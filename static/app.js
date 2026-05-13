@@ -238,13 +238,34 @@ function render(windows) {
 
 function wireCards() {
   grid.querySelectorAll(".card").forEach((el) => {
-    el.addEventListener("click", () => openModal(el.dataset.target));
+    let nameClickTimer = null;
+    const target = el.dataset.target;
     const nameEl = el.querySelector(".card-name");
+
+    el.addEventListener("click", (e) => {
+      // Clicks elsewhere on the card open the modal immediately.
+      // Clicks on the name defer ~220ms so dblclick (rename) has a chance.
+      const onName = nameEl && nameEl.contains(e.target);
+      if (!onName) {
+        openModal(target);
+        return;
+      }
+      if (nameClickTimer) return;
+      nameClickTimer = setTimeout(() => {
+        nameClickTimer = null;
+        openModal(target);
+      }, 220);
+    });
+
     if (nameEl) {
       nameEl.title = "double-click to rename";
       nameEl.addEventListener("dblclick", (e) => {
         e.stopPropagation();
-        startRename(nameEl, el.dataset.target, nameEl.textContent);
+        if (nameClickTimer) {
+          clearTimeout(nameClickTimer);
+          nameClickTimer = null;
+        }
+        startRename(nameEl, target, nameEl.textContent);
       });
     }
   });
@@ -529,6 +550,10 @@ sendInput.addEventListener("keydown", (e) => {
 });
 
 function submitText(text) {
+  // Strip leading/trailing newlines — an accidental Enter at start or end
+  // shouldn't force the multi-line paste path, which can race with Claude's
+  // bracketed-paste handling and drop the submit.
+  text = text.replace(/^\n+|\n+$/g, "");
   if (text === "") {
     sendKeys(["Enter"]);
     return;
