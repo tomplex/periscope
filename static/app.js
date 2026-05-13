@@ -16,8 +16,14 @@ const sendStatus = document.getElementById("send-status");
 
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
-let lastSpinner = null;     // tracks "Claude is thinking" state across polls
-let sendStatusTimer = null; // clears the transient "sending…" text
+let lastSpinner = null;          // last detected spinner verb (for hysteresis)
+let lastSpinnerSeenAt = 0;       // epoch ms of last positive spinner detection
+let sendStatusTimer = null;      // protects the transient "sending…" text
+
+// Tmux capture-pane sometimes catches Claude's TUI mid-redraw, dropping the
+// spinner line for one poll cycle even though Claude is still working. Keep
+// showing "thinking" through brief gaps so the status doesn't flicker.
+const SPINNER_GRACE_MS = 4000;
 
 let currentFilter = "all";
 let lastWindows = [];
@@ -460,6 +466,8 @@ async function openModal(target) {
   document.body.classList.add("modal-open");
   resetHistoryNav();
   setSendStatus("", "");
+  lastSpinner = null;
+  lastSpinnerSeenAt = 0;
   await refreshModalPane({ forceScroll: true });
   sendInput.value = "";
   sendInput.focus();
@@ -536,11 +544,19 @@ function updateSendStatusFromPane(data) {
   if (sendStatusTimer) return;
   if (data.spinner) {
     lastSpinner = data.spinner;
+    lastSpinnerSeenAt = Date.now();
     setSendStatus(`Claude is ${data.spinner.toLowerCase()}…`, "thinking");
-  } else {
-    lastSpinner = null;
-    setSendStatus("", "");
+    return;
   }
+  // Hysteresis: if we saw a spinner recently, keep the thinking indicator
+  // visible. Capture-pane snapshots occasionally drop the spinner line for
+  // one cycle even when Claude is still working.
+  if (lastSpinner && Date.now() - lastSpinnerSeenAt < SPINNER_GRACE_MS) {
+    setSendStatus(`Claude is ${lastSpinner.toLowerCase()}…`, "thinking");
+    return;
+  }
+  lastSpinner = null;
+  setSendStatus("", "");
 }
 
 // --- Send history (Up/Down to recall, per-target) ---
@@ -750,6 +766,8 @@ function closeModal() {
   }
   resetHistoryNav();
   setSendStatus("", "");
+  lastSpinner = null;
+  lastSpinnerSeenAt = 0;
   activeTarget = null;
 }
 
