@@ -378,16 +378,66 @@ body.modal-open { overflow: hidden; }
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
+}
+
+.modal-title-block {
+  flex: 1;
+  min-width: 0;
 }
 
 .modal-head h2 {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  flex: 1;
 }
+
+.modal-subtitle {
+  margin-top: 3px;
+  font-size: 11px;
+  font-family: "SF Mono", monospace;
+  color: var(--fg-dim);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.modal-subtitle .sep { color: var(--fg-very-dim); }
+.modal-subtitle .pr { color: var(--accent); text-decoration: none; }
+.modal-subtitle .pr:hover { text-decoration: underline; }
+.modal-subtitle .ci-ok    { color: var(--ok); }
+.modal-subtitle .ci-bad   { color: var(--error); }
+.modal-subtitle .ci-pending { color: var(--working); }
+.modal-subtitle .spinner-tag {
+  color: var(--working);
+  font-style: italic;
+}
+
+.modal-brief {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--fg);
+  background: rgba(88, 166, 255, 0.06);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  font-style: italic;
+}
+
+.modal-brief.hidden { display: none; }
+
+.send-status {
+  font-size: 11px;
+  color: var(--fg-very-dim);
+  font-family: "SF Mono", monospace;
+  min-height: 14px;
+  padding: 0 2px;
+}
+
+.send-status.sending   { color: var(--working); }
+.send-status.thinking  { color: var(--waiting); }
+.send-status.history   { color: var(--fg-very-dim); font-style: italic; }
 
 .modal-actions {
   display: flex;

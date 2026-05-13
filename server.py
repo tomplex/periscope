@@ -215,13 +215,28 @@ def state():
 
 @app.get("/api/pane")
 def pane(session: str, index: int, lines: int = 200):
-    """Capture last N lines of a pane. Session/index passed as query params so
-    slash-bearing session names (e.g. "tc/foo/bar") don't conflict with path
-    routing."""
+    """Capture last N lines of a pane plus parsed status fields. Session/index
+    passed as query params so slash-bearing session names (e.g. 'tc/foo/bar')
+    don't conflict with path routing."""
     target = f"{session}:{index}"
-    # -e preserves ANSI color escape sequences for the modal viewer.
+    # -e preserves ANSI escape sequences for the modal viewer.
     content = tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
-    return {"content": content, "target": target}
+    # Parse the same buffer (after stripping ANSI) so the modal can render a
+    # live status header alongside the pane content from one request.
+    plain = re.sub(r"\x1b\[[\d;]*m", "", content)
+    parsed = parse_pane(plain)
+    try:
+        window_name = tmux(
+            "display-message", "-t", target, "-p", "#{window_name}"
+        ).strip()
+    except Exception:
+        window_name = ""
+    return {
+        "content": content,
+        "target": target,
+        "name": window_name,
+        **parsed,
+    }
 
 
 @app.post("/api/focus")

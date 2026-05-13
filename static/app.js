@@ -10,9 +10,14 @@ const modalFocus = document.getElementById("modal-focus");
 const modalClose = document.getElementById("modal-close");
 const sendInput = document.getElementById("send-input");
 const keyButtons = document.getElementById("key-buttons");
+const modalSubtitle = document.getElementById("modal-subtitle");
+const modalBrief = document.getElementById("modal-brief");
+const sendStatus = document.getElementById("send-status");
 
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
+let lastSpinner = null;     // tracks "Claude is thinking" state across polls
+let sendStatusTimer = null; // clears the transient "sending…" text
 
 let currentFilter = "all";
 let lastWindows = [];
@@ -448,9 +453,13 @@ function reorderSessions(src, dst, before) {
 async function openModal(target) {
   activeTarget = target;
   modalTitle.textContent = target;
+  modalSubtitle.innerHTML = "";
+  modalBrief.classList.add("hidden");
   modalPane.textContent = "loading...";
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
+  resetHistoryNav();
+  setSendStatus("", "");
   await refreshModalPane({ forceScroll: true });
   sendInput.value = "";
   sendInput.focus();
@@ -466,6 +475,8 @@ async function refreshModalPane({ forceScroll = false } = {}) {
       return;
     }
     const data = await res.json();
+    updateModalHeader(data);
+    updateSendStatusFromPane(data);
     const wasAtBottom =
       modalPane.scrollHeight - modalPane.scrollTop - modalPane.clientHeight < 24;
     modalPane.innerHTML = ansiToHtml(data.content);
@@ -475,6 +486,136 @@ async function refreshModalPane({ forceScroll = false } = {}) {
   } catch (e) {
     modalPane.textContent = `fetch failed: ${e.message}`;
   }
+}
+
+function updateModalHeader(data) {
+  // Title: target + curated window name (e.g. "main:1 — SUPERVISOR")
+  const nameSuffix = data.name && data.name !== data.target ? ` — ${data.name}` : "";
+  modalTitle.textContent = `${data.target}${nameSuffix}`;
+
+  // Subtitle: branch · PR · CI · context% · model · spinner
+  const parts = [];
+  if (data.branch) parts.push(`<span class="mono">${escapeHtml(data.branch)}</span>`);
+  if (data.pr) {
+    const ciCls = data.ci === "✓" ? "ci-ok" : data.ci === "✗" ? "ci-bad" : "ci-pending";
+    const ci = data.ci ? `<span class="${ciCls}">${data.ci}</span>` : "";
+    parts.push(
+      `<a class="pr" href="https://github.com/faradayio/fdy/pull/${data.pr}" target="_blank" rel="noopener">#${data.pr}</a> ${ci}`
+    );
+  }
+  if (data.context_pct != null) parts.push(`${data.context_pct}%`);
+  if (data.model) parts.push(escapeHtml(data.model.replace(/\s*\(.*\)/, "")));
+  if (data.spinner) {
+    parts.push(
+      `<span class="spinner-tag">✻ ${escapeHtml(data.spinner.toLowerCase())}…</span>`
+    );
+  } else if (data.pending_input) {
+    parts.push(
+      `<span class="spinner-tag" style="color: var(--fg-dim); font-style: normal;">↗ pending</span>`
+    );
+  }
+  modalSubtitle.innerHTML = parts.join(`<span class="sep">·</span> `);
+
+  // Brief: most recent recap
+  if (data.recap) {
+    modalBrief.textContent = `※ ${data.recap}`;
+    modalBrief.classList.remove("hidden");
+  } else {
+    modalBrief.classList.add("hidden");
+  }
+}
+
+function setSendStatus(text, kind) {
+  sendStatus.textContent = text;
+  sendStatus.className = "send-status" + (kind ? ` ${kind}` : "");
+}
+
+function updateSendStatusFromPane(data) {
+  // Only the polled refresh drives this — the transient "sending…" set by
+  // submitText takes precedence for ~600ms (sendStatusTimer guards it).
+  if (sendStatusTimer) return;
+  if (data.spinner) {
+    lastSpinner = data.spinner;
+    setSendStatus(`Claude is ${data.spinner.toLowerCase()}…`, "thinking");
+  } else {
+    lastSpinner = null;
+    setSendStatus("", "");
+  }
+}
+
+// --- Send history (Up/Down to recall, per-target) ---
+
+const SEND_HISTORY_KEY = "periscope:sendHistory";
+const HISTORY_MAX = 20;
+let historyIndex = null;  // null = live draft; 0+ = entry in history (0 = most recent)
+let liveDraft = "";
+
+function loadSendHistory() {
+  try { return JSON.parse(localStorage.getItem(SEND_HISTORY_KEY)) || {}; }
+  catch { return {}; }
+}
+function saveSendHistory(h) {
+  localStorage.setItem(SEND_HISTORY_KEY, JSON.stringify(h));
+}
+function pushSendHistory(target, msg) {
+  if (!msg) return;
+  const h = loadSendHistory();
+  const arr = h[target] || [];
+  if (arr[0] === msg) return;  // don't duplicate the most-recent entry
+  arr.unshift(msg);
+  h[target] = arr.slice(0, HISTORY_MAX);
+  saveSendHistory(h);
+}
+function resetHistoryNav() {
+  historyIndex = null;
+  liveDraft = "";
+}
+
+function cursorOnFirstLine(input) {
+  return input.value.slice(0, input.selectionStart).indexOf("\n") === -1;
+}
+function cursorOnLastLine(input) {
+  return input.value.slice(input.selectionEnd).indexOf("\n") === -1;
+}
+function moveCursorToEnd(input) {
+  const end = input.value.length;
+  input.setSelectionRange(end, end);
+}
+
+function recallHistory(direction) {
+  if (!activeTarget) return false;
+  const history = loadSendHistory()[activeTarget] || [];
+  if (history.length === 0) return false;
+  if (direction === "older") {
+    if (historyIndex === null) {
+      liveDraft = sendInput.value;
+      historyIndex = 0;
+    } else if (historyIndex + 1 < history.length) {
+      historyIndex++;
+    } else {
+      return true;  // already at oldest; consume key but don't change
+    }
+    sendInput.value = history[historyIndex];
+    moveCursorToEnd(sendInput);
+    setSendStatus(`history ${historyIndex + 1}/${history.length}`, "history");
+    return true;
+  }
+  if (direction === "newer") {
+    if (historyIndex === null) return false;  // not in history; let cursor move
+    if (historyIndex === 0) {
+      historyIndex = null;
+      sendInput.value = liveDraft;
+      moveCursorToEnd(sendInput);
+      setSendStatus("", "");
+      return true;
+    }
+    historyIndex--;
+    sendInput.value = history[historyIndex];
+    moveCursorToEnd(sendInput);
+    setSendStatus(`history ${historyIndex + 1}/${history.length}`, "history");
+    return true;
+  }
+  return false;
 }
 
 async function sendToTmux(payload) {
@@ -603,10 +744,26 @@ function closeModal() {
     clearInterval(modalPollHandle);
     modalPollHandle = null;
   }
+  if (sendStatusTimer) {
+    clearTimeout(sendStatusTimer);
+    sendStatusTimer = null;
+  }
+  resetHistoryNav();
+  setSendStatus("", "");
   activeTarget = null;
 }
 
 sendInput.addEventListener("keydown", (e) => {
+  // History recall: Up at first line goes older, Down at last line goes newer.
+  // Only intercept when the cursor would otherwise move past the buffer edge,
+  // so multi-line editing inside the textarea still works.
+  if (e.key === "ArrowUp" && cursorOnFirstLine(sendInput)) {
+    if (recallHistory("older")) { e.preventDefault(); return; }
+  }
+  if (e.key === "ArrowDown" && cursorOnLastLine(sendInput)) {
+    if (recallHistory("newer")) { e.preventDefault(); return; }
+  }
+
   // Cmd/Ctrl+Enter submits. Bare Enter inserts a newline (default textarea
   // behavior — much friendlier for composing multi-line messages).
   const isSubmit = e.key === "Enter" && (e.metaKey || e.ctrlKey);
@@ -614,7 +771,28 @@ sendInput.addEventListener("keydown", (e) => {
   e.preventDefault();
   const text = sendInput.value;
   sendInput.value = "";
+  if (activeTarget) pushSendHistory(activeTarget, text.trim());
+  resetHistoryNav();
+  // Transient "sending…" — protected for 600ms so the pane poll doesn't
+  // overwrite it before the user gets feedback.
+  setSendStatus("sending…", "sending");
+  if (sendStatusTimer) clearTimeout(sendStatusTimer);
+  sendStatusTimer = setTimeout(() => {
+    sendStatusTimer = null;
+    // The next pane poll (every 1.5s) will set "thinking…" if Claude is
+    // working; otherwise updateSendStatusFromPane clears the line.
+  }, 600);
   submitText(text);
+});
+
+// Any direct edit takes us out of history-recall mode (so Up/Down doesn't keep
+// stomping on the user's typing).
+sendInput.addEventListener("input", () => {
+  if (historyIndex !== null) {
+    historyIndex = null;
+    liveDraft = sendInput.value;
+    if (sendStatus.classList.contains("history")) setSendStatus("", "");
+  }
 });
 
 function submitText(text) {
