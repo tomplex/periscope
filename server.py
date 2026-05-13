@@ -260,6 +260,95 @@ def _fetch_pr_into_cache(path: str, branch: str) -> None:
         _pr_fetching.discard((path, branch))
 
 
+# --- Claude Code plan usage (parsed from session JSONL files) -------------
+#
+# Claude Code logs every assistant message to ~/.claude/projects/<encoded-cwd>/
+# <session-id>.jsonl. Each line is a JSON record; assistant lines carry a
+# `message.usage` block with input_tokens, cache_creation_input_tokens,
+# cache_read_input_tokens, and output_tokens. Summing across files in a
+# rolling 5h window gives a real measurement of plan token usage, no API
+# subscription / billing endpoint required.
+
+_USAGE_TTL = 30.0
+_usage_cache: tuple[float, dict] | None = None
+_usage_lock = threading.Lock()
+_CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
+
+
+def compute_claude_usage(window_hours: float = 5.0) -> dict:
+    """Walk every recent session JSONL and sum token usage in the window."""
+    if not _CLAUDE_PROJECTS.exists():
+        return {"available": False}
+
+    from datetime import datetime
+    cutoff = time.time() - window_hours * 3600
+    fresh = cache_w = cache_r = out = msgs = 0
+    earliest_msg_ts: float | None = None
+
+    for jsonl in _CLAUDE_PROJECTS.glob("*/*.jsonl"):
+        try:
+            if jsonl.stat().st_mtime < cutoff:
+                continue
+        except OSError:
+            continue
+        try:
+            with jsonl.open(encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    ts_str = rec.get("timestamp")
+                    if not isinstance(ts_str, str):
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+                    except Exception:
+                        continue
+                    if ts < cutoff:
+                        continue
+                    usage = ((rec.get("message") or {}).get("usage")) or {}
+                    if not usage:
+                        continue
+                    fresh += int(usage.get("input_tokens") or 0)
+                    cache_w += int(usage.get("cache_creation_input_tokens") or 0)
+                    cache_r += int(usage.get("cache_read_input_tokens") or 0)
+                    out += int(usage.get("output_tokens") or 0)
+                    msgs += 1
+                    if earliest_msg_ts is None or ts < earliest_msg_ts:
+                        earliest_msg_ts = ts
+        except OSError:
+            continue
+
+    # The plan's 5h rolling reset is anchored at the *first* message of the
+    # window, so the next reset is window_hours after the earliest in-window
+    # message (not "now + 5h"). If we found nothing, the window is wide open.
+    reset_at = int(earliest_msg_ts + window_hours * 3600) if earliest_msg_ts else None
+    return {
+        "available": True,
+        "window_hours": window_hours,
+        "messages": msgs,
+        "input_tokens": fresh,
+        "cache_creation_tokens": cache_w,
+        "cache_read_tokens": cache_r,
+        "output_tokens": out,
+        "total_tokens": fresh + cache_w + cache_r + out,
+        "reset_at": reset_at,
+    }
+
+
+def cached_claude_usage() -> dict:
+    global _usage_cache
+    now = time.time()
+    with _usage_lock:
+        if _usage_cache and now - _usage_cache[0] < _USAGE_TTL:
+            return _usage_cache[1]
+    data = compute_claude_usage()
+    with _usage_lock:
+        _usage_cache = (now, data)
+    return data
+
+
 def cached_pr_state(path: str, branch: str | None) -> dict | None:
     """Stale-while-revalidate. Returns cached data instantly; kicks off a
     refresh in a background thread if the cache is missing or expired. The
@@ -472,7 +561,11 @@ def state():
                 "focused_at": _focused_at.get(target, 0),
             }
         )
-    return {"windows": result, "ts": int(time.time())}
+    return {
+        "windows": result,
+        "ts": int(time.time()),
+        "usage": cached_claude_usage(),
+    }
 
 
 @app.get("/api/pane")
