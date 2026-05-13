@@ -1,8 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastapi", "uvicorn[standard]", "anthropic"]
+# dependencies = ["fastapi", "uvicorn[standard]", "anthropic", "python-dotenv"]
 # ///
-"""Live tmux dashboard. Run with: uv run server.py"""
+"""Periscope — live tmux dashboard. Run with: uv run server.py"""
 
 import json
 import re
@@ -10,10 +10,14 @@ import subprocess
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# Load .env from the script's directory (existing env vars take precedence).
+load_dotenv(Path(__file__).parent / ".env")
 
 app = FastAPI()
 STATIC = Path(__file__).parent / "static"
