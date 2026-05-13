@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastapi", "uvicorn[standard]"]
+# dependencies = ["fastapi", "uvicorn[standard]", "anthropic"]
 # ///
 """Live tmux dashboard. Run with: uv run server.py"""
 
@@ -253,31 +253,37 @@ def rename(session: str, index: int, body: RenameBody):
     return {"ok": True, "target": target, "name": name}
 
 
-# --- auto-rename via claude CLI -------------------------------------------
+# --- auto-rename via the Anthropic SDK ------------------------------------
 
-_EMPTY_MCP = Path(__file__).parent / "empty-mcp.json"
+_anthropic_client = None
 
 
-def claude_cli(prompt: str, model: str = "haiku") -> str:
-    """Run the claude CLI and return its result string. Skips MCP loading
-    (which adds 5+ seconds of startup) since auto-rename doesn't need tools."""
-    r = subprocess.run(
-        [
-            "claude", "-p", prompt,
-            "--output-format", "json",
-            "--model", model,
-            "--strict-mcp-config", str(_EMPTY_MCP),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
+def get_anthropic():
+    global _anthropic_client
+    if _anthropic_client is None:
+        import os
+        from anthropic import Anthropic
+
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is not set. Export it in your shell "
+                "(e.g. add to ~/.zshenv) before starting the dashboard."
+            )
+        _anthropic_client = Anthropic()
+    return _anthropic_client
+
+
+def claude_complete(prompt: str, model: str = "claude-haiku-4-5") -> str:
+    """Single-shot completion via the Anthropic SDK. Much faster than the
+    claude CLI (no MCP / hooks / settings load — just an HTTP round-trip)."""
+    client = get_anthropic()
+    msg = client.messages.create(
+        model=model,
+        max_tokens=2048,
+        messages=[{"role": "user", "content": prompt}],
     )
-    if r.returncode != 0:
-        raise RuntimeError(f"claude failed (exit {r.returncode}): {r.stderr[:500]}")
-    data = json.loads(r.stdout)
-    if data.get("is_error"):
-        raise RuntimeError(f"claude returned error: {data.get('result', data)}")
-    return data["result"]
+    # Concatenate all text blocks (Haiku usually returns just one)
+    return "".join(b.text for b in msg.content if b.type == "text")
 
 
 def build_rename_prompt(windows: list[dict]) -> str:
@@ -350,7 +356,7 @@ def auto_rename_session(session: str):
 
     prompt = build_rename_prompt(context)
     try:
-        result = claude_cli(prompt)
+        result = claude_complete(prompt)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
