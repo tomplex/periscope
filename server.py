@@ -123,13 +123,19 @@ SPINNER_VERB_RE = re.compile(r"\b([A-Z]\w+(?:ing|ed))\b")
 # Needs-input: the numbered-choice permission dialog. `❯ 1.` plus the
 # "Esc to cancel" footer is Claude-Code-specific; either alone false-positives
 # (shells use ❯ as a prompt; "Esc to cancel" appears in transient toasts).
-# Claude's AskUserQuestion dialog footers consistently include "Esc to cancel"
-# regardless of single-select vs multi-select. Pairing the marker with a
-# numbered option line catches both:
-#   single-select:  "❯ 1. Yes"
-#   multi-select:   "1. [ ] Pane-level helpers"
-NEEDS_INPUT_MARKER = "Esc to cancel"
-NEEDS_INPUT_OPTION_RE = re.compile(r"^\s*(?:❯\s+)?\d+\.\s+", re.MULTILINE)
+# Claude's choice dialogs always render a single footer line that combines
+# navigation hints with the cancel marker — e.g. one of:
+#   "Enter to select · Esc to cancel"
+#   "Enter to select · ↑/↓ to navigate · Esc to cancel"
+#   "Submit · Esc to cancel"
+# Matching the whole footer pattern on a single line is much more specific
+# than scanning for the marker and a numbered option anywhere in the tail:
+# prose responses (or shell output) that happen to mention both in different
+# places will no longer false-positive. The dialog's options can sit far
+# above the footer, so we don't need to find them — the footer is sufficient.
+NEEDS_INPUT_FOOTER_RE = re.compile(
+    r"(?:Enter\s+to\s+\w+|↑/↓|Submit\b).*Esc\s+to\s+cancel",
+)
 
 RECAP_RE = re.compile(
     r"※ recap:\s*(?P<text>.+?)(?=\n\s*[─❯]|\Z)", re.DOTALL
@@ -357,19 +363,16 @@ def parse_pane(content: str) -> dict:
                 spinner = first or "working"
             break
 
-    # Needs-input: Claude's choice dialog — covers both single-select
-    # (permission prompts: "❯ 1. Yes / 2. No") and multi-select
-    # (AskUserQuestion: "1. [ ] option"). Footer marker + numbered option
-    # together avoid false positives on shell content that happens to have
-    # one or the other in isolation.
-    tail_text = "\n".join(lines[-30:])
-    needs_input = (
-        NEEDS_INPUT_MARKER in tail_text
-        and bool(NEEDS_INPUT_OPTION_RE.search(tail_text))
+    # Needs-input: look for the dialog's footer line in the last few lines.
+    # The footer is always a single line at the bottom of the pane when a
+    # dialog is active, so restricting the search to a tight tail avoids
+    # matching prose that happens to discuss dialog UI.
+    needs_input = any(
+        NEEDS_INPUT_FOOTER_RE.search(line) for line in lines[-5:]
     )
-    # The dialog footer + numbered options is a Claude-specific UI; if we see
-    # it the pane IS Claude even if STATUS_RE missed (the dialog occupies the
-    # bottom rows where the status line normally lives).
+    # The dialog footer is Claude-specific UI; if we see it the pane IS
+    # Claude even if STATUS_RE missed (the dialog occupies the bottom rows
+    # where the status line normally lives).
     if needs_input:
         is_claude = True
 

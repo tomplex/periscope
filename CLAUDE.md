@@ -23,8 +23,11 @@ npm install                     # one-time
 npm run dev                     # http://127.0.0.1:5174/
 ```
 
-`npm run dev` uses `concurrently` to run `uv run server.py` and `vite` as a
-single foreground process; ctrl+c stops both. `vite.config.js` proxies
+`npm run dev` runs `dev.sh`, which launches `uv run server.py` and `vite`
+under a single shell with `trap 'kill 0' EXIT INT TERM` — ctrl+c kills the
+whole process group at once, so uvicorn's reload-worker child never gets
+orphaned regardless of how each intermediate layer forwards signals.
+`vite.config.js` proxies
 `/api/*` and `/ws/*` to FastAPI on :8765. Vite is purely a dev convenience —
 production keeps loading `static/app.js` and the vendored xterm scripts
 directly from FastAPI with no build artifact.
