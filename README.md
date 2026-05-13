@@ -1,9 +1,20 @@
 # periscope
 
 A live dashboard over your tmux sessions. Every window becomes a card; click
-into a card to see the full pane (with ANSI colors), send keystrokes, focus
-the window in tmux, or rename it. Parses Claude pane status — branch, PR, CI
-state, recap, spinner — and surfaces what's pending input.
+into a card to open a full live terminal (xterm.js + tmux `pipe-pane` over
+WebSocket), send keystrokes, focus the window in tmux, or rename it. Parses
+Claude Code pane status — branch, PR, CI state, recap, spinner — and surfaces
+what's pending input.
+
+Built for the "I have 30 tmux windows across 5 sessions with various Claude
+Code agents running, and I want a single pane of glass" workflow.
+
+## Requirements
+
+- `tmux` (any reasonably modern version)
+- [`uv`](https://docs.astral.sh/uv/) for running the single-file script
+- A modern browser (uses WebSockets + ES module-free vanilla JS)
+- Optional: `ANTHROPIC_API_KEY` for the ✨ auto-rename feature
 
 ## Run
 
@@ -11,11 +22,12 @@ state, recap, spinner — and surfaces what's pending input.
 uv run server.py
 ```
 
-Open http://127.0.0.1:8765/. Polls every 3s.
+Open <http://127.0.0.1:8765/>. Polls every 3s; the modal opens a live
+WebSocket bridge to the selected pane.
 
 ## Auto-rename (optional)
 
-The ✨ rename button on each session header asks Haiku 4.5 to suggest fresh,
+The ✨ button on each session header asks Haiku 4.5 to suggest fresh,
 descriptive names for every window in the session based on current pane
 content. Requires an Anthropic API key:
 
@@ -27,8 +39,13 @@ cp .env.example .env
 ## Endpoints
 
 - `GET  /api/state` — every tmux window with parsed Claude status
-- `GET  /api/pane?session=...&index=...&lines=200` — capture last N lines (with ANSI escapes)
-- `POST /api/focus?session=...&index=...` — switch every attached tmux client to that window
-- `POST /api/send?session=...&index=...` — body `{keys: [...], paste: "..."}`; sends keystrokes / bracketed paste
-- `POST /api/rename?session=...&index=...` — body `{name: "..."}`; renames a window
-- `POST /api/auto-rename-session?session=...` — Haiku-driven batch rename of every window in a session
+- `GET  /api/pane?session=…&index=…&lines=200` — capture last N lines (with ANSI escapes)
+- `POST /api/focus?session=…&index=…` — switch every attached tmux client to that window
+- `POST /api/send?session=…&index=…` — body `{keys: [...], paste: "..."}`; sends keystrokes / bracketed paste
+- `POST /api/rename?session=…&index=…` — body `{name: "..."}`; renames a window
+- `POST /api/auto-rename-session?session=…` — Haiku-driven batch rename of every window in a session
+- `WS   /ws/pane?session=…&index=…` — live bidirectional pane stream (xterm.js powers the modal)
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
