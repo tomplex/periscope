@@ -316,16 +316,20 @@ async function refreshModalPane({ forceScroll = false } = {}) {
   }
 }
 
-async function sendKeys(keys) {
-  if (!activeTarget || !keys.length) return;
+async function sendToTmux(payload) {
+  if (!activeTarget) return;
   const [s, i] = activeTarget.split(":");
   await fetch(`/api/send/${encodeURIComponent(s)}/${i}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ keys }),
+    body: JSON.stringify(payload),
   });
   // Quick refresh so the user sees it land before the next poll tick.
   setTimeout(() => refreshModalPane(), 80);
+}
+
+function sendKeys(keys) {
+  return sendToTmux({ keys });
 }
 
 // --- ANSI -> HTML ---------------------------------------------------------
@@ -443,17 +447,30 @@ function closeModal() {
 }
 
 sendInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    const text = sendInput.value;
-    sendInput.value = "";
-    if (text === "") {
-      sendKeys(["Enter"]);
-    } else {
-      sendKeys([text, "Enter"]);
-    }
-  }
+  // Enter submits; Shift+Enter inserts a newline in the textarea (default).
+  // Cmd/Ctrl+Enter also submits — natural for power users.
+  const isSubmit =
+    e.key === "Enter" && !e.shiftKey;
+  if (!isSubmit) return;
+  e.preventDefault();
+  const text = sendInput.value;
+  sendInput.value = "";
+  submitText(text);
 });
+
+function submitText(text) {
+  if (text === "") {
+    sendKeys(["Enter"]);
+    return;
+  }
+  if (text.includes("\n")) {
+    // Multi-line: bracketed paste delivers embedded newlines intact;
+    // send-keys would silently strip them. Final Enter submits.
+    sendToTmux({ paste: text, keys: ["Enter"] });
+  } else {
+    sendKeys([text, "Enter"]);
+  }
+}
 
 keyButtons.addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-keys]");

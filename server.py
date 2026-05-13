@@ -201,23 +201,32 @@ def focus(session: str, index: int):
 
 
 class SendBody(BaseModel):
-    keys: list[str]
+    keys: list[str] = []
+    paste: str | None = None  # bracketed-pasted into the pane before `keys`
 
 
 @app.post("/api/send/{session}/{index}")
 def send(session: str, index: int, body: SendBody):
-    """Send keystrokes to a tmux pane.
+    """Send input to a tmux pane.
 
-    `keys` is a list of tmux key names or literal strings, matching the
-    arguments tmux send-keys accepts. Examples:
-      ["Escape"]                  -> send Escape
-      ["C-c"]                     -> send Ctrl+C
-      ["git status", "Enter"]     -> type the string then press Enter
+    `paste`, if set, is sent first via tmux's bracketed-paste mechanism — this
+    is the only reliable way to deliver multi-line text, since tmux send-keys
+    silently strips embedded newlines.
+
+    `keys` is then sent via send-keys. Each item is either a tmux key name
+    (Enter, Escape, C-c, S-Tab, Up, F1, …) or a literal string.
     """
     target = f"{session}:{index}"
-    if not body.keys:
-        return {"ok": False, "error": "no keys"}
-    tmux("send-keys", "-t", target, *body.keys)
+    if body.paste is not None and body.paste != "":
+        # Use a unique buffer name so concurrent calls don't trample each other.
+        import uuid
+        buf = f"wd-{uuid.uuid4().hex[:8]}"
+        tmux("set-buffer", "-b", buf, body.paste)
+        tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+    if body.keys:
+        tmux("send-keys", "-t", target, *body.keys)
+    if not body.keys and body.paste is None:
+        return {"ok": False, "error": "no keys or paste"}
     return {"ok": True, "target": target}
 
 
