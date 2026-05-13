@@ -35,6 +35,25 @@ STATIC = Path(__file__).parent / "static"
 _focused_at: dict[str, int] = {}
 _active_per_session: dict[str, str] = {}
 
+# Per-target spinner hysteresis. Tmux capture-pane occasionally catches Claude's
+# TUI mid-redraw, dropping the spinner line for one cycle even when Claude is
+# still working. We remember the last positive detection per target and treat
+# it as sticky for SPINNER_GRACE_S so cards + modal subtitles don't flicker.
+_spinner_last_seen: dict[str, tuple[str, float]] = {}
+SPINNER_GRACE_S = 4.0
+
+
+def smooth_spinner(target: str, current: str | None) -> str | None:
+    now = time.time()
+    if current:
+        _spinner_last_seen[target] = (current, now)
+        return current
+    last = _spinner_last_seen.get(target)
+    if last and now - last[1] < SPINNER_GRACE_S:
+        return last[0]
+    _spinner_last_seen.pop(target, None)
+    return None
+
 
 def note_focus(target: str) -> None:
     _focused_at[target] = int(time.time())
@@ -238,6 +257,25 @@ def capture(target: str, lines: int = 100) -> str:
     return tmux("capture-pane", "-t", target, "-p", "-S", f"-{lines}")
 
 
+def deliver_input(target: str, text: str) -> None:
+    """Pipe raw bytes into a pane via tmux load-buffer + paste-buffer.
+
+    We use this rather than `send-keys -l` because tmux's argv parser treats a
+    standalone `;` argument as a command separator — when xterm.js forwards a
+    single semicolon keystroke as one WS message, send-keys silently drops it.
+    Stdin avoids that entire parsing path.
+    """
+    buf = f"wd-in-{uuid.uuid4().hex[:8]}"
+    subprocess.run(
+        ["tmux", "load-buffer", "-b", buf, "-"],
+        input=text, text=True, check=False, timeout=5,
+    )
+    subprocess.run(
+        ["tmux", "paste-buffer", "-d", "-b", buf, "-t", target],
+        check=False, timeout=5,
+    )
+
+
 def parse_pane(content: str) -> dict:
     raw_lines = content.rstrip("\n").split("\n")
     lines = [ln for ln in raw_lines if ln.strip() != ""]
@@ -324,6 +362,11 @@ def state():
             parsed = parse_pane(content)
         except Exception as e:
             parsed = {"error": str(e), "state": "error", "is_claude": False}
+        # Hysteresis: smooth out per-poll detection gaps so cards / modal
+        # subtitles don't flicker between "thinking" and idle.
+        parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
+        if parsed.get("is_claude") and parsed.get("spinner") and parsed.get("state") != "working":
+            parsed["state"] = "working"
         git = cached_git_state(w.get("cwd", "")) or {}
         pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
         result.append(
@@ -348,6 +391,9 @@ def pane(session: str, index: int, lines: int = 200):
     # live status header alongside the pane content from one request.
     plain = re.sub(r"\x1b\[[\d;]*m", "", content)
     parsed = parse_pane(plain)
+    parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
+    if parsed.get("is_claude") and parsed.get("spinner") and parsed.get("state") != "working":
+        parsed["state"] = "working"
     try:
         meta = tmux(
             "display-message", "-t", target, "-p",
@@ -660,7 +706,10 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
 
         # 4) Main loop: receive keystrokes from the client and push to tmux.
         #    xterm.js's onData sends raw input including escape sequences
-        #    (e.g. "\x1b[A" for up arrow). send-keys -l preserves them.
+        #    (e.g. "\x1b[A" for up arrow). We deliver them via load-buffer +
+        #    paste-buffer rather than send-keys -l because tmux's argv parser
+        #    treats a standalone ";" as a command separator — typing a single
+        #    semicolon would otherwise be silently dropped.
         try:
             while True:
                 msg = await websocket.receive()
@@ -671,10 +720,8 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
                     text = msg["bytes"].decode("utf-8", errors="replace")
                 if not text:
                     continue
-                # Run send-keys in a thread so it doesn't block the loop on the
-                # ~1-2ms subprocess fork.
                 await loop.run_in_executor(
-                    None, lambda t=text: tmux("send-keys", "-t", target, "-l", t)
+                    None, lambda t=text: deliver_input(target, t)
                 )
         except WebSocketDisconnect:
             pass
@@ -702,6 +749,35 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
                 os.unlink(fifo_path)
             except Exception:
                 pass
+
+
+def prewarm_pr_cache() -> None:
+    """Walk every current tmux pane, resolve its branch via git, and kick off
+    background gh PR queries for each unique (cwd, branch) pair. Runs once at
+    startup so PR badges populate on the first /api/state poll instead of
+    waiting for the second poll's stale-while-revalidate to fire them."""
+    if not _GH_AVAILABLE:
+        return
+    try:
+        windows = list_windows()
+    except Exception:
+        return
+    pairs: set[tuple[str, str]] = set()
+    for w in windows:
+        cwd = w.get("cwd") or ""
+        if not cwd:
+            continue
+        git = cached_git_state(cwd)
+        if git and git.get("branch"):
+            pairs.add((cwd, git["branch"]))
+    for cwd, branch in pairs:
+        # cached_pr_state spawns a daemon thread per (cwd, branch) miss.
+        cached_pr_state(cwd, branch)
+
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    threading.Thread(target=prewarm_pr_cache, daemon=True).start()
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

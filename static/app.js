@@ -23,13 +23,6 @@ let escCloseTimer = null;
 
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
-let lastSpinner = null;          // last detected spinner verb (for hysteresis)
-let lastSpinnerSeenAt = 0;       // epoch ms of last positive spinner detection
-
-// Tmux capture-pane sometimes catches Claude's TUI mid-redraw, dropping the
-// spinner line for one poll cycle even though Claude is still working. Keep
-// showing "thinking" through brief gaps so the subtitle doesn't flicker.
-const SPINNER_GRACE_MS = 4000;
 
 let currentFilter = "all";
 let lastWindows = [];
@@ -468,8 +461,6 @@ async function openModal(target) {
   modalSubtitle.innerHTML = "";
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
-  lastSpinner = null;
-  lastSpinnerSeenAt = 0;
   startLiveTerminal(target);
   // Header poll keeps the subtitle/brief/spinner fresh; the terminal body
   // itself streams live via the WebSocket, no polling needed.
@@ -617,7 +608,6 @@ async function refreshModalHeader() {
     const res = await fetch(`/api/pane?${targetQuery(activeTarget)}&lines=80`);
     if (!res.ok) return;
     const data = await res.json();
-    applySpinnerHysteresis(data);
     updateModalHeader(data);
   } catch (_) {
     // Transient — next tick will retry
@@ -653,23 +643,6 @@ function updateModalHeader(data) {
   modalSubtitle.innerHTML = parts.join(`<span class="sep">·</span> `);
 }
 
-function applySpinnerHysteresis(data) {
-  // Tmux capture-pane occasionally catches Claude's TUI mid-redraw and the
-  // spinner line is briefly absent from the snapshot. We treat any positive
-  // detection as sticky for SPINNER_GRACE_MS so the subtitle doesn't toggle
-  // every poll while Claude is still working.
-  if (data.spinner) {
-    lastSpinner = data.spinner;
-    lastSpinnerSeenAt = Date.now();
-    return;
-  }
-  if (lastSpinner && Date.now() - lastSpinnerSeenAt < SPINNER_GRACE_MS) {
-    data.spinner = lastSpinner;
-    return;
-  }
-  lastSpinner = null;
-}
-
 function closeModal() {
   if (escCloseTimer) {
     clearTimeout(escCloseTimer);
@@ -682,8 +655,6 @@ function closeModal() {
     clearInterval(modalPollHandle);
     modalPollHandle = null;
   }
-  lastSpinner = null;
-  lastSpinnerSeenAt = 0;
   activeTarget = null;
 }
 
