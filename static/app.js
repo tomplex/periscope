@@ -110,6 +110,8 @@ function renderCard(w) {
   const foot = [];
   if (w.context_pct != null) foot.push(`${w.context_pct}%`);
   if (w.model) foot.push(escapeHtml(w.model.replace(/\s*\(.*\)/, "")));
+  const recent = relTime(w.activity);
+  if (recent) foot.push(recent);
   const footHtml = foot.length
     ? `<div class="card-foot">${foot.join(" · ")}</div>`
     : "";
@@ -129,25 +131,29 @@ function renderCard(w) {
 }
 
 function orderedSessions(allSessions, bySession) {
-  // Apply user-saved order first; then auto-sort the rest by state priority.
+  // User-pinned (drag-reordered) sessions float to the top in saved order.
+  // Everything else sorts by most-recent activity across its windows, descending.
   const saved = loadOrder();
   const present = new Set(allSessions);
   const ordered = saved.filter((s) => present.has(s));
   const remaining = allSessions.filter((s) => !ordered.includes(s));
+  const lastActivity = (s) =>
+    Math.max(0, ...(bySession.get(s) || []).map((w) => w.activity || 0));
   remaining.sort((a, b) => {
-    const score = (s) => {
-      const ws = bySession.get(s) || [];
-      if (ws.some((w) => w.state === "waiting")) return 0;
-      if (ws.some((w) => w.state === "working")) return 1;
-      if (ws.some((w) => w.is_claude)) return 2;
-      return 3;
-    };
-    const sa = score(a);
-    const sb = score(b);
-    if (sa !== sb) return sa - sb;
+    const da = lastActivity(b) - lastActivity(a);
+    if (da !== 0) return da;
     return a.localeCompare(b);
   });
   return [...ordered, ...remaining];
+}
+
+function relTime(epochSec) {
+  if (!epochSec) return "";
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSec);
+  if (diff < 60) return `${diff}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
 }
 
 function sessionPill(ws) {
@@ -183,17 +189,24 @@ function render(windows) {
 
   grid.innerHTML = sessionOrder
     .map((s) => {
-      const ws = bySession.get(s).sort((a, b) => a.index - b.index);
+      // Within a session, sort by recent activity desc; index as tiebreak.
+      const ws = bySession.get(s).slice().sort((a, b) => {
+        const da = (b.activity || 0) - (a.activity || 0);
+        if (da !== 0) return da;
+        return a.index - b.index;
+      });
       const total = windows.filter((w) => w.session === s).length;
       const shown = ws.length;
       const meta = shown === total ? `${total} windows` : `${shown}/${total} windows`;
       const collapsed = collapsedSessions.has(s) ? " collapsed" : "";
+      const recent = Math.max(0, ...ws.map((w) => w.activity || 0));
+      const recentLabel = recent ? relTime(recent) : "";
       return `
         <section class="session-group${collapsed}" data-session="${escapeHtml(s)}">
           <div class="session-header" draggable="true" data-session="${escapeHtml(s)}">
             <span class="chevron">▾</span>
             <h2>${escapeHtml(s)}</h2>
-            <span class="session-meta">${meta}</span>
+            <span class="session-meta">${meta}${recentLabel ? ` · ${recentLabel}` : ""}</span>
             ${sessionPill(bySession.get(s))}
           </div>
           <div class="cards">
