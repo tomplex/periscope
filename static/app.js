@@ -217,6 +217,7 @@ function render(windows) {
             <h2>${escapeHtml(s)}</h2>
             <span class="session-meta">${meta}${recentLabel ? ` · ${recentLabel}` : ""}</span>
             ${sessionPill(bySession.get(s))}
+            <button class="auto-rename" data-session="${escapeHtml(s)}" title="ask Claude to auto-rename windows in this session">✨ rename</button>
           </div>
           <div class="cards">
             ${ws.map(renderCard).join("")}
@@ -316,9 +317,45 @@ function wireSessionHeaders() {
   grid.querySelectorAll(".session-header").forEach((header) => {
     const session = header.dataset.session;
 
-    // Collapse on click (but not while dragging)
+    // Auto-rename button (must be wired before the header click to stop propagation)
+    const autoBtn = header.querySelector(".auto-rename");
+    if (autoBtn) {
+      autoBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (autoBtn.dataset.busy) return;
+        autoBtn.dataset.busy = "1";
+        const orig = autoBtn.innerHTML;
+        autoBtn.innerHTML = "✨ thinking…";
+        autoBtn.disabled = true;
+        try {
+          const res = await fetch(
+            `/api/auto-rename-session?session=${encodeURIComponent(session)}`,
+            { method: "POST" }
+          );
+          const data = await res.json();
+          if (!data.ok) {
+            autoBtn.innerHTML = `✗ ${escapeHtml(data.error || "failed").slice(0, 40)}`;
+            setTimeout(() => { autoBtn.innerHTML = orig; }, 4000);
+          } else {
+            const n = (data.applied || []).length;
+            autoBtn.innerHTML = n ? `✓ renamed ${n}` : "✓ all good";
+            setTimeout(() => { autoBtn.innerHTML = orig; }, 2500);
+            poll();
+          }
+        } catch (err) {
+          autoBtn.innerHTML = `✗ ${err.message}`.slice(0, 40);
+          setTimeout(() => { autoBtn.innerHTML = orig; }, 4000);
+        } finally {
+          autoBtn.disabled = false;
+          delete autoBtn.dataset.busy;
+        }
+      });
+    }
+
+    // Collapse on click (but not while dragging, and not on the auto-rename button)
     header.addEventListener("click", (e) => {
       if (header.classList.contains("dragging")) return;
+      if (e.target.closest(".auto-rename")) return;
       if (collapsedSessions.has(session)) collapsedSessions.delete(session);
       else collapsedSessions.add(session);
       saveCollapsed(collapsedSessions);

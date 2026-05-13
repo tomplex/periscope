@@ -4,6 +4,7 @@
 # ///
 """Live tmux dashboard. Run with: uv run server.py"""
 
+import json
 import re
 import subprocess
 import time
@@ -250,6 +251,135 @@ def rename(session: str, index: int, body: RenameBody):
         return {"ok": False, "error": "empty name"}
     tmux("rename-window", "-t", target, name)
     return {"ok": True, "target": target, "name": name}
+
+
+# --- auto-rename via claude CLI -------------------------------------------
+
+_EMPTY_MCP = Path(__file__).parent / "empty-mcp.json"
+
+
+def claude_cli(prompt: str, model: str = "haiku") -> str:
+    """Run the claude CLI and return its result string. Skips MCP loading
+    (which adds 5+ seconds of startup) since auto-rename doesn't need tools."""
+    r = subprocess.run(
+        [
+            "claude", "-p", prompt,
+            "--output-format", "json",
+            "--model", model,
+            "--strict-mcp-config", str(_EMPTY_MCP),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"claude failed (exit {r.returncode}): {r.stderr[:500]}")
+    data = json.loads(r.stdout)
+    if data.get("is_error"):
+        raise RuntimeError(f"claude returned error: {data.get('result', data)}")
+    return data["result"]
+
+
+def build_rename_prompt(windows: list[dict]) -> str:
+    lines = [
+        "You are renaming tmux windows in a senior developer's terminal session.",
+        "",
+        "For each window below, suggest a SHORT descriptive name that captures what",
+        "is currently happening in that window. Constraints:",
+        "  - 1-3 words, lowercase-with-dashes preferred (e.g. 'fs-build', 'cohort-inv')",
+        "  - Max 25 characters",
+        "  - Concept-focused, not generic. Bad: 'claude', 'shell', 'zsh', 'work'.",
+        "    Good: 'postcode-ingestion', 'monitoring-cert', 'rust-port'",
+        "  - If the existing name is still accurate, KEEP IT (don't change for the sake of changing)",
+        "",
+        "Windows in this session:",
+    ]
+    for w in windows:
+        lines.append("")
+        lines.append(f"[index {w['index']}] current_name='{w['current_name']}'")
+        if w.get("branch"):
+            pr = f", PR #{w['pr']}" if w.get("pr") else ""
+            lines.append(f"  branch: {w['branch']}{pr}")
+        if w.get("recap"):
+            lines.append(f"  recap: {w['recap'][:300]}")
+        if w.get("pending_input"):
+            lines.append(f"  pending input: {w['pending_input'][:120]}")
+        snippet = w.get("recent_excerpt", "")
+        if snippet:
+            lines.append(f"  recent terminal excerpt:\n    {snippet}")
+    lines.append("")
+    lines.append(
+        'Return ONLY a JSON object mapping window index (as a string) to the new name. '
+        'Example: {"1": "fs-build", "2": "cohort-inv"}. '
+        "No markdown fences, no commentary, just the JSON object."
+    )
+    return "\n".join(lines)
+
+
+@app.post("/api/auto-rename-session")
+def auto_rename_session(session: str):
+    all_windows = list_windows()
+    target_windows = [w for w in all_windows if w["session"] == session]
+    if not target_windows:
+        return {"ok": False, "error": f"session {session!r} not found"}
+
+    # Build per-window context
+    context = []
+    for w in target_windows:
+        target = f"{w['session']}:{w['index']}"
+        try:
+            content = capture(target, lines=80)
+            parsed = parse_pane(content)
+        except Exception:
+            content, parsed = "", {}
+        # Strip ANSI from snippet so the prompt isn't full of escape codes
+        plain = re.sub(r"\x1b\[[\d;]*m", "", content)
+        snippet_lines = [ln for ln in plain.split("\n") if ln.strip()][-20:]
+        snippet = "\n    ".join(snippet_lines)[-1200:]
+        context.append(
+            {
+                "index": w["index"],
+                "current_name": w["name"],
+                "branch": parsed.get("branch"),
+                "pr": parsed.get("pr"),
+                "recap": parsed.get("recap"),
+                "pending_input": parsed.get("pending_input"),
+                "recent_excerpt": snippet,
+            }
+        )
+
+    prompt = build_rename_prompt(context)
+    try:
+        result = claude_cli(prompt)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    # Claude sometimes wraps JSON in code fences despite instructions; strip.
+    cleaned = result.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.MULTILINE)
+    try:
+        new_names = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"claude returned invalid JSON: {e}", "raw": result[:500]}
+
+    applied = []
+    for index_str, new_name in new_names.items():
+        try:
+            index = int(index_str)
+        except ValueError:
+            continue
+        new_name = (new_name or "").strip()
+        if not new_name:
+            continue
+        old = next((w["name"] for w in target_windows if w["index"] == index), None)
+        if old is None or new_name == old:
+            continue
+        target = f"{session}:{index}"
+        tmux("rename-window", "-t", target, new_name)
+        applied.append({"index": index, "old": old, "new": new_name})
+
+    return {"ok": True, "applied": applied, "session": session}
 
 
 @app.post("/api/send")

@@ -181,6 +181,29 @@ main {
 .session-pill.has-working { color: var(--working); border-color: var(--working); }
 .session-pill.has-ci-bad { color: var(--error); border-color: var(--error); }
 
+.auto-rename {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.auto-rename:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.auto-rename:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
