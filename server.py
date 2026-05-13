@@ -80,20 +80,19 @@ def list_windows() -> list[dict]:
         "list-windows",
         "-a",
         "-F",
-        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_activity}",
+        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}",
     )
     rows = []
     for line in out.strip().split("\n"):
         if not line:
             continue
-        s, idx, name, active, activity = line.split("\t")
+        s, idx, name, active = line.split("\t")
         rows.append(
             {
                 "session": s,
                 "index": int(idx),
                 "name": name,
                 "active": active == "1",
-                "activity": int(activity),
             }
         )
     return rows

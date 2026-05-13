@@ -19,8 +19,21 @@ let lastWindows = [];
 let activeTarget = null;
 
 // Persisted UI state
-const ORDER_KEY = "work-dashboard:sessionOrder";
-const COLLAPSED_KEY = "work-dashboard:collapsedSessions";
+const ORDER_KEY = "periscope:sessionOrder";
+const COLLAPSED_KEY = "periscope:collapsedSessions";
+
+// One-time migration from the pre-rename keys. Reads the old value if present
+// and the new key is empty, then deletes the old key. Safe to leave in place;
+// after one load it's a no-op.
+function migrateOldKey(oldK, newK) {
+  const v = localStorage.getItem(oldK);
+  if (v !== null && localStorage.getItem(newK) === null) {
+    localStorage.setItem(newK, v);
+  }
+  if (v !== null) localStorage.removeItem(oldK);
+}
+migrateOldKey("work-dashboard:sessionOrder", ORDER_KEY);
+migrateOldKey("work-dashboard:collapsedSessions", COLLAPSED_KEY);
 
 function loadOrder() {
   try { return JSON.parse(localStorage.getItem(ORDER_KEY)) || []; }
@@ -181,6 +194,31 @@ function sessionPill(ws) {
   return `<span class="${cls}">${parts.join(" · ")}</span>`;
 }
 
+function renderSession(session, ws, totalWindows) {
+  const shown = ws.length;
+  const meta = shown === totalWindows
+    ? `${totalWindows} windows`
+    : `${shown}/${totalWindows} windows`;
+  const collapsed = collapsedSessions.has(session) ? " collapsed" : "";
+  const recent = Math.max(0, ...ws.map((w) => w.focused_at || 0));
+  const recentLabel = recent ? relTime(recent) : "";
+  const s = escapeHtml(session);
+  return `
+    <section class="session-group${collapsed}" data-session="${s}">
+      <div class="session-header" draggable="true" data-session="${s}">
+        <span class="chevron">▾</span>
+        <h2>${s}</h2>
+        <span class="session-meta">${meta}${recentLabel ? ` · ${recentLabel}` : ""}</span>
+        ${sessionPill(ws)}
+        <button class="auto-rename" data-session="${s}" title="ask Claude to auto-rename windows in this session">✨ rename</button>
+      </div>
+      <div class="cards">
+        ${ws.map(renderCard).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function render(windows) {
   const filtered = windows.filter(passesFilter);
   const bySession = new Map();
@@ -195,6 +233,8 @@ function render(windows) {
   }
 
   const sessionOrder = orderedSessions([...bySession.keys()], bySession);
+  const totals = new Map();
+  for (const w of windows) totals.set(w.session, (totals.get(w.session) || 0) + 1);
 
   grid.innerHTML = sessionOrder
     .map((s) => {
@@ -204,72 +244,15 @@ function render(windows) {
         if (da !== 0) return da;
         return a.index - b.index;
       });
-      const total = windows.filter((w) => w.session === s).length;
-      const shown = ws.length;
-      const meta = shown === total ? `${total} windows` : `${shown}/${total} windows`;
-      const collapsed = collapsedSessions.has(s) ? " collapsed" : "";
-      const recent = Math.max(0, ...ws.map((w) => w.focused_at || 0));
-      const recentLabel = recent ? relTime(recent) : "";
-      return `
-        <section class="session-group${collapsed}" data-session="${escapeHtml(s)}">
-          <div class="session-header" draggable="true" data-session="${escapeHtml(s)}">
-            <span class="chevron">▾</span>
-            <h2>${escapeHtml(s)}</h2>
-            <span class="session-meta">${meta}${recentLabel ? ` · ${recentLabel}` : ""}</span>
-            ${sessionPill(bySession.get(s))}
-            <button class="auto-rename" data-session="${escapeHtml(s)}" title="ask Claude to auto-rename windows in this session">✨ rename</button>
-          </div>
-          <div class="cards">
-            ${ws.map(renderCard).join("")}
-          </div>
-        </section>
-      `;
+      return renderSession(s, ws, totals.get(s));
     })
     .join("");
-
-  wireCards();
-  wireSessionHeaders();
 
   // Counts in header
   const total = windows.length;
   const working = windows.filter((w) => w.state === "working").length;
   const waiting = windows.filter((w) => w.state === "waiting").length;
   counts.textContent = `${total} windows · ${working} working · ${waiting} waiting`;
-}
-
-function wireCards() {
-  grid.querySelectorAll(".card").forEach((el) => {
-    let nameClickTimer = null;
-    const target = el.dataset.target;
-    const nameEl = el.querySelector(".card-name");
-
-    el.addEventListener("click", (e) => {
-      // Clicks elsewhere on the card open the modal immediately.
-      // Clicks on the name defer ~220ms so dblclick (rename) has a chance.
-      const onName = nameEl && nameEl.contains(e.target);
-      if (!onName) {
-        openModal(target);
-        return;
-      }
-      if (nameClickTimer) return;
-      nameClickTimer = setTimeout(() => {
-        nameClickTimer = null;
-        openModal(target);
-      }, 220);
-    });
-
-    if (nameEl) {
-      nameEl.title = "double-click to rename";
-      nameEl.addEventListener("dblclick", (e) => {
-        e.stopPropagation();
-        if (nameClickTimer) {
-          clearTimeout(nameClickTimer);
-          nameClickTimer = null;
-        }
-        startRename(nameEl, target, nameEl.textContent);
-      });
-    }
-  });
 }
 
 function startRename(nameEl, target, currentName) {
@@ -313,92 +296,140 @@ function startRename(nameEl, target, currentName) {
   input.addEventListener("dblclick", (e) => e.stopPropagation());
 }
 
-function wireSessionHeaders() {
-  grid.querySelectorAll(".session-header").forEach((header) => {
-    const session = header.dataset.session;
+// One-time event delegation on the grid root. Survives every render() rebuild
+// without re-attaching handlers per element.
+//
+// Handlers dispatch by walking up from event.target via closest() to find the
+// relevant card/header/button and resolve target/session from data-attributes.
+const nameClickTimers = new Map();  // target -> setTimeout handle
 
-    // Auto-rename button (must be wired before the header click to stop propagation)
-    const autoBtn = header.querySelector(".auto-rename");
+function wireGrid() {
+  grid.addEventListener("click", (e) => {
+    // Auto-rename button takes priority (it's inside the header).
+    const autoBtn = e.target.closest(".auto-rename");
     if (autoBtn) {
-      autoBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (autoBtn.dataset.busy) return;
-        autoBtn.dataset.busy = "1";
-        const orig = autoBtn.innerHTML;
-        autoBtn.innerHTML = "✨ thinking…";
-        autoBtn.disabled = true;
-        try {
-          const res = await fetch(
-            `/api/auto-rename-session?session=${encodeURIComponent(session)}`,
-            { method: "POST" }
-          );
-          const data = await res.json();
-          if (!data.ok) {
-            autoBtn.innerHTML = `✗ ${escapeHtml(data.error || "failed").slice(0, 40)}`;
-            setTimeout(() => { autoBtn.innerHTML = orig; }, 4000);
-          } else {
-            const n = (data.applied || []).length;
-            autoBtn.innerHTML = n ? `✓ renamed ${n}` : "✓ all good";
-            setTimeout(() => { autoBtn.innerHTML = orig; }, 2500);
-            poll();
-          }
-        } catch (err) {
-          autoBtn.innerHTML = `✗ ${err.message}`.slice(0, 40);
-          setTimeout(() => { autoBtn.innerHTML = orig; }, 4000);
-        } finally {
-          autoBtn.disabled = false;
-          delete autoBtn.dataset.busy;
-        }
-      });
+      e.stopPropagation();
+      handleAutoRename(autoBtn);
+      return;
     }
-
-    // Collapse on click (but not while dragging, and not on the auto-rename button)
-    header.addEventListener("click", (e) => {
-      if (header.classList.contains("dragging")) return;
-      if (e.target.closest(".auto-rename")) return;
+    // Header click toggles collapse (unless the header is mid-drag).
+    const header = e.target.closest(".session-header");
+    if (header && !header.classList.contains("dragging")) {
+      const session = header.dataset.session;
       if (collapsedSessions.has(session)) collapsedSessions.delete(session);
       else collapsedSessions.add(session);
       saveCollapsed(collapsedSessions);
       header.closest(".session-group").classList.toggle("collapsed");
-    });
+      return;
+    }
+    // Card click: open modal, but defer if the click is on the name (so a
+    // dblclick can win and start a rename instead).
+    const card = e.target.closest(".card");
+    if (!card) return;
+    const target = card.dataset.target;
+    const onName = !!e.target.closest(".card-name");
+    if (!onName) {
+      openModal(target);
+      return;
+    }
+    if (nameClickTimers.has(target)) return;
+    const timer = setTimeout(() => {
+      nameClickTimers.delete(target);
+      openModal(target);
+    }, 220);
+    nameClickTimers.set(target, timer);
+  });
 
-    // Drag-and-drop reordering
-    header.addEventListener("dragstart", (e) => {
-      header.classList.add("dragging");
-      e.dataTransfer.setData("text/plain", session);
-      e.dataTransfer.effectAllowed = "move";
-    });
+  grid.addEventListener("dblclick", (e) => {
+    const nameEl = e.target.closest(".card-name");
+    if (!nameEl) return;
+    const card = nameEl.closest(".card");
+    const target = card.dataset.target;
+    e.stopPropagation();
+    const timer = nameClickTimers.get(target);
+    if (timer) {
+      clearTimeout(timer);
+      nameClickTimers.delete(target);
+    }
+    startRename(nameEl, target, nameEl.textContent);
+  });
 
-    header.addEventListener("dragend", () => {
-      header.classList.remove("dragging");
-      grid.querySelectorAll(".session-header").forEach((h) => {
-        h.classList.remove("drag-over-top", "drag-over-bottom");
-      });
-    });
+  // Drag-and-drop session reordering — delegated. dragstart/dragover/etc all
+  // bubble, so a single listener on grid covers every header.
+  grid.addEventListener("dragstart", (e) => {
+    const header = e.target.closest(".session-header");
+    if (!header) return;
+    header.classList.add("dragging");
+    e.dataTransfer.setData("text/plain", header.dataset.session);
+    e.dataTransfer.effectAllowed = "move";
+  });
 
-    header.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      const rect = header.getBoundingClientRect();
-      const before = e.clientY < rect.top + rect.height / 2;
-      header.classList.toggle("drag-over-top", before);
-      header.classList.toggle("drag-over-bottom", !before);
-    });
-
-    header.addEventListener("dragleave", () => {
-      header.classList.remove("drag-over-top", "drag-over-bottom");
-    });
-
-    header.addEventListener("drop", (e) => {
-      e.preventDefault();
-      const src = e.dataTransfer.getData("text/plain");
-      const dst = session;
-      if (src === dst) return;
-      const rect = header.getBoundingClientRect();
-      const before = e.clientY < rect.top + rect.height / 2;
-      reorderSessions(src, dst, before);
+  grid.addEventListener("dragend", (e) => {
+    const header = e.target.closest(".session-header");
+    if (header) header.classList.remove("dragging");
+    grid.querySelectorAll(".session-header").forEach((h) => {
+      h.classList.remove("drag-over-top", "drag-over-bottom");
     });
   });
+
+  grid.addEventListener("dragover", (e) => {
+    const header = e.target.closest(".session-header");
+    if (!header) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = header.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    header.classList.toggle("drag-over-top", before);
+    header.classList.toggle("drag-over-bottom", !before);
+  });
+
+  grid.addEventListener("dragleave", (e) => {
+    const header = e.target.closest(".session-header");
+    if (header) header.classList.remove("drag-over-top", "drag-over-bottom");
+  });
+
+  grid.addEventListener("drop", (e) => {
+    const header = e.target.closest(".session-header");
+    if (!header) return;
+    e.preventDefault();
+    const src = e.dataTransfer.getData("text/plain");
+    const dst = header.dataset.session;
+    if (src === dst) return;
+    const rect = header.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    reorderSessions(src, dst, before);
+  });
+}
+
+async function handleAutoRename(autoBtn) {
+  if (autoBtn.dataset.busy) return;
+  const session = autoBtn.dataset.session;
+  autoBtn.dataset.busy = "1";
+  const orig = autoBtn.innerHTML;
+  autoBtn.innerHTML = "✨ thinking…";
+  autoBtn.disabled = true;
+  try {
+    const res = await fetch(
+      `/api/auto-rename-session?session=${encodeURIComponent(session)}`,
+      { method: "POST" }
+    );
+    const data = await res.json();
+    if (!data.ok) {
+      autoBtn.innerHTML = `✗ ${escapeHtml(data.error || "failed").slice(0, 40)}`;
+      setTimeout(() => { autoBtn.innerHTML = orig; }, 4000);
+    } else {
+      const n = (data.applied || []).length;
+      autoBtn.innerHTML = n ? `✓ renamed ${n}` : "✓ all good";
+      setTimeout(() => { autoBtn.innerHTML = orig; }, 2500);
+      poll();
+    }
+  } catch (err) {
+    autoBtn.innerHTML = `✗ ${err.message}`.slice(0, 40);
+    setTimeout(() => { autoBtn.innerHTML = orig; }, 4000);
+  } finally {
+    autoBtn.disabled = false;
+    delete autoBtn.dataset.busy;
+  }
 }
 
 function reorderSessions(src, dst, before) {
@@ -633,5 +664,6 @@ async function poll() {
   }
 }
 
+wireGrid();
 poll();
 setInterval(poll, POLL_MS);
