@@ -480,6 +480,13 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
 
         initial = tmux("capture-pane", "-t", target, "-p", "-e", "-S", "-200")
         if initial:
+            # capture-pane separates lines with bare \n. xterm.js needs \r\n
+            # to return each new line to column 0 — without the \r, every line
+            # staircases rightward by however many columns the previous line
+            # had occupied. The pipe-pane stream that follows already includes
+            # the proper escapes (since it's the actual byte stream tmux
+            # renders), so this fixup is only needed for the initial blob.
+            initial = initial.replace("\n", "\r\n")
             await websocket.send_bytes(initial.encode("utf-8", errors="replace"))
 
         # 2) Set up the pipe. mkfifo + open(O_RDONLY|O_NONBLOCK) returns
