@@ -483,6 +483,9 @@ async function refreshModalPane({ forceScroll = false } = {}) {
       return;
     }
     const data = await res.json();
+    // Smooth the spinner field once so every consumer (modal header subtitle,
+    // send-status indicator) sees the same value across capture-pane gaps.
+    applySpinnerHysteresis(data);
     updateModalHeader(data);
     updateSendStatusFromPane(data);
     const wasAtBottom =
@@ -538,25 +541,33 @@ function setSendStatus(text, kind) {
   sendStatus.className = "send-status" + (kind ? ` ${kind}` : "");
 }
 
+function applySpinnerHysteresis(data) {
+  // Tmux capture-pane occasionally catches Claude's TUI mid-redraw and the
+  // spinner line is briefly absent from the snapshot. We treat any positive
+  // detection as sticky for SPINNER_GRACE_MS and mutate data.spinner so every
+  // downstream consumer (modal subtitle, send-status, etc.) sees the same
+  // smoothed value instead of toggling.
+  if (data.spinner) {
+    lastSpinner = data.spinner;
+    lastSpinnerSeenAt = Date.now();
+    return;
+  }
+  if (lastSpinner && Date.now() - lastSpinnerSeenAt < SPINNER_GRACE_MS) {
+    data.spinner = lastSpinner;
+    return;
+  }
+  lastSpinner = null;
+}
+
 function updateSendStatusFromPane(data) {
   // Only the polled refresh drives this — the transient "sending…" set by
   // submitText takes precedence for ~600ms (sendStatusTimer guards it).
   if (sendStatusTimer) return;
   if (data.spinner) {
-    lastSpinner = data.spinner;
-    lastSpinnerSeenAt = Date.now();
     setSendStatus(`Claude is ${data.spinner.toLowerCase()}…`, "thinking");
-    return;
+  } else {
+    setSendStatus("", "");
   }
-  // Hysteresis: if we saw a spinner recently, keep the thinking indicator
-  // visible. Capture-pane snapshots occasionally drop the spinner line for
-  // one cycle even when Claude is still working.
-  if (lastSpinner && Date.now() - lastSpinnerSeenAt < SPINNER_GRACE_MS) {
-    setSendStatus(`Claude is ${lastSpinner.toLowerCase()}…`, "thinking");
-    return;
-  }
-  lastSpinner = null;
-  setSendStatus("", "");
 }
 
 // --- Send history (Up/Down to recall, per-target) ---
