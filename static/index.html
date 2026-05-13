@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>active work</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <h1>active work</h1>
+    <nav class="filters" id="filters">
+      <button data-filter="all" class="active">all</button>
+      <button data-filter="working">working</button>
+      <button data-filter="waiting">waiting</button>
+      <button data-filter="claude">claude</button>
+      <button data-filter="shell">shells</button>
+      <button data-filter="ci-bad">CI ✗</button>
+    </nav>
+    <div class="meta">
+      <span id="counts"></span>
+      <span id="last-update"></span>
+    </div>
+  </header>
+  <main id="grid"></main>
+  <div id="modal" class="hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="modal-title"></h2>
+        <div class="modal-actions">
+          <button id="modal-focus">focus in tmux</button>
+          <button id="modal-close">×</button>
+        </div>
+      </div>
+      <pre id="modal-pane"></pre>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
