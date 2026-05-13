@@ -12,6 +12,7 @@
     <h1>periscope</h1>
     <nav class="filters" id="filters">
       <button data-filter="all" class="active">all</button>
+      <button data-filter="needs-input">needs input</button>
       <button data-filter="working">working</button>
       <button data-filter="waiting">waiting</button>
       <button data-filter="claude">claude</button>
@@ -33,6 +34,7 @@
           <div id="modal-subtitle" class="modal-subtitle"></div>
         </div>
         <div class="modal-actions">
+          <button id="modal-auto-rename" title="ask Claude to rename this window">✨ rename</button>
           <button id="modal-focus">focus in tmux</button>
           <button id="modal-close">×</button>
         </div>

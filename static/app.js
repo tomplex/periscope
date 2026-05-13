@@ -9,6 +9,7 @@ const modalXtermEl = document.getElementById("modal-xterm");
 const modalFocus = document.getElementById("modal-focus");
 const modalClose = document.getElementById("modal-close");
 const modalSubtitle = document.getElementById("modal-subtitle");
+const modalAutoRename = document.getElementById("modal-auto-rename");
 
 // Live terminal (xterm.js + WebSocket) wiring. The xterm instance is created
 // fresh per modal-open and disposed on close, so each pane gets a clean state.
@@ -26,6 +27,9 @@ let escCloseTimer = null;
 
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
+// Suppresses refreshModalHeader's title update while an inline rename input is
+// open in the modal head, so the poll doesn't clobber the user's typing.
+let modalRenaming = false;
 
 let currentFilter = "all";
 let lastWindows = [];
@@ -91,6 +95,54 @@ modalFocus.addEventListener("click", async () => {
   await fetch(`/api/focus?${targetQuery(activeTarget)}`, { method: "POST" });
 });
 
+// Double-click the window name in the modal header to rename it. The `.modal-name`
+// span is rebuilt every poll by updateModalHeader, so delegate from the
+// persistent <h2> instead of attaching per-render.
+modalTitle.addEventListener("dblclick", (e) => {
+  if (!e.target.closest(".modal-name")) return;
+  e.stopPropagation();
+  startModalRename();
+});
+
+modalAutoRename.addEventListener("click", (e) => {
+  e.stopPropagation();
+  handleModalAutoRename();
+});
+
+// Image paste: when the user pastes a screenshot (or any image) into the
+// modal, upload the bytes to the server, which writes a temp file and
+// bracketed-pastes "@/tmp/foo.png " into the pane so Claude Code reads it as
+// a file reference. Text pastes are ignored here and fall through to xterm's
+// own paste handling. Capture phase so we see the event before xterm's
+// hidden textarea consumes it.
+modalXtermEl.addEventListener("paste", async (e) => {
+  if (!activeTarget) return;
+  const items = e.clipboardData?.items || [];
+  for (const item of items) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const blob = item.getAsFile();
+    if (!blob) continue;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const res = await fetch(`/api/paste-image?${targetQuery(activeTarget)}`, {
+        method: "POST",
+        headers: { "Content-Type": blob.type || "image/png" },
+        body: blob,
+      });
+      const data = await res.json();
+      if (!data.ok && term) {
+        term.writeln(`\r\n\x1b[31m[periscope: image paste failed: ${data.error}]\x1b[0m`);
+      }
+    } catch (err) {
+      if (term) {
+        term.writeln(`\r\n\x1b[31m[periscope: image paste error: ${err.message}]\x1b[0m`);
+      }
+    }
+    return;
+  }
+}, true);
+
 function targetQuery(target) {
   // target looks like "session:index" — but session may contain ":" if any
   // session name has one (rare in tmux but legal). Split on the last ":".
@@ -102,6 +154,7 @@ function targetQuery(target) {
 
 function passesFilter(w) {
   if (currentFilter === "all") return true;
+  if (currentFilter === "needs-input") return w.state === "needs-input";
   if (currentFilter === "working") return w.state === "working";
   if (currentFilter === "waiting") return w.state === "waiting";
   if (currentFilter === "claude") return w.is_claude;
@@ -140,9 +193,14 @@ function renderCard(w) {
     snippet = `<div class="card-snippet">${escapeHtml(w.last_line)}</div>`;
   }
 
-  const stateLabel = w.spinner
-    ? `<span class="card-state ${stateClass}">${escapeHtml(w.spinner.toLowerCase())}…</span>`
-    : `<span class="card-state ${stateClass}">${w.state}</span>`;
+  // needs-input wins over the spinner verb (a stale "envisioning…" in
+  // scrollback shouldn't drown out the blocking prompt). For other states,
+  // show the spinner phrase if we have one, else the bare state name.
+  const stateLabel = w.state === "needs-input"
+    ? `<span class="card-state ${stateClass}">needs input</span>`
+    : w.spinner
+      ? `<span class="card-state ${stateClass}">${escapeHtml(w.spinner.toLowerCase())}…</span>`
+      : `<span class="card-state ${stateClass}">${w.state}</span>`;
 
   const foot = [];
   if (w.context_pct != null) foot.push(`${w.context_pct}%`);
@@ -205,16 +263,21 @@ function relTime(epochSec) {
 }
 
 function sessionPill(ws) {
+  const needsInput = ws.filter((w) => w.state === "needs-input").length;
   const waiting = ws.filter((w) => w.state === "waiting").length;
   const working = ws.filter((w) => w.state === "working").length;
   const ciBad = ws.filter((w) => w.ci === "✗").length;
   const parts = [];
+  if (needsInput) parts.push(`${needsInput} needs input`);
   if (waiting) parts.push(`${waiting} waiting`);
   if (working) parts.push(`${working} working`);
   if (ciBad) parts.push(`${ciBad} ✗`);
   if (!parts.length) parts.push(`${ws.length}`);
+  // Pill color hierarchy: needs-input is the loudest signal (a pane is
+  // blocked on me) > ci-bad > waiting > working. Anything quieter loses.
   let cls = "session-pill";
-  if (ciBad) cls += " has-ci-bad";
+  if (needsInput) cls += " has-needs-input";
+  else if (ciBad) cls += " has-ci-bad";
   else if (waiting) cls += " has-waiting";
   else if (working) cls += " has-working";
   return `<span class="${cls}">${parts.join(" · ")}</span>`;
@@ -276,11 +339,17 @@ function render(windows) {
     })
     .join("");
 
-  // Counts in header
+  // Counts in header. Lead with needs-input — that's the only count that
+  // means "drop what you're doing and look here", so it earns top billing
+  // and only renders when nonzero.
   const total = windows.length;
+  const needsInput = windows.filter((w) => w.state === "needs-input").length;
   const working = windows.filter((w) => w.state === "working").length;
   const waiting = windows.filter((w) => w.state === "waiting").length;
-  counts.textContent = `${total} windows · ${working} working · ${waiting} waiting`;
+  const parts = [`${total} windows`];
+  if (needsInput) parts.push(`${needsInput} needs input`);
+  parts.push(`${working} working`, `${waiting} waiting`);
+  counts.textContent = parts.join(" · ");
 }
 
 function startRename(nameEl, target, currentName) {
@@ -752,6 +821,7 @@ async function refreshModalHeader() {
   // doesn't need this poll. We pass lines=40 since we only need enough buffer
   // for the parser to find the status block and most recent recap.
   if (!activeTarget) return;
+  if (modalRenaming) return;  // don't clobber the in-flight rename input
   try {
     const res = await fetch(`/api/pane?${targetQuery(activeTarget)}&lines=80`);
     if (!res.ok) return;
@@ -763,9 +833,17 @@ async function refreshModalHeader() {
 }
 
 function updateModalHeader(data) {
-  // Title: target + curated window name (e.g. "main:1 — SUPERVISOR")
-  const nameSuffix = data.name && data.name !== data.target ? ` — ${data.name}` : "";
-  modalTitle.textContent = `${data.target}${nameSuffix}`;
+  // Title: window name (prominent), then session and cwd in dim text.
+  // tmux window index is intentionally omitted — not useful for orientation.
+  const name = data.name || data.target;
+  const titleParts = [`<span class="modal-name">${escapeHtml(name)}</span>`];
+  if (data.session) {
+    titleParts.push(`<span class="modal-session">${escapeHtml(data.session)}</span>`);
+  }
+  if (data.cwd) {
+    titleParts.push(`<span class="modal-cwd mono">${escapeHtml(data.cwd)}</span>`);
+  }
+  modalTitle.innerHTML = titleParts.join("");
 
   // Subtitle: branch · PR · CI · context% · model · spinner
   const parts = [];
@@ -779,7 +857,11 @@ function updateModalHeader(data) {
   }
   if (data.context_pct != null) parts.push(`${data.context_pct}%`);
   if (data.model) parts.push(escapeHtml(data.model.replace(/\s*\(.*\)/, "")));
-  if (data.spinner) {
+  if (data.state === "needs-input") {
+    parts.push(
+      `<span class="spinner-tag" style="color: var(--needs-input); font-weight: 600;">⚠ needs input</span>`
+    );
+  } else if (data.spinner) {
     parts.push(
       `<span class="spinner-tag">✻ ${escapeHtml(data.spinner.toLowerCase())}…</span>`
     );
@@ -803,7 +885,72 @@ function closeModal() {
     clearInterval(modalPollHandle);
     modalPollHandle = null;
   }
+  modalRenaming = false;
   activeTarget = null;
+}
+
+function startModalRename() {
+  if (!activeTarget || modalRenaming) return;
+  const nameSpan = modalTitle.querySelector(".modal-name");
+  if (!nameSpan) return;
+  const currentName = nameSpan.textContent;
+  modalRenaming = true;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = currentName;
+  input.className = "rename-input modal-rename-input";
+  nameSpan.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const newName = input.value.trim();
+    modalRenaming = false;
+    if (save && newName && newName !== currentName && activeTarget) {
+      await fetch(`/api/rename?${targetQuery(activeTarget)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+    }
+    refreshModalHeader();
+    poll();  // also refresh cards on the grid
+  };
+
+  // stopPropagation so Esc/Enter don't escape to the document handler
+  // (which would close the modal) or the xterm terminal.
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+async function handleModalAutoRename() {
+  if (!activeTarget || modalAutoRename.dataset.busy) return;
+  modalAutoRename.dataset.busy = "1";
+  const orig = modalAutoRename.textContent;
+  modalAutoRename.textContent = "✨ thinking…";
+  modalAutoRename.disabled = true;
+  try {
+    const data = await apiCall(
+      "auto-rename window",
+      `/api/auto-rename-window?${targetQuery(activeTarget)}`,
+      { method: "POST" }
+    );
+    if (data) {
+      refreshModalHeader();
+      poll();
+    }
+  } finally {
+    modalAutoRename.textContent = orig;
+    modalAutoRename.disabled = false;
+    delete modalAutoRename.dataset.busy;
+  }
 }
 
 function escapeHtml(s) {

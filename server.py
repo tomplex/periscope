@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -51,6 +51,13 @@ _active_per_session: dict[str, str] = {}
 _spinner_last_seen: dict[str, tuple[str, float]] = {}
 SPINNER_GRACE_S = 4.0
 
+# Per-target "is this a Claude pane" stickiness. Detection is via STATUS_RE
+# matching CC's bottom status line, but CC's interactive dialogs (e.g.
+# AskUserQuestion) take over the screen and temporarily hide that line — we
+# don't want the card to flip back to "shell" while the user is mid-prompt.
+_claude_last_seen: dict[str, float] = {}
+CLAUDE_STICKY_S = 120.0
+
 
 def smooth_spinner(target: str, current: str | None) -> str | None:
     now = time.time()
@@ -62,6 +69,18 @@ def smooth_spinner(target: str, current: str | None) -> str | None:
         return last[0]
     _spinner_last_seen.pop(target, None)
     return None
+
+
+def smooth_is_claude(target: str, current: bool) -> bool:
+    now = time.time()
+    if current:
+        _claude_last_seen[target] = now
+        return True
+    last = _claude_last_seen.get(target, 0)
+    if now - last < CLAUDE_STICKY_S:
+        return True
+    _claude_last_seen.pop(target, None)
+    return False
 
 
 def note_focus(target: str) -> None:
@@ -91,7 +110,27 @@ STATUS_RE = re.compile(
 # above STATUS_RE. We now pull those from the pane's cwd directly (git +
 # `gh pr list`), independent of any statusline customization.
 
-SPINNER_RE = re.compile(r"^[\s✻✶*·]+(?P<verb>[A-Z]\w+(?:ing|ed))[…\.]")
+# Spinner: any non-ASCII glyph at line start (Claude Code rotates through
+# ✻ ✶ ✷ ✳ ✦ … and others — enumerating breaks every time Claude adds a new
+# one) + whitespace + content + a literal `…`. The ellipsis is what
+# distinguishes an active spinner from past-tense status lines like
+# "✻ Brewed for 31s" (no `…`).
+SPINNER_RE = re.compile(r"^\s*[^\x00-\x7f]\s+(?P<phrase>\S.*?)…")
+# Pull out a verb-shaped word for the card label (`envisioning…`,
+# `planning…`). Falls back to the first word if there's no clean verb.
+SPINNER_VERB_RE = re.compile(r"\b([A-Z]\w+(?:ing|ed))\b")
+
+# Needs-input: the numbered-choice permission dialog. `❯ 1.` plus the
+# "Esc to cancel" footer is Claude-Code-specific; either alone false-positives
+# (shells use ❯ as a prompt; "Esc to cancel" appears in transient toasts).
+# Claude's AskUserQuestion dialog footers consistently include "Esc to cancel"
+# regardless of single-select vs multi-select. Pairing the marker with a
+# numbered option line catches both:
+#   single-select:  "❯ 1. Yes"
+#   multi-select:   "1. [ ] Pane-level helpers"
+NEEDS_INPUT_MARKER = "Esc to cancel"
+NEEDS_INPUT_OPTION_RE = re.compile(r"^\s*(?:❯\s+)?\d+\.\s+", re.MULTILINE)
+
 RECAP_RE = re.compile(
     r"※ recap:\s*(?P<text>.+?)(?=\n\s*[─❯]|\Z)", re.DOTALL
 )
@@ -303,21 +342,47 @@ def parse_pane(content: str) -> dict:
 
     is_claude = status is not None
 
-    # Spinner: most recent "✻ Verbing…" line in the pane.
+    # Spinner: most recent "<glyph> <phrase>…" line. Verb extraction is a
+    # display nicety — detection only requires the glyph + ellipsis.
     spinner = None
     for line in reversed(lines[-40:]):
         m = SPINNER_RE.match(line)
         if m:
-            spinner = m.group("verb")
+            phrase = m.group("phrase").strip()
+            vm = SPINNER_VERB_RE.search(phrase)
+            if vm:
+                spinner = vm.group(1)
+            else:
+                first = phrase.split(None, 1)[0] if phrase else ""
+                spinner = first or "working"
             break
 
-    # Pending input: ❯ followed by some text (not just empty prompt)
+    # Needs-input: Claude's choice dialog — covers both single-select
+    # (permission prompts: "❯ 1. Yes / 2. No") and multi-select
+    # (AskUserQuestion: "1. [ ] option"). Footer marker + numbered option
+    # together avoid false positives on shell content that happens to have
+    # one or the other in isolation.
+    tail_text = "\n".join(lines[-30:])
+    needs_input = (
+        NEEDS_INPUT_MARKER in tail_text
+        and bool(NEEDS_INPUT_OPTION_RE.search(tail_text))
+    )
+    # The dialog footer + numbered options is a Claude-specific UI; if we see
+    # it the pane IS Claude even if STATUS_RE missed (the dialog occupies the
+    # bottom rows where the status line normally lives).
+    if needs_input:
+        is_claude = True
+
+    # Pending input: ❯ followed by some text the user has typed but not
+    # submitted. Skip when needs_input is true — `❯ 1.` is the dialog's
+    # selection line, not user typing.
     pending_input = None
-    for line in reversed(lines[-15:]):
-        m = PROMPT_LINE_RE.match(line.strip())
-        if m and m.group("input").strip():
-            pending_input = m.group("input").strip()
-            break
+    if not needs_input:
+        for line in reversed(lines[-15:]):
+            m = PROMPT_LINE_RE.match(line.strip())
+            if m and m.group("input").strip():
+                pending_input = m.group("input").strip()
+                break
 
     # Most recent recap block
     full = "\n".join(lines)
@@ -340,8 +405,12 @@ def parse_pane(content: str) -> dict:
         last_line = s[:200]
         break
 
+    # State priority: needs-input wins over working (a spinner glyph can
+    # linger in scrollback above the dialog), working wins over waiting.
     if not is_claude:
         state = "shell"
+    elif needs_input:
+        state = "needs-input"
     elif spinner:
         state = "working"
     else:
@@ -351,6 +420,7 @@ def parse_pane(content: str) -> dict:
         "is_claude": is_claude,
         "state": state,
         "spinner": spinner,
+        "needs_input": needs_input,
         "pending_input": pending_input,
         "recap": recap,
         "last_line": last_line,
@@ -374,7 +444,21 @@ def state():
         # Hysteresis: smooth out per-poll detection gaps so cards / modal
         # subtitles don't flicker between "thinking" and idle.
         parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
-        if parsed.get("is_claude") and parsed.get("spinner") and parsed.get("state") != "working":
+        # is_claude stickiness: dialogs hide the bottom status line; without
+        # this the card would flip to "shell" mid-prompt and lose its state
+        # coloring + needs-input classification.
+        parsed["is_claude"] = smooth_is_claude(target, parsed.get("is_claude", False))
+        if not parsed["is_claude"]:
+            parsed["state"] = "shell"
+        # Spinner hysteresis can promote a momentarily-blank parse back to
+        # "working" — but only if we're not already in a louder state.
+        # needs-input must never be downgraded back to working: the dialog
+        # commonly lingers below a stale spinner glyph in scrollback.
+        if (
+            parsed.get("is_claude")
+            and parsed.get("spinner")
+            and parsed.get("state") not in ("working", "needs-input")
+        ):
             parsed["state"] = "working"
         git = cached_git_state(w.get("cwd", "")) or {}
         pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
@@ -401,7 +485,10 @@ def pane(session: str, index: int, lines: int = 200):
     plain = re.sub(r"\x1b\[[\d;]*m", "", content)
     parsed = parse_pane(plain)
     parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
-    if parsed.get("is_claude") and parsed.get("spinner") and parsed.get("state") != "working":
+    parsed["is_claude"] = smooth_is_claude(target, parsed.get("is_claude", False))
+    if not parsed["is_claude"]:
+        parsed["state"] = "shell"
+    if parsed.get("is_claude") and parsed.get("spinner") and parsed.get("state") not in ("working", "needs-input"):
         parsed["state"] = "working"
     try:
         meta = tmux(
@@ -413,10 +500,18 @@ def pane(session: str, index: int, lines: int = 200):
         window_name, cwd = "", ""
     git = cached_git_state(cwd) or {}
     pr = cached_pr_state(cwd, git.get("branch")) or {}
+    # Shorten $HOME → ~ for display. Done server-side because the browser
+    # doesn't know the user's home dir.
+    home = os.path.expanduser("~")
+    cwd_display = cwd
+    if cwd and (cwd == home or cwd.startswith(home + "/")):
+        cwd_display = "~" + cwd[len(home):]
     return {
         "content": content,
         "target": target,
         "name": window_name,
+        "cwd": cwd_display,
+        "session": session,
         **parsed,
         **git,
         **pr,
@@ -626,12 +721,17 @@ def auto_rename_session(session: str):
         plain = re.sub(r"\x1b\[[\d;]*m", "", content)
         snippet_lines = [ln for ln in plain.split("\n") if ln.strip()][-20:]
         snippet = "\n    ".join(snippet_lines)[-1200:]
+        # branch/pr no longer live in parse_pane output — they're derived
+        # from the pane's cwd via git/gh. Fetching here (cached) gives the
+        # prompt actually-useful context.
+        git = cached_git_state(w.get("cwd", "")) or {}
+        pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
         context.append(
             {
                 "index": w["index"],
                 "current_name": w["name"],
-                "branch": parsed.get("branch"),
-                "pr": parsed.get("pr"),
+                "branch": git.get("branch"),
+                "pr": pr.get("pr"),
                 "recap": parsed.get("recap"),
                 "pending_input": parsed.get("pending_input"),
                 "recent_excerpt": snippet,
@@ -672,6 +772,64 @@ def auto_rename_session(session: str):
     return {"ok": True, "applied": applied, "session": session}
 
 
+@app.post("/api/auto-rename-window")
+def auto_rename_window(session: str, index: int):
+    """Single-window variant of auto_rename_session. Same prompt machinery, but
+    scoped to one window so the user can refresh a single card's name without
+    perturbing siblings."""
+    target = f"{session}:{index}"
+    try:
+        meta = tmux(
+            "display-message", "-t", target, "-p",
+            "#{window_name}\t#{pane_current_path}",
+        ).strip()
+        current_name, _, cwd = meta.partition("\t")
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if not current_name:
+        return {"ok": False, "error": f"target {target!r} not found"}
+
+    try:
+        content = capture(target, lines=80)
+        parsed = parse_pane(content)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    plain = re.sub(r"\x1b\[[\d;]*m", "", content)
+    snippet_lines = [ln for ln in plain.split("\n") if ln.strip()][-20:]
+    snippet = "\n    ".join(snippet_lines)[-1200:]
+    git = cached_git_state(cwd) or {}
+    pr = cached_pr_state(cwd, git.get("branch")) or {}
+
+    ctx = [{
+        "index": index,
+        "current_name": current_name,
+        "branch": git.get("branch"),
+        "pr": pr.get("pr"),
+        "recap": parsed.get("recap"),
+        "pending_input": parsed.get("pending_input"),
+        "recent_excerpt": snippet,
+    }]
+    prompt = build_rename_prompt(ctx)
+    try:
+        result = claude_complete(prompt)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    cleaned = result.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.MULTILINE)
+    try:
+        new_names = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"claude returned invalid JSON: {e}", "raw": result[:500]}
+    new_name = (new_names.get(str(index)) or "").strip()
+    if not new_name:
+        return {"ok": False, "error": "claude returned empty name"}
+    if new_name == current_name:
+        return {"ok": True, "applied": False, "old": current_name, "new": current_name}
+    tmux("rename-window", "-t", target, new_name)
+    return {"ok": True, "applied": True, "old": current_name, "new": new_name}
+
+
 @app.post("/api/send")
 def send(session: str, index: int, body: SendBody):
     """Send input to a tmux pane.
@@ -702,6 +860,62 @@ def send(session: str, index: int, body: SendBody):
         return {"ok": False, "error": "no keys or paste"}
     note_focus(target)
     return {"ok": True, "target": target}
+
+
+# --- Paste image (screenshot) → temp file → @path into pane --------------
+#
+# xterm.js has no way to carry image bytes through to Claude Code, and tmux
+# has no image protocol either. So we shortcut: the browser intercepts a
+# paste event with an image in the clipboard, POSTs the bytes here, we write
+# them to /tmp, and bracketed-paste "@/tmp/foo.png " into the pane. Claude
+# Code resolves @-paths against the filesystem on submit.
+#
+# Files are best-effort GC'd on each paste (anything older than an hour).
+# Same-machine only by construction — server binds 127.0.0.1.
+_PASTE_IMG_DIR = Path("/tmp")
+_PASTE_IMG_PREFIX = "periscope-paste-"
+_PASTE_IMG_MAX_AGE_S = 3600.0
+_PASTE_IMG_MAX_BYTES = 25 * 1024 * 1024
+_EXT_BY_MIME = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/heic": "heic",
+}
+
+
+def _sweep_old_paste_images() -> None:
+    cutoff = time.time() - _PASTE_IMG_MAX_AGE_S
+    for p in _PASTE_IMG_DIR.glob(f"{_PASTE_IMG_PREFIX}*"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except Exception:
+            pass
+
+
+@app.post("/api/paste-image")
+async def paste_image(session: str, index: int, request: Request):
+    target = f"{session}:{index}"
+    body = await request.body()
+    if not body:
+        return {"ok": False, "error": "empty body"}
+    if len(body) > _PASTE_IMG_MAX_BYTES:
+        return {"ok": False, "error": f"image too large ({len(body)} bytes)"}
+    mime = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    ext = _EXT_BY_MIME.get(mime, "png")
+    _sweep_old_paste_images()
+    path = _PASTE_IMG_DIR / f"{_PASTE_IMG_PREFIX}{uuid.uuid4().hex}.{ext}"
+    path.write_bytes(body)
+    # Trailing space so Claude Code commits the @-reference (its file picker
+    # closes on whitespace) and the user can keep typing immediately after.
+    buf = f"wd-img-{uuid.uuid4().hex[:8]}"
+    tmux("set-buffer", "-b", buf, f"@{path} ")
+    tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+    note_focus(target)
+    return {"ok": True, "path": str(path), "bytes": len(body)}
 
 
 # --- Live terminal: WebSocket bridge to a tmux pane ----------------------
@@ -940,4 +1154,23 @@ app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    # loop="asyncio" forces the stdlib selector loop instead of uvloop. As of
+    # uvloop 0.22.1 + CPython 3.14, uvloop captures `asyncio.iscoroutinefunction`
+    # at import time and calls it from `run_in_executor`, which now emits a
+    # DeprecationWarning per call (loud during WS resize traffic). Revert this
+    # when uvloop ships a 3.14-compatible release.
+    #
+    # reload=True watches server.py for changes and restarts the worker. Needs
+    # an import string (not the `app` object) so the reloader can re-import the
+    # module. reload_dirs is scoped to this file's parent so edits under
+    # static/ don't bounce the server — Vite handles frontend reloads in dev,
+    # and direct browser hits pick up new static files without a restart.
+    uvicorn.run(
+        "server:app",
+        host="127.0.0.1",
+        port=8765,
+        log_level="warning",
+        loop="asyncio",
+        reload=True,
+        reload_dirs=[str(Path(__file__).parent)],
+    )

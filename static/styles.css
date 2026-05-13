@@ -11,6 +11,7 @@
   --fg-dim: #abb2bf;
   --fg-very-dim: #828997;
   --accent: #58a6ff;
+  --needs-input: #f85149;
   --working: #d29922;
   --waiting: #58a6ff;
   --shell: #6e7681;
@@ -183,6 +184,7 @@ main {
 
 .session-pill.has-waiting { color: var(--waiting); border-color: var(--waiting); }
 .session-pill.has-working { color: var(--working); border-color: var(--working); }
+.session-pill.has-needs-input { color: var(--needs-input); border-color: var(--needs-input); }
 .session-pill.has-ci-bad { color: var(--error); border-color: var(--error); }
 
 .auto-rename {
@@ -266,10 +268,11 @@ main {
   border-color: var(--accent);
 }
 
-.card.state-working { border-left-color: var(--working); }
-.card.state-waiting { border-left-color: var(--waiting); }
-.card.state-shell   { border-left-color: var(--shell); opacity: 0.7; }
-.card.ci-bad        { border-left-color: var(--error); }
+.card.state-needs-input { border-left-color: var(--needs-input); }
+.card.state-working     { border-left-color: var(--working); }
+.card.state-waiting     { border-left-color: var(--waiting); }
+.card.state-shell       { border-left-color: var(--shell); opacity: 0.7; }
+.card.ci-bad            { border-left-color: var(--error); }
 
 .card-head {
   display: flex;
@@ -316,9 +319,10 @@ main {
   font-weight: 500;
 }
 
-.card-state.state-working { color: var(--working); }
-.card-state.state-waiting { color: var(--waiting); }
-.card-state.state-shell   { color: var(--fg-very-dim); }
+.card-state.state-needs-input { color: var(--needs-input); font-weight: 600; }
+.card-state.state-working     { color: var(--working); }
+.card-state.state-waiting     { color: var(--waiting); }
+.card-state.state-shell       { color: var(--fg-very-dim); }
 
 /* Hover-revealed kill button on each card. Keeping it transparent by default
    prevents the X from cluttering the dense grid. */
@@ -488,6 +492,31 @@ body.modal-open { overflow: hidden; }
   margin: 0;
   font-size: 14px;
   font-weight: 600;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.modal-head .modal-name {
+  color: var(--fg);
+}
+
+.modal-head .modal-session {
+  color: var(--fg-very-dim);
+  font-weight: 400;
+  font-size: 13px;
+}
+
+.modal-head .modal-cwd {
+  color: var(--fg-very-dim);
+  font-weight: 400;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .modal-subtitle {
