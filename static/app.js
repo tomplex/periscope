@@ -16,6 +16,12 @@ const modalBrief = document.getElementById("modal-brief");
 let term = null;
 let termWs = null;
 
+// Esc-tap state. Single Esc closes the modal (after a brief debounce window
+// so we can distinguish from double-tap). Double Esc within the window
+// cancels the close and forwards Esc to the terminal for Claude to interrupt.
+const DOUBLE_ESC_MS = 300;
+let escCloseTimer = null;
+
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
 let lastSpinner = null;          // last detected spinner verb (for hysteresis)
@@ -515,16 +521,39 @@ function startLiveTerminal(target) {
   // to the pane ourselves. Returning false from the handler tells xterm to
   // skip its own processing (which would otherwise be nothing for these).
   term.attachCustomKeyEventHandler((e) => {
-    if (e.type !== "keydown" || !e.metaKey) return true;
+    if (e.type !== "keydown") return true;
+
+    // Esc handling: first tap schedules a modal close; second tap within
+    // DOUBLE_ESC_MS cancels the close and lets xterm send Esc to the pane
+    // (so Claude sees it for interrupt / cancel).
+    if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      if (escCloseTimer) {
+        clearTimeout(escCloseTimer);
+        escCloseTimer = null;
+        return true;  // let xterm emit ESC normally
+      }
+      e.preventDefault();
+      escCloseTimer = setTimeout(() => {
+        escCloseTimer = null;
+        closeModal();
+      }, DOUBLE_ESC_MS);
+      return false;
+    }
+
+    if (!e.metaKey) return true;
     const sendCtrl = (seq) => {
       e.preventDefault();
       if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(seq);
     };
     switch (e.key) {
-      case "Backspace": sendCtrl("\x15"); return false;  // Cmd+Backspace = kill line backward (Ctrl+U)
-      case "Delete":    sendCtrl("\x0b"); return false;  // Cmd+Delete   = kill line forward  (Ctrl+K)
-      case "ArrowLeft": sendCtrl("\x01"); return false;  // Cmd+Left     = beginning of line  (Ctrl+A)
-      case "ArrowRight":sendCtrl("\x05"); return false;  // Cmd+Right    = end of line        (Ctrl+E)
+      // Cmd+Backspace = clear input box. Ctrl+U (kill-line-backward) doesn't
+      // reliably trigger in Ink-based TUIs like Claude Code, so we just flood
+      // backspaces — every input library handles \x7f. 200 is plenty for any
+      // realistic input length; extras hit empty input as no-ops.
+      case "Backspace": sendCtrl("\x7f".repeat(200)); return false;
+      case "Delete":    sendCtrl("\x0b"); return false;  // Cmd+Delete   = kill line forward (Ctrl+K)
+      case "ArrowLeft": sendCtrl("\x01"); return false;  // Cmd+Left     = beginning of line (Ctrl+A)
+      case "ArrowRight":sendCtrl("\x05"); return false;  // Cmd+Right    = end of line       (Ctrl+E)
       default: return true;  // Cmd+C/V/etc fall through to xterm's clipboard handling
     }
   });
@@ -652,6 +681,10 @@ function applySpinnerHysteresis(data) {
 }
 
 function closeModal() {
+  if (escCloseTimer) {
+    clearTimeout(escCloseTimer);
+    escCloseTimer = null;
+  }
   stopLiveTerminal();
   modal.classList.add("hidden");
   document.body.classList.remove("modal-open");
