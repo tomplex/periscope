@@ -488,6 +488,10 @@ function startLiveTerminal(target) {
     cursorBlink: true,
     scrollback: 5000,
     convertEol: false,
+    // Option key → Meta escape prefix, so Option+Backspace becomes the
+    // readline word-back-delete sequence (ESC + DEL), Option+Left becomes
+    // ESC + b (word back), etc. Claude Code's input box honors these.
+    macOptionIsMeta: true,
     theme: {
       background: "#0d1117",
       foreground: "#e6edf3",
@@ -505,6 +509,25 @@ function startLiveTerminal(target) {
   });
   term.open(modalXtermEl);
   term.focus();
+
+  // The browser intercepts Cmd+key combos before xterm sees them. Translate
+  // the common ones into readline-style control sequences and forward them
+  // to the pane ourselves. Returning false from the handler tells xterm to
+  // skip its own processing (which would otherwise be nothing for these).
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== "keydown" || !e.metaKey) return true;
+    const sendCtrl = (seq) => {
+      e.preventDefault();
+      if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(seq);
+    };
+    switch (e.key) {
+      case "Backspace": sendCtrl("\x15"); return false;  // Cmd+Backspace = kill line backward (Ctrl+U)
+      case "Delete":    sendCtrl("\x0b"); return false;  // Cmd+Delete   = kill line forward  (Ctrl+K)
+      case "ArrowLeft": sendCtrl("\x01"); return false;  // Cmd+Left     = beginning of line  (Ctrl+A)
+      case "ArrowRight":sendCtrl("\x05"); return false;  // Cmd+Right    = end of line        (Ctrl+E)
+      default: return true;  // Cmd+C/V/etc fall through to xterm's clipboard handling
+    }
+  });
 
   const wsProto = location.protocol === "https:" ? "wss" : "ws";
   termWs = new WebSocket(`${wsProto}://${location.host}/ws/pane?${targetQuery(target)}`);

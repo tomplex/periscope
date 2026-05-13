@@ -465,29 +465,44 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
     pipe_active = False
 
     try:
-        # 1) Send current pane state and size so xterm renders something
-        #    coherent immediately, before the pipe attaches.
+        # 1) Get tmux's view of the pane: size, cursor position, alt-screen
+        #    state. We need all three to render the initial blob into an xterm
+        #    state that matches what tmux thinks the pane currently looks like.
+        #    If we don't, incremental updates from the stream (e.g. "cursor to
+        #    row 5 col 15, write '20s'") land at xterm's stale cursor and
+        #    leave ghost text from the old buffer.
         try:
-            cols_rows = tmux(
-                "display-message", "-t", target, "-p", "#{pane_width}x#{pane_height}"
+            meta = tmux(
+                "display-message", "-t", target, "-p",
+                "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{alternate_on}",
             ).strip()
-            cols, rows = (int(x) for x in cols_rows.split("x"))
+            cols_s, rows_s, cx_s, cy_s, alt_s = meta.split("|")
+            cols, rows = int(cols_s), int(rows_s)
+            cx, cy = int(cx_s), int(cy_s)
+            alt_on = alt_s == "1"
         except Exception:
-            cols, rows = 120, 40
+            cols, rows, cx, cy, alt_on = 120, 40, 0, 0, False
+
         await websocket.send_text(
             json.dumps({"type": "size", "cols": cols, "rows": rows})
         )
 
         initial = tmux("capture-pane", "-t", target, "-p", "-e", "-S", "-200")
-        if initial:
-            # capture-pane separates lines with bare \n. xterm.js needs \r\n
-            # to return each new line to column 0 — without the \r, every line
-            # staircases rightward by however many columns the previous line
-            # had occupied. The pipe-pane stream that follows already includes
-            # the proper escapes (since it's the actual byte stream tmux
-            # renders), so this fixup is only needed for the initial blob.
-            initial = initial.replace("\n", "\r\n")
-            await websocket.send_bytes(initial.encode("utf-8", errors="replace"))
+        # capture-pane separates lines with bare \n. xterm needs \r\n to
+        # return each new line to column 0 — without the \r every line would
+        # staircase rightward.
+        body = initial.replace("\n", "\r\n") if initial else ""
+        # Build a prefix that puts xterm into the same screen mode tmux is in,
+        # clears any stale rendering, then a suffix that parks the cursor
+        # where tmux thinks it is.
+        prefix = ""
+        if alt_on:
+            prefix += "\x1b[?1049h"  # enter alt-screen buffer
+        prefix += "\x1b[2J\x1b[H"     # clear screen, home cursor
+        # ANSI cursor positioning is 1-indexed; tmux's #{cursor_x/y} are 0-indexed.
+        suffix = f"\x1b[{cy + 1};{cx + 1}H"
+        blob = (prefix + body + suffix).encode("utf-8", errors="replace")
+        await websocket.send_bytes(blob)
 
         # 2) Set up the pipe. mkfifo + open(O_RDONLY|O_NONBLOCK) returns
         #    immediately; tmux opens the write end via the cat subprocess.
