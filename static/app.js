@@ -8,6 +8,11 @@ const modalTitle = document.getElementById("modal-title");
 const modalPane = document.getElementById("modal-pane");
 const modalFocus = document.getElementById("modal-focus");
 const modalClose = document.getElementById("modal-close");
+const sendInput = document.getElementById("send-input");
+const keyButtons = document.getElementById("key-buttons");
+
+const MODAL_POLL_MS = 1500;
+let modalPollHandle = null;
 
 let currentFilter = "all";
 let lastWindows = [];
@@ -285,11 +290,42 @@ async function openModal(target) {
   modalTitle.textContent = target;
   modalPane.textContent = "loading...";
   modal.classList.remove("hidden");
-  const [s, i] = target.split(":");
-  const res = await fetch(`/api/pane/${encodeURIComponent(s)}/${i}?lines=200`);
-  const data = await res.json();
-  modalPane.innerHTML = ansiToHtml(data.content);
-  modalPane.scrollTop = modalPane.scrollHeight;
+  document.body.classList.add("modal-open");
+  await refreshModalPane({ forceScroll: true });
+  sendInput.value = "";
+  sendInput.focus();
+  modalPollHandle = setInterval(() => refreshModalPane(), MODAL_POLL_MS);
+}
+
+async function refreshModalPane({ forceScroll = false } = {}) {
+  if (!activeTarget) return;
+  const [s, i] = activeTarget.split(":");
+  try {
+    const res = await fetch(
+      `/api/pane/${encodeURIComponent(s)}/${i}?lines=200`
+    );
+    const data = await res.json();
+    const wasAtBottom =
+      modalPane.scrollHeight - modalPane.scrollTop - modalPane.clientHeight < 24;
+    modalPane.innerHTML = ansiToHtml(data.content);
+    if (forceScroll || wasAtBottom) {
+      modalPane.scrollTop = modalPane.scrollHeight;
+    }
+  } catch (e) {
+    // swallow — next tick will retry
+  }
+}
+
+async function sendKeys(keys) {
+  if (!activeTarget || !keys.length) return;
+  const [s, i] = activeTarget.split(":");
+  await fetch(`/api/send/${encodeURIComponent(s)}/${i}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keys }),
+  });
+  // Quick refresh so the user sees it land before the next poll tick.
+  setTimeout(() => refreshModalPane(), 80);
 }
 
 // --- ANSI -> HTML ---------------------------------------------------------
@@ -398,8 +434,34 @@ function ansiToHtml(text) {
 
 function closeModal() {
   modal.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  if (modalPollHandle) {
+    clearInterval(modalPollHandle);
+    modalPollHandle = null;
+  }
   activeTarget = null;
 }
+
+sendInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const text = sendInput.value;
+    sendInput.value = "";
+    if (text === "") {
+      sendKeys(["Enter"]);
+    } else {
+      sendKeys([text, "Enter"]);
+    }
+  }
+});
+
+keyButtons.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-keys]");
+  if (!btn) return;
+  const keys = JSON.parse(btn.dataset.keys);
+  sendKeys(keys);
+  sendInput.focus();
+});
 
 function escapeHtml(s) {
   if (s == null) return "";

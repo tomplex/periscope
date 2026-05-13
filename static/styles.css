@@ -305,6 +305,8 @@ main {
   font-size: 13px;
 }
 
+body.modal-open { overflow: hidden; }
+
 #modal {
   position: fixed;
   inset: 0;
@@ -314,6 +316,7 @@ main {
   justify-content: center;
   z-index: 100;
   padding: 24px;
+  overscroll-behavior: contain;
 }
 
 #modal.hidden { display: none; }
@@ -374,9 +377,62 @@ main {
   margin: 0;
   padding: 14px 16px;
   overflow: auto;
+  overscroll-behavior: contain;
   font-size: 11px;
   line-height: 1.5;
   color: var(--fg);
   white-space: pre;
   flex: 1;
+}
+
+.modal-foot {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#send-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+  font-size: 12px;
+  outline: none;
+  width: 100%;
+}
+
+#send-input:focus {
+  border-color: var(--accent);
+}
+
+.key-buttons {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.key-buttons button {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-family: "SF Mono", monospace;
+  font-size: 11px;
+  cursor: pointer;
+  min-width: 36px;
+}
+
+.key-buttons button:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.key-buttons button:active {
+  background: var(--accent);
+  color: var(--bg);
 }

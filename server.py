@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 app = FastAPI()
 STATIC = Path(__file__).parent / "static"
@@ -197,6 +198,27 @@ def focus(session: str, index: int):
             tmux("switch-client", "-c", c, "-t", target)
             switched.append(c)
     return {"ok": True, "switched": switched, "target": target}
+
+
+class SendBody(BaseModel):
+    keys: list[str]
+
+
+@app.post("/api/send/{session}/{index}")
+def send(session: str, index: int, body: SendBody):
+    """Send keystrokes to a tmux pane.
+
+    `keys` is a list of tmux key names or literal strings, matching the
+    arguments tmux send-keys accepts. Examples:
+      ["Escape"]                  -> send Escape
+      ["C-c"]                     -> send Ctrl+C
+      ["git status", "Enter"]     -> type the string then press Enter
+    """
+    target = f"{session}:{index}"
+    if not body.keys:
+        return {"ok": False, "error": "no keys"}
+    tmux("send-keys", "-t", target, *body.keys)
+    return {"ok": True, "target": target}
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
