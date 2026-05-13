@@ -469,8 +469,9 @@ async function openModal(target) {
   lastSpinner = null;
   lastSpinnerSeenAt = 0;
   await refreshModalPane({ forceScroll: true });
-  sendInput.value = "";
+  sendInput.value = loadDraft(target);
   sendInput.focus();
+  moveCursorToEnd(sendInput);
   modalPollHandle = setInterval(() => refreshModalPane(), MODAL_POLL_MS);
 }
 
@@ -592,6 +593,27 @@ function pushSendHistory(target, msg) {
   arr.unshift(msg);
   h[target] = arr.slice(0, HISTORY_MAX);
   saveSendHistory(h);
+}
+
+// --- Per-target in-progress drafts ---
+// Anything sitting in the textarea when the modal closes is preserved per
+// target so reopening returns you to exactly where you left off. Cleared on
+// successful submit.
+
+const DRAFTS_KEY = "periscope:drafts";
+
+function loadDrafts() {
+  try { return JSON.parse(localStorage.getItem(DRAFTS_KEY)) || {}; }
+  catch { return {}; }
+}
+function saveDraft(target, text) {
+  const drafts = loadDrafts();
+  if (text && text.trim()) drafts[target] = text;
+  else delete drafts[target];
+  localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+}
+function loadDraft(target) {
+  return loadDrafts()[target] || "";
 }
 function resetHistoryNav() {
   historyIndex = null;
@@ -765,6 +787,8 @@ function ansiToHtml(text) {
 }
 
 function closeModal() {
+  // Preserve any in-progress prompt for this target — reopening restores it.
+  if (activeTarget) saveDraft(activeTarget, sendInput.value);
   modal.classList.add("hidden");
   document.body.classList.remove("modal-open");
   if (modalPollHandle) {
@@ -800,7 +824,10 @@ sendInput.addEventListener("keydown", (e) => {
   e.preventDefault();
   const text = sendInput.value;
   sendInput.value = "";
-  if (activeTarget) pushSendHistory(activeTarget, text.trim());
+  if (activeTarget) {
+    pushSendHistory(activeTarget, text.trim());
+    saveDraft(activeTarget, "");  // submitted, so the draft is consumed
+  }
   resetHistoryNav();
   // Transient "sending…" — protected for 600ms so the pane poll doesn't
   // overwrite it before the user gets feedback.
