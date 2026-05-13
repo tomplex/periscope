@@ -415,17 +415,6 @@ body.modal-open { overflow: hidden; }
   font-style: italic;
 }
 
-.modal-brief {
-  padding: 8px 16px;
-  font-size: 12px;
-  color: var(--fg);
-  background: rgba(88, 166, 255, 0.06);
-  border-bottom: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  font-style: italic;
-}
-
-.modal-brief.hidden { display: none; }
 
 .modal-actions {
   display: flex;

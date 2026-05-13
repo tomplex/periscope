@@ -8,7 +8,9 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -57,13 +59,10 @@ STATUS_RE = re.compile(
     r"^\s*(?P<context>\d+)%\s*\|\s*↑\S+\s+↓\S+\s*\|\s*\$[\d.,]+\s*\|\s*(?P<model>.+?)\s*$"
 )
 
-# Title line above the status line:
-#   "  fdy | master | clean | github.com/.../pull/1234 ✓"
-TITLE_RE = re.compile(
-    r"^\s*(?P<title>.+?)\s+\|\s+(?P<branch>[^|]+?)\s+\|\s+(?P<git>[^|]+?)\s+\|\s+(?P<repo>.+?)\s*$"
-)
+# Branch / PR / CI used to come from a custom statusline rendered in the line
+# above STATUS_RE. We now pull those from the pane's cwd directly (git +
+# `gh pr list`), independent of any statusline customization.
 
-PR_RE = re.compile(r"github\.com/[^/]+/[^/]+/pull/(?P<num>\d+)\s*(?P<ci>[⟳✓✗])?")
 SPINNER_RE = re.compile(r"^[\s✻✶*·]+(?P<verb>[A-Z]\w+(?:ing|ed))[…\.]")
 RECAP_RE = re.compile(
     r"※ recap:\s*(?P<text>.+?)(?=\n\s*[─❯]|\Z)", re.DOTALL
@@ -78,24 +77,158 @@ def tmux(*args: str) -> str:
     return r.stdout
 
 
+# --- Git + PR state derived from each pane's current working directory ----
+#
+# Independent of any custom Claude statusline. We ask tmux for the pane's
+# current path, run git from there, and (if gh is installed) ask for the
+# PR + CI rollup attached to that branch. Results are cached because both
+# git status and gh queries cost real wall-clock time and the data changes
+# slowly compared to our polling cadence.
+
+_GIT_TTL = 15.0
+_PR_TTL = 60.0
+_git_cache: dict[str, tuple[float, dict | None]] = {}
+_pr_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
+_pr_fetching: set[tuple[str, str]] = set()
+_pr_lock = threading.Lock()
+_GH_AVAILABLE = shutil.which("gh") is not None
+
+
+def _run(cmd: list[str], cwd: str | None = None, timeout: float = 3.0) -> tuple[int, str]:
+    try:
+        r = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
+        )
+        return r.returncode, r.stdout.strip()
+    except Exception:
+        return -1, ""
+
+
+def git_state_for(path: str) -> dict | None:
+    """Return {branch, git} for the git repo at `path`, or None."""
+    if not path or not os.path.isdir(path):
+        return None
+    code, _ = _run(["git", "-C", path, "rev-parse", "--git-dir"])
+    if code != 0:
+        return None
+    _, branch = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
+    if not branch or branch == "HEAD":
+        _, sha = _run(["git", "-C", path, "rev-parse", "--short", "HEAD"])
+        branch = f"@{sha}" if sha else "?"
+    # Compact diff stats vs HEAD (covers staged + unstaged together).
+    _, diff = _run(["git", "-C", path, "diff", "HEAD", "--shortstat"])
+    adds = int(re.search(r"(\d+) insertion", diff).group(1)) if "insertion" in diff else 0
+    dels = int(re.search(r"(\d+) deletion", diff).group(1)) if "deletion" in diff else 0
+    # Unpushed commits ahead of upstream.
+    code, ahead_s = _run(["git", "-C", path, "rev-list", "--count", "@{u}..HEAD"])
+    ahead = int(ahead_s) if code == 0 and ahead_s.isdigit() else 0
+    state = "clean" if (adds == 0 and dels == 0) else f"+{adds} -{dels}"
+    if ahead > 0:
+        state += " *"
+    return {"branch": branch, "git": state}
+
+
+def cached_git_state(path: str) -> dict | None:
+    if not path:
+        return None
+    now = time.time()
+    cached = _git_cache.get(path)
+    if cached and now - cached[0] < _GIT_TTL:
+        return cached[1]
+    data = git_state_for(path)
+    _git_cache[path] = (now, data)
+    return data
+
+
+def pr_state_for(path: str, branch: str) -> dict | None:
+    """Return {pr, ci} for the PR open against `branch` in repo at `path`."""
+    if not _GH_AVAILABLE or not path or not branch:
+        return None
+    code, out = _run(
+        [
+            "gh", "pr", "list",
+            "--head", branch,
+            "--state", "open",
+            "--json", "number,statusCheckRollup",
+            "--limit", "1",
+        ],
+        cwd=path,
+        timeout=8.0,
+    )
+    if code != 0 or not out:
+        return None
+    try:
+        prs = json.loads(out)
+    except Exception:
+        return None
+    if not prs:
+        return None
+    pr = prs[0]
+    rollup = pr.get("statusCheckRollup") or []
+    states = {(c.get("conclusion") or c.get("status") or "").upper() for c in rollup}
+    states.discard("")
+    ci = None
+    if states & {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}:
+        ci = "✗"
+    elif states & {"PENDING", "QUEUED", "IN_PROGRESS", "WAITING"}:
+        ci = "⟳"
+    elif states and states <= {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+        ci = "✓"
+    return {"pr": pr.get("number"), "ci": ci}
+
+
+def _fetch_pr_into_cache(path: str, branch: str) -> None:
+    try:
+        data = pr_state_for(path, branch)
+    except Exception:
+        data = None
+    with _pr_lock:
+        _pr_cache[(path, branch)] = (time.time(), data)
+        _pr_fetching.discard((path, branch))
+
+
+def cached_pr_state(path: str, branch: str | None) -> dict | None:
+    """Stale-while-revalidate. Returns cached data instantly; kicks off a
+    refresh in a background thread if the cache is missing or expired. The
+    next poll picks up the fresh value."""
+    if not branch:
+        return None
+    key = (path, branch)
+    now = time.time()
+    with _pr_lock:
+        cached = _pr_cache.get(key)
+        if cached and now - cached[0] < _PR_TTL:
+            return cached[1]
+        if key not in _pr_fetching:
+            _pr_fetching.add(key)
+            threading.Thread(
+                target=_fetch_pr_into_cache, args=(path, branch), daemon=True
+            ).start()
+        return cached[1] if cached else None
+
+
 def list_windows() -> list[dict]:
     out = tmux(
         "list-windows",
         "-a",
         "-F",
-        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}",
+        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}",
     )
     rows = []
     for line in out.strip().split("\n"):
         if not line:
             continue
-        s, idx, name, active = line.split("\t")
+        # pane_current_path is the active pane's cwd; safe even when missing.
+        parts = line.split("\t")
+        s, idx, name, active = parts[:4]
+        cwd = parts[4] if len(parts) > 4 else ""
         rows.append(
             {
                 "session": s,
                 "index": int(idx),
                 "name": name,
                 "active": active == "1",
+                "cwd": cwd,
             }
         )
     return rows
@@ -110,20 +243,15 @@ def parse_pane(content: str) -> dict:
     lines = [ln for ln in raw_lines if ln.strip() != ""]
 
     status = None
-    title = None
-    # The Claude UI keeps its status block (title + context-line) at the very
-    # bottom of the pane. If we don't see it in the last 4 non-empty lines, the
-    # user is at a shell prompt and the pane shouldn't be marked as Claude even
-    # if scrollback contains old status lines.
+    # Claude Code's bottom status line ("X% | ↑n ↓n | $cost | model") signals
+    # both "this is a Claude pane" and gives us the context+model fields.
+    # Branch/PR/CI used to be parsed from a custom statusline rendered above
+    # this — we now derive them from the pane's cwd via git/gh instead.
     tail = lines[-4:]
-    for i in range(len(tail) - 1, -1, -1):
-        m = STATUS_RE.match(tail[i])
+    for line in reversed(tail):
+        m = STATUS_RE.match(line)
         if m:
             status = m.groupdict()
-            if i > 0:
-                t = TITLE_RE.match(tail[i - 1])
-                if t:
-                    title = t.groupdict()
             break
 
     is_claude = status is not None
@@ -152,15 +280,6 @@ def parse_pane(content: str) -> dict:
         recap = matches[-1].group("text").strip()
         recap = re.sub(r"\s+", " ", recap)[:400]
 
-    # PR + CI state
-    pr_num = None
-    ci_state = None
-    if title:
-        m = PR_RE.search(title["repo"])
-        if m:
-            pr_num = int(m.group("num"))
-            ci_state = m.group("ci")
-
     # Last meaningful line for shell panes / fallback
     last_line = ""
     for line in reversed(lines):
@@ -169,7 +288,7 @@ def parse_pane(content: str) -> dict:
             continue
         if s.startswith("─") or s.startswith("❯"):
             continue
-        if STATUS_RE.match(line) or TITLE_RE.match(line):
+        if STATUS_RE.match(line):
             continue
         last_line = s[:200]
         break
@@ -188,11 +307,6 @@ def parse_pane(content: str) -> dict:
         "pending_input": pending_input,
         "recap": recap,
         "last_line": last_line,
-        "title": title["title"].strip() if title else None,
-        "branch": title["branch"].strip() if title else None,
-        "git": title["git"].strip() if title else None,
-        "pr": pr_num,
-        "ci": ci_state,
         "context_pct": int(status["context"]) if status else None,
         "model": status["model"].strip() if status else None,
     }
@@ -210,8 +324,14 @@ def state():
             parsed = parse_pane(content)
         except Exception as e:
             parsed = {"error": str(e), "state": "error", "is_claude": False}
+        git = cached_git_state(w.get("cwd", "")) or {}
+        pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
         result.append(
-            {**w, **parsed, "target": target, "focused_at": _focused_at.get(target, 0)}
+            {
+                **w, **parsed, **git, **pr,
+                "target": target,
+                "focused_at": _focused_at.get(target, 0),
+            }
         )
     return {"windows": result, "ts": int(time.time())}
 
@@ -229,16 +349,22 @@ def pane(session: str, index: int, lines: int = 200):
     plain = re.sub(r"\x1b\[[\d;]*m", "", content)
     parsed = parse_pane(plain)
     try:
-        window_name = tmux(
-            "display-message", "-t", target, "-p", "#{window_name}"
+        meta = tmux(
+            "display-message", "-t", target, "-p",
+            "#{window_name}\t#{pane_current_path}",
         ).strip()
+        window_name, _, cwd = meta.partition("\t")
     except Exception:
-        window_name = ""
+        window_name, cwd = "", ""
+    git = cached_git_state(cwd) or {}
+    pr = cached_pr_state(cwd, git.get("branch")) or {}
     return {
         "content": content,
         "target": target,
         "name": window_name,
         **parsed,
+        **git,
+        **pr,
     }
 
 

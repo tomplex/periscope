@@ -9,7 +9,6 @@ const modalXtermEl = document.getElementById("modal-xterm");
 const modalFocus = document.getElementById("modal-focus");
 const modalClose = document.getElementById("modal-close");
 const modalSubtitle = document.getElementById("modal-subtitle");
-const modalBrief = document.getElementById("modal-brief");
 
 // Live terminal (xterm.js + WebSocket) wiring. The xterm instance is created
 // fresh per modal-open and disposed on close, so each pane gets a clean state.
@@ -467,7 +466,6 @@ async function openModal(target) {
   activeTarget = target;
   modalTitle.textContent = target;
   modalSubtitle.innerHTML = "";
-  modalBrief.classList.add("hidden");
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
   lastSpinner = null;
@@ -653,14 +651,6 @@ function updateModalHeader(data) {
     );
   }
   modalSubtitle.innerHTML = parts.join(`<span class="sep">·</span> `);
-
-  // Brief: most recent recap
-  if (data.recap) {
-    modalBrief.textContent = `※ ${data.recap}`;
-    modalBrief.classList.remove("hidden");
-  } else {
-    modalBrief.classList.add("hidden");
-  }
 }
 
 function applySpinnerHysteresis(data) {
