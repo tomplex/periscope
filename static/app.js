@@ -8,11 +8,8 @@ const modalTitle = document.getElementById("modal-title");
 const modalXtermEl = document.getElementById("modal-xterm");
 const modalFocus = document.getElementById("modal-focus");
 const modalClose = document.getElementById("modal-close");
-const sendInput = document.getElementById("send-input");
-const keyButtons = document.getElementById("key-buttons");
 const modalSubtitle = document.getElementById("modal-subtitle");
 const modalBrief = document.getElementById("modal-brief");
-const sendStatus = document.getElementById("send-status");
 
 // Live terminal (xterm.js + WebSocket) wiring. The xterm instance is created
 // fresh per modal-open and disposed on close, so each pane gets a clean state.
@@ -23,11 +20,10 @@ const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
 let lastSpinner = null;          // last detected spinner verb (for hysteresis)
 let lastSpinnerSeenAt = 0;       // epoch ms of last positive spinner detection
-let sendStatusTimer = null;      // protects the transient "sending…" text
 
 // Tmux capture-pane sometimes catches Claude's TUI mid-redraw, dropping the
 // spinner line for one poll cycle even though Claude is still working. Keep
-// showing "thinking" through brief gaps so the status doesn't flicker.
+// showing "thinking" through brief gaps so the subtitle doesn't flicker.
 const SPINNER_GRACE_MS = 4000;
 
 let currentFilter = "all";
@@ -468,17 +464,12 @@ async function openModal(target) {
   modalBrief.classList.add("hidden");
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
-  resetHistoryNav();
-  setSendStatus("", "");
   lastSpinner = null;
   lastSpinnerSeenAt = 0;
   startLiveTerminal(target);
   // Header poll keeps the subtitle/brief/spinner fresh; the terminal body
   // itself streams live via the WebSocket, no polling needed.
   await refreshModalHeader();
-  sendInput.value = loadDraft(target);
-  // The xterm.js terminal owns focus by default; this only matters if the
-  // user clicks into the textarea to compose a long message.
   modalPollHandle = setInterval(refreshModalHeader, MODAL_POLL_MS);
 }
 
@@ -578,7 +569,6 @@ async function refreshModalHeader() {
     const data = await res.json();
     applySpinnerHysteresis(data);
     updateModalHeader(data);
-    updateSendStatusFromPane(data);
   } catch (_) {
     // Transient — next tick will retry
   }
@@ -621,17 +611,11 @@ function updateModalHeader(data) {
   }
 }
 
-function setSendStatus(text, kind) {
-  sendStatus.textContent = text;
-  sendStatus.className = "send-status" + (kind ? ` ${kind}` : "");
-}
-
 function applySpinnerHysteresis(data) {
   // Tmux capture-pane occasionally catches Claude's TUI mid-redraw and the
   // spinner line is briefly absent from the snapshot. We treat any positive
-  // detection as sticky for SPINNER_GRACE_MS and mutate data.spinner so every
-  // downstream consumer (modal subtitle, send-status, etc.) sees the same
-  // smoothed value instead of toggling.
+  // detection as sticky for SPINNER_GRACE_MS so the subtitle doesn't toggle
+  // every poll while Claude is still working.
   if (data.spinner) {
     lastSpinner = data.spinner;
     lastSpinnerSeenAt = Date.now();
@@ -644,133 +628,7 @@ function applySpinnerHysteresis(data) {
   lastSpinner = null;
 }
 
-function updateSendStatusFromPane(data) {
-  // Only the polled refresh drives this — the transient "sending…" set by
-  // submitText takes precedence for ~600ms (sendStatusTimer guards it).
-  if (sendStatusTimer) return;
-  if (data.spinner) {
-    setSendStatus(`Claude is ${data.spinner.toLowerCase()}…`, "thinking");
-  } else {
-    setSendStatus("", "");
-  }
-}
-
-// --- Send history (Up/Down to recall, per-target) ---
-
-const SEND_HISTORY_KEY = "periscope:sendHistory";
-const HISTORY_MAX = 20;
-let historyIndex = null;  // null = live draft; 0+ = entry in history (0 = most recent)
-let liveDraft = "";
-
-function loadSendHistory() {
-  try { return JSON.parse(localStorage.getItem(SEND_HISTORY_KEY)) || {}; }
-  catch { return {}; }
-}
-function saveSendHistory(h) {
-  localStorage.setItem(SEND_HISTORY_KEY, JSON.stringify(h));
-}
-function pushSendHistory(target, msg) {
-  if (!msg) return;
-  const h = loadSendHistory();
-  const arr = h[target] || [];
-  if (arr[0] === msg) return;  // don't duplicate the most-recent entry
-  arr.unshift(msg);
-  h[target] = arr.slice(0, HISTORY_MAX);
-  saveSendHistory(h);
-}
-
-// --- Per-target in-progress drafts ---
-// Anything sitting in the textarea when the modal closes is preserved per
-// target so reopening returns you to exactly where you left off. Cleared on
-// successful submit.
-
-const DRAFTS_KEY = "periscope:drafts";
-
-function loadDrafts() {
-  try { return JSON.parse(localStorage.getItem(DRAFTS_KEY)) || {}; }
-  catch { return {}; }
-}
-function saveDraft(target, text) {
-  const drafts = loadDrafts();
-  if (text && text.trim()) drafts[target] = text;
-  else delete drafts[target];
-  localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
-}
-function loadDraft(target) {
-  return loadDrafts()[target] || "";
-}
-function resetHistoryNav() {
-  historyIndex = null;
-  liveDraft = "";
-}
-
-function cursorOnFirstLine(input) {
-  return input.value.slice(0, input.selectionStart).indexOf("\n") === -1;
-}
-function cursorOnLastLine(input) {
-  return input.value.slice(input.selectionEnd).indexOf("\n") === -1;
-}
-function moveCursorToEnd(input) {
-  const end = input.value.length;
-  input.setSelectionRange(end, end);
-}
-
-function recallHistory(direction) {
-  if (!activeTarget) return false;
-  const history = loadSendHistory()[activeTarget] || [];
-  if (history.length === 0) return false;
-  if (direction === "older") {
-    if (historyIndex === null) {
-      liveDraft = sendInput.value;
-      historyIndex = 0;
-    } else if (historyIndex + 1 < history.length) {
-      historyIndex++;
-    } else {
-      return true;  // already at oldest; consume key but don't change
-    }
-    sendInput.value = history[historyIndex];
-    moveCursorToEnd(sendInput);
-    setSendStatus(`history ${historyIndex + 1}/${history.length}`, "history");
-    return true;
-  }
-  if (direction === "newer") {
-    if (historyIndex === null) return false;  // not in history; let cursor move
-    if (historyIndex === 0) {
-      historyIndex = null;
-      sendInput.value = liveDraft;
-      moveCursorToEnd(sendInput);
-      setSendStatus("", "");
-      return true;
-    }
-    historyIndex--;
-    sendInput.value = history[historyIndex];
-    moveCursorToEnd(sendInput);
-    setSendStatus(`history ${historyIndex + 1}/${history.length}`, "history");
-    return true;
-  }
-  return false;
-}
-
-async function sendToTmux(payload) {
-  if (!activeTarget) return;
-  await fetch(`/api/send?${targetQuery(activeTarget)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  // Quick refresh so the user sees it land before the next poll tick.
-  // The xterm stream picks up Claude's response automatically; we only need
-  // to nudge the header refresh so the spinner/recap update quickly.
-  setTimeout(refreshModalHeader, 80);
-}
-
-function sendKeys(keys) {
-  return sendToTmux({ keys });
-}
-
 function closeModal() {
-  // Preserve any in-progress prompt for this target — reopening restores it.
-  if (activeTarget) saveDraft(activeTarget, sendInput.value);
   stopLiveTerminal();
   modal.classList.add("hidden");
   document.body.classList.remove("modal-open");
@@ -778,85 +636,10 @@ function closeModal() {
     clearInterval(modalPollHandle);
     modalPollHandle = null;
   }
-  if (sendStatusTimer) {
-    clearTimeout(sendStatusTimer);
-    sendStatusTimer = null;
-  }
-  resetHistoryNav();
-  setSendStatus("", "");
   lastSpinner = null;
   lastSpinnerSeenAt = 0;
   activeTarget = null;
 }
-
-sendInput.addEventListener("keydown", (e) => {
-  // History recall: Up at first line goes older, Down at last line goes newer.
-  // Only intercept when the cursor would otherwise move past the buffer edge,
-  // so multi-line editing inside the textarea still works.
-  if (e.key === "ArrowUp" && cursorOnFirstLine(sendInput)) {
-    if (recallHistory("older")) { e.preventDefault(); return; }
-  }
-  if (e.key === "ArrowDown" && cursorOnLastLine(sendInput)) {
-    if (recallHistory("newer")) { e.preventDefault(); return; }
-  }
-
-  // Cmd/Ctrl+Enter submits. Bare Enter inserts a newline (default textarea
-  // behavior — much friendlier for composing multi-line messages).
-  const isSubmit = e.key === "Enter" && (e.metaKey || e.ctrlKey);
-  if (!isSubmit) return;
-  e.preventDefault();
-  const text = sendInput.value;
-  sendInput.value = "";
-  if (activeTarget) {
-    pushSendHistory(activeTarget, text.trim());
-    saveDraft(activeTarget, "");  // submitted, so the draft is consumed
-  }
-  resetHistoryNav();
-  // Transient "sending…" — protected for 600ms so the pane poll doesn't
-  // overwrite it before the user gets feedback.
-  setSendStatus("sending…", "sending");
-  if (sendStatusTimer) clearTimeout(sendStatusTimer);
-  sendStatusTimer = setTimeout(() => {
-    sendStatusTimer = null;
-    // The next pane poll (every 1.5s) will set "thinking…" if Claude is
-    // working; otherwise updateSendStatusFromPane clears the line.
-  }, 600);
-  submitText(text);
-});
-
-// Any direct edit takes us out of history-recall mode (so Up/Down doesn't keep
-// stomping on the user's typing).
-sendInput.addEventListener("input", () => {
-  if (historyIndex !== null) {
-    historyIndex = null;
-    liveDraft = sendInput.value;
-    if (sendStatus.classList.contains("history")) setSendStatus("", "");
-  }
-});
-
-function submitText(text) {
-  // Trim leading/trailing newlines (incl. \r in case the browser produces
-  // CRLF). Trailing newlines in paste content can collide with the explicit
-  // Enter and produce a no-op submit on some TUIs.
-  text = text.replace(/^[\r\n]+|[\r\n]+$/g, "");
-  if (text === "") {
-    sendKeys(["Enter"]);
-    return;
-  }
-  // One unified path: bracketed paste for the content, then an explicit Enter
-  // as the submit key. The server inserts a small delay between the two so
-  // the receiving TUI applies the paste before submit fires (Claude Code's
-  // input was racing the Enter under the old branched path).
-  sendToTmux({ paste: text, keys: ["Enter"] });
-}
-
-keyButtons.addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-keys]");
-  if (!btn) return;
-  const keys = JSON.parse(btn.dataset.keys);
-  sendKeys(keys);
-  sendInput.focus();
-});
 
 function escapeHtml(s) {
   if (s == null) return "";

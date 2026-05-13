@@ -427,18 +427,6 @@ body.modal-open { overflow: hidden; }
 
 .modal-brief.hidden { display: none; }
 
-.send-status {
-  font-size: 11px;
-  color: var(--fg-very-dim);
-  font-family: "SF Mono", monospace;
-  min-height: 14px;
-  padding: 0 2px;
-}
-
-.send-status.sending   { color: var(--working); }
-.send-status.thinking  { color: var(--waiting); }
-.send-status.history   { color: var(--fg-very-dim); font-style: italic; }
-
 .modal-actions {
   display: flex;
   gap: 6px;
@@ -484,58 +472,3 @@ body.modal-open { overflow: hidden; }
   overscroll-behavior: contain;
 }
 
-.modal-foot {
-  border-top: 1px solid var(--border);
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-#send-input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: 8px 10px;
-  border-radius: 4px;
-  font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
-  font-size: 12px;
-  line-height: 1.4;
-  outline: none;
-  width: 100%;
-  resize: vertical;
-  min-height: 32px;
-  max-height: 240px;
-}
-
-#send-input:focus {
-  border-color: var(--accent);
-}
-
-.key-buttons {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.key-buttons button {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--fg-dim);
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-family: "SF Mono", monospace;
-  font-size: 11px;
-  cursor: pointer;
-  min-width: 36px;
-}
-
-.key-buttons button:hover {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-
-.key-buttons button:active {
-  background: var(--accent);
-  color: var(--bg);
-}
