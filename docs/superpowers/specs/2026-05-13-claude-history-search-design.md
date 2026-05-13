@@ -33,13 +33,53 @@ repo. It has zero periscope-specific imports — periscope mounts a thin
 
 ## Non-goals
 
-- Search across sub-agent transcripts (Task-tool dispatches). Top-level sessions
-  only in v1.
+- Search across sub-agent transcripts (Task-tool dispatches). These live in
+  `~/.claude/tasks/<task-uuid>/N.json` (numbered JSON files, not JSONL) —
+  a separate directory tree the indexer simply doesn't walk in v1. The
+  non-goal is automatic.
 - Cross-session entity extraction (e.g. "everyone who worked on the cohort
   table"). FTS + summary should cover the realistic queries.
 - Embedding-based retrieval. Anthropic doesn't ship embeddings; FTS + Haiku
   rerank is sufficient and avoids a new provider dependency.
 - Multi-user / remote access. Periscope is single-user, 127.0.0.1.
+
+## Phases
+
+This work ships in three phases. Each is a self-contained PR.
+
+### Phase 0 — `auto_rename_*` forced-tool-use migration (prerequisite, ~½ day)
+
+Migrate the existing `auto_rename_session` and `auto_rename_window` in
+`server.py` from free-form JSON parsing (`json.loads(cleaned)` +
+code-fence stripping + `JSONDecodeError` handling) to forced tool-use
+via the Anthropic SDK's `tool_choice={"type": "tool", "name": ...}`
+mechanism. Same model (`claude-haiku-4-5`), same prompt body, schema
+captures the existing `{index: name}` output shape.
+
+Why first: smallest possible end-to-end exercise of the structured-output
+pattern, with a known-working fallback (the current code) one revert away.
+Validates the SDK pin, the call shape, and the response-parsing code path
+before Phase A depends on it for the larger feature.
+
+### Phase A — `history/` indexer + CLI (~3–4 days, dogfoodable)
+
+The `history/` subpackage end-to-end: schema, indexer, JSONL parsing, Haiku
+summarization with forced tool-use, backfill, SessionEnd hook, `python -m
+history` CLI with `search` / `backfill` / `hook` / `reindex` /
+`resummarize` / `stats` / `clean` verbs.
+
+Ship-criteria: backfill 1,984 sessions cleanly; `python -m history search
+"foo"` returns ranked results; SessionEnd hook updates the DB on session
+exit. Zero periscope code changes in this phase. Tom dogfoods the CLI for
+~1 week before Phase B.
+
+### Phase B — periscope web UI + resume (~2–3 days)
+
+Add `/history` static page, `/api/history/search`, `/api/history/session/{id}`
+routes, extend `/api/window/new` with `mode="resume"`. Builds on the
+validated Phase A indexing — if Phase A surfaces "summaries are too short"
+or "FTS columns are wrong" feedback, the schema is still cheap to change
+before web UI work hardens around it.
 
 ## Architecture
 
@@ -103,9 +143,11 @@ repo. It has zero periscope-specific imports — periscope mounts a thin
    to the same pattern as a stretch cleanup.)
 4. **No periscope-side state.** Web UI is stateless: `/api/history/search?q=...`
    → SQLite → JSON. The DB owns everything; periscope is a view layer.
-5. **Re-indexing is content-aware.** Three independent version counters
-   (`schema`, `mechanical`, `summary`) plus a `summary_input_hash` per row mean
-   that adding a new mechanical field doesn't trigger re-summarization.
+5. **Re-indexing is content-aware.** Two version counters (`schema`,
+   `mechanical`) plus a per-row `summary_input_hash` + `summary_model`
+   mean that adding a new mechanical field doesn't trigger
+   re-summarization, and a deliberate prompt/model change is a manual
+   one-liner (`resummarize --all`).
 
 ## Repo layout
 
@@ -177,12 +219,11 @@ CREATE TABLE sessions (
   -- Cache control for summary
   summary_input_hash   TEXT,                     -- sha256 of canonical summary input
   summary_model        TEXT,                     -- e.g. "claude-haiku-4-5"
-  summary_version      INTEGER,                  -- matches meta.summary_version at write
 
   -- Mechanically extracted
   first_user_msg       TEXT,                     -- truncated 500 chars
   last_user_msg        TEXT,                     -- truncated 500 chars
-  recap_blocks         TEXT,                     -- concatenated ※ recap: spans
+  final_assistant_msg  TEXT,                     -- truncated ~1000 chars; outcome signal
   files_touched        TEXT,                     -- JSON array, distinct, by first-touched
   notable_cmds         TEXT,                     -- JSON array of distinctive Bash lines
   tool_use_counts      TEXT,                     -- JSON dict {"Bash": 47, "Edit": 12}
@@ -204,7 +245,7 @@ CREATE VIRTUAL TABLE sessions_fts USING fts5(
   tags,
   first_user_msg,
   last_user_msg,
-  recap_blocks,
+  final_assistant_msg,    -- outcome signal in JSONL data
   user_messages,          -- all user turns concatenated, deduplicated
   assistant_text,         -- all assistant prose (no tool_use blocks)
   files_touched,
@@ -212,8 +253,12 @@ CREATE VIRTUAL TABLE sessions_fts USING fts5(
   tokenize = "porter unicode61"
 );
 
--- Triggers keep sessions_fts in sync. Indexer deletes + re-inserts inside the
--- per-session transaction; triggers handle external mutations.
+-- The indexer is the sole writer to this DB. UPSERTs to `sessions` are
+-- paired with an explicit DELETE + INSERT to `sessions_fts` inside the
+-- same transaction. This trigger is a safety net for raw DELETEs (e.g.
+-- `python -m history clean`) so FTS rows don't leak. Don't remove the
+-- explicit DELETE in the indexer thinking the trigger will cover it —
+-- FTS5 has no uniqueness constraint and you'll get duplicate rows.
 CREATE TRIGGER sessions_fts_after_delete AFTER DELETE ON sessions BEGIN
   DELETE FROM sessions_fts WHERE session_id = old.session_id;
 END;
@@ -222,27 +267,35 @@ CREATE TABLE meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
--- Required keys: schema_version, mechanical_version, summary_version,
+-- Required keys: schema_version, mechanical_version,
 -- haiku_model, last_full_scan_at
 ```
 
 ### Version counter semantics
 
+Two counters, plus per-row `summary_model`:
+
 | Counter | Bumped when | Effect of bump |
 |---|---|---|
 | `schema_version` | Tables or columns change | Migration runs; may require full re-extract |
 | `mechanical_version` | Field-extraction logic changes | Re-extract all rows; summary reused if `summary_input_hash` unchanged. **Free** (no Haiku calls). |
-| `summary_version` | Haiku prompt or model changes | Forces re-summarization of all rows. **Costs ~$10 for 1,984 sessions.** Deliberate, manual. |
+
+Re-summarization is driven by content (not a version counter): a session is
+re-summarized when `summary_input_hash` changes, when `summary IS NULL`, or
+when the configured `meta.haiku_model` differs from the row's
+`summary_model`. The "deliberate prompt change" path is `python -m history
+resummarize --all`, which clears `summary_input_hash` for every row and
+re-runs the indexer — costs ~$10 once, no extra column needed.
 
 The `summary_input_hash` is `sha256` over a canonical representation of
-`(first_user_msg, all_user_messages, recap_blocks, files_touched, branch,
-notable_cmds[:20])`. On every (re)index of a session, the new hash is computed
-and compared:
+`(first_user_msg, all_user_messages, final_assistant_msg, files_touched,
+branch, notable_cmds[:20])`. On every (re)index of a session, the new hash
+is computed and compared:
 
-- New hash == stored hash AND `summary_version` matches AND `summary_model`
-  matches → reuse existing summary, **no Haiku call**.
-- Triviality filter triggers (see below) → store heuristic summary, **no Haiku
-  call**.
+- New hash == stored hash AND `summary_model` matches `meta.haiku_model` →
+  reuse existing summary, **no Haiku call**.
+- Triviality filter triggers (see below) → store heuristic summary, **no
+  Haiku call**.
 - Otherwise → Haiku call.
 
 ### Triviality filter
@@ -264,42 +317,53 @@ For one session (one JSONL file):
 read JSONL line-by-line (streaming, tolerant of truncated lines)
    │
    ▼
-classify events by `type` field:
-   • permission-mode, attachment, file-history-snapshot → meta, skip from counts
-   • user / assistant → text content; tool_use blocks separated
-   • tool_use / tool_result → counted, mapped back via id
+classify events by top-level `type` field:
+   • known meta types → permission-mode, attachment, file-history-snapshot,
+     agent-name, custom-title, last-prompt, pr-link, queue-operation, system
+     → skip from counts; the indexer extracts what it needs and moves on
+   • user / assistant → message text + content blocks
+   • unknown type → log and skip (Claude Code adds event types across
+     releases; indexer must never crash on novel types)
+
+   Note: `tool_use` and `tool_result` are content BLOCK types inside
+   `assistant.message.content` and `user.message.content` arrays — not
+   top-level event types. Extract by iterating the content array of each
+   assistant/user message.
    │
    ▼
 aggregate:
-   • started_at, ended_at, duration_s, branch (last seen)
+   • started_at, ended_at, duration_s, branch (last seen `gitBranch`)
    • user_msg_count, asst_msg_count, tool_use_count
    • was_interrupted (any line containing "Request interrupted by user")
    • ended_cleanly (last event is an assistant reply, not mid-tool)
    • first_user_msg, last_user_msg
+   • final_assistant_msg: text content of the last assistant message,
+     truncated to ~1000 chars. Replaces the original (broken) `recap_blocks`
+     plan — `※ recap:` blocks are tmux-TUI-only chrome and don't appear in
+     the JSONL. final_assistant_msg captures the "what just got done"
+     signal that recap_blocks was supposed to provide.
    • user_messages (joined)
    • assistant_text (all assistant prose, no tool_use bodies)
-   • recap_blocks via regex from server.py:
-       r"※ recap:\s*(.+?)(?=\n\s*[─❯]|\Z)"  (DOTALL)
-   • files_touched: paths from Edit / Write / Read / NotebookEdit tool args,
-     deduplicated, ordered by first touch
+   • files_touched: paths from Edit / Write / Read / NotebookEdit tool_use
+     blocks, deduplicated, ordered by first touch
    • notable_cmds: Bash commands that are non-trivial
      (filter: length ≥ 20 OR contains '|' '>' '<' '/' OR matches verb regex;
      excludes `ls`, `pwd`, `cat`, single-word commands)
-   • tool_use_counts: Counter() of tool_use names
+   • tool_use_counts: Counter() of tool_use block `name` values
    │
    ▼
 compute summary_input_hash from (first_user_msg + user_messages
-   + recap_blocks + files_touched + branch + notable_cmds[:20])
+   + final_assistant_msg + files_touched + branch + notable_cmds[:20])
    │
-   ├── triviality filter OR hash match (with version match) → reuse / heuristic
-   │     summary, no Haiku call
+   ├── triviality filter OR hash match (with summary_model match) →
+   │     reuse / heuristic summary, no Haiku call
    │
    └── otherwise → build Haiku prompt → forced-tool-call → parse `input` dict
    │
    ▼
 single SQLite transaction:
    • UPSERT into sessions (all columns)
-   • DELETE FROM sessions_fts WHERE session_id = ?  (or rely on trigger)
+   • DELETE FROM sessions_fts WHERE session_id = ?  (explicit; see schema comment)
    • INSERT INTO sessions_fts (...)
 ```
 
@@ -332,23 +396,52 @@ SUMMARIZE_TOOL = {
     },
 }
 
+SYSTEM_PROMPT = (
+    "You summarize Claude Code coding sessions for a search index. "
+    "Output is consumed by a developer searching their own history later. "
+    "Bias toward concrete specifics (file names, error messages, decisions) "
+    "over generic descriptions. Always call save_session_summary."
+)
+
 msg = client.messages.create(
     model="claude-haiku-4-5",
     max_tokens=512,
+    system=[
+        {
+            "type": "text",
+            "text": SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ],
     tools=[SUMMARIZE_TOOL],
     tool_choice={"type": "tool", "name": "save_session_summary"},
-    messages=[{"role": "user", "content": prompt}],
+    messages=[{"role": "user", "content": prompt_body}],
 )
 for block in msg.content:
     if block.type == "tool_use":
         return block.input
 ```
 
+**Why forced tool-use over `messages.parse()`?** Both produce structured
+output reliably; `messages.parse()` is simpler for a single schema. We
+stay with tool-use here because the rerank path (Search API §below) is
+a natural tool-use case (the model is being asked to *act on* candidates),
+and one consistent pattern across summarize + rerank is worth more than
+the line or two saved on the summarize side. Verified against Anthropic
+Python SDK current docs; `tool_choice={"type": "tool", "name": "..."}`
+is the correct shape for forced invocation.
+
+**Prompt caching.** The `system` prompt + `tools` schema are stable across
+all 1,984 sessions. With `cache_control={"type": "ephemeral"}` on the
+system message, every backfill worker after the first lands a cache hit
+on the prefix (~0.1× input cost) for 5 minutes. With the
+`Semaphore(5)`-bounded backfill, this cuts ~40–60% off the $10 backfill
+spend. Stable content goes in `system` and `tools`; per-session content
+is the `messages[0].content` body.
+
 The prompt body (the `messages[0].content`) is:
 
 ```
-You are summarizing a Claude Code coding session for a search index.
-
 SESSION:
   project: {project_path}
   branch: {branch}
@@ -359,16 +452,16 @@ SESSION:
 USER MESSAGES (concatenated, may be truncated to ~6k tokens):
 {user_messages_truncated}
 
-RECAPS (Claude's own ※ recap: blocks during the session):
-{recap_blocks}
+FINAL ASSISTANT MESSAGE (outcome signal, truncated):
+{final_assistant_msg}
 
 Call save_session_summary with concrete details from this session.
 ```
 
-Note: assistant prose is **not** included in the prompt. User messages + recaps
-+ files + commands capture intent + outcome at ~10× lower token cost than the
-full transcript. If summaries feel thin in practice, we can add a sampling of
-assistant prose; not a v1 requirement.
+Note: assistant prose mid-conversation is **not** included. User messages
++ final assistant message + files + commands capture intent + outcome at
+~10× lower token cost than the full transcript. If summaries feel thin in
+practice, we can add a sampling of assistant prose; not a v1 requirement.
 
 ### Live-session detection
 
@@ -595,33 +688,69 @@ POST /api/window/new?session=history&mode=resume&resume_id=<session_id>
    ▼
 server:
   - look up jsonl_path + project_path from sessions row
-  - if jsonl_path missing on disk → return {ok:false, error:"jsonl deleted"}
-  - if project_path missing on disk → return {ok:false, error:"cwd no longer exists: ..."}
+  - if jsonl_path missing on disk         → {ok:false, error:"jsonl deleted"}
+  - if project_path missing on disk       → {ok:false, error:"cwd no longer exists: ..."}
+  - if mtime(jsonl_path) < now - 60s      → {ok:false, error:"session looks live; wait"}
+  - if _resuming[session_id] exists       → {ok:false, error:"already resumed in <target>",
+                                              existing_target: ...}
   - ensure tmux session "history" exists; create -d if not (cwd=project_path)
   - new-window in "history" (cwd=project_path), capture window_index
   - sleep 100ms (let shell rc settle, mirrors mode="claude")
   - tmux send-keys "claude --resume <session_id>" Enter
+  - _resuming[session_id] = {target, started_at: now}
   - note_focus(target)
   - return {ok:true, target:"history:N"}
    │
    ▼
 frontend:
-  - toast "resumed in history:N  [switch to it]"
-  - link calls POST /api/focus on click
+  - on ok: toast "resumed in history:N  [switch to it]" (link → /api/focus)
+  - on "already resumed": toast "already in <target>  [switch to it]"
+  - on "jsonl deleted" / "cwd missing": offer one-click fallback
 ```
+
+The `_resuming` dict is purged lazily: any time `/api/state` finds that a
+target it knew about is no longer in the tmux `list-windows` output, drop
+the matching `_resuming` entry. Plus a hard 30-minute expiry as a backstop.
+
+### Resume semantics (verified)
+
+`claude --resume <id>` **appends** to the existing JSONL — it does NOT
+fork a new file. One JSONL = one logical session that grows across every
+resume. The newly-appended records carry the same `sessionId` and their
+`parentUuid` chains continue off the last UUID of the pre-existing
+conversation. Even just launching `claude --resume <id>` and immediately
+`/exit`-ing mutates the file (Claude auto-injects `/clear` + `/exit`
+events) — so the resume button is not a no-op preview.
+
+This means **concurrent resume of the same session_id is a real
+corruption risk** (two processes appending to one file with no
+coordination), not a theoretical edge case.
 
 ### Resume edge cases
 
 - **Original cwd missing.** Toast offers "resume in $HOME instead" as a
-  one-click fallback that re-posts with `cwd_override=$HOME`.
-- **JSONL deleted from disk.** DB row marked stale; search hides it until
-  `python -m history clean` removes the row.
-- **`claude --resume` itself fails** (Claude CLI errors). The shell shows the
-  error in the new pane. We don't try to detect this server-side — the user can
-  see it in the pane.
-- **Two browser tabs resume same session.** Each spawns its own window. Claude
-  Code's `--resume` forks a new session_id per invocation (verify in
-  implementation).
+  one-click fallback that re-posts with `cwd_override=$HOME`. Note: the
+  `cwd` field in appended JSONL events reflects the shell's actual cwd
+  at resume time, not the original — so a $HOME-override resume will
+  write `cwd: $HOME` into the appended events. Tolerable; documented.
+- **JSONL deleted from disk.** DB row marked stale; search hides it
+  until `python -m history clean` removes the row.
+- **JSONL currently being written to** (`mtime < 60s ago` — matches the
+  indexer's live-session heuristic). Refuse the resume with a clear
+  toast: "this session looks live; pick a different one or wait."
+- **Already-resumed-by-this-server.** Periscope keeps a process-local
+  `_resuming: dict[session_id, {target, started_at}]` map. On resume
+  request, check the map; if there's an entry younger than 30 minutes,
+  refuse with "already resumed in `<target>` — switch to it instead"
+  (with a one-click switch via `/api/focus`). Entry cleared on tmux
+  window kill (detected lazily on next `/api/state` poll) or after 30
+  min, whichever comes first. The 30-min expiry catches "the user
+  abandoned the resumed window in the background and wants to resume
+  again"; the mtime guard catches "Claude is actively writing right
+  now"; together they make concurrent appends very unlikely.
+- **`claude --resume` itself fails** (Claude CLI errors). The shell
+  shows the error in the new pane. We don't try to detect this
+  server-side — the user can see it in the pane.
 
 ## Failure modes
 
@@ -634,9 +763,10 @@ frontend:
 | Live JSONL during scan | Skip if last event < 5 min ago OR mtime < 60s. SessionEnd handles it once quiet. |
 | JSONL deleted on disk | Row marked stale on next access; `python -m history clean` removes orphans. Search returns stale rows until cleaned. |
 | Original cwd missing on resume | Toast with one-click "$HOME instead" fallback. |
+| JSONL currently being written to | Resume endpoint refuses (`mtime < 60s ago`); toast suggests waiting. |
+| Already-resumed-by-this-server | Resume endpoint refuses; toast offers one-click switch to the existing resumed window. |
+| Resume "preview" mutates JSONL | Acknowledged. Even `claude --resume <id>` + immediate `/exit` appends ~40KB of `/clear`+`/exit` cruft. Indexer sees mtime change and re-extracts; if `final_assistant_msg` changes (it can if the auto-injected events get there), a re-summary may fire (~$0.005). Acceptable. |
 | DB corruption | Source-of-truth = JSONL pays off: backup, drop, rebuild. ~30 min of backfill. |
-| Two tabs resume same session | Each spawns its own window; Claude Code resume forks new session_ids. |
-| Sub-agent transcripts | Index top-level session only in v1; defer to v2. |
 | Trivial sessions | Indexed with heuristic summary; excluded from default UI; toggle to include. |
 
 ## CLI surface
@@ -657,8 +787,9 @@ python -m history reindex --all
     Bump mechanical_version; re-extract every row without re-summarizing. Free.
 
 python -m history resummarize --missing | --all
-    Re-run Haiku. --missing only hits NULL-summary rows. --all bumps
-    summary_version and re-summarizes everything (deliberate, ~$10).
+    Re-run Haiku. --missing only hits NULL-summary rows. --all clears
+    summary_input_hash on every row so the next index pass re-summarizes
+    them all (deliberate, ~$10 before prompt-cache savings).
 
 python -m history stats
     Row counts, summarized vs not, estimated total Haiku spend, last scan time.
@@ -669,34 +800,48 @@ python -m history clean
 
 ## Hook installation
 
-The new SessionEnd hook (exact field names verified during implementation
-against current Claude Code hook docs):
+Claude Code's SessionEnd hooks pipe a JSON event over **stdin** to the
+configured command — the hook reads `json.load(sys.stdin)` and extracts
+`transcript_path` (snake_case). This is verifiable against the existing
+hook at `~/.claude/hooks/index-conversation.py`, which reads stdin and
+pulls `transcript_path` from the payload.
 
 ```jsonc
 // ~/.claude/settings.json
 {
   "hooks": {
     "SessionEnd": [
-      { "command": "python -m history hook \"${SESSION_TRANSCRIPT_PATH}\"" }
+      // existing index-conversation hook stays alongside
+      { "command": "python -m history hook" }
     ]
   }
 }
 ```
 
-The existing `conversation-index.md` hook stays installed alongside the new
-hook during shakedown. After ~2 weeks of trusting the new system, the old hook
-is removed manually. The two hooks write to different files and don't interact.
+The `python -m history hook` entry point:
 
-## Stretch cleanup
+```python
+def cli_hook() -> None:
+    payload = json.load(sys.stdin)
+    transcript_path = payload.get("transcript_path")
+    if not transcript_path or not os.path.isfile(transcript_path):
+        return  # nothing to index
+    indexer.index_one(transcript_path)
+```
 
-Migrate `auto_rename_session` and `auto_rename_window` in `server.py` to use
-the same forced-tool-call pattern. ~30 lines of cleanup. Removes the manual
-code-fence stripping and JSON-parse retry logic. Validates the tool-use pattern
-before we depend on it for the bigger feature.
+The existing `conversation-index.md` hook stays installed alongside the
+new hook during shakedown. After ~2 weeks of trusting the new system,
+the old hook is removed manually. The two hooks write to different files
+and don't interact.
+
+### Phase 0 detail: `auto_rename_*` migration
+
+The tool schema for the `auto_rename_*` migration (Phase 0 in §Phases):
 
 ```python
 RENAME_TOOL = {
     "name": "rename_windows",
+    "description": "Rename one or more tmux windows.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -706,7 +851,7 @@ RENAME_TOOL = {
                     "type": "object",
                     "properties": {
                         "index": {"type": "integer"},
-                        "name": {"type": "string"},
+                        "name":  {"type": "string"},
                     },
                     "required": ["index", "name"],
                 },
@@ -716,6 +861,15 @@ RENAME_TOOL = {
     },
 }
 ```
+
+The existing `claude_complete()` helper in `server.py:612-622` returns
+free-form text; replace with a sibling that returns the tool input dict
+directly. Same model, same client singleton, same `ANTHROPIC_API_KEY`
+loading. Existing callers `auto_rename_session` (~line 661) and
+`auto_rename_window` (~line 732) destructure `{renames: [{index, name},
+...]}` instead of `json.loads(cleaned)` of free-form JSON; remove the
+code-fence stripping (`if cleaned.startswith("```"): ...`) and the
+`JSONDecodeError` branch entirely.
 
 ## First-time UX
 
@@ -733,14 +887,18 @@ once in the foreground is fine.
 
 | Operation | Frequency | Cost |
 |---|---|---|
-| Backfill (1,984 sessions × Haiku call) | One-time | ~$10 |
+| Backfill (1,984 sessions × Haiku call) | One-time | ~$4–6 (after prompt caching) |
 | SessionEnd indexing | Per Claude session ended | ~$0.005 |
-| Search rerank | Per search with rerank=true | ~$0.001 |
+| Search rerank | Per search with `rerank=true` | ~$0.001 |
 | Search FTS-only | Per search | $0 |
-| Re-summarize (`summary_version` bump) | Manual, rare | ~$10 per 2k sessions |
+| Re-summarize (manual `resummarize --all`) | Rare | ~$4–6 per 2k sessions |
 | Re-extract (`mechanical_version` bump) | Manual | $0 |
 
-Per-day ongoing: low single-digit cents in normal use.
+Per-day ongoing: low single-digit cents in normal use. Backfill cost drops
+40–60% vs naive pricing because the system prompt + tool schema land in the
+Haiku prompt cache across the `Semaphore(5)`-bounded worker pool. The
+Anthropic Batches API would discount another 50% on top with a ≤24h SLA,
+but for a $4–6 one-shot expense it's not worth the async complexity in v1.
 
 ## Tests
 
@@ -766,15 +924,18 @@ abstraction that swaps in a fixture-driven `FakeClient`.
 
 These don't change the design but need verification during implementation:
 
-- Exact field name for the JSONL path in SessionEnd hooks
-  (`SESSION_TRANSCRIPT_PATH` is a guess; check current Claude Code hook docs).
-- Whether `claude --resume <id>` succeeds in the resumed pane even when run
-  outside the original cwd (we always run it from the original cwd, but worth
-  knowing the failure mode).
-- Sub-agent transcript paths in `~/.claude/projects/` — confirm they share the
-  same projects directory or live elsewhere. (Affects scanner glob.)
-- Whether existing `auto_rename_*` token costs change meaningfully after the
-  forced-tool-call migration (Haiku adds ~100 tokens for tool schema).
+- **`auto_rename_*` token cost delta** after the Phase 0 migration. Haiku
+  adds ~100 tokens for the tool schema; should be a wash but worth a
+  before/after spot-check in case Anthropic accounting changed.
+- **Should `final_assistant_msg` filter out `/clear` and `/exit` cruft?**
+  When a user "previews" a session by clicking resume and immediately
+  exiting, the appended `<command-name>/exit</command-name>` and
+  `<local-command-stdout>See ya!</local-command-stdout>` records become
+  the new tail of the JSONL. If `final_assistant_msg` blindly takes the
+  last assistant message text, these previews shift it. Worth a small
+  filter ("if the last assistant message is just a `/clear`-style
+  command echo, walk back to the previous substantive one") during
+  Phase A implementation.
 
 ## Out of scope (v2 candidates)
 
