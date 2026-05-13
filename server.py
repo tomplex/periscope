@@ -182,7 +182,9 @@ def state():
 @app.get("/api/pane/{session}/{index}")
 def pane(session: str, index: int, lines: int = 200):
     target = f"{session}:{index}"
-    return {"content": capture(target, lines), "target": target}
+    # -e preserves ANSI color escape sequences for the modal viewer.
+    content = tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
+    return {"content": content, "target": target}
 
 
 @app.post("/api/focus/{session}/{index}")

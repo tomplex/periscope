@@ -288,8 +288,112 @@ async function openModal(target) {
   const [s, i] = target.split(":");
   const res = await fetch(`/api/pane/${encodeURIComponent(s)}/${i}?lines=200`);
   const data = await res.json();
-  modalPane.textContent = data.content;
+  modalPane.innerHTML = ansiToHtml(data.content);
   modalPane.scrollTop = modalPane.scrollHeight;
+}
+
+// --- ANSI -> HTML ---------------------------------------------------------
+// Supports SGR codes: reset, bold/dim/italic/underline, basic 16 colors,
+// 256-color (38;5;N / 48;5;N), and truecolor (38;2;R;G;B / 48;2;R;G;B).
+
+const ANSI_RE = /\x1b\[([\d;]*)m/g;
+
+const ANSI_16 = [
+  "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
+  "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
+  "#969896", "#ff7373", "#c8e094", "#ffd47b",
+  "#9ec5fe", "#d8b6db", "#a8e0d8", "#ffffff",
+];
+
+function ansi256(n) {
+  if (n < 16) return ANSI_16[n];
+  if (n < 232) {
+    n -= 16;
+    const r = Math.floor(n / 36);
+    const g = Math.floor((n % 36) / 6);
+    const b = n % 6;
+    const v = (x) => (x === 0 ? 0 : 55 + x * 40);
+    return `rgb(${v(r)},${v(g)},${v(b)})`;
+  }
+  const v = 8 + (n - 232) * 10;
+  return `rgb(${v},${v},${v})`;
+}
+
+function applyCodes(s, style) {
+  if (s === "" || s === "0") {
+    for (const k of Object.keys(style)) delete style[k];
+    return;
+  }
+  const codes = s.split(";").map((x) => parseInt(x, 10));
+  let i = 0;
+  while (i < codes.length) {
+    const c = codes[i];
+    if (Number.isNaN(c)) { i++; continue; }
+    if (c === 0) {
+      for (const k of Object.keys(style)) delete style[k];
+    } else if (c === 1) style.bold = true;
+    else if (c === 2) style.dim = true;
+    else if (c === 3) style.italic = true;
+    else if (c === 4) style.underline = true;
+    else if (c === 22) { delete style.bold; delete style.dim; }
+    else if (c === 23) delete style.italic;
+    else if (c === 24) delete style.underline;
+    else if (c === 39) delete style.fg;
+    else if (c === 49) delete style.bg;
+    else if (c >= 30 && c <= 37) style.fg = ANSI_16[c - 30];
+    else if (c >= 40 && c <= 47) style.bg = ANSI_16[c - 40];
+    else if (c >= 90 && c <= 97) style.fg = ANSI_16[c - 90 + 8];
+    else if (c >= 100 && c <= 107) style.bg = ANSI_16[c - 100 + 8];
+    else if (c === 38 || c === 48) {
+      const target = c === 38 ? "fg" : "bg";
+      if (codes[i + 1] === 5 && codes[i + 2] != null) {
+        style[target] = ansi256(codes[i + 2]);
+        i += 2;
+      } else if (codes[i + 1] === 2 && codes[i + 4] != null) {
+        style[target] = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`;
+        i += 4;
+      }
+    }
+    i++;
+  }
+}
+
+function styleToCss(s) {
+  const css = [];
+  if (s.fg) css.push(`color:${s.fg}`);
+  if (s.bg) css.push(`background:${s.bg}`);
+  if (s.bold) css.push("font-weight:600");
+  if (s.italic) css.push("font-style:italic");
+  if (s.underline) css.push("text-decoration:underline");
+  if (s.dim) css.push("opacity:0.65");
+  return css.join(";");
+}
+
+function ansiToHtml(text) {
+  let out = "";
+  let last = 0;
+  const style = {};
+  let m;
+  ANSI_RE.lastIndex = 0;
+  while ((m = ANSI_RE.exec(text)) !== null) {
+    const chunk = text.slice(last, m.index);
+    if (chunk) {
+      const css = styleToCss(style);
+      out += css
+        ? `<span style="${css}">${escapeHtml(chunk)}</span>`
+        : escapeHtml(chunk);
+    }
+    last = m.index + m[0].length;
+    applyCodes(m[1], style);
+  }
+  const tail = text.slice(last);
+  if (tail) {
+    const css = styleToCss(style);
+    out += css
+      ? `<span style="${css}">${escapeHtml(tail)}</span>`
+      : escapeHtml(tail);
+  }
+  return out;
 }
 
 function closeModal() {
