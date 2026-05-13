@@ -107,6 +107,57 @@ header h1 {
 }
 .usage-pill:empty { display: none; }
 
+/* When the scraped /usage meters are available we render three compact bars
+   instead of the single-pill fallback. The container drops its border so the
+   meters read as a row of indicators rather than a single chip. */
+.usage-pill.usage-bars {
+  display: flex;
+  gap: 10px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+}
+.usage-pill.usage-bars:hover {
+  border: none;
+}
+.usage-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  cursor: help;
+}
+.usage-meter-label {
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  min-width: 38px;
+  text-align: right;
+}
+.usage-meter-bar {
+  position: relative;
+  display: inline-block;
+  width: 70px;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.usage-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+.usage-meter-fill.warn   { background: var(--working); }
+.usage-meter-fill.danger { background: var(--error); }
+.usage-meter-pct {
+  min-width: 28px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 main {
   padding: 16px 24px 64px;
 }

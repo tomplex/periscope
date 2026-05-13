@@ -14,6 +14,7 @@ const grid = document.getElementById("grid");
 const counts = document.getElementById("counts");
 const lastUpdate = document.getElementById("last-update");
 const usageEl = document.getElementById("usage");
+const toggleAllBtn = document.getElementById("toggle-all");
 
 const nameClickTimers = new Map();  // target -> setTimeout handle (single-click defer for dblclick rename)
 
@@ -166,6 +167,33 @@ function renderSession(session, ws, totalWindows) {
   `;
 }
 
+// The header "collapse/expand all" toggle reflects, and operates on, only the
+// sessions currently rendered — filtering out hidden sessions keeps the button
+// label honest and avoids surprise mutations to off-screen state.
+function updateToggleAll(visibleSessions) {
+  if (!toggleAllBtn) return;
+  if (visibleSessions.length === 0) {
+    toggleAllBtn.hidden = true;
+    return;
+  }
+  toggleAllBtn.hidden = false;
+  const allCollapsed = visibleSessions.every((s) => state.collapsedSessions.has(s));
+  toggleAllBtn.textContent = allCollapsed ? "▸ expand all" : "▾ collapse all";
+}
+
+function handleToggleAll() {
+  const visible = [...grid.querySelectorAll(".session-group")].map((g) => g.dataset.session);
+  if (visible.length === 0) return;
+  const allCollapsed = visible.every((s) => state.collapsedSessions.has(s));
+  if (allCollapsed) {
+    for (const s of visible) state.collapsedSessions.delete(s);
+  } else {
+    for (const s of visible) state.collapsedSessions.add(s);
+  }
+  saveCollapsed(state.collapsedSessions);
+  render(state.lastWindows);
+}
+
 export function render(windows) {
   const filtered = windows.filter(passesFilter);
   const bySession = new Map();
@@ -176,6 +204,7 @@ export function render(windows) {
 
   if (filtered.length === 0) {
     grid.innerHTML = `<div class="empty-state">no windows match the current filter</div>`;
+    updateToggleAll([]);
     return;
   }
 
@@ -194,6 +223,8 @@ export function render(windows) {
       return renderSession(s, ws, totals.get(s));
     })
     .join("");
+
+  updateToggleAll(sessionOrder);
 
   // Counts in header. Lead with needs-input — that's the only count that
   // means "drop what you're doing and look here", so it earns top billing
@@ -334,6 +365,8 @@ function reorderSessions(src, dst, before) {
 }
 
 function wireGrid() {
+  if (toggleAllBtn) toggleAllBtn.addEventListener("click", handleToggleAll);
+
   grid.addEventListener("click", (e) => {
     // Mutation buttons inside the grid take priority over the more general
     // header-toggle / card-open handlers below.
@@ -457,7 +490,7 @@ export async function poll() {
     const data = await res.json();
     state.lastWindows = data.windows;
     render(state.lastWindows);
-    updateUsagePill(data.usage);
+    updateUsagePill(data.usage_scrape, data.usage);
     lastUpdate.textContent = `updated ${new Date().toLocaleTimeString()}`;
   } catch (e) {
     lastUpdate.textContent = `poll failed: ${e.message}`;
@@ -483,28 +516,49 @@ function fmtResetCountdown(epochSec) {
   return `resets in ${h}h ${m}m`;
 }
 
-function updateUsagePill(u) {
+function meterBar(label, pct, resets) {
+  const tone = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "ok";
+  return `
+    <div class="usage-meter" title="${escapeHtml(label)} — ${pct}% used. Resets ${escapeHtml(resets || "")}">
+      <span class="usage-meter-label">${escapeHtml(label)}</span>
+      <span class="usage-meter-bar"><span class="usage-meter-fill ${tone}" style="width:${pct}%"></span></span>
+      <span class="usage-meter-pct">${pct}%</span>
+    </div>
+  `;
+}
+
+function updateUsagePill(scraped, fallback) {
   if (!usageEl) return;
-  if (!u || !u.available) {
+  // Prefer the scraped TUI data (real plan percentages). Fall back to the
+  // JSONL-derived 5h pill when the scrape hasn't completed yet (first ~20s
+  // after server start) or failed.
+  if (scraped && scraped.available && scraped.meters) {
+    const m = scraped.meters;
+    const order = ["session", "week_all", "week_sonnet"];
+    const compactLabels = { session: "session", week_all: "week", week_sonnet: "sonnet" };
+    usageEl.classList.add("usage-bars");
+    usageEl.innerHTML = order
+      .filter((k) => m[k])
+      .map((k) => meterBar(compactLabels[k], m[k].percent, m[k].resets))
+      .join("");
+    usageEl.title = order
+      .filter((k) => m[k])
+      .map((k) => `${m[k].label}: ${m[k].percent}% used\n  Resets ${m[k].resets}`)
+      .join("\n\n");
+    return;
+  }
+  usageEl.classList.remove("usage-bars");
+  if (!fallback || !fallback.available) {
     usageEl.textContent = "";
     usageEl.title = "";
     return;
   }
-  // Headline: "active" tokens = everything except cache_read, which is
-  // heavily discounted and would massively overstate plan-spend. Tooltip
-  // shows the full breakdown so you can sanity-check.
-  const active = (u.input_tokens || 0) + (u.cache_creation_tokens || 0) + (u.output_tokens || 0);
-  usageEl.textContent = `5h: ${fmtTokens(active)} · ${fmtResetCountdown(u.reset_at)}`;
-  usageEl.title =
-    `Claude Code plan usage, last ${u.window_hours}h:\n` +
-    `  ${u.messages} assistant messages\n` +
-    `  ${fmtTokens(u.input_tokens)} fresh input\n` +
-    `  ${fmtTokens(u.cache_creation_tokens)} cache creation\n` +
-    `  ${fmtTokens(u.output_tokens)} output\n` +
-    `  ─\n` +
-    `  ${fmtTokens(active)} active total (above)\n` +
-    `  ${fmtTokens(u.cache_read_tokens)} cache reads (heavily discounted)\n` +
-    `  ${fmtTokens(u.total_tokens)} grand total`;
+  const active = (fallback.input_tokens || 0) + (fallback.cache_creation_tokens || 0) + (fallback.output_tokens || 0);
+  usageEl.textContent = `5h: ${fmtTokens(active)} · ${fmtResetCountdown(fallback.reset_at)}`;
+  usageEl.title = `Claude Code plan usage estimate (JSONL-derived; scrape not yet ready)\n` +
+    `  ${fallback.messages} assistant messages\n` +
+    `  ${fmtTokens(active)} active tokens\n` +
+    `  ${fmtTokens(fallback.cache_read_tokens)} cache reads (discounted)`;
 }
 
 export function initGrid() {
