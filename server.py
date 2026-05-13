@@ -933,7 +933,7 @@ def prewarm_pr_cache() -> None:
 # index.html for `/` (and any directory request) without needing a separate
 # route. Asset paths in index.html are root-relative (`/styles.css`, `/app.js`,
 # `/vendor/xterm.js`) so they resolve identically here and under Vite's dev
-# server on :5173.
+# server on :5174.
 app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
 
 
