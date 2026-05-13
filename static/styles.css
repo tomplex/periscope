@@ -41,11 +41,22 @@ header {
   background: rgba(33, 37, 43, 0.92);  /* --bg with alpha for blur */
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
-  padding: 12px 24px;
+  padding: 10px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 10;
+}
+
+.header-row {
   display: flex;
   align-items: center;
   gap: 24px;
-  z-index: 10;
+}
+
+.header-actions {
+  display: flex;
+  gap: 6px;
 }
 
 header h1 {
