@@ -410,6 +410,12 @@ def send(session: str, index: int, body: SendBody):
         buf = f"wd-{uuid.uuid4().hex[:8]}"
         tmux("set-buffer", "-b", buf, body.paste)
         tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+        # Give the receiving TUI (especially Claude Code) time to apply state
+        # for the paste before the submit key arrives. Without this, Enter can
+        # land before React renders and submits empty input, leaving the pasted
+        # text visibly stranded in the prompt area.
+        if body.keys:
+            time.sleep(0.10)
     if body.keys:
         tmux("send-keys", "-t", target, *body.keys)
     if not body.keys and body.paste is None:

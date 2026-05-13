@@ -587,21 +587,19 @@ sendInput.addEventListener("keydown", (e) => {
 });
 
 function submitText(text) {
-  // Strip leading/trailing newlines — an accidental Enter at start or end
-  // shouldn't force the multi-line paste path, which can race with Claude's
-  // bracketed-paste handling and drop the submit.
-  text = text.replace(/^\n+|\n+$/g, "");
+  // Trim leading/trailing newlines (incl. \r in case the browser produces
+  // CRLF). Trailing newlines in paste content can collide with the explicit
+  // Enter and produce a no-op submit on some TUIs.
+  text = text.replace(/^[\r\n]+|[\r\n]+$/g, "");
   if (text === "") {
     sendKeys(["Enter"]);
     return;
   }
-  if (text.includes("\n")) {
-    // Multi-line: bracketed paste delivers embedded newlines intact;
-    // send-keys would silently strip them. Final Enter submits.
-    sendToTmux({ paste: text, keys: ["Enter"] });
-  } else {
-    sendKeys([text, "Enter"]);
-  }
+  // One unified path: bracketed paste for the content, then an explicit Enter
+  // as the submit key. The server inserts a small delay between the two so
+  // the receiving TUI applies the paste before submit fires (Claude Code's
+  // input was racing the Enter under the old branched path).
+  sendToTmux({ paste: text, keys: ["Enter"] });
 }
 
 keyButtons.addEventListener("click", (e) => {
