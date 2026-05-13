@@ -59,9 +59,17 @@ document.addEventListener("keydown", (e) => {
 
 modalFocus.addEventListener("click", async () => {
   if (!activeTarget) return;
-  const [s, i] = activeTarget.split(":");
-  await fetch(`/api/focus/${encodeURIComponent(s)}/${i}`, { method: "POST" });
+  await fetch(`/api/focus?${targetQuery(activeTarget)}`, { method: "POST" });
 });
+
+function targetQuery(target) {
+  // target looks like "session:index" — but session may contain ":" if any
+  // session name has one (rare in tmux but legal). Split on the last ":".
+  const i = target.lastIndexOf(":");
+  const session = target.slice(0, i);
+  const index = target.slice(i + 1);
+  return `session=${encodeURIComponent(session)}&index=${encodeURIComponent(index)}`;
+}
 
 function passesFilter(w) {
   if (currentFilter === "all") return true;
@@ -312,11 +320,12 @@ async function openModal(target) {
 
 async function refreshModalPane({ forceScroll = false } = {}) {
   if (!activeTarget) return;
-  const [s, i] = activeTarget.split(":");
   try {
-    const res = await fetch(
-      `/api/pane/${encodeURIComponent(s)}/${i}?lines=200`
-    );
+    const res = await fetch(`/api/pane?${targetQuery(activeTarget)}&lines=200`);
+    if (!res.ok) {
+      modalPane.textContent = `error: ${res.status} ${res.statusText} fetching ${activeTarget}`;
+      return;
+    }
     const data = await res.json();
     const wasAtBottom =
       modalPane.scrollHeight - modalPane.scrollTop - modalPane.clientHeight < 24;
@@ -325,14 +334,13 @@ async function refreshModalPane({ forceScroll = false } = {}) {
       modalPane.scrollTop = modalPane.scrollHeight;
     }
   } catch (e) {
-    // swallow — next tick will retry
+    modalPane.textContent = `fetch failed: ${e.message}`;
   }
 }
 
 async function sendToTmux(payload) {
   if (!activeTarget) return;
-  const [s, i] = activeTarget.split(":");
-  await fetch(`/api/send/${encodeURIComponent(s)}/${i}`, {
+  await fetch(`/api/send?${targetQuery(activeTarget)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

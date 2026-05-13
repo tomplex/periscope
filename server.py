@@ -180,15 +180,18 @@ def state():
     return {"windows": result, "ts": int(time.time())}
 
 
-@app.get("/api/pane/{session}/{index}")
+@app.get("/api/pane")
 def pane(session: str, index: int, lines: int = 200):
+    """Capture last N lines of a pane. Session/index passed as query params so
+    slash-bearing session names (e.g. "tc/foo/bar") don't conflict with path
+    routing."""
     target = f"{session}:{index}"
     # -e preserves ANSI color escape sequences for the modal viewer.
     content = tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
     return {"content": content, "target": target}
 
 
-@app.post("/api/focus/{session}/{index}")
+@app.post("/api/focus")
 def focus(session: str, index: int):
     target = f"{session}:{index}"
     clients = tmux("list-clients", "-F", "#{client_name}").strip().split("\n")
@@ -205,7 +208,7 @@ class SendBody(BaseModel):
     paste: str | None = None  # bracketed-pasted into the pane before `keys`
 
 
-@app.post("/api/send/{session}/{index}")
+@app.post("/api/send")
 def send(session: str, index: int, body: SendBody):
     """Send input to a tmux pane.
 
