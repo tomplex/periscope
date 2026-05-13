@@ -118,8 +118,8 @@ function renderCard(w) {
   const foot = [];
   if (w.context_pct != null) foot.push(`${w.context_pct}%`);
   if (w.model) foot.push(escapeHtml(w.model.replace(/\s*\(.*\)/, "")));
-  const recent = relTime(w.activity);
-  if (recent) foot.push(recent);
+  const recent = relTime(w.focused_at);
+  if (recent) foot.push(`viewed ${recent}`);
   const footHtml = foot.length
     ? `<div class="card-foot">${foot.join(" · ")}</div>`
     : "";
@@ -145,10 +145,10 @@ function orderedSessions(allSessions, bySession) {
   const present = new Set(allSessions);
   const ordered = saved.filter((s) => present.has(s));
   const remaining = allSessions.filter((s) => !ordered.includes(s));
-  const lastActivity = (s) =>
-    Math.max(0, ...(bySession.get(s) || []).map((w) => w.activity || 0));
+  const lastFocus = (s) =>
+    Math.max(0, ...(bySession.get(s) || []).map((w) => w.focused_at || 0));
   remaining.sort((a, b) => {
-    const da = lastActivity(b) - lastActivity(a);
+    const da = lastFocus(b) - lastFocus(a);
     if (da !== 0) return da;
     return a.localeCompare(b);
   });
@@ -197,9 +197,9 @@ function render(windows) {
 
   grid.innerHTML = sessionOrder
     .map((s) => {
-      // Within a session, sort by recent activity desc; index as tiebreak.
+      // Within a session, sort by recent user focus desc; index as tiebreak.
       const ws = bySession.get(s).slice().sort((a, b) => {
-        const da = (b.activity || 0) - (a.activity || 0);
+        const da = (b.focused_at || 0) - (a.focused_at || 0);
         if (da !== 0) return da;
         return a.index - b.index;
       });
@@ -207,7 +207,7 @@ function render(windows) {
       const shown = ws.length;
       const meta = shown === total ? `${total} windows` : `${shown}/${total} windows`;
       const collapsed = collapsedSessions.has(s) ? " collapsed" : "";
-      const recent = Math.max(0, ...ws.map((w) => w.activity || 0));
+      const recent = Math.max(0, ...ws.map((w) => w.focused_at || 0));
       const recentLabel = recent ? relTime(recent) : "";
       return `
         <section class="session-group${collapsed}" data-session="${escapeHtml(s)}">

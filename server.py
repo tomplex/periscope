@@ -17,6 +17,32 @@ from pydantic import BaseModel
 app = FastAPI()
 STATIC = Path(__file__).parent / "static"
 
+# Server-tracked "last user-focused" per target.
+# Tmux's window_activity bumps on any output (Claude streaming, build logs, dev
+# servers, etc), which surprises users expecting "last accessed" semantics.
+# We instead record when each window most recently became the active window in
+# its session, plus any time the user acts on it via the dashboard.
+_focused_at: dict[str, int] = {}
+_active_per_session: dict[str, str] = {}
+
+
+def note_focus(target: str) -> None:
+    _focused_at[target] = int(time.time())
+
+
+def update_focus_from_windows(windows: list[dict]) -> None:
+    """Walk the freshly-listed windows and stamp focus times when the active
+    window for a session changes."""
+    by_session_active: dict[str, str] = {}
+    for w in windows:
+        if w.get("active"):
+            by_session_active[w["session"]] = f"{w['session']}:{w['index']}"
+    for session, target in by_session_active.items():
+        prev = _active_per_session.get(session)
+        if prev != target or target not in _focused_at:
+            note_focus(target)
+            _active_per_session[session] = target
+
 # Status line at the bottom of every Claude pane:
 #   "  24% | ↑235k ↓479 | $17.04 | Opus 4.7 (1M context)"
 STATUS_RE = re.compile(
@@ -168,6 +194,7 @@ def parse_pane(content: str) -> dict:
 @app.get("/api/state")
 def state():
     windows = list_windows()
+    update_focus_from_windows(windows)
     result = []
     for w in windows:
         target = f"{w['session']}:{w['index']}"
@@ -176,7 +203,9 @@ def state():
             parsed = parse_pane(content)
         except Exception as e:
             parsed = {"error": str(e), "state": "error", "is_claude": False}
-        result.append({**w, **parsed, "target": target})
+        result.append(
+            {**w, **parsed, "target": target, "focused_at": _focused_at.get(target, 0)}
+        )
     return {"windows": result, "ts": int(time.time())}
 
 
@@ -200,6 +229,7 @@ def focus(session: str, index: int):
         if c:
             tmux("switch-client", "-c", c, "-t", target)
             switched.append(c)
+    note_focus(target)
     return {"ok": True, "switched": switched, "target": target}
 
 
@@ -230,6 +260,7 @@ def send(session: str, index: int, body: SendBody):
         tmux("send-keys", "-t", target, *body.keys)
     if not body.keys and body.paste is None:
         return {"ok": False, "error": "no keys or paste"}
+    note_focus(target)
     return {"ok": True, "target": target}
 
 
