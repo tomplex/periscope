@@ -100,11 +100,31 @@ main {
 
 .session-header {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 10px;
-  padding-bottom: 6px;
+  padding: 4px 6px 6px 6px;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  border-radius: 4px 4px 0 0;
+  user-select: none;
+}
+
+.session-header:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.session-header.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+.session-header.drag-over-top {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.session-header.drag-over-bottom {
+  box-shadow: inset 0 -2px 0 0 var(--accent);
 }
 
 .session-header h2 {
@@ -119,6 +139,47 @@ main {
   font-size: 11px;
   color: var(--fg-very-dim);
 }
+
+.session-header .chevron {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--fg-dim);
+  transition: transform 0.15s ease;
+  font-family: "SF Mono", monospace;
+}
+
+.session-group.collapsed .session-header .chevron {
+  transform: rotate(-90deg);
+  color: var(--fg-very-dim);
+}
+
+.session-group.collapsed .cards {
+  display: none;
+}
+
+.session-group.collapsed .session-header {
+  border-bottom: 1px solid transparent;
+  margin-bottom: 0;
+}
+
+.session-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-family: "SF Mono", monospace;
+}
+
+.session-pill.has-waiting { color: var(--waiting); border-color: var(--waiting); }
+.session-pill.has-working { color: var(--working); border-color: var(--working); }
+.session-pill.has-ci-bad { color: var(--error); border-color: var(--error); }
 
 .cards {
   display: grid;

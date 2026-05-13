@@ -13,6 +13,27 @@ let currentFilter = "all";
 let lastWindows = [];
 let activeTarget = null;
 
+// Persisted UI state
+const ORDER_KEY = "work-dashboard:sessionOrder";
+const COLLAPSED_KEY = "work-dashboard:collapsedSessions";
+
+function loadOrder() {
+  try { return JSON.parse(localStorage.getItem(ORDER_KEY)) || []; }
+  catch { return []; }
+}
+function saveOrder(order) {
+  localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+}
+function loadCollapsed() {
+  try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY)) || []); }
+  catch { return new Set(); }
+}
+function saveCollapsed(set) {
+  localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set]));
+}
+
+let collapsedSessions = loadCollapsed();
+
 const filterButtons = document.querySelectorAll("#filters button");
 filterButtons.forEach((b) => {
   b.addEventListener("click", () => {
@@ -102,18 +123,15 @@ function renderCard(w) {
   `;
 }
 
-function render(windows) {
-  const filtered = windows.filter(passesFilter);
-  const bySession = new Map();
-  for (const w of filtered) {
-    if (!bySession.has(w.session)) bySession.set(w.session, []);
-    bySession.get(w.session).push(w);
-  }
-
-  // Sort sessions: those with any "waiting" or "working" first, then by name
-  const sessionOrder = [...bySession.keys()].sort((a, b) => {
+function orderedSessions(allSessions, bySession) {
+  // Apply user-saved order first; then auto-sort the rest by state priority.
+  const saved = loadOrder();
+  const present = new Set(allSessions);
+  const ordered = saved.filter((s) => present.has(s));
+  const remaining = allSessions.filter((s) => !ordered.includes(s));
+  remaining.sort((a, b) => {
     const score = (s) => {
-      const ws = bySession.get(s);
+      const ws = bySession.get(s) || [];
       if (ws.some((w) => w.state === "waiting")) return 0;
       if (ws.some((w) => w.state === "working")) return 1;
       if (ws.some((w) => w.is_claude)) return 2;
@@ -124,11 +142,39 @@ function render(windows) {
     if (sa !== sb) return sa - sb;
     return a.localeCompare(b);
   });
+  return [...ordered, ...remaining];
+}
+
+function sessionPill(ws) {
+  const waiting = ws.filter((w) => w.state === "waiting").length;
+  const working = ws.filter((w) => w.state === "working").length;
+  const ciBad = ws.filter((w) => w.ci === "✗").length;
+  const parts = [];
+  if (waiting) parts.push(`${waiting} waiting`);
+  if (working) parts.push(`${working} working`);
+  if (ciBad) parts.push(`${ciBad} ✗`);
+  if (!parts.length) parts.push(`${ws.length}`);
+  let cls = "session-pill";
+  if (ciBad) cls += " has-ci-bad";
+  else if (waiting) cls += " has-waiting";
+  else if (working) cls += " has-working";
+  return `<span class="${cls}">${parts.join(" · ")}</span>`;
+}
+
+function render(windows) {
+  const filtered = windows.filter(passesFilter);
+  const bySession = new Map();
+  for (const w of filtered) {
+    if (!bySession.has(w.session)) bySession.set(w.session, []);
+    bySession.get(w.session).push(w);
+  }
 
   if (filtered.length === 0) {
     grid.innerHTML = `<div class="empty-state">no windows match the current filter</div>`;
     return;
   }
+
+  const sessionOrder = orderedSessions([...bySession.keys()], bySession);
 
   grid.innerHTML = sessionOrder
     .map((s) => {
@@ -136,11 +182,14 @@ function render(windows) {
       const total = windows.filter((w) => w.session === s).length;
       const shown = ws.length;
       const meta = shown === total ? `${total} windows` : `${shown}/${total} windows`;
+      const collapsed = collapsedSessions.has(s) ? " collapsed" : "";
       return `
-        <section class="session-group">
-          <div class="session-header">
+        <section class="session-group${collapsed}" data-session="${escapeHtml(s)}">
+          <div class="session-header" draggable="true" data-session="${escapeHtml(s)}">
+            <span class="chevron">▾</span>
             <h2>${escapeHtml(s)}</h2>
             <span class="session-meta">${meta}</span>
+            ${sessionPill(bySession.get(s))}
           </div>
           <div class="cards">
             ${ws.map(renderCard).join("")}
@@ -150,16 +199,85 @@ function render(windows) {
     })
     .join("");
 
-  // Wire card clicks
-  grid.querySelectorAll(".card").forEach((el) => {
-    el.addEventListener("click", () => openModal(el.dataset.target));
-  });
+  wireCards();
+  wireSessionHeaders();
 
   // Counts in header
   const total = windows.length;
   const working = windows.filter((w) => w.state === "working").length;
   const waiting = windows.filter((w) => w.state === "waiting").length;
   counts.textContent = `${total} windows · ${working} working · ${waiting} waiting`;
+}
+
+function wireCards() {
+  grid.querySelectorAll(".card").forEach((el) => {
+    el.addEventListener("click", () => openModal(el.dataset.target));
+  });
+}
+
+function wireSessionHeaders() {
+  grid.querySelectorAll(".session-header").forEach((header) => {
+    const session = header.dataset.session;
+
+    // Collapse on click (but not while dragging)
+    header.addEventListener("click", (e) => {
+      if (header.classList.contains("dragging")) return;
+      if (collapsedSessions.has(session)) collapsedSessions.delete(session);
+      else collapsedSessions.add(session);
+      saveCollapsed(collapsedSessions);
+      header.closest(".session-group").classList.toggle("collapsed");
+    });
+
+    // Drag-and-drop reordering
+    header.addEventListener("dragstart", (e) => {
+      header.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", session);
+      e.dataTransfer.effectAllowed = "move";
+    });
+
+    header.addEventListener("dragend", () => {
+      header.classList.remove("dragging");
+      grid.querySelectorAll(".session-header").forEach((h) => {
+        h.classList.remove("drag-over-top", "drag-over-bottom");
+      });
+    });
+
+    header.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const rect = header.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      header.classList.toggle("drag-over-top", before);
+      header.classList.toggle("drag-over-bottom", !before);
+    });
+
+    header.addEventListener("dragleave", () => {
+      header.classList.remove("drag-over-top", "drag-over-bottom");
+    });
+
+    header.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const src = e.dataTransfer.getData("text/plain");
+      const dst = session;
+      if (src === dst) return;
+      const rect = header.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      reorderSessions(src, dst, before);
+    });
+  });
+}
+
+function reorderSessions(src, dst, before) {
+  // Build the order from current DOM (so we capture auto-sorted positions of new sessions too)
+  const all = [...grid.querySelectorAll(".session-group")].map(
+    (g) => g.dataset.session
+  );
+  const without = all.filter((s) => s !== src);
+  const dstIdx = without.indexOf(dst);
+  const insertAt = before ? dstIdx : dstIdx + 1;
+  without.splice(insertAt, 0, src);
+  saveOrder(without);
+  render(lastWindows);
 }
 
 async function openModal(target) {
