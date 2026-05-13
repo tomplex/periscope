@@ -1,11 +1,15 @@
 :root {
-  --bg: #0d1117;
-  --bg-card: #161b22;
-  --bg-card-hover: #1c232b;
-  --border: #30363d;
+  /* One Dark / Ghostty-default family. The modal terminal renders on #282c34
+     (see app.js); we keep cards at the same value so the xterm reads as a
+     seamless extension of its modal frame instead of a darker well. The page
+     drops one shade so cards visibly lift off it. */
+  --bg: #21252b;
+  --bg-card: #282c34;
+  --bg-card-hover: #2c313c;
+  --border: #3e4451;
   --fg: #e6edf3;
-  --fg-dim: #8b949e;
-  --fg-very-dim: #6e7681;
+  --fg-dim: #abb2bf;
+  --fg-very-dim: #828997;
   --accent: #58a6ff;
   --working: #d29922;
   --waiting: #58a6ff;
@@ -33,7 +37,7 @@ code, pre, .mono {
 header {
   position: sticky;
   top: 0;
-  background: rgba(13, 17, 23, 0.92);
+  background: rgba(33, 37, 43, 0.92);  /* --bg with alpha for blur */
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
   padding: 12px 24px;
@@ -204,6 +208,39 @@ main {
   opacity: 0.7;
 }
 
+.kill-session {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-very-dim);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.kill-session:hover {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.header-action {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.header-action:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -282,6 +319,66 @@ main {
 .card-state.state-working { color: var(--working); }
 .card-state.state-waiting { color: var(--waiting); }
 .card-state.state-shell   { color: var(--fg-very-dim); }
+
+/* Hover-revealed kill button on each card. Keeping it transparent by default
+   prevents the X from cluttering the dense grid. */
+.card-kill {
+  background: transparent;
+  border: none;
+  color: var(--fg-very-dim);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.1s ease, color 0.1s ease;
+}
+
+.card:hover .card-kill { opacity: 1; }
+.card-kill:hover { color: var(--error); }
+
+/* "+ new window" tile rendered as the last item in each session's grid.
+   Two buttons (claude / shell) share the tile. .card.card-new overrides the
+   filled-card border/background to read as a placeholder slot. */
+.card.card-new {
+  background: transparent;
+  border: 1px dashed var(--border);
+  cursor: default;
+  padding: 8px;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: center;
+  gap: 8px;
+}
+
+.card.card-new:hover {
+  background: transparent;
+  border-color: var(--fg-very-dim);
+}
+
+.card-new .new-window {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.card-new .new-window:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.card-new .new-window:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
 
 .card-branch {
   font-size: 11px;
@@ -447,7 +544,10 @@ body.modal-open { overflow: hidden; }
   flex: 1;
   min-height: 0;
   padding: 6px 8px 0 8px;
-  background: #0d1117;
+  /* Must match the xterm theme background in app.js — this is the padding
+     ring around the xterm canvas, and any mismatch frames the terminal in
+     a different shade. */
+  background: #282c34;
   overflow: hidden;
 }
 

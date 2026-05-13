@@ -436,6 +436,22 @@ class RenameBody(BaseModel):
     name: str
 
 
+class NewSessionBody(BaseModel):
+    name: str
+    cwd: str | None = None
+
+
+def _tmux_mutate(*args: str) -> tuple[bool, str]:
+    """Run a tmux command for its side effects. Surfaces stderr on failure
+    instead of swallowing it like the read-only `tmux()` helper does."""
+    r = subprocess.run(
+        ["tmux", *args], capture_output=True, text=True, timeout=5
+    )
+    if r.returncode != 0:
+        return False, (r.stderr.strip() or r.stdout.strip() or "tmux failed")
+    return True, r.stdout.strip()
+
+
 @app.post("/api/rename")
 def rename(session: str, index: int, body: RenameBody):
     target = f"{session}:{index}"
@@ -444,6 +460,72 @@ def rename(session: str, index: int, body: RenameBody):
         return {"ok": False, "error": "empty name"}
     tmux("rename-window", "-t", target, name)
     return {"ok": True, "target": target, "name": name}
+
+
+@app.post("/api/session/new")
+def session_new(body: NewSessionBody):
+    name = body.name.strip()
+    if not name:
+        return {"ok": False, "error": "empty name"}
+    cwd = body.cwd or os.path.expanduser("~")
+    ok, msg = _tmux_mutate("new-session", "-d", "-s", name, "-c", cwd)
+    if not ok:
+        return {"ok": False, "error": msg}
+    # Stamp focus so the new session sorts to the top on next poll.
+    note_focus(f"{name}:0")
+    return {"ok": True, "session": name}
+
+
+@app.delete("/api/session")
+def session_delete(session: str):
+    ok, msg = _tmux_mutate("kill-session", "-t", session)
+    if not ok:
+        return {"ok": False, "error": msg}
+    prefix = f"{session}:"
+    for t in [t for t in _focused_at if t.startswith(prefix)]:
+        _focused_at.pop(t, None)
+    _active_per_session.pop(session, None)
+    return {"ok": True, "session": session}
+
+
+@app.post("/api/window/new")
+def window_new(session: str, mode: str = "shell"):
+    """Spawn a window in `session`. `mode=claude` types `claude\\n` into the
+    new pane so the window comes up running Claude Code; `mode=shell` leaves
+    it at a bare prompt. cwd is inherited from the session's active pane —
+    without `-c`, tmux would use the periscope server's cwd, which is never
+    what you want."""
+    cwd = tmux(
+        "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
+    ).strip() or os.path.expanduser("~")
+    ok, msg = _tmux_mutate(
+        "new-window", "-t", f"{session}:", "-c", cwd,
+        "-P", "-F", "#{window_index}",
+    )
+    if not ok:
+        return {"ok": False, "error": msg}
+    try:
+        index = int(msg)
+    except ValueError:
+        return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
+    target = f"{session}:{index}"
+    if mode == "claude":
+        # Let the shell finish its rc before the `claude` line arrives, so the
+        # command runs as a real prompt entry rather than mid-rc echoed text.
+        time.sleep(0.1)
+        tmux("send-keys", "-t", target, "claude", "Enter")
+    note_focus(target)
+    return {"ok": True, "session": session, "index": index, "target": target, "mode": mode}
+
+
+@app.delete("/api/window")
+def window_delete(session: str, index: int):
+    target = f"{session}:{index}"
+    ok, msg = _tmux_mutate("kill-window", "-t", target)
+    if not ok:
+        return {"ok": False, "error": msg}
+    _focused_at.pop(target, None)
+    return {"ok": True, "target": target}
 
 
 # --- auto-rename via the Anthropic SDK ------------------------------------
@@ -636,6 +718,12 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
     loop = asyncio.get_running_loop()
     pipe_active = False
 
+    # On the first {type:"resize"} message we save the window's original size
+    # and window-size mode so we can restore them when the connection closes.
+    # Tmux refuses to honor resize-window unless window-size is "manual".
+    saved_window_size: str | None = None
+    saved_dims: tuple[int, int] | None = None
+
     try:
         # 1) Get tmux's view of the pane: size, cursor position, alt-screen
         #    state. We need all three to render the initial blob into an xterm
@@ -730,6 +818,43 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
                     text = msg["bytes"].decode("utf-8", errors="replace")
                 if not text:
                     continue
+                # Resize control message: client measured how many cols/rows
+                # fit in its modal and asks tmux to match. Sent as JSON text
+                # ({"type":"resize","cols":N,"rows":M}). Plain keystrokes are
+                # always non-JSON, so the json.loads path filters them out.
+                if text.startswith("{"):
+                    try:
+                        ctrl = json.loads(text)
+                    except Exception:
+                        ctrl = None
+                    if isinstance(ctrl, dict) and ctrl.get("type") == "resize":
+                        cols = int(ctrl.get("cols") or 0)
+                        rows = int(ctrl.get("rows") or 0)
+                        if cols > 0 and rows > 0:
+                            def do_resize(c=cols, r=rows):
+                                nonlocal saved_window_size, saved_dims
+                                if saved_window_size is None:
+                                    # First resize: snapshot the window's
+                                    # current size + mode so we can restore
+                                    # on disconnect, then switch to manual so
+                                    # resize-window actually takes effect.
+                                    try:
+                                        wsz = tmux(
+                                            "show-option", "-t", target,
+                                            "-w", "-v", "window-size",
+                                        ).strip() or "latest"
+                                        dims = tmux(
+                                            "display-message", "-t", target,
+                                            "-p", "#{window_width} #{window_height}",
+                                        ).strip().split()
+                                        saved_window_size = wsz
+                                        saved_dims = (int(dims[0]), int(dims[1]))
+                                        tmux("setw", "-t", target, "window-size", "manual")
+                                    except Exception:
+                                        pass
+                                tmux("resize-window", "-t", target, "-x", str(c), "-y", str(r))
+                            await loop.run_in_executor(None, do_resize)
+                        continue
                 await loop.run_in_executor(
                     None, lambda t=text: deliver_input(target, t)
                 )
@@ -740,6 +865,16 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
     finally:
         # Cleanup in reverse setup order. Each step is best-effort because
         # any of them could fail mid-teardown if the pane already died.
+        # Restore the original window size + mode if we ever resized.
+        if saved_window_size is not None and saved_dims is not None:
+            try:
+                tmux(
+                    "resize-window", "-t", target,
+                    "-x", str(saved_dims[0]), "-y", str(saved_dims[1]),
+                )
+                tmux("setw", "-t", target, "window-size", saved_window_size)
+            except Exception:
+                pass
         if pipe_active:
             try:
                 tmux("pipe-pane", "-t", target)  # no command = stop piping

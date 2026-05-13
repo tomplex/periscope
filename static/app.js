@@ -14,6 +14,9 @@ const modalSubtitle = document.getElementById("modal-subtitle");
 // fresh per modal-open and disposed on close, so each pane gets a clean state.
 let term = null;
 let termWs = null;
+let fitAddon = null;
+let termResizeObserver = null;
+let fitDebounce = null;
 
 // Esc-tap state. Single Esc closes the modal (after a brief debounce window
 // so we can distinguish from double-tap). Double Esc within the window
@@ -72,6 +75,8 @@ filterButtons.forEach((b) => {
     render(lastWindows);
   });
 });
+
+document.getElementById("new-session").addEventListener("click", handleNewSession);
 
 modalClose.addEventListener("click", closeModal);
 modal.addEventListener("click", (e) => {
@@ -154,10 +159,21 @@ function renderCard(w) {
         <span class="card-name">${escapeHtml(w.name)}</span>
         <span class="card-idx mono">${w.index}</span>
         ${stateLabel}
+        <button class="card-kill" data-target="${w.target}" data-name="${escapeHtml(w.name)}" title="kill this window">✕</button>
       </div>
       ${branch}
       ${snippet}
       ${footHtml}
+    </div>
+  `;
+}
+
+function renderNewTile(session) {
+  const s = escapeHtml(session);
+  return `
+    <div class="card card-new" data-session="${s}">
+      <button class="new-window" data-session="${s}" data-mode="claude">+ claude</button>
+      <button class="new-window" data-session="${s}" data-mode="shell">+ shell</button>
     </div>
   `;
 }
@@ -221,9 +237,11 @@ function renderSession(session, ws, totalWindows) {
         <span class="session-meta">${meta}${recentLabel ? ` · ${recentLabel}` : ""}</span>
         ${sessionPill(ws)}
         <button class="auto-rename" data-session="${s}" title="ask Claude to auto-rename windows in this session">✨ rename</button>
+        <button class="kill-session" data-session="${s}" title="kill this tmux session">✕</button>
       </div>
       <div class="cards">
         ${ws.map(renderCard).join("")}
+        ${renderNewTile(session)}
       </div>
     </section>
   `;
@@ -315,11 +333,30 @@ const nameClickTimers = new Map();  // target -> setTimeout handle
 
 function wireGrid() {
   grid.addEventListener("click", (e) => {
-    // Auto-rename button takes priority (it's inside the header).
+    // Mutation buttons inside the grid take priority over the more general
+    // header-toggle / card-open handlers below.
     const autoBtn = e.target.closest(".auto-rename");
     if (autoBtn) {
       e.stopPropagation();
       handleAutoRename(autoBtn);
+      return;
+    }
+    const killSessionBtn = e.target.closest(".kill-session");
+    if (killSessionBtn) {
+      e.stopPropagation();
+      handleKillSession(killSessionBtn);
+      return;
+    }
+    const killWindowBtn = e.target.closest(".card-kill");
+    if (killWindowBtn) {
+      e.stopPropagation();
+      handleKillWindow(killWindowBtn);
+      return;
+    }
+    const newWindowBtn = e.target.closest(".new-window");
+    if (newWindowBtn) {
+      e.stopPropagation();
+      handleNewWindow(newWindowBtn);
       return;
     }
     // Header click toggles collapse (unless the header is mid-drag).
@@ -442,6 +479,78 @@ async function handleAutoRename(autoBtn) {
   }
 }
 
+// Shared error-surfacing wrapper. FastAPI returns `{detail: ...}` on 404/422,
+// not our `{ok, error}` shape, so naive `data.error` reads as "undefined" when
+// e.g. the wrong server version is running. This normalizes both shapes.
+async function apiCall(label, path, opts = {}) {
+  let res;
+  try {
+    res = await fetch(path, opts);
+  } catch (err) {
+    alert(`${label} failed: ${err.message}`);
+    return null;
+  }
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok || data.ok === false) {
+    const err = data.error || data.detail || `HTTP ${res.status}`;
+    alert(`${label} failed: ${err}`);
+    return null;
+  }
+  return data;
+}
+
+async function handleKillSession(btn) {
+  const session = btn.dataset.session;
+  const n = lastWindows.filter((w) => w.session === session).length;
+  const msg = `Kill session '${session}'?\n\nCloses ${n} window${n === 1 ? "" : "s"} and detaches any attached client.`;
+  if (!confirm(msg)) return;
+  await apiCall("kill session", `/api/session?session=${encodeURIComponent(session)}`, {
+    method: "DELETE",
+  });
+  poll();
+}
+
+async function handleKillWindow(btn) {
+  const target = btn.dataset.target;
+  const name = btn.dataset.name;
+  if (!confirm(`Kill window '${name}' (${target})?`)) return;
+  await apiCall("kill window", `/api/window?${targetQuery(target)}`, {
+    method: "DELETE",
+  });
+  poll();
+}
+
+async function handleNewWindow(btn) {
+  const session = btn.dataset.session;
+  const mode = btn.dataset.mode;
+  const tile = btn.closest(".card-new");
+  // Disable both buttons in the tile while the request is in flight so a
+  // double-click can't spawn two windows.
+  tile.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  try {
+    await apiCall(
+      "new window",
+      `/api/window/new?session=${encodeURIComponent(session)}&mode=${encodeURIComponent(mode)}`,
+      { method: "POST" }
+    );
+  } finally {
+    tile.querySelectorAll("button").forEach((b) => (b.disabled = false));
+  }
+  poll();
+}
+
+async function handleNewSession() {
+  const name = prompt("session name:");
+  if (!name) return;
+  await apiCall("new session", `/api/session/new`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name.trim() }),
+  });
+  poll();
+}
+
 function reorderSessions(src, dst, before) {
   // Build the order from current DOM (so we capture auto-sorted positions of new sessions too)
   const all = [...grid.querySelectorAll(".session-group")].map(
@@ -488,10 +597,10 @@ function startLiveTerminal(target) {
     // ESC + b (word back), etc. Claude Code's input box honors these.
     macOptionIsMeta: true,
     theme: {
-      background: "#0d1117",
+      background: "#282c34",
       foreground: "#e6edf3",
       cursor: "#58a6ff",
-      cursorAccent: "#0d1117",
+      cursorAccent: "#282c34",
       selectionBackground: "rgba(88,166,255,0.35)",
       black: "#1d1f21",        red: "#cc6666",  green: "#b5bd68",
       yellow: "#f0c674",       blue: "#81a2be", magenta: "#b294bb",
@@ -504,6 +613,20 @@ function startLiveTerminal(target) {
   });
   term.open(modalXtermEl);
   term.focus();
+
+  // Fit xterm to the modal container's actual pixel size (so we never clip
+  // the bottom rows) and ask tmux to resize the underlying pane to match.
+  // Without this, xterm renders at tmux's pane size (often taller than the
+  // modal) and the bottom is clipped by overflow:hidden.
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+
+  // ResizeObserver: refit + tell tmux when the modal/window changes size.
+  // Debounced so a window-drag doesn't spam tmux with subprocess calls.
+  termResizeObserver = new ResizeObserver(scheduleFit);
+  termResizeObserver.observe(modalXtermEl);
+  // Initial fit after the layout settles.
+  requestAnimationFrame(scheduleFit);
 
   // The browser intercepts Cmd+key combos before xterm sees them. Translate
   // the common ones into readline-style control sequences and forward them
@@ -587,7 +710,32 @@ function startLiveTerminal(target) {
   });
 }
 
+function scheduleFit() {
+  if (fitDebounce) clearTimeout(fitDebounce);
+  fitDebounce = setTimeout(() => {
+    fitDebounce = null;
+    if (!term || !fitAddon) return;
+    try {
+      fitAddon.fit();
+    } catch (_) {
+      return;
+    }
+    if (termWs && termWs.readyState === WebSocket.OPEN) {
+      termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+    }
+  }, 80);
+}
+
 function stopLiveTerminal() {
+  if (fitDebounce) {
+    clearTimeout(fitDebounce);
+    fitDebounce = null;
+  }
+  if (termResizeObserver) {
+    try { termResizeObserver.disconnect(); } catch (_) {}
+    termResizeObserver = null;
+  }
+  fitAddon = null;
   if (termWs) {
     try { termWs.close(); } catch (_) {}
     termWs = null;
