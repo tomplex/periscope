@@ -660,13 +660,20 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
         )
 
         initial = tmux("capture-pane", "-t", target, "-p", "-e", "-S", "-200")
-        # capture-pane separates lines with bare \n. xterm needs \r\n to
-        # return each new line to column 0 — without the \r every line would
-        # staircase rightward. Strip trailing newlines first: if we render a
-        # full pane-height worth of lines AND end with a \r\n, xterm scrolls
-        # the buffer up one row (cursor advances past the bottom row), which
-        # leaves the cursor one line below where tmux thinks it is.
-        body = initial.rstrip("\n").replace("\n", "\r\n") if initial else ""
+        # capture-pane separates lines with \n AND appends one more \n after
+        # the final line. We strip exactly that final terminator (not any
+        # blank-line content above it) and convert internal \n to \r\n so
+        # xterm wraps each new line back to column 0 instead of staircasing.
+        # If we strip too many, blank lines at the bottom of the pane vanish
+        # and the cursor lands one row above where tmux says it is. If we
+        # strip too few, the trailing \r\n scrolls xterm one row past the
+        # bottom and the cursor lands one row below.
+        if initial:
+            if initial.endswith("\n"):
+                initial = initial[:-1]
+            body = initial.replace("\n", "\r\n")
+        else:
+            body = ""
         # Build a prefix that puts xterm into the same screen mode tmux is in,
         # clears any stale rendering, then a suffix that parks the cursor
         # where tmux thinks it is.
