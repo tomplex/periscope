@@ -4,14 +4,17 @@
 # ///
 """Periscope — live tmux dashboard. Run with: uv run server.py"""
 
+import asyncio
 import json
+import os
 import re
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -436,6 +439,121 @@ def send(session: str, index: int, body: SendBody):
         return {"ok": False, "error": "no keys or paste"}
     note_focus(target)
     return {"ok": True, "target": target}
+
+
+# --- Live terminal: WebSocket bridge to a tmux pane ----------------------
+#
+# Architecture:
+#   - tmux pipe-pane -O writes the pane's output stream to a named pipe
+#   - we read from the FIFO and forward bytes to the WebSocket
+#   - we receive keystroke messages from the WebSocket and pass them through
+#     to tmux send-keys -l (literal) so escape sequences (arrow keys, etc.)
+#     reach the pane's PTY untouched
+#   - on disconnect we stop the pipe-pane and remove the FIFO
+#
+# pipe-pane duplicates the output, so the user's actual tmux terminal keeps
+# rendering normally alongside the browser-side terminal.
+
+
+@app.websocket("/ws/pane")
+async def ws_pane(websocket: WebSocket, session: str, index: int):
+    await websocket.accept()
+    target = f"{session}:{index}"
+    fifo_path = f"/tmp/periscope.{uuid.uuid4().hex}.fifo"
+    fd = None
+    loop = asyncio.get_running_loop()
+    pipe_active = False
+
+    try:
+        # 1) Send current pane state and size so xterm renders something
+        #    coherent immediately, before the pipe attaches.
+        try:
+            cols_rows = tmux(
+                "display-message", "-t", target, "-p", "#{pane_width}x#{pane_height}"
+            ).strip()
+            cols, rows = (int(x) for x in cols_rows.split("x"))
+        except Exception:
+            cols, rows = 120, 40
+        await websocket.send_text(
+            json.dumps({"type": "size", "cols": cols, "rows": rows})
+        )
+
+        initial = tmux("capture-pane", "-t", target, "-p", "-e", "-S", "-200")
+        if initial:
+            await websocket.send_bytes(initial.encode("utf-8", errors="replace"))
+
+        # 2) Set up the pipe. mkfifo + open(O_RDONLY|O_NONBLOCK) returns
+        #    immediately; tmux opens the write end via the cat subprocess.
+        os.mkfifo(fifo_path)
+        tmux("pipe-pane", "-O", "-t", target, f"cat > {fifo_path}")
+        pipe_active = True
+        fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+
+        # 3) Bridge FIFO → queue → websocket. asyncio.add_reader notifies us
+        #    when the fd is readable; we drain in non-blocking chunks.
+        out_queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+        def on_readable():
+            try:
+                chunk = os.read(fd, 8192)
+            except BlockingIOError:
+                return
+            if chunk:
+                out_queue.put_nowait(chunk)
+
+        loop.add_reader(fd, on_readable)
+
+        async def forward_out():
+            while True:
+                chunk = await out_queue.get()
+                await websocket.send_bytes(chunk)
+
+        forward_task = asyncio.create_task(forward_out())
+
+        # 4) Main loop: receive keystrokes from the client and push to tmux.
+        #    xterm.js's onData sends raw input including escape sequences
+        #    (e.g. "\x1b[A" for up arrow). send-keys -l preserves them.
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                text = msg.get("text")
+                if text is None and msg.get("bytes") is not None:
+                    text = msg["bytes"].decode("utf-8", errors="replace")
+                if not text:
+                    continue
+                # Run send-keys in a thread so it doesn't block the loop on the
+                # ~1-2ms subprocess fork.
+                await loop.run_in_executor(
+                    None, lambda t=text: tmux("send-keys", "-t", target, "-l", t)
+                )
+        except WebSocketDisconnect:
+            pass
+        finally:
+            forward_task.cancel()
+    finally:
+        # Cleanup in reverse setup order. Each step is best-effort because
+        # any of them could fail mid-teardown if the pane already died.
+        if pipe_active:
+            try:
+                tmux("pipe-pane", "-t", target)  # no command = stop piping
+            except Exception:
+                pass
+        if fd is not None:
+            try:
+                loop.remove_reader(fd)
+            except Exception:
+                pass
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if os.path.exists(fifo_path):
+            try:
+                os.unlink(fifo_path)
+            except Exception:
+                pass
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

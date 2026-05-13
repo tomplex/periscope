@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>periscope</title>
+  <link rel="stylesheet" href="/static/vendor/xterm.css">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -36,7 +37,7 @@
         </div>
       </div>
       <div id="modal-brief" class="modal-brief hidden"></div>
-      <pre id="modal-pane"></pre>
+      <div id="modal-xterm" class="modal-xterm"></div>
       <div class="modal-foot">
         <div id="send-status" class="send-status"></div>
         <textarea id="send-input" autocomplete="off" spellcheck="false" rows="2"
@@ -54,6 +55,7 @@
       </div>
     </div>
   </div>
+  <script src="/static/vendor/xterm.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

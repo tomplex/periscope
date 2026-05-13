@@ -466,16 +466,22 @@ body.modal-open { overflow: hidden; }
   line-height: 1;
 }
 
-#modal-pane {
-  margin: 0;
-  padding: 14px 16px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--fg);
-  white-space: pre;
+#modal-xterm {
   flex: 1;
+  min-height: 0;
+  padding: 6px 8px 0 8px;
+  background: #0d1117;
+  overflow: hidden;
+}
+
+/* xterm.js applies its own theme to .xterm-screen; we just need the host
+   container to look right and not clip the rendered terminal. */
+.modal-xterm .xterm {
+  height: 100%;
+}
+.modal-xterm .xterm-viewport {
+  background: transparent !important;
+  overscroll-behavior: contain;
 }
 
 .modal-foot {

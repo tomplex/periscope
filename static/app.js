@@ -5,7 +5,7 @@ const counts = document.getElementById("counts");
 const lastUpdate = document.getElementById("last-update");
 const modal = document.getElementById("modal");
 const modalTitle = document.getElementById("modal-title");
-const modalPane = document.getElementById("modal-pane");
+const modalXtermEl = document.getElementById("modal-xterm");
 const modalFocus = document.getElementById("modal-focus");
 const modalClose = document.getElementById("modal-close");
 const sendInput = document.getElementById("send-input");
@@ -13,6 +13,11 @@ const keyButtons = document.getElementById("key-buttons");
 const modalSubtitle = document.getElementById("modal-subtitle");
 const modalBrief = document.getElementById("modal-brief");
 const sendStatus = document.getElementById("send-status");
+
+// Live terminal (xterm.js + WebSocket) wiring. The xterm instance is created
+// fresh per modal-open and disposed on close, so each pane gets a clean state.
+let term = null;
+let termWs = null;
 
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
@@ -461,42 +466,121 @@ async function openModal(target) {
   modalTitle.textContent = target;
   modalSubtitle.innerHTML = "";
   modalBrief.classList.add("hidden");
-  modalPane.textContent = "loading...";
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
   resetHistoryNav();
   setSendStatus("", "");
   lastSpinner = null;
   lastSpinnerSeenAt = 0;
-  await refreshModalPane({ forceScroll: true });
+  startLiveTerminal(target);
+  // Header poll keeps the subtitle/brief/spinner fresh; the terminal body
+  // itself streams live via the WebSocket, no polling needed.
+  await refreshModalHeader();
   sendInput.value = loadDraft(target);
-  sendInput.focus();
-  moveCursorToEnd(sendInput);
-  modalPollHandle = setInterval(() => refreshModalPane(), MODAL_POLL_MS);
+  // The xterm.js terminal owns focus by default; this only matters if the
+  // user clicks into the textarea to compose a long message.
+  modalPollHandle = setInterval(refreshModalHeader, MODAL_POLL_MS);
 }
 
-async function refreshModalPane({ forceScroll = false } = {}) {
+function startLiveTerminal(target) {
+  // Fresh xterm.js instance per modal-open. Dispose any leftover from a prior
+  // session before creating a new one.
+  if (term) {
+    try { term.dispose(); } catch (_) {}
+    term = null;
+  }
+  modalXtermEl.innerHTML = "";
+
+  term = new Terminal({
+    fontFamily: '"SF Mono", "JetBrains Mono", "Menlo", monospace',
+    fontSize: 12,
+    cursorBlink: true,
+    scrollback: 5000,
+    convertEol: false,
+    theme: {
+      background: "#0d1117",
+      foreground: "#e6edf3",
+      cursor: "#58a6ff",
+      cursorAccent: "#0d1117",
+      selectionBackground: "rgba(88,166,255,0.35)",
+      black: "#1d1f21",        red: "#cc6666",  green: "#b5bd68",
+      yellow: "#f0c674",       blue: "#81a2be", magenta: "#b294bb",
+      cyan: "#8abeb7",         white: "#c5c8c6",
+      brightBlack: "#969896",  brightRed: "#ff7373",
+      brightGreen: "#c8e094",  brightYellow: "#ffd47b",
+      brightBlue: "#9ec5fe",   brightMagenta: "#d8b6db",
+      brightCyan: "#a8e0d8",   brightWhite: "#ffffff",
+    },
+  });
+  term.open(modalXtermEl);
+  term.focus();
+
+  const wsProto = location.protocol === "https:" ? "wss" : "ws";
+  termWs = new WebSocket(`${wsProto}://${location.host}/ws/pane?${targetQuery(target)}`);
+  termWs.binaryType = "arraybuffer";
+
+  termWs.onmessage = (event) => {
+    if (typeof event.data === "string") {
+      // Control message (JSON) — currently only `{type:"size", cols, rows}`.
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "size") {
+          term.resize(msg.cols, msg.rows);
+        }
+      } catch (_) {
+        // Not JSON; treat as data
+        term.write(event.data);
+      }
+    } else {
+      // Binary terminal bytes
+      term.write(new Uint8Array(event.data));
+    }
+  };
+
+  termWs.onerror = () => {
+    term.writeln("\r\n\x1b[31m[periscope: WebSocket error]\x1b[0m");
+  };
+  termWs.onclose = (e) => {
+    if (!e.wasClean) {
+      term.writeln("\r\n\x1b[33m[periscope: stream closed]\x1b[0m");
+    }
+  };
+
+  // Forward every keystroke (including escape sequences for arrows, esc, etc.)
+  // straight to the server. The server passes them through tmux send-keys -l.
+  term.onData((data) => {
+    if (termWs && termWs.readyState === WebSocket.OPEN) {
+      termWs.send(data);
+    }
+  });
+}
+
+function stopLiveTerminal() {
+  if (termWs) {
+    try { termWs.close(); } catch (_) {}
+    termWs = null;
+  }
+  if (term) {
+    try { term.dispose(); } catch (_) {}
+    term = null;
+  }
+}
+
+async function refreshModalHeader() {
+  // /api/pane is now used only for parsed status fields (branch, PR, recap,
+  // spinner). The terminal content itself streams live via WebSocket and
+  // doesn't need this poll. We pass lines=40 since we only need enough buffer
+  // for the parser to find the status block and most recent recap.
   if (!activeTarget) return;
   try {
-    const res = await fetch(`/api/pane?${targetQuery(activeTarget)}&lines=200`);
-    if (!res.ok) {
-      modalPane.textContent = `error: ${res.status} ${res.statusText} fetching ${activeTarget}`;
-      return;
-    }
+    const res = await fetch(`/api/pane?${targetQuery(activeTarget)}&lines=80`);
+    if (!res.ok) return;
     const data = await res.json();
-    // Smooth the spinner field once so every consumer (modal header subtitle,
-    // send-status indicator) sees the same value across capture-pane gaps.
     applySpinnerHysteresis(data);
     updateModalHeader(data);
     updateSendStatusFromPane(data);
-    const wasAtBottom =
-      modalPane.scrollHeight - modalPane.scrollTop - modalPane.clientHeight < 24;
-    modalPane.innerHTML = ansiToHtml(data.content);
-    if (forceScroll || wasAtBottom) {
-      modalPane.scrollTop = modalPane.scrollHeight;
-    }
-  } catch (e) {
-    modalPane.textContent = `fetch failed: ${e.message}`;
+  } catch (_) {
+    // Transient — next tick will retry
   }
 }
 
@@ -675,120 +759,19 @@ async function sendToTmux(payload) {
     body: JSON.stringify(payload),
   });
   // Quick refresh so the user sees it land before the next poll tick.
-  setTimeout(() => refreshModalPane(), 80);
+  // The xterm stream picks up Claude's response automatically; we only need
+  // to nudge the header refresh so the spinner/recap update quickly.
+  setTimeout(refreshModalHeader, 80);
 }
 
 function sendKeys(keys) {
   return sendToTmux({ keys });
 }
 
-// --- ANSI -> HTML ---------------------------------------------------------
-// Supports SGR codes: reset, bold/dim/italic/underline, basic 16 colors,
-// 256-color (38;5;N / 48;5;N), and truecolor (38;2;R;G;B / 48;2;R;G;B).
-
-const ANSI_RE = /\x1b\[([\d;]*)m/g;
-
-const ANSI_16 = [
-  "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
-  "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
-  "#969896", "#ff7373", "#c8e094", "#ffd47b",
-  "#9ec5fe", "#d8b6db", "#a8e0d8", "#ffffff",
-];
-
-function ansi256(n) {
-  if (n < 16) return ANSI_16[n];
-  if (n < 232) {
-    n -= 16;
-    const r = Math.floor(n / 36);
-    const g = Math.floor((n % 36) / 6);
-    const b = n % 6;
-    const v = (x) => (x === 0 ? 0 : 55 + x * 40);
-    return `rgb(${v(r)},${v(g)},${v(b)})`;
-  }
-  const v = 8 + (n - 232) * 10;
-  return `rgb(${v},${v},${v})`;
-}
-
-function applyCodes(s, style) {
-  if (s === "" || s === "0") {
-    for (const k of Object.keys(style)) delete style[k];
-    return;
-  }
-  const codes = s.split(";").map((x) => parseInt(x, 10));
-  let i = 0;
-  while (i < codes.length) {
-    const c = codes[i];
-    if (Number.isNaN(c)) { i++; continue; }
-    if (c === 0) {
-      for (const k of Object.keys(style)) delete style[k];
-    } else if (c === 1) style.bold = true;
-    else if (c === 2) style.dim = true;
-    else if (c === 3) style.italic = true;
-    else if (c === 4) style.underline = true;
-    else if (c === 22) { delete style.bold; delete style.dim; }
-    else if (c === 23) delete style.italic;
-    else if (c === 24) delete style.underline;
-    else if (c === 39) delete style.fg;
-    else if (c === 49) delete style.bg;
-    else if (c >= 30 && c <= 37) style.fg = ANSI_16[c - 30];
-    else if (c >= 40 && c <= 47) style.bg = ANSI_16[c - 40];
-    else if (c >= 90 && c <= 97) style.fg = ANSI_16[c - 90 + 8];
-    else if (c >= 100 && c <= 107) style.bg = ANSI_16[c - 100 + 8];
-    else if (c === 38 || c === 48) {
-      const target = c === 38 ? "fg" : "bg";
-      if (codes[i + 1] === 5 && codes[i + 2] != null) {
-        style[target] = ansi256(codes[i + 2]);
-        i += 2;
-      } else if (codes[i + 1] === 2 && codes[i + 4] != null) {
-        style[target] = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`;
-        i += 4;
-      }
-    }
-    i++;
-  }
-}
-
-function styleToCss(s) {
-  const css = [];
-  if (s.fg) css.push(`color:${s.fg}`);
-  if (s.bg) css.push(`background:${s.bg}`);
-  if (s.bold) css.push("font-weight:600");
-  if (s.italic) css.push("font-style:italic");
-  if (s.underline) css.push("text-decoration:underline");
-  if (s.dim) css.push("opacity:0.65");
-  return css.join(";");
-}
-
-function ansiToHtml(text) {
-  let out = "";
-  let last = 0;
-  const style = {};
-  let m;
-  ANSI_RE.lastIndex = 0;
-  while ((m = ANSI_RE.exec(text)) !== null) {
-    const chunk = text.slice(last, m.index);
-    if (chunk) {
-      const css = styleToCss(style);
-      out += css
-        ? `<span style="${css}">${escapeHtml(chunk)}</span>`
-        : escapeHtml(chunk);
-    }
-    last = m.index + m[0].length;
-    applyCodes(m[1], style);
-  }
-  const tail = text.slice(last);
-  if (tail) {
-    const css = styleToCss(style);
-    out += css
-      ? `<span style="${css}">${escapeHtml(tail)}</span>`
-      : escapeHtml(tail);
-  }
-  return out;
-}
-
 function closeModal() {
   // Preserve any in-progress prompt for this target — reopening restores it.
   if (activeTarget) saveDraft(activeTarget, sendInput.value);
+  stopLiveTerminal();
   modal.classList.add("hidden");
   document.body.classList.remove("modal-open");
   if (modalPollHandle) {
