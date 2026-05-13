@@ -227,6 +227,20 @@ main {
   white-space: nowrap;
 }
 
+.rename-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 1px 6px;
+  border-radius: 3px;
+  outline: none;
+  min-width: 0;
+}
+
 .card-idx {
   font-family: "SF Mono", monospace;
   font-size: 10px;

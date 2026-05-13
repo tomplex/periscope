@@ -238,6 +238,20 @@ class SendBody(BaseModel):
     paste: str | None = None  # bracketed-pasted into the pane before `keys`
 
 
+class RenameBody(BaseModel):
+    name: str
+
+
+@app.post("/api/rename")
+def rename(session: str, index: int, body: RenameBody):
+    target = f"{session}:{index}"
+    name = body.name.strip()
+    if not name:
+        return {"ok": False, "error": "empty name"}
+    tmux("rename-window", "-t", target, name)
+    return {"ok": True, "target": target, "name": name}
+
+
 @app.post("/api/send")
 def send(session: str, index: int, body: SendBody):
     """Send input to a tmux pane.

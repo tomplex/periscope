@@ -38,6 +38,7 @@ function saveCollapsed(set) {
 }
 
 let collapsedSessions = loadCollapsed();
+let editingTarget = null;  // pauses polling while a rename input is open
 
 const filterButtons = document.querySelectorAll("#filters button");
 filterButtons.forEach((b) => {
@@ -238,7 +239,56 @@ function render(windows) {
 function wireCards() {
   grid.querySelectorAll(".card").forEach((el) => {
     el.addEventListener("click", () => openModal(el.dataset.target));
+    const nameEl = el.querySelector(".card-name");
+    if (nameEl) {
+      nameEl.title = "double-click to rename";
+      nameEl.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        startRename(nameEl, el.dataset.target, nameEl.textContent);
+      });
+    }
   });
+}
+
+function startRename(nameEl, target, currentName) {
+  if (editingTarget) return;
+  editingTarget = target;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = currentName;
+  input.className = "rename-input";
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const newName = input.value.trim();
+    editingTarget = null;
+    if (save && newName && newName !== currentName) {
+      try {
+        await fetch(`/api/rename?${targetQuery(target)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: newName }),
+        });
+      } catch (e) {
+        // poll() below will resync from tmux either way
+      }
+    }
+    poll();  // immediate refresh so the new name appears
+  };
+
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("dblclick", (e) => e.stopPropagation());
 }
 
 function wireSessionHeaders() {
@@ -468,10 +518,9 @@ function closeModal() {
 }
 
 sendInput.addEventListener("keydown", (e) => {
-  // Enter submits; Shift+Enter inserts a newline in the textarea (default).
-  // Cmd/Ctrl+Enter also submits — natural for power users.
-  const isSubmit =
-    e.key === "Enter" && !e.shiftKey;
+  // Cmd/Ctrl+Enter submits. Bare Enter inserts a newline (default textarea
+  // behavior — much friendlier for composing multi-line messages).
+  const isSubmit = e.key === "Enter" && (e.metaKey || e.ctrlKey);
   if (!isSubmit) return;
   e.preventDefault();
   const text = sendInput.value;
@@ -512,6 +561,7 @@ function escapeHtml(s) {
 }
 
 async function poll() {
+  if (editingTarget) return;  // user is mid-rename; don't blow away their input
   try {
     const res = await fetch("/api/state");
     const data = await res.json();
