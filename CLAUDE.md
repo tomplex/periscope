@@ -4,8 +4,9 @@
 
 A single-file FastAPI server (`server.py`) plus a vanilla-JS frontend
 (`static/`) that gives a browser dashboard over the host's tmux sessions.
-No build step, no framework, no package manifest — `uv run server.py` reads
-its dependencies from the PEP-723 inline metadata at the top of the file.
+No bundling step in production — `uv run server.py` reads its dependencies
+from the PEP-723 inline metadata at the top of the file and serves
+`static/` as-is.
 
 ## Running
 
@@ -14,6 +15,19 @@ uv run server.py     # http://127.0.0.1:8765/
 ```
 
 That's it. There's no test suite; iterate against the live dashboard.
+
+For frontend HMR (CSS reloads instantly, JS without losing scroll position):
+
+```sh
+npm install                     # one-time
+npm run dev                     # http://127.0.0.1:5174/
+```
+
+`npm run dev` uses `concurrently` to run `uv run server.py` and `vite` as a
+single foreground process; ctrl+c stops both. `vite.config.js` proxies
+`/api/*` and `/ws/*` to FastAPI on :8765. Vite is purely a dev convenience —
+production keeps loading `static/app.js` and the vendored xterm scripts
+directly from FastAPI with no build artifact.
 
 ## Architecture
 
@@ -31,10 +45,12 @@ FastAPI (server.py)                       tmux pipe-pane FIFO
 - **`server.py`** holds everything server-side: pane parsing, the focus
   bookkeeping, all `/api/*` routes, and the `/ws/pane` WebSocket bridge.
 - **`static/app.js`** is the entire frontend — grid rendering, filters,
-  drag-to-reorder sessions, modal, xterm.js wiring. No bundler; the file is
-  served as-is.
-- **`static/vendor/xterm.{js,css}`** is vendored upstream xterm.js. Don't
-  edit; replace wholesale if upgrading.
+  drag-to-reorder sessions, modal, xterm.js wiring. Loaded as
+  `<script type="module">` so Vite can do HMR; otherwise plain ES modules,
+  no bundle required.
+- **`static/vendor/xterm.{js,css}`** is vendored upstream xterm.js, loaded
+  as plain `<script>` tags (not modules) so `Terminal` and `FitAddon` end
+  up on `window`. Don't edit; replace wholesale if upgrading.
 
 ## Key invariants (the things that broke and we fixed)
 
@@ -92,7 +108,10 @@ shell."
 ## Conventions
 
 - Single-file server; resist the urge to split it until it actually hurts.
-- No frameworks on the frontend; vanilla JS is part of the value prop.
+- No frontend framework; vanilla JS is part of the value prop. Vite is a
+  dev-only HMR convenience — anything that requires the build step to run
+  (npm-imported deps, JSX, TypeScript) breaks the "just `uv run server.py`"
+  promise and shouldn't land without a deliberate conversation.
 - Comments explain *why*, not what. The existing comments around
   pipe-pane, the cursor sync, and the bracketed-paste delay are the
   template — terse, points at the failure that motivated the code.

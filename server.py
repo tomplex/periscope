@@ -13,18 +13,27 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Load .env from the script's directory (existing env vars take precedence).
 load_dotenv(Path(__file__).parent / ".env")
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # prewarm_pr_cache is defined later in the file; Python resolves the name
+    # at call-time, so the forward reference is fine.
+    threading.Thread(target=prewarm_pr_cache, daemon=True).start()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 STATIC = Path(__file__).parent / "static"
 
 # Server-tracked "last user-focused" per target.
@@ -920,17 +929,12 @@ def prewarm_pr_cache() -> None:
         cached_pr_state(cwd, branch)
 
 
-@app.on_event("startup")
-def _on_startup() -> None:
-    threading.Thread(target=prewarm_pr_cache, daemon=True).start()
-
-
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
-
-
-@app.get("/")
-def root():
-    return FileResponse(STATIC / "index.html")
+# Mounted last so the API/WS routes above take precedence. `html=True` serves
+# index.html for `/` (and any directory request) without needing a separate
+# route. Asset paths in index.html are root-relative (`/styles.css`, `/app.js`,
+# `/vendor/xterm.js`) so they resolve identically here and under Vite's dev
+# server on :5173.
+app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
 
 
 if __name__ == "__main__":

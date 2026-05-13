@@ -13,8 +13,9 @@ Code agents running, and I want a single pane of glass" workflow.
 
 - `tmux` (any reasonably modern version)
 - [`uv`](https://docs.astral.sh/uv/) for running the single-file script
-- A modern browser (uses WebSockets + ES module-free vanilla JS)
+- A modern browser (uses WebSockets + vanilla JS)
 - Optional: `ANTHROPIC_API_KEY` for the ✨ auto-rename feature
+- Optional: Node 20+ if you want HMR while iterating on the frontend
 
 ## Run
 
@@ -24,6 +25,20 @@ uv run server.py
 
 Open <http://127.0.0.1:8765/>. Polls every 3s; the modal opens a live
 WebSocket bridge to the selected pane.
+
+### Frontend HMR (optional)
+
+For hot-reload while editing `static/app.js` or `static/styles.css`:
+
+```sh
+npm install        # one-time
+npm run dev        # then visit http://127.0.0.1:5174/
+```
+
+`npm run dev` runs the FastAPI server **and** Vite together via
+`concurrently`; ctrl+c stops both. Vite proxies `/api/*` and `/ws/*` to
+FastAPI, so only one URL matters in the browser. There's no build step —
+production still loads `static/` as-is from FastAPI on :8765.
 
 ## Auto-rename (optional)
 
