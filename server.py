@@ -203,33 +203,34 @@ STATUS_RE = re.compile(
 # above STATUS_RE. We now pull those from the pane's cwd directly (git +
 # `gh pr list`), independent of any statusline customization.
 
-# Spinner: any non-ASCII glyph at line start (Claude Code rotates through
-# ✻ ✶ ✷ ✳ ✦ … and others — enumerating breaks every time Claude adds a new
-# one) + whitespace + a single-word verb + a literal `…`. The ellipsis is
-# what distinguishes an active spinner from past-tense status lines like
-# "✻ Brewed for 31s" (no `…`).
+# Active-op detection — two patterns covering the variations Claude Code's
+# TUI shows for a running operation. Both are used with `.match()` so the
+# spinner glyph must be at line start (after optional indent); this rejects
+# prose embeds where a previous response or user message quotes the marker
+# mid-sentence.
 #
-# The phrase is `\S+?` (single token, no whitespace) on purpose: Claude Code
-# tool-call headers look like `⏺ Bash(cd /Users/tom/… --skip-glo…)`, with the
-# `…` truncating the command inside the parens. A laxer pattern that allowed
-# whitespace inside the phrase would match those scrollback lines and falsely
-# promote idle Claude panes to the "working" state.
-SPINNER_RE = re.compile(r"^\s*[^\x00-\x7f]\s+(?P<phrase>\S+?)…")
+# An active marker is always `<non-ASCII glyph> <verb-phrase>` followed by
+# either a trailing `…`, a `(timing/tokens)` parenthetical, or both.
+# Glyph enumeration is intentionally avoided (Claude rotates through
+# ✻ ✶ ✷ ✳ ✦ ⏺ … and adds new ones over time) — `[^\x00-\x7f]` matches any.
+#
+# SPINNER_RE handles the ellipsis form, single- OR multi-word phrase:
+#   "✻ Envisioning…"
+#   "✳ Wiring resolve_pids into endpoints…(910m 2 · ↓ 14.78 tokens · ...)"
+# The phrase character class excludes `(` so it can't grow into parens —
+# without that, tool-call headers like `⏺ Bash(cd /Users/tom/… --skip-glo…)`
+# would match (the `…` inside the bash invocation isn't an active marker).
+SPINNER_RE = re.compile(r"^\s*[^\x00-\x7f]\s+(?P<phrase>[^(\n…]+?)…")
 
-# Newer Claude Code task UI dropped the trailing `…`. An active operation now
-# renders as `<glyph> <verb> <noun?> (Xm Ys · ↑Nk tokens · thought for Zs)`
-# and signals completion by dropping the up-arrow — e.g. `Done (5 tool uses ·
-# 25.5k tokens · 21s)` is a finished agent. The `↑ Nk tokens` inside parens
-# is the live uplink meter; only the running op shows it. Distinguishable
-# from STATUS_RE because the status line has both ↑ and ↓ and no `tokens`
-# word, and it isn't wrapped in parens.
-#
-# Anchored to line start (used with `.match()`) so it doesn't trigger on
-# assistant prose that quotes the marker mid-sentence — the actual TUI line
-# always begins with the spinner glyph + verb, not embedded in surrounding
-# words. (This rule is the same one SPINNER_RE relies on.)
+# ACTIVE_OP_RE handles the parens form (no trailing `…`):
+#   "● Bootstrapping packages (7m 29s · ↑ 22.1k tokens · thought for 2s)"
+# The `↑/↓ Nk tokens` is the live uplink/downlink meter — present only while
+# the op is running. Completion drops the arrow (`Done (5 tool uses · 25.5k
+# tokens · 21s)`), so completed lines don't match. Distinguishable from
+# STATUS_RE because the status line has both arrows on the same line, no
+# `tokens` word, and no parens around the metering.
 ACTIVE_OP_RE = re.compile(
-    r"\s*[^\x00-\x7f]\s+\S+.*\([^)]*↑\s*[\d.]+\w*\s+tokens[^)]*\)"
+    r"^\s*[^\x00-\x7f]\s+\S+.*\([^)]*[↑↓]\s*[\d.]+\w*\s+tokens[^)]*\)"
 )
 
 # Pull out a verb-shaped word for the card label (`envisioning…`,
