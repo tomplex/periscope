@@ -1694,9 +1694,9 @@ def auto_rename_window(session: str, index: int):
     if not new_name:
         return {"ok": False, "error": "claude returned empty name"}
     if new_name == current_name:
-        return {"ok": True, "applied": False, "old": current_name, "new": current_name}
+        return {"ok": True, "applied": False, "old": current_name, "new": current_name, "pid": pid}
     tmux("rename-window", "-t", target, new_name)
-    return {"ok": True, "applied": True, "old": current_name, "new": new_name}
+    return {"ok": True, "applied": True, "old": current_name, "new": new_name, "pid": pid}
 
 
 @app.post("/api/send")
