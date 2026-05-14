@@ -89,12 +89,17 @@ def call_summarizer(client, rec: SessionRecord, *,
     """Single Haiku call with forced tool-use. Returns None on persistent failure
     (caller stores summary=NULL and logs)."""
     body = build_summary_prompt(rec)
-    last_err: Exception | None = None
+    last_failure: str | None = None
     for attempt in range(max_retries + 1):
         try:
             msg = client.messages.create(
                 model=model,
                 max_tokens=512,
+                # cache_control here may be silently ignored: Anthropic prompt
+                # caching has a ~1024-token minimum prefix and our system+tools
+                # together fall short. Task 13 verifies actual caching via
+                # response.usage.cache_*_input_tokens — if cache_read is 0 we
+                # either expand the prefix or drop this marker.
                 system=[{
                     "type": "text",
                     "text": SUMMARIZE_SYSTEM_PROMPT,
@@ -105,7 +110,7 @@ def call_summarizer(client, rec: SessionRecord, *,
                 messages=[{"role": "user", "content": body}],
             )
         except Exception as e:
-            last_err = e
+            last_failure = f"API error: {e!r}"
             log.warning("summarize: API error on attempt %d for %s: %s",
                         attempt + 1, rec.session_id, e)
             continue
@@ -115,12 +120,18 @@ def call_summarizer(client, rec: SessionRecord, *,
                 summary = data.get("summary")
                 tags = data.get("tags")
                 if isinstance(summary, str) and isinstance(tags, list):
+                    # Normalize + filter empty tags (the schema's minItems=3 makes
+                    # this rare, but a stray empty string would still index).
+                    norm_tags = [s for s in (str(t).lower().strip() for t in tags) if s]
                     return SummaryResult(summary=summary.strip(),
-                                          tags=[str(t).lower().strip() for t in tags],
+                                          tags=norm_tags,
                                           model=model)
-        log.warning("summarize: no valid tool_use block on attempt %d for %s",
-                    attempt + 1, rec.session_id)
-    if last_err is not None:
-        log.error("summarize: gave up after %d attempts for %s: %s",
-                  max_retries + 1, rec.session_id, last_err)
+        stop_reason = getattr(msg, "stop_reason", "?")
+        last_failure = f"no valid tool_use block (stop_reason={stop_reason})"
+        log.warning("summarize: %s on attempt %d for %s",
+                    last_failure, attempt + 1, rec.session_id)
+    # All attempts exhausted — always emit a single ERROR so backfill summaries
+    # of failures are countable via `grep ERROR` on the log stream.
+    log.error("summarize: gave up after %d attempts for %s — %s",
+              max_retries + 1, rec.session_id, last_failure)
     return None

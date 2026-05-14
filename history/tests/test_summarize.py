@@ -1,7 +1,5 @@
 from unittest.mock import MagicMock
 
-import pytest
-
 from history.summarize import (
     SUMMARIZE_TOOL, SUMMARIZE_SYSTEM_PROMPT,
     build_summary_prompt, call_summarizer, SummaryResult,
