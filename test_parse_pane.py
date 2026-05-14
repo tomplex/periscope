@@ -265,6 +265,54 @@ GHOST_CASES: list[tuple[str, str, str | None]] = [
 ]
 
 
+# ── last_line filter cases ─────────────────────────────────────────────
+# Each row: (tag, content, expected_last_line). These verify the card
+# snippet doesn't surface TUI chrome (auto-mode footer, title bar, etc.).
+
+LAST_LINE_CASES: list[tuple[str, str, str]] = [
+    # Auto-mode footer at the bottom — must be filtered. Falls through to
+    # the actual response content above.
+    ("filter-auto-mode", textwrap.dedent(f"""\
+        Some recent response text from the assistant.
+        ✻ Brewed for 31s
+        ❯
+        ─────────────────────
+        {STATUS_LINE}
+        ⏵⏵ auto mode on (shift+tab to cycle)
+    """), "✻ Brewed for 31s"),
+
+    # Auto-mode footer with the "← for agents" suffix — same filter.
+    ("filter-auto-mode-agents", textwrap.dedent(f"""\
+        Some recent response text.
+        ✻ Cooked for 1m 15s
+        ❯
+        {STATUS_LINE}
+        ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+    """), "✻ Cooked for 1m 15s"),
+
+    # Title bar at top + auto-mode at bottom — both filtered.
+    ("filter-title-bar", textwrap.dedent(f"""\
+        periscope | main | +3 -26 4m * | github.com/tomplex/periscope/compare/master...main
+        Assistant said something useful here.
+        ✻ Brewed for 5s
+        ❯
+        {STATUS_LINE}
+        ⏵⏵ auto mode on (shift+tab to cycle)
+    """), "✻ Brewed for 5s"),
+
+    # Active spinner line shouldn't surface as snippet (duplicate of state
+    # label). Falls through to whatever's below the spinner.
+    ("filter-active-spinner", textwrap.dedent(f"""\
+        ✳ Wiring resolve_pids into endpoints…
+          ⎿  ◼ Task 2.3: subtask line
+             ◻ Task 2.4: another subtask
+        ❯
+        {STATUS_LINE}
+        ⏵⏵ auto mode on (shift+tab to cycle)
+    """), "◻ Task 2.4: another subtask"),
+]
+
+
 # ── Runner ──────────────────────────────────────────────────────────────
 
 def run_regex_cases() -> int:
@@ -316,9 +364,23 @@ def run_ghost_cases() -> int:
     return failures
 
 
+def run_last_line_cases() -> int:
+    print("\n── last_line filter ───────────────────────────────────────")
+    failures = 0
+    for tag, content, want in LAST_LINE_CASES:
+        result = server.parse_pane(content)
+        got = result.get("last_line")
+        if got == want:
+            print(f"  OK   [{tag:>25}] last_line={got!r}")
+        else:
+            failures += 1
+            print(f"  FAIL [{tag:>25}] last_line={got!r} (want {want!r})")
+    return failures
+
+
 def main() -> int:
-    fails = run_regex_cases() + run_parse_cases() + run_ghost_cases()
-    total = len(REGEX_CASES) + len(PARSE_CASES) + len(GHOST_CASES)
+    fails = run_regex_cases() + run_parse_cases() + run_ghost_cases() + run_last_line_cases()
+    total = len(REGEX_CASES) + len(PARSE_CASES) + len(GHOST_CASES) + len(LAST_LINE_CASES)
     print()
     if fails:
         print(f"=== {fails}/{total} FAIL ===")

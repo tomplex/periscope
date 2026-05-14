@@ -144,10 +144,10 @@ _focused_at: dict[str, int] = {}
 # `_acted_at` is a *user-action-only* recency stamp. Unlike `_focused_at` it
 # does NOT bump on tmux active-window changes (which fire when Tom switches
 # between sessions in his terminal, not when he engages a window via the
-# periscope UI). Stream view sorts by this; grid view continues to sort by
-# `_focused_at`. Bumped from the periscope-side handlers only:
+# periscope UI). The grid view's within-session card sort and the stream view
+# both order by this. Bumped from the periscope-side handlers only:
 #   - /ws/pane WS-connect (modal-open is the canonical "opened in periscope")
-#   - /api/focus, /api/send, /api/paste-image, /api/rename
+#   - /api/send, /api/paste-image, /api/rename
 #   - /api/session/new, /api/window/new (creation through periscope)
 # Reset on process restart; not persisted.
 _acted_at: dict[str, int] = {}
@@ -1171,15 +1171,29 @@ def parse_pane(content: str) -> dict:
         recap = matches[-1].group("text").strip()
         recap = re.sub(r"\s+", " ", recap)[:400]
 
-    # Last meaningful line for shell panes / fallback
+    # Last meaningful line for shell panes / card snippet fallback. Walk up
+    # from the bottom skipping TUI chrome — what's left is the closest
+    # "real" content (recent prose, subtask line, or past-tense indicator).
+    #   ─ / ❯           separator and empty prompt
+    #   ⏵               `⏵⏵ auto mode on (shift+tab to cycle)` footer hint
+    #   STATUS_RE       `XX% | ↑Nk ↓N | $cost | model` status line
+    #   title bar       `<repo> | <branch> | <diff> | github.com/<path>…`
+    #                   (Claude Code renders this inline above the convo)
+    #   SPINNER/ACTIVE  active spinner line — the verb is already shown as
+    #                   the card's state label, so re-rendering the full
+    #                   spinner line as the snippet would be redundant.
     last_line = ""
     for line in reversed(lines):
         s = line.strip()
         if not s:
             continue
-        if s.startswith("─") or s.startswith("❯"):
+        if s.startswith(("─", "❯", "⏵")):
             continue
         if STATUS_RE.match(line):
+            continue
+        if "github.com/" in line and line.count("|") >= 3:
+            continue
+        if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
             continue
         last_line = s[:200]
         break
@@ -1474,20 +1488,6 @@ def pane(session: str, index: int, lines: int = 200):
         **git,
         **pr,
     }
-
-
-@app.post("/api/focus")
-def focus(session: str, index: int):
-    target = f"{session}:{index}"
-    clients = tmux("list-clients", "-F", "#{client_name}").strip().split("\n")
-    switched = []
-    for c in clients:
-        if c:
-            tmux("switch-client", "-c", c, "-t", target)
-            switched.append(c)
-    note_focus(target)
-    note_action(target)
-    return {"ok": True, "switched": switched, "target": target}
 
 
 class SendBody(BaseModel):
