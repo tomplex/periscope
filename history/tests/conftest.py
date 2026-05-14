@@ -1,6 +1,7 @@
 """Shared pytest fixtures for history tests."""
 import os
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ def fixture_dir() -> Path:
 
 
 @pytest.fixture
-def in_memory_db() -> sqlite3.Connection:
+def in_memory_db() -> Iterator[sqlite3.Connection]:
     """A fresh in-memory SQLite with the history schema applied."""
     from history.db import apply_schema
     conn = sqlite3.connect(":memory:")
