@@ -2492,6 +2492,105 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
                 pass
 
 
+# --- Live channel: WebSocket subscriber for /api/channel/push events ------
+#
+# The channel subprocess (one per pane) connects here to receive structured
+# events posted to /api/channel/push. The handler:
+#   1. drains any backlog queued in _CHANNEL_QUEUES (events pushed before a
+#      subscriber attached) into the subscriber's mailbox in order;
+#   2. then forwards new events fan-out'd by _channel_enqueue.
+#
+# Last-writer-wins on reconnect: if a stale WS still holds the registration
+# when the channel subprocess reconnects (e.g. after periscope restart), the
+# new subscriber displaces it. The old subscriber receives a private
+# `_periscope_internal: superseded` sentinel via its own asyncio.Queue, which
+# causes its handler to close the WS with code 4409. The sentinel never
+# reaches the wire — the supersede branch returns before send_json.
+
+@app.websocket("/ws/channel")
+async def ws_channel(ws: WebSocket):
+    pane = ws.query_params.get("pane", "")
+    if not pane.startswith("%"):
+        await ws.close(code=4400, reason="pane must be a %N tmux pane id")
+        return
+
+    await ws.accept()
+
+    # Last-writer-wins: bump any prior subscriber for this pane.
+    with _CHANNELS_LOCK:
+        prior = _CHANNEL_SUBSCRIBERS.pop(pane, None)
+    if prior is not None:
+        try:
+            prior.put_nowait({"_periscope_internal": "superseded"})
+        except asyncio.QueueFull:
+            pass
+
+    # Create this subscriber's mailbox and register it. The cap is 2x the
+    # backlog cap so flushing a full _CHANNEL_QUEUES into the mailbox can
+    # never QueueFull.
+    inbox: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CHANNEL_QUEUE_MAX * 2)
+    with _CHANNELS_LOCK:
+        _CHANNEL_SUBSCRIBERS[pane] = inbox
+
+    # Flush any backlog into the mailbox first (preserves order with new
+    # events fan-out'd via _channel_enqueue, which now sees the live sub).
+    for event in _channel_drain(pane):
+        inbox.put_nowait(event)
+
+    # We race two awaitables: a fresh event in our mailbox, and any inbound
+    # message / disconnect from the client. The second leg is the only way
+    # asyncio learns the client went away when we're otherwise just
+    # broadcasting — without it, a clean WS close leaves us parked in
+    # inbox.get() forever and channel_attached stays true.
+    async def _next_event():
+        return await inbox.get()
+
+    async def _watch_client():
+        # We don't read anything meaningful from the subscriber; this just
+        # blocks until the WS closes, at which point it raises
+        # WebSocketDisconnect (or returns a close frame from the peer).
+        while True:
+            await ws.receive()
+
+    next_event_task = asyncio.create_task(_next_event())
+    watch_task = asyncio.create_task(_watch_client())
+
+    try:
+        while True:
+            done, _ = await asyncio.wait(
+                {next_event_task, watch_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if watch_task in done:
+                # Either WebSocketDisconnect or a peer-initiated close frame.
+                # Either way, the connection is going down.
+                exc = watch_task.exception()
+                if exc and not isinstance(exc, WebSocketDisconnect):
+                    raise exc
+                return
+            event = next_event_task.result()
+            next_event_task = asyncio.create_task(_next_event())
+            if event.get("_periscope_internal") == "superseded":
+                await ws.close(code=4409, reason="superseded by newer subscriber")
+                return
+            await ws.send_json({
+                "content": event["content"],
+                "meta": event.get("meta", {}),
+            })
+    except WebSocketDisconnect:
+        pass
+    finally:
+        for t in (next_event_task, watch_task):
+            if not t.done():
+                t.cancel()
+        # Only deregister if we're still the registered subscriber. If a
+        # newer subscriber superseded us, it has already replaced our slot;
+        # the identity check protects against deleting its registration.
+        with _CHANNELS_LOCK:
+            if _CHANNEL_SUBSCRIBERS.get(pane) is inbox:
+                _CHANNEL_SUBSCRIBERS.pop(pane, None)
+
+
 def prewarm_pr_cache() -> None:
     """Walk every current tmux pane, resolve its branch via git, and kick off
     background gh PR queries for each unique (cwd, branch) pair. Runs once at
