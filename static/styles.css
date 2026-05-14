@@ -1386,3 +1386,44 @@ body.modal-open { overflow: hidden; }
     opacity: 0.5;
     font-size: 12px;
 }
+
+.modal-msg-composer {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border, #333);
+}
+
+.modal-msg-composer-input {
+    flex: 1;
+    background: var(--bg-3, #222);
+    border: 1px solid var(--border, #333);
+    color: inherit;
+    padding: 4px 6px;
+    font-size: 12px;
+    border-radius: 3px;
+}
+
+.modal-msg-composer-btn {
+    background: var(--accent, #3b82f6);
+    color: white;
+    border: none;
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.modal-msg-composer-btn:hover {
+    background: var(--accent-hover, #2563eb);
+}
+
+.modal-msg-composer-disabled {
+    font-size: 11px;
+    opacity: 0.5;
+    text-align: center;
+    margin-top: 8px;
+    padding: 4px;
+    cursor: not-allowed;
+}

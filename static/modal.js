@@ -131,6 +131,18 @@ function renderMessages(data) {
   }).join("");
 }
 
+function renderMessageComposer(data) {
+  if (!data.channel_attached) {
+    return `<div class="modal-msg-composer-disabled" title="Channel not attached. Respawn Claude via + claude.">push disabled (no channel)</div>`;
+  }
+  return `
+    <form class="modal-msg-composer" data-pane-id="${data.pane_id}">
+      <input type="text" class="modal-msg-composer-input" placeholder="Push to Claude...">
+      <button type="submit" class="modal-msg-composer-btn">push</button>
+    </form>
+  `;
+}
+
 function renderModalSidebar(data) {
   if (!modalSide) return;
   modalSide.innerHTML = `
@@ -150,9 +162,11 @@ function renderModalSidebar(data) {
     <section class="modal-side-section modal-side-messages">
       <h4>Messages</h4>
       ${renderMessages(data)}
+      ${renderMessageComposer(data)}
     </section>
   `;
   wireNotesEditor(data);
+  wireMessageComposer(data);
 
   // Clear unread when the modal is showing replies. Fire-and-forget.
   if (data.pane_id && (data.channel_unread || 0) > 0) {
@@ -327,6 +341,23 @@ function wireNotesEditor(data) {
     const nextTags = ann.tags.filter((_, idx) => idx !== i);
     prefs.setAnnotation(pid, { notes: ta.value, tags: nextTags });
     refreshModalHeader();
+  });
+}
+
+function wireMessageComposer(data) {
+  const form = modalSide?.querySelector(".modal-msg-composer");
+  if (!form) return;
+  const input = form.querySelector(".modal-msg-composer-input");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text || !data.pane_id) return;
+    input.value = "";
+    await fetch(`/api/channel/push?pane=${encodeURIComponent(data.pane_id)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: text }),
+    });
   });
 }
 
