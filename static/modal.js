@@ -5,6 +5,7 @@
 // This is a circular import (grid.js imports openModal from here) — it works
 // because `poll` is a function declaration (hoisted) and is only called inside
 // event handlers, never at module top level.
+import { pushEscape, popEscape } from './overlay.js';
 
 import { state } from './state.js';
 import { escapeHtml, targetQuery, apiCall, relTime } from './util.js';
@@ -26,6 +27,7 @@ let modalPollHandle = null;
 
 export function openModal(target) {
   state.activeTarget = target;
+  pushEscape(closeModal);
   modalTitle.textContent = target;
   modalSubtitle.innerHTML = "";
   modal.classList.remove("hidden");
@@ -48,6 +50,7 @@ export function closeModal() {
   if (modalSide) modalSide.innerHTML = "";
   state.modalRenaming = false;
   state.activeTarget = null;
+  popEscape(closeModal);
 }
 
 async function refreshModalHeader() {
@@ -368,9 +371,7 @@ export function initModal() {
   modal.addEventListener("click", (e) => {
     if (e.target === modal) closeModal();
   });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeModal();
-  });
+
 
   modalFocus.addEventListener("click", async () => {
     if (!state.activeTarget) return;
