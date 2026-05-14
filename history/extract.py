@@ -200,21 +200,34 @@ TRIVIAL_DURATION_S = 60
 def compute_summary_input_hash(rec: SessionRecord) -> str:
     """SHA256 over a canonical representation of the fields that drive the
     Haiku summary. If any of these change, the summary should be re-derived;
-    if none change, we can reuse a stored summary."""
+    if none change, we can reuse a stored summary.
+
+    Decode JSON-string fields into Python objects before hashing so the
+    digest depends on semantic content, not on json.dumps formatting choices
+    (whitespace, key order) that could shift in a future refactor."""
+    files_list = json.loads(rec.files_touched)
     notable_cmds_first_20 = json.loads(rec.notable_cmds)[:20]
     canonical = json.dumps([
         rec.first_user_msg or "",
         rec.user_messages_blob,
         rec.final_assistant_msg or "",
-        rec.files_touched,
+        files_list,
         rec.branch or "",
         notable_cmds_first_20,
-    ], sort_keys=True, ensure_ascii=False)
+    ], ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def is_trivial(rec: SessionRecord) -> bool:
-    """Trivial sessions skip the Haiku call and get a heuristic summary."""
+    """Trivial sessions skip the Haiku call and get a heuristic summary.
+
+    OR semantics (not AND) — either dimension being shallow signals a
+    session not worth ~$0.005 of summarization: false-starts (one user
+    message and then quit), quick aborts (<60s), or accidental Enter-key
+    sessions. AND would only catch sessions that are BOTH single-shot
+    AND fast, which would let through many 1-message-then-walked-away
+    sessions that have no useful summary to produce.
+    """
     return (rec.user_msg_count < TRIVIAL_USER_MSG_THRESHOLD or
             rec.duration_s < TRIVIAL_DURATION_S)
 
@@ -222,5 +235,7 @@ def is_trivial(rec: SessionRecord) -> bool:
 def heuristic_summary(rec: SessionRecord) -> str:
     """Concrete placeholder for trivial sessions; surfaces in search results."""
     head = (rec.first_user_msg or "(no user message)")[:120]
-    return (f"Short session ({rec.user_msg_count} messages, "
+    n = rec.user_msg_count
+    msg_word = "message" if n == 1 else "messages"
+    return (f"Short session ({n} {msg_word}, "
             f"{rec.duration_s}s) — first user message: {head}")

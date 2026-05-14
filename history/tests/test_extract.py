@@ -1,5 +1,10 @@
 import json
-from history.extract import extract_record
+from history.extract import (
+    extract_record,
+    compute_summary_input_hash,
+    is_trivial,
+    heuristic_summary,
+)
 from history.jsonl import parse_jsonl
 
 
@@ -96,9 +101,6 @@ def test_short_session(fixture_dir):
     assert rec.user_msg_count == 1   # only one real user message; the tool_result is excluded
     assert rec.asst_msg_count == 2
     assert rec.tool_use_count == 1
-
-
-from history.extract import compute_summary_input_hash, is_trivial, heuristic_summary
 
 
 def test_summary_input_hash_stable_for_same_inputs(fixture_dir):
