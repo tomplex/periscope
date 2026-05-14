@@ -10,7 +10,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .db import connect
 from .indexer import index_one
 
 log = logging.getLogger(__name__)
@@ -35,10 +34,6 @@ def backfill(*, projects_dir: Path = DEFAULT_PROJECTS_DIR,
     statuses: dict[str, int] = {}
     errors: list[tuple[str, str]] = []
     log.info("history.backfill: scanning %d jsonl files (workers=%d)", len(paths), workers)
-    # Pre-initialize the DB so workers don't race on first-run schema/WAL setup.
-    # Without this, two threads creating the DB at once can hit "database is
-    # locked" before WAL mode is established.
-    connect(db_path).close()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(index_one, str(p), db_path=db_path): p for p in paths}
         for fut in as_completed(futures):

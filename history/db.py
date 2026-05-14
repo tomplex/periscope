@@ -32,15 +32,20 @@ def apply_schema(conn: sqlite3.Connection) -> None:
 
 
 def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
-    """Open the history DB in WAL mode with the schema applied."""
+    """Open the history DB in WAL mode with the schema applied.
+
+    Threads racing on first-time creation can otherwise both try to set
+    journal_mode=WAL + apply schema simultaneously before WAL takes effect,
+    triggering `database is locked`. The lock serializes that one-time path."""
     path = Path(db_path) if db_path else DEFAULT_DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    apply_schema(conn)
+    with _LOCK:
+        conn = sqlite3.connect(str(path), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        apply_schema(conn)
     return conn
 
 
