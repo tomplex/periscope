@@ -134,6 +134,99 @@ def _seed_commands_if_empty() -> None:
 _seed_commands_if_empty()
 
 
+# --- Channels state -------------------------------------------------------
+#
+# Per-pane (keyed on %N from $TMUX_PANE) in-memory queues, reply logs, and
+# live subscriber registrations. See
+# docs/superpowers/specs/2026-05-14-channels-design.md.
+#
+# A separate lock from _STATE_LOCK because channel state is touched from
+# both sync request handlers (FastAPI threadpool) and async WS handlers;
+# threading.Lock works correctly from both contexts whereas asyncio.Lock
+# only blocks coroutines.
+
+_CHANNELS_LOCK = threading.Lock()
+# pane_id -> list[dict]   pending push events (FIFO)
+_CHANNEL_QUEUES: dict[str, list[dict]] = {}
+# pane_id -> list[dict]   reply log (kind, severity, message, ts)
+_CHANNEL_REPLIES: dict[str, list[dict]] = {}
+# pane_id -> int          unread reply count, cleared when modal opens
+_CHANNEL_UNREAD: dict[str, int] = {}
+# pane_id -> asyncio.Queue holding live subscriber's event queue.
+# Presence in this dict is the "channel attached" indicator.
+_CHANNEL_SUBSCRIBERS: dict[str, "asyncio.Queue[dict]"] = {}
+
+_CHANNEL_QUEUE_MAX = 100  # events; overflow drops oldest + synthesizes a "dropped" notice
+
+_META_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _channel_enqueue(pane_id: str, event: dict) -> None:
+    """Push `event` to the pane's queue. If a live subscriber exists, also
+    fan out to its asyncio.Queue. On queue overflow, coalesce a single
+    synthetic 'dropped' event so Claude can notice the gap."""
+    with _CHANNELS_LOCK:
+        q = _CHANNEL_QUEUES.setdefault(pane_id, [])
+
+        if len(q) >= _CHANNEL_QUEUE_MAX:
+            # Overflow: drop oldest; coalesce or insert the synthetic notice.
+            dropped = q.pop(0)
+            existing_synth = next(
+                (e for e in q if e.get("meta", {}).get("synthetic")),
+                None,
+            )
+            if existing_synth is not None:
+                n = existing_synth["meta"].get("n", 1) + 1
+                existing_synth["meta"]["n"] = n
+                existing_synth["content"] = (
+                    f"periscope dropped {n} earlier events; "
+                    f"oldest was at {dropped.get('ts', '?')}"
+                )
+            else:
+                q.append({
+                    "content": (
+                        "periscope dropped 1 earlier event; "
+                        f"oldest was at {dropped.get('ts', '?')}"
+                    ),
+                    "meta": {
+                        "severity": "warning",
+                        "kind": "dropped",
+                        "synthetic": True,
+                        "n": 1,
+                    },
+                })
+
+        q.append(event)
+        sub = _CHANNEL_SUBSCRIBERS.get(pane_id)
+
+    # Fan-out happens outside the lock; asyncio.Queue.put_nowait can't block.
+    if sub is not None:
+        try:
+            sub.put_nowait(event)
+        except asyncio.QueueFull:
+            # Subscriber lagged catastrophically. The queue in _CHANNEL_QUEUES
+            # is the source of truth; the subscriber's mailbox will drain on
+            # reconnect.
+            pass
+
+
+def _channel_drain(pane_id: str) -> list[dict]:
+    """Pop all queued events for `pane_id`. Used when a subscriber connects
+    and needs the backlog flushed in order."""
+    with _CHANNELS_LOCK:
+        events = _CHANNEL_QUEUES.pop(pane_id, [])
+        return events
+
+
+def _channel_gc(known_pane_ids: set[str]) -> None:
+    """Drop channel state for panes that no longer exist. Called once per
+    poll from the existing pane-enumeration path (see list_windows callers)."""
+    with _CHANNELS_LOCK:
+        for d in (_CHANNEL_QUEUES, _CHANNEL_REPLIES, _CHANNEL_UNREAD):
+            for stale in [k for k in d if k not in known_pane_ids]:
+                d.pop(stale, None)
+        # _CHANNEL_SUBSCRIBERS is GC'd when the WS closes; don't touch here.
+
 
 # Server-tracked "last user-focused" per target.
 # Tmux's window_activity bumps on any output (Claude streaming, build logs, dev
@@ -1329,6 +1422,7 @@ def state():
                 "completed_at": completed,
             }
         )
+    _channel_gc({w["pane_id"] for w in windows if w.get("pane_id")})
     if stamp_updates:
         with _STATE_LOCK:
             wblock = _STATE.setdefault("windows", {})
