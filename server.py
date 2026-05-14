@@ -1674,6 +1674,11 @@ class NewSessionBody(BaseModel):
     cwd: str | None = None
 
 
+class ChannelPushBody(BaseModel):
+    content: str
+    meta: dict | None = None
+
+
 def _tmux_mutate(*args: str) -> tuple[bool, str]:
     """Run a tmux command for its side effects. Surfaces stderr on failure
     instead of swallowing it like the read-only `tmux()` helper does."""
@@ -2163,6 +2168,32 @@ def send(session: str, index: int, body: SendBody):
     note_focus(target)
     note_action(target)
     return {"ok": True, "target": target}
+
+
+@app.post("/api/channel/push")
+def channel_push(body: ChannelPushBody, pane: str = Query(...)):
+    """Push an event onto the pane's channel queue.
+
+    pane: the %N TMUX_PANE id from list_windows / /api/state.
+    """
+    if not pane.startswith("%"):
+        return {"ok": False, "error": "pane must be a %N tmux pane id"}
+
+    meta = body.meta or {}
+    bad = [k for k in meta if not _META_KEY_RE.match(k)]
+    if bad:
+        return {
+            "ok": False,
+            "error": f"meta keys must match [A-Za-z_][A-Za-z0-9_]*; got: {bad!r}",
+        }
+
+    event = {
+        "content": body.content,
+        "meta": meta,
+        "ts": int(time.time()),
+    }
+    _channel_enqueue(pane, event)
+    return {"ok": True}
 
 
 # --- Paste image (screenshot) → temp file → @path into pane --------------
