@@ -145,6 +145,11 @@ function renderMessageComposer(data) {
 
 function renderModalSidebar(data) {
   if (!modalSide) return;
+  // The 1.5s header poll re-renders the sidebar wholesale. If focus is inside
+  // the sidebar (notes textarea, tag input, message composer), rebuilding the
+  // innerHTML drops focus and clobbers in-flight typing. Skip this tick — the
+  // next poll after blur will catch up.
+  if (modalSide.contains(document.activeElement)) return;
   modalSide.innerHTML = `
     <section class="modal-side-section">
       <h4>Linked</h4>

@@ -1,6 +1,12 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastapi", "uvicorn[standard]", "anthropic", "python-dotenv"]
+# dependencies = [
+#     "fastapi",
+#     "uvicorn[standard]",
+#     "anthropic",
+#     "python-dotenv",
+#     "mcp==1.27.*",
+# ]
 # ///
 """Periscope — live tmux dashboard. Run with: uv run server.py"""
 
@@ -10,11 +16,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
@@ -37,7 +45,21 @@ async def lifespan(_app: FastAPI):
     # has PR badges and the usage bars populated.
     threading.Thread(target=prewarm_pr_cache, daemon=True).start()
     threading.Thread(target=cached_scraped_usage, daemon=True).start()
-    yield
+    # MCP unix-socket listener: accepts connections from channel_shim.py
+    # (one per Claude pane), runs an MCP Server per connection in-process.
+    mcp_task = asyncio.create_task(_mcp_listener())
+    try:
+        yield
+    finally:
+        mcp_task.cancel()
+        try:
+            await mcp_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        try:
+            os.unlink(MCP_SOCKET_PATH)
+        except FileNotFoundError:
+            pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -159,98 +181,279 @@ def _channels_migration_v1() -> None:
 _channels_migration_v1()
 
 
-# --- Channels state -------------------------------------------------------
+# --- Channels (in-process MCP server) -------------------------------------
 #
-# Per-pane (keyed on %N from $TMUX_PANE) in-memory queues, reply logs, and
-# live subscriber registrations. See
-# docs/superpowers/specs/2026-05-14-channels-design.md.
+# Periscope hosts an MCP server over a unix socket. Each Claude pane spawns
+# a thin `channel_shim.py` subprocess (the documented stdio MCP entry point
+# Claude requires), which connects to /tmp/periscope-mcp.sock and proxies
+# bytes between Claude's stdio and our socket. All MCP logic — tool
+# registration, capability declaration, notification emission — lives here.
 #
-# A separate lock from _STATE_LOCK because channel state is touched from
-# both sync request handlers (FastAPI threadpool) and async WS handlers;
-# threading.Lock works correctly from both contexts whereas asyncio.Lock
-# only blocks coroutines.
+# Locking: `_CHANNELS_LOCK` (threading.Lock) protects the reply log and
+# session registry. Separate from `_STATE_LOCK` because channel state is
+# touched from both sync request handlers (FastAPI threadpool) and async
+# MCP handlers; threading.Lock works correctly from both whereas
+# asyncio.Lock only blocks coroutines.
+
+MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
+
+CHANNEL_INSTRUCTIONS = """\
+Messages from periscope arrive as <channel source="periscope" ...> blocks
+on each turn. They may include severity, kind, or other meta attributes.
+
+Use the `reply` tool to surface status back to periscope's UI:
+  - kind="need_human" when blocked and waiting on the user
+  - kind="done" when the current task is complete
+  - kind="info" (default) for everything else
+
+The pane this channel is attached to is identified by $TMUX_PANE on
+the server side; you don't need to address it explicitly.
+"""
 
 _CHANNELS_LOCK = threading.Lock()
-# pane_id -> list[dict]   pending push events (FIFO)
-_CHANNEL_QUEUES: dict[str, list[dict]] = {}
 # pane_id -> list[dict]   reply log (kind, severity, message, ts)
 _CHANNEL_REPLIES: dict[str, list[dict]] = {}
 # pane_id -> int          unread reply count, cleared when modal opens
 _CHANNEL_UNREAD: dict[str, int] = {}
-# pane_id -> asyncio.Queue holding live subscriber's event queue.
-# Presence in this dict is the "channel attached" indicator.
-_CHANNEL_SUBSCRIBERS: dict[str, "asyncio.Queue[dict]"] = {}
-
-_CHANNEL_QUEUE_MAX = 100  # events; overflow drops oldest + synthesizes a "dropped" notice
-
-_META_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _channel_enqueue(pane_id: str, event: dict) -> None:
-    """Push `event` to the pane's queue. If a live subscriber exists, also
-    fan out to its asyncio.Queue. On queue overflow, coalesce a single
-    synthetic 'dropped' event so Claude can notice the gap."""
-    with _CHANNELS_LOCK:
-        q = _CHANNEL_QUEUES.setdefault(pane_id, [])
-
-        if len(q) >= _CHANNEL_QUEUE_MAX:
-            # Overflow: drop oldest; coalesce or insert the synthetic notice.
-            dropped = q.pop(0)
-            existing_synth = next(
-                (e for e in q if e.get("meta", {}).get("synthetic")),
-                None,
-            )
-            if existing_synth is not None:
-                n = existing_synth["meta"].get("n", 1) + 1
-                existing_synth["meta"]["n"] = n
-                existing_synth["content"] = (
-                    f"periscope dropped {n} earlier events; "
-                    f"oldest was at {dropped.get('ts', '?')}"
-                )
-            else:
-                q.append({
-                    "content": (
-                        "periscope dropped 1 earlier event; "
-                        f"oldest was at {dropped.get('ts', '?')}"
-                    ),
-                    "meta": {
-                        "severity": "warning",
-                        "kind": "dropped",
-                        "synthetic": True,
-                        "n": 1,
-                    },
-                })
-
-        q.append(event)
-        sub = _CHANNEL_SUBSCRIBERS.get(pane_id)
-
-    # Fan-out happens outside the lock; asyncio.Queue.put_nowait can't block.
-    if sub is not None:
-        try:
-            sub.put_nowait(event)
-        except asyncio.QueueFull:
-            # Subscriber lagged catastrophically. The queue in _CHANNEL_QUEUES
-            # is the source of truth; the subscriber's mailbox will drain on
-            # reconnect.
-            pass
-
-
-def _channel_drain(pane_id: str) -> list[dict]:
-    """Pop all queued events for `pane_id`. Used when a subscriber connects
-    and needs the backlog flushed in order."""
-    with _CHANNELS_LOCK:
-        events = _CHANNEL_QUEUES.pop(pane_id, [])
-        return events
+# pane_id -> MCP ServerSession reference. Presence is the "channel
+# attached" indicator and the route for notification emission. Typed Any
+# because the SDK's BaseSession-derived objects aren't reliably importable
+# at module load (we lazy-load mcp); attribute access happens in
+# emit_channel_event where the runtime shape is what matters.
+_MCP_SESSIONS: dict[str, Any] = {}
 
 
 def _channel_gc(known_pane_ids: set[str]) -> None:
-    """Drop channel state for panes that no longer exist. Called once per
-    poll from the existing pane-enumeration path (see list_windows callers)."""
+    """Drop reply state for panes that no longer exist. Session registry is
+    GC'd by the connection handler on disconnect, not here."""
     with _CHANNELS_LOCK:
-        for d in (_CHANNEL_QUEUES, _CHANNEL_REPLIES, _CHANNEL_UNREAD):
+        for d in (_CHANNEL_REPLIES, _CHANNEL_UNREAD):
             for stale in [k for k in d if k not in known_pane_ids]:
                 d.pop(stale, None)
-        # _CHANNEL_SUBSCRIBERS is GC'd when the WS closes; don't touch here.
+
+
+def _do_reply_tool(pane: str, arguments: dict):
+    """Tool implementation for `reply` — appends to the per-pane reply log
+    and bumps the unread count. Surfaces in periscope's UI on next poll."""
+    from mcp import types
+
+    message = arguments["message"]
+    kind = arguments.get("kind", "info")
+    severity = arguments.get("severity", "info")
+
+    entry = {
+        "message": message,
+        "kind": kind,
+        "severity": severity,
+        "ts": int(time.time()),
+    }
+    with _CHANNELS_LOCK:
+        _CHANNEL_REPLIES.setdefault(pane, []).append(entry)
+        _CHANNEL_UNREAD[pane] = _CHANNEL_UNREAD.get(pane, 0) + 1
+
+    body = {"ok": True, "kind": kind, "severity": severity}
+    return [types.TextContent(type="text", text=json.dumps(body))]
+
+
+async def emit_channel_event(pane: str, content: str, meta: dict | None = None) -> bool:
+    """Push a `notifications/claude/channel` event to the Claude connected
+    on `pane`. Returns True on send, False if no session attached.
+
+    The push direction has no current consumer in periscope's UI (Tom's
+    framing: this is plumbing for future external producers like webhooks
+    or autonomous TODO loops). Built so it's there when needed."""
+    from mcp.shared.message import SessionMessage
+    from mcp.types import JSONRPCMessage, JSONRPCNotification
+
+    with _CHANNELS_LOCK:
+        session = _MCP_SESSIONS.get(pane)
+    if session is None:
+        return False
+
+    notification = JSONRPCNotification(
+        jsonrpc="2.0",
+        method="notifications/claude/channel",
+        params={"content": content, "meta": meta or {}},
+    )
+    try:
+        await session._write_stream.send(  # type: ignore[attr-defined]
+            SessionMessage(message=JSONRPCMessage(notification))
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _mcp_listener() -> None:
+    """Bind the unix socket and accept connections from channel_shim.py.
+    Each connection runs a fresh per-pane MCP Server in _handle_mcp_connection."""
+    try:
+        os.unlink(MCP_SOCKET_PATH)
+    except FileNotFoundError:
+        pass
+
+    server = await asyncio.start_unix_server(
+        _handle_mcp_connection, path=MCP_SOCKET_PATH
+    )
+    os.chmod(MCP_SOCKET_PATH, 0o600)
+    print(f"periscope: MCP listener bound to {MCP_SOCKET_PATH}", file=sys.stderr)
+    try:
+        async with server:
+            await server.serve_forever()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        server.close()
+        try:
+            await server.wait_closed()
+        except Exception:
+            pass
+
+
+async def _handle_mcp_connection(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    """Per-connection MCP handler: read hello frame, dispatch to
+    _run_mcp_for_pane, clean up session registry on close."""
+    pane = ""
+    try:
+        # Hello frame: a single JSON line {"pane": "%N"}.
+        hello_line = await reader.readline()
+        if not hello_line:
+            return
+        try:
+            hello = json.loads(hello_line.decode().strip())
+            pane = hello.get("pane", "")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+        if not pane.startswith("%"):
+            return
+
+        await _run_mcp_for_pane(reader, writer, pane)
+    except Exception as e:
+        print(f"periscope MCP: connection {pane or '<no-pane>'} failed: {e}", file=sys.stderr)
+    finally:
+        if pane:
+            with _CHANNELS_LOCK:
+                _MCP_SESSIONS.pop(pane, None)
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
+async def _run_mcp_for_pane(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, pane: str
+) -> None:
+    """Run a per-pane MCP Server over the given asyncio socket streams.
+
+    Bridges asyncio byte streams ↔ anyio object streams that the MCP SDK
+    consumes. Tool handlers close over `pane` so they target the right
+    per-pane state without needing thread-local lookups."""
+    # Lazy-imported — MCP SDK is heavy; only loaded once any pane connects.
+    import anyio
+    from mcp.server import Server
+    from mcp.server.models import InitializationOptions
+    from mcp.shared.message import SessionMessage
+    from mcp import types
+    from mcp.types import JSONRPCMessage, ServerCapabilities, ToolsCapability
+
+    server = Server("periscope")
+
+    @server.list_tools()
+    async def _list_tools() -> list[types.Tool]:
+        # Capture this connection's session for notification emission. Claude
+        # always calls tools/list during init, so this fires reliably and
+        # before any tools/call could need it.
+        try:
+            sess = server.request_context.session  # type: ignore[attr-defined]
+            with _CHANNELS_LOCK:
+                _MCP_SESSIONS[pane] = sess
+        except LookupError:
+            pass
+        return [
+            types.Tool(
+                name="reply",
+                description=(
+                    "Surface a message in periscope's UI for this pane. "
+                    "Use kind=\"need_human\" when blocked and waiting on the user, "
+                    "kind=\"done\" when the current task is complete, "
+                    "otherwise kind=\"info\"."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string"},
+                        "kind": {
+                            "type": "string",
+                            "enum": ["info", "need_human", "done"],
+                            "default": "info",
+                        },
+                        "severity": {
+                            "type": "string",
+                            "enum": ["info", "good", "warning", "bad"],
+                            "default": "info",
+                        },
+                    },
+                    "required": ["message"],
+                },
+            ),
+        ]
+
+    @server.call_tool()
+    async def _call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+        if name == "reply":
+            return _do_reply_tool(pane, arguments)
+        raise ValueError(f"unknown tool: {name}")
+
+    # Bridge: asyncio socket → anyio object stream of SessionMessage.
+    read_send, read_recv = anyio.create_memory_object_stream[SessionMessage | Exception](0)
+    write_send, write_recv = anyio.create_memory_object_stream[SessionMessage](0)
+
+    async def socket_reader_loop() -> None:
+        try:
+            while True:
+                line = await reader.readline()
+                if not line:
+                    break
+                try:
+                    msg = JSONRPCMessage.model_validate_json(line.decode())
+                    await read_send.send(SessionMessage(message=msg))
+                except Exception as e:
+                    await read_send.send(e)
+        finally:
+            await read_send.aclose()
+
+    async def socket_writer_loop() -> None:
+        try:
+            async with write_recv:
+                async for sm in write_recv:
+                    data = sm.message.model_dump_json(
+                        by_alias=True, exclude_none=True
+                    ) + "\n"
+                    writer.write(data.encode())
+                    await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+
+    init_options = InitializationOptions(
+        server_name="periscope",
+        server_version="0.1.0",
+        capabilities=ServerCapabilities(
+            experimental={"claude/channel": {}},
+            tools=ToolsCapability(listChanged=False),
+        ),
+        instructions=CHANNEL_INSTRUCTIONS,
+    )
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(socket_reader_loop)
+        tg.start_soon(socket_writer_loop)
+        try:
+            await server.run(read_recv, write_send, init_options)
+        finally:
+            tg.cancel_scope.cancel()
 
 
 # Server-tracked "last user-focused" per target.
@@ -1439,7 +1642,7 @@ def state():
         # Channel state (added by 2026-05-14-channels-design.md).
         pane_id = w.get("pane_id") or ""
         with _CHANNELS_LOCK:
-            channel_attached = pane_id in _CHANNEL_SUBSCRIBERS if pane_id else False
+            channel_attached = pane_id in _MCP_SESSIONS if pane_id else False
             channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
             channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
 
@@ -1691,7 +1894,7 @@ def pane(session: str, index: int, lines: int = 200):
             pane_id = w.get("pane_id", "")
             break
     with _CHANNELS_LOCK:
-        channel_attached = pane_id in _CHANNEL_SUBSCRIBERS if pane_id else False
+        channel_attached = pane_id in _MCP_SESSIONS if pane_id else False
         channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
         channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
     return {
@@ -1717,6 +1920,12 @@ class SendBody(BaseModel):
     paste: str | None = None  # bracketed-pasted into the pane before `keys`
 
 
+class SendBulkBody(BaseModel):
+    targets: list[str]            # ["session:index", ...]
+    keys: list[str] = []
+    paste: str | None = None
+
+
 class RenameBody(BaseModel):
     name: str
 
@@ -1724,17 +1933,6 @@ class RenameBody(BaseModel):
 class NewSessionBody(BaseModel):
     name: str
     cwd: str | None = None
-
-
-class ChannelPushBody(BaseModel):
-    content: str
-    meta: dict | None = None
-
-
-class ChannelReplyBody(BaseModel):
-    message: str
-    kind: str = "info"          # "info" | "need_human" | "done" (unknowns degrade)
-    severity: str = "info"      # "info" | "good" | "warning" | "bad"
 
 
 def _tmux_mutate(*args: str) -> tuple[bool, str]:
@@ -2195,6 +2393,37 @@ def auto_rename_window(session: str, index: int):
     return {"ok": True, "applied": True, "old": current_name, "new": new_name, "pid": pid}
 
 
+def _send_to_target(target: str, paste: str | None, keys: list[str]) -> dict:
+    """Core paste-buffer + send-keys logic. Used by `/api/send` and the bulk
+    variant; both bump focus + acted_at on the target. Returns a result dict
+    suitable for inclusion in the endpoint response."""
+    if not keys and (paste is None or paste == ""):
+        return {"target": target, "ok": False, "error": "no keys or paste"}
+    try:
+        if paste is not None and paste != "":
+            # Unique buffer name so concurrent calls (including bulk fan-out)
+            # never trample each other.
+            import uuid
+            buf = f"wd-{uuid.uuid4().hex[:8]}"
+            tmux("set-buffer", "-b", buf, paste)
+            tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+            # Give the receiving TUI (especially Claude Code) time to apply
+            # state for the paste before the submit key arrives. Without this,
+            # Enter can land before React renders and submits empty input,
+            # leaving the pasted text visibly stranded in the prompt area.
+            if keys:
+                time.sleep(0.10)
+        if keys:
+            tmux("send-keys", "-t", target, *keys)
+    except subprocess.CalledProcessError as e:
+        return {"target": target, "ok": False, "error": (e.stderr or str(e)).strip()}
+    except Exception as e:
+        return {"target": target, "ok": False, "error": str(e)}
+    note_focus(target)
+    note_action(target)
+    return {"target": target, "ok": True}
+
+
 @app.post("/api/send")
 def send(session: str, index: int, body: SendBody):
     """Send input to a tmux pane.
@@ -2207,68 +2436,37 @@ def send(session: str, index: int, body: SendBody):
     (Enter, Escape, C-c, S-Tab, Up, F1, …) or a literal string.
     """
     target = f"{session}:{index}"
-    if body.paste is not None and body.paste != "":
-        # Use a unique buffer name so concurrent calls don't trample each other.
-        import uuid
-        buf = f"wd-{uuid.uuid4().hex[:8]}"
-        tmux("set-buffer", "-b", buf, body.paste)
-        tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
-        # Give the receiving TUI (especially Claude Code) time to apply state
-        # for the paste before the submit key arrives. Without this, Enter can
-        # land before React renders and submits empty input, leaving the pasted
-        # text visibly stranded in the prompt area.
-        if body.keys:
-            time.sleep(0.10)
-    if body.keys:
-        tmux("send-keys", "-t", target, *body.keys)
-    if not body.keys and body.paste is None:
-        return {"ok": False, "error": "no keys or paste"}
-    note_focus(target)
-    note_action(target)
+    result = _send_to_target(target, body.paste, body.keys)
+    if not result["ok"]:
+        return result
     return {"ok": True, "target": target}
 
 
-@app.post("/api/channel/push")
-def channel_push(body: ChannelPushBody, pane: str = Query(...)):
-    """Push an event onto the pane's channel queue.
+@app.post("/api/send-bulk")
+def send_bulk(body: SendBulkBody):
+    """Fan out the same paste/keys to multiple panes concurrently.
 
-    pane: the %N TMUX_PANE id from list_windows / /api/state.
+    Each target is processed in its own thread so the per-pane 100ms
+    bracketed-paste delay overlaps across panes — broadcasting `/reload-plugins`
+    to 30 claudes finishes in ~100ms wall time instead of 3s sequential.
+
+    Buffer-name collisions are avoided by `_send_to_target` minting a fresh
+    uuid'd buf per call.
     """
-    if not pane.startswith("%"):
-        return {"ok": False, "error": "pane must be a %N tmux pane id"}
-
-    meta = body.meta or {}
-    bad = [k for k in meta if not _META_KEY_RE.match(k)]
-    if bad:
-        return {
-            "ok": False,
-            "error": f"meta keys must match [A-Za-z_][A-Za-z0-9_]*; got: {bad!r}",
-        }
-
-    event = {
-        "content": body.content,
-        "meta": meta,
-        "ts": int(time.time()),
-    }
-    _channel_enqueue(pane, event)
-    return {"ok": True}
-
-
-@app.post("/api/channel/reply")
-def channel_reply(body: ChannelReplyBody, pane: str = Query(...)):
-    if not pane.startswith("%"):
-        return {"ok": False, "error": "pane must be a %N tmux pane id"}
-
-    entry = {
-        "message": body.message,
-        "kind": body.kind,
-        "severity": body.severity,
-        "ts": int(time.time()),
-    }
-    with _CHANNELS_LOCK:
-        _CHANNEL_REPLIES.setdefault(pane, []).append(entry)
-        _CHANNEL_UNREAD[pane] = _CHANNEL_UNREAD.get(pane, 0) + 1
-    return {"ok": True}
+    if not body.targets:
+        return {"ok": False, "error": "no targets"}
+    if not body.keys and (body.paste is None or body.paste == ""):
+        return {"ok": False, "error": "no keys or paste"}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(32, len(body.targets))) as pool:
+        results = list(
+            pool.map(
+                lambda t: _send_to_target(t, body.paste, body.keys),
+                body.targets,
+            )
+        )
+    ok_count = sum(1 for r in results if r["ok"])
+    return {"ok": True, "sent": ok_count, "total": len(results), "results": results}
 
 
 @app.post("/api/channel/clear-unread")
@@ -2540,105 +2738,6 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
                 os.unlink(fifo_path)
             except Exception:
                 pass
-
-
-# --- Live channel: WebSocket subscriber for /api/channel/push events ------
-#
-# The channel subprocess (one per pane) connects here to receive structured
-# events posted to /api/channel/push. The handler:
-#   1. drains any backlog queued in _CHANNEL_QUEUES (events pushed before a
-#      subscriber attached) into the subscriber's mailbox in order;
-#   2. then forwards new events fan-out'd by _channel_enqueue.
-#
-# Last-writer-wins on reconnect: if a stale WS still holds the registration
-# when the channel subprocess reconnects (e.g. after periscope restart), the
-# new subscriber displaces it. The old subscriber receives a private
-# `_periscope_internal: superseded` sentinel via its own asyncio.Queue, which
-# causes its handler to close the WS with code 4409. The sentinel never
-# reaches the wire — the supersede branch returns before send_json.
-
-@app.websocket("/ws/channel")
-async def ws_channel(ws: WebSocket):
-    pane = ws.query_params.get("pane", "")
-    if not pane.startswith("%"):
-        await ws.close(code=4400, reason="pane must be a %N tmux pane id")
-        return
-
-    await ws.accept()
-
-    # Last-writer-wins: bump any prior subscriber for this pane.
-    with _CHANNELS_LOCK:
-        prior = _CHANNEL_SUBSCRIBERS.pop(pane, None)
-    if prior is not None:
-        try:
-            prior.put_nowait({"_periscope_internal": "superseded"})
-        except asyncio.QueueFull:
-            pass
-
-    # Create this subscriber's mailbox and register it. The cap is 2x the
-    # backlog cap so flushing a full _CHANNEL_QUEUES into the mailbox can
-    # never QueueFull.
-    inbox: asyncio.Queue[dict] = asyncio.Queue(maxsize=_CHANNEL_QUEUE_MAX * 2)
-    with _CHANNELS_LOCK:
-        _CHANNEL_SUBSCRIBERS[pane] = inbox
-
-    # Flush any backlog into the mailbox first (preserves order with new
-    # events fan-out'd via _channel_enqueue, which now sees the live sub).
-    for event in _channel_drain(pane):
-        inbox.put_nowait(event)
-
-    # We race two awaitables: a fresh event in our mailbox, and any inbound
-    # message / disconnect from the client. The second leg is the only way
-    # asyncio learns the client went away when we're otherwise just
-    # broadcasting — without it, a clean WS close leaves us parked in
-    # inbox.get() forever and channel_attached stays true.
-    async def _next_event():
-        return await inbox.get()
-
-    async def _watch_client():
-        # We don't read anything meaningful from the subscriber; this just
-        # blocks until the WS closes, at which point it raises
-        # WebSocketDisconnect (or returns a close frame from the peer).
-        while True:
-            await ws.receive()
-
-    next_event_task = asyncio.create_task(_next_event())
-    watch_task = asyncio.create_task(_watch_client())
-
-    try:
-        while True:
-            done, _ = await asyncio.wait(
-                {next_event_task, watch_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if watch_task in done:
-                # Either WebSocketDisconnect or a peer-initiated close frame.
-                # Either way, the connection is going down.
-                exc = watch_task.exception()
-                if exc and not isinstance(exc, WebSocketDisconnect):
-                    raise exc
-                return
-            event = next_event_task.result()
-            next_event_task = asyncio.create_task(_next_event())
-            if event.get("_periscope_internal") == "superseded":
-                await ws.close(code=4409, reason="superseded by newer subscriber")
-                return
-            await ws.send_json({
-                "content": event["content"],
-                "meta": event.get("meta", {}),
-            })
-    except WebSocketDisconnect:
-        pass
-    finally:
-        for t in (next_event_task, watch_task):
-            if not t.done():
-                t.cancel()
-        # Only deregister if we're still the registered subscriber. If a
-        # newer subscriber superseded us, it has already replaced our slot;
-        # the identity check protects against deleting its registration.
-        with _CHANNELS_LOCK:
-            if _CHANNEL_SUBSCRIBERS.get(pane) is inbox:
-                _CHANNEL_SUBSCRIBERS.pop(pane, None)
 
 
 def prewarm_pr_cache() -> None:

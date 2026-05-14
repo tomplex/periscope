@@ -3,7 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#25282f">
   <title>periscope</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" href="/icon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="stylesheet" href="/vendor/xterm.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -30,6 +35,7 @@
       <button data-filter="ci-bad" class="filter-btn">CI ✗</button>
       <span class="filters-sep"></span>
       <button id="new-session" class="filter-btn is-action" title="create a new tmux session">+ session</button>
+      <button id="send-bulk" class="filter-btn is-action" hidden title="paste text + Enter into every visible pane (filter first to scope)"></button>
       <button id="toggle-all" class="filter-btn is-action" title="collapse or expand all sessions"></button>
       <button id="open-commands" class="filter-btn is-action" title="edit + claude / + shell / + ... commands">⚙</button>
       <span class="filters-spacer"></span>
