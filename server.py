@@ -149,8 +149,20 @@ _focused_at: dict[str, int] = {}
 #   - /ws/pane WS-connect (modal-open is the canonical "opened in periscope")
 #   - /api/send, /api/paste-image, /api/rename
 #   - /api/session/new, /api/window/new (creation through periscope)
-# Reset on process restart; not persisted.
+# In-memory cache only; the persistent counterpart lives in
+# _STATE["windows"][pid]["acked_at"] and is the source of truth for the
+# done-vs-idle split (see /api/state). Reset on process restart; the
+# persisted value carries forward.
 _acted_at: dict[str, int] = {}
+# When the parser observed a working/needs-input → idle transition, stamped
+# `now`. Paired with `_acted_at` to split idle into "done" (Claude finished
+# something the user hasn't acknowledged) vs "idle" (acknowledged or never
+# busy). Persisted alongside acked_at under each pid's state.json entry.
+_completed_at: dict[str, int] = {}
+# Previous parsed state per pid, used to detect the working/needs-input →
+# idle edge that drives `_completed_at`. Keyed by pid (not target) so a
+# session rename doesn't lose the prior state and refire the transition.
+_prev_state: dict[str, str] = {}
 _active_per_session: dict[str, str] = {}
 
 # Active resume operations, keyed by session_id. Each entry tracks where a
@@ -1199,7 +1211,9 @@ def parse_pane(content: str) -> dict:
         break
 
     # State priority: needs-input wins over working (a spinner glyph can
-    # linger in scrollback above the dialog), working wins over waiting.
+    # linger in scrollback above the dialog), working wins over idle.
+    # `idle` is the parse-level neutral state — /api/state may refine it to
+    # `done` when there's an unacknowledged completion stamp.
     if not is_claude:
         state = "shell"
     elif needs_input:
@@ -1207,7 +1221,7 @@ def parse_pane(content: str) -> dict:
     elif spinner:
         state = "working"
     else:
-        state = "waiting"
+        state = "idle"
 
     return {
         "is_claude": is_claude,
@@ -1227,9 +1241,15 @@ def state():
     windows = list_windows()
     update_focus_from_windows(windows)
     _attach_git_then_resolve_pids(windows)
+    now_ts = int(time.time())
+    # Accumulate (pid, completed_at, acked_at) tuples for stamp persistence
+    # at the end of the loop. Single lock acquisition + single write covers
+    # every pane in this poll.
+    stamp_updates: list[tuple[str, int, int]] = []
     result = []
     for w in windows:
         target = f"{w['session']}:{w['index']}"
+        pid = w.get("pid") or ""
         try:
             content = capture(target)
             parsed = parse_pane(content)
@@ -1254,6 +1274,43 @@ def state():
             and parsed.get("state") not in ("working", "needs-input")
         ):
             parsed["state"] = "working"
+
+        # done-vs-idle refinement. Uses per-pid stamps (persisted via
+        # state.json) so a server restart preserves the "Claude finished
+        # something you haven't looked at" signal across the gap.
+        #
+        # Edge detection: if the previous parse was busy and now we're idle,
+        # stamp `_completed_at` so the refinement below promotes us to
+        # "done" until the user acknowledges via a periscope action.
+        # Targets without a pid (rare — only if pid resolution failed)
+        # skip persistence; the in-memory value still works for the
+        # current process lifetime.
+        prev = _prev_state.get(pid) if pid else None
+        cur = parsed.get("state")
+        if pid and prev in ("working", "needs-input") and cur == "idle":
+            _completed_at[target] = now_ts
+        if pid:
+            _prev_state[pid] = cur
+
+        # Pull persisted stamps; in-memory may be ahead (just bumped) or
+        # behind (fresh process, never observed a transition this run).
+        wblock = _STATE.get("windows", {})
+        persisted = wblock.get(pid, {}) if pid else {}
+        completed = max(_completed_at.get(target, 0), int(persisted.get("completed_at") or 0))
+        acked = max(_acted_at.get(target, 0), int(persisted.get("acked_at") or 0))
+
+        if cur == "idle" and parsed.get("is_claude") and completed > acked:
+            parsed["state"] = "done"
+
+        # Schedule a state.json write if either stamp is newer than what's
+        # on disk. The write itself runs once, under the lock, after the
+        # loop.
+        if pid and (
+            completed > int(persisted.get("completed_at") or 0)
+            or acked > int(persisted.get("acked_at") or 0)
+        ):
+            stamp_updates.append((pid, completed, acked))
+
         git = cached_git_state(w.get("cwd", "")) or {}
         pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
         result.append(
@@ -1264,9 +1321,24 @@ def state():
                 # 0 means "never engaged through periscope" — stream view
                 # filters these out; grid view sorts cards within each session
                 # by acted_at desc (most-recently-opened leftmost).
-                "acted_at": _acted_at.get(target, 0),
+                "acted_at": acked,
+                "completed_at": completed,
             }
         )
+    if stamp_updates:
+        with _STATE_LOCK:
+            wblock = _STATE.setdefault("windows", {})
+            dirty = False
+            for pid, completed, acked in stamp_updates:
+                entry = wblock.setdefault(pid, {})
+                if int(entry.get("completed_at") or 0) != completed:
+                    entry["completed_at"] = completed
+                    dirty = True
+                if int(entry.get("acked_at") or 0) != acked:
+                    entry["acked_at"] = acked
+                    dirty = True
+            if dirty:
+                _write_state(_STATE)
     # Garbage-collect stale resumes: targets that are no longer in tmux's
     # list-windows output, or older than 30 min.
     now = int(time.time())

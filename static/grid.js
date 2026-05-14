@@ -23,7 +23,8 @@ function passesFilter(w) {
   if (state.currentFilter === "all") return true;
   if (state.currentFilter === "needs-input") return w.state === "needs-input";
   if (state.currentFilter === "working") return w.state === "working";
-  if (state.currentFilter === "waiting") return w.state === "waiting";
+  if (state.currentFilter === "done") return w.state === "done";
+  if (state.currentFilter === "idle") return w.state === "idle";
   if (state.currentFilter === "claude") return w.is_claude;
   if (state.currentFilter === "shell") return w.state === "shell";
   if (state.currentFilter === "ci-bad") return w.ci === "✗";
@@ -63,10 +64,15 @@ function renderCard(w) {
   }
   if (w.pr) {
     if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
-    metaParts.push(
-      `<a class="card-pr" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${w.pr}</a>`
-    );
-    if (w.ci) metaParts.push(ciSpan(w.ci));
+    const prLink = `<a class="card-pr" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${w.pr}</a>`;
+    if (w.ci === "✗") {
+      // Bundle #PR + ✗ into a single red badge so the failure mode is
+      // immediately legible without claiming the card's state accent.
+      metaParts.push(`<span class="card-pr-fail">${prLink}<span class="card-ci-bad">✗</span></span>`);
+    } else {
+      metaParts.push(prLink);
+      if (w.ci) metaParts.push(ciSpan(w.ci));
+    }
   }
   const metaRow = metaParts.length
     ? `<div class="card-meta">${metaParts.join(" ")}</div>`
@@ -169,22 +175,25 @@ function orderedSessions(allSessions, bySession) {
 
 function sessionPill(ws) {
   const needsInput = ws.filter((w) => w.state === "needs-input").length;
-  const waiting = ws.filter((w) => w.state === "waiting").length;
+  const done = ws.filter((w) => w.state === "done").length;
+  const idle = ws.filter((w) => w.state === "idle").length;
   const working = ws.filter((w) => w.state === "working").length;
   const ciBad = ws.filter((w) => w.ci === "✗").length;
   const parts = [];
   if (needsInput) parts.push(`${needsInput} needs input`);
-  if (waiting) parts.push(`${waiting} waiting`);
+  if (done) parts.push(`${done} done`);
   if (working) parts.push(`${working} working`);
+  if (idle) parts.push(`${idle} idle`);
   if (ciBad) parts.push(`${ciBad} ✗`);
   if (!parts.length) parts.push(`${ws.length}`);
   // Pill color hierarchy: needs-input is the loudest signal (a pane is
-  // blocked on me) > ci-bad > waiting > working. Anything quieter loses.
+  // blocked on me) > ci-bad > done > working > idle. Anything quieter loses.
   let cls = "session-pill";
   if (needsInput) cls += " has-needs-input";
   else if (ciBad) cls += " has-ci-bad";
-  else if (waiting) cls += " has-waiting";
+  else if (done) cls += " has-done";
   else if (working) cls += " has-working";
+  else if (idle) cls += " has-idle";
   return `<span class="${cls}">${parts.join(" · ")}</span>`;
 }
 
@@ -242,21 +251,25 @@ function handleToggleAll() {
   render(state.lastWindows);
 }
 
-// Stream-view priority — needs > working > waiting > shell. Anything else
-// (e.g., a transient "error" state) sorts last.
-const STREAM_STATE_PRIORITY = { "needs-input": 0, working: 1, waiting: 2, shell: 3 };
+// Stream-view priority — needs > done > working > idle > shell. Anything
+// else (e.g., a transient "error" state) sorts last. `done` outranks
+// `working`: a pane Claude already finished and hasn't been ack'd is more
+// likely to need your eyes than one still chewing.
+const STREAM_STATE_PRIORITY = { "needs-input": 0, done: 1, working: 2, idle: 3, shell: 4 };
 
 function streamIcon(s) {
   if (s === "needs-input") return "!";
   if (s === "working") return `<span class="stream-spin">◐</span>`;
-  if (s === "waiting") return "✓";
+  if (s === "done") return "✓";
+  if (s === "idle") return "·";
   return "$";
 }
 
 function streamAction(s) {
   if (s === "needs-input") return `<span class="stream-action-respond">respond ↵</span>`;
   if (s === "working") return "watch";
-  if (s === "waiting") return "resume";
+  if (s === "done") return "review";
+  if (s === "idle") return "resume";
   return "focus";
 }
 
@@ -382,12 +395,14 @@ export function render(windows) {
   const total = windows.length;
   const needsInput = windows.filter((w) => w.state === "needs-input").length;
   const working = windows.filter((w) => w.state === "working").length;
-  const waiting = windows.filter((w) => w.state === "waiting").length;
+  const done = windows.filter((w) => w.state === "done").length;
+  const idle = windows.filter((w) => w.state === "idle").length;
   const sep = `<span class="count-sep">·</span>`;
   const segments = [`<span><b>${total}</b> windows</span>`];
   if (needsInput) segments.push(`<span class="count-needs">${needsInput} needs input</span>`);
   segments.push(`<span class="count-working">${working} working</span>`);
-  segments.push(`<span class="count-waiting">${waiting} waiting</span>`);
+  segments.push(`<span class="count-done">${done} done</span>`);
+  segments.push(`<span class="count-idle">${idle} idle</span>`);
   counts.innerHTML = segments.join(` ${sep} `);
 }
 

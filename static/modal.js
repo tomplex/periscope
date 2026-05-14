@@ -16,7 +16,6 @@ import * as prefs from './prefs.js';
 const modal = document.getElementById("modal");
 const modalTitle = document.getElementById("modal-title");
 const modalXtermEl = document.getElementById("modal-xterm");
-const modalFocus = document.getElementById("modal-focus");
 const modalClose = document.getElementById("modal-close");
 const modalSubtitle = document.getElementById("modal-subtitle");
 const modalAutoRename = document.getElementById("modal-auto-rename");
@@ -370,12 +369,6 @@ export function initModal() {
   modalClose.addEventListener("click", closeModal);
   modal.addEventListener("click", (e) => {
     if (e.target === modal) closeModal();
-  });
-
-
-  modalFocus.addEventListener("click", async () => {
-    if (!state.activeTarget) return;
-    await fetch(`/api/focus?${targetQuery(state.activeTarget)}`, { method: "POST" });
   });
 
   // Double-click the window name in the modal header to rename it. The

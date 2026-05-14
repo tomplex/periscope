@@ -233,7 +233,7 @@
 }
 .ph-tag.is-shipped { color: var(--s-shell); }
 .ph-tag.is-bug { color: var(--s-needs); }
-.ph-tag.is-design { color: var(--s-waiting); }
+.ph-tag.is-design { color: var(--accent); }
 .ph-tag.is-unfinished { color: var(--s-working); }
 
 .ph-result-rerank {
@@ -381,7 +381,7 @@
 }
 .ph-msg.role-user .ph-msg-gutter .ph-role-label { color: var(--s-needs); }
 .ph-msg.role-assistant .ph-msg-gutter .ph-role-label { color: var(--fg-1); }
-.ph-msg.role-tool .ph-msg-gutter .ph-role-label { color: var(--s-waiting); }
+.ph-msg.role-tool .ph-msg-gutter .ph-role-label { color: var(--accent); }
 
 .ph-msg-body { flex: 1; min-width: 0; }
 .ph-msg.role-user .ph-msg-body { color: var(--fg-0); }
@@ -391,12 +391,12 @@
   color: var(--fg-2);
   padding: 8px 12px;
   background: var(--bg-2);
-  border-left: 2px solid var(--s-waiting);
+  border-left: 2px solid var(--accent);
   border-radius: 0 var(--r-sm) var(--r-sm) 0;
 }
 .ph-msg.role-tool .ph-tool-head {
   display: inline-flex; gap: 6px;
-  color: var(--s-waiting);
+  color: var(--accent);
   font-weight: 600;
   margin-right: 8px;
 }

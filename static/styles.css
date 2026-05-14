@@ -34,8 +34,10 @@
   --s-needs-bg: color-mix(in oklch, oklch(0.74 0.14 38) 16%, transparent);
   --s-working:  oklch(0.80 0.14 92);   /* amber — working */
   --s-working-bg: color-mix(in oklch, oklch(0.80 0.14 92) 14%, transparent);
-  --s-waiting:  oklch(0.74 0.13 232);  /* blue — waiting */
-  --s-waiting-bg: color-mix(in oklch, oklch(0.74 0.13 232) 14%, transparent);
+  --s-done:     oklch(0.76 0.17 152);  /* green — Claude finished, unacked */
+  --s-done-bg:  color-mix(in oklch, oklch(0.76 0.17 152) 16%, transparent);
+  --s-idle:     oklch(0.65 0.01 250);  /* neutral grey — quiet/idle */
+  --s-idle-bg:  color-mix(in oklch, oklch(0.65 0.01 250) 14%, transparent);
   --s-shell:    oklch(0.72 0.10 165);  /* desat green — shell / ok */
   --s-shell-bg: color-mix(in oklch, oklch(0.72 0.10 165) 12%, transparent);
   --s-success:  oklch(0.74 0.13 150);
@@ -175,7 +177,8 @@ html, body {
 .meta b { color: var(--fg-1); font-weight: 500; }
 .meta .count-needs   { color: var(--s-needs); }
 .meta .count-working { color: var(--s-working); }
-.meta .count-waiting { color: var(--s-waiting); }
+.meta .count-done    { color: var(--s-done); }
+.meta .count-idle    { color: var(--s-idle); }
 .meta .count-sep     { color: var(--fg-4); }
 
 /* ─── Filter bar ─────────────────────────────────────── */
@@ -360,10 +363,15 @@ body[data-view="stream"] .stream-banner {
   background: var(--s-working-bg);
   border-color: color-mix(in oklch, var(--s-working) 35%, transparent);
 }
-.session-pill.has-waiting {
-  color: var(--s-waiting);
-  background: var(--s-waiting-bg);
-  border-color: color-mix(in oklch, var(--s-waiting) 35%, transparent);
+.session-pill.has-done {
+  color: var(--s-done);
+  background: var(--s-done-bg);
+  border-color: color-mix(in oklch, var(--s-done) 35%, transparent);
+}
+.session-pill.has-idle {
+  color: var(--s-idle);
+  background: var(--s-idle-bg);
+  border-color: color-mix(in oklch, var(--s-idle) 35%, transparent);
 }
 .session-pill.has-ci-bad {
   color: var(--s-danger);
@@ -425,13 +433,16 @@ body[data-view="stream"] .stream-banner {
 :root[data-density="compact"] .card { padding: 9px 11px; min-height: 92px; gap: 4px; }
 :root[data-density="comfy"]   .card { padding: 14px 16px; min-height: 124px; gap: 7px; }
 
-/* Per-state accent. ci-bad overrides everything else — a card whose CI just
-   broke is louder than its tmux activity state. */
+/* Per-state accent. The leftbar reflects the tmux activity state only —
+   CI failure is signaled by a dedicated red badge on the PR number (see
+   `.card-pr-fail`) so the two channels don't fight for the same color. */
 .card.state-needs-input { --card-accent: var(--s-needs); }
 .card.state-working     { --card-accent: var(--s-working); }
-.card.state-waiting     { --card-accent: var(--s-waiting); }
+.card.state-done        { --card-accent: var(--s-done); }
+.card.state-idle        { --card-accent: var(--s-idle); }
 .card.state-shell       { --card-accent: var(--s-shell); }
-.card.ci-bad            { --card-accent: var(--s-danger); }
+/* Shell cards de-emphasize unless they carry a CI failure — keeping them
+   fully bright then lets the red PR badge land at full intensity. */
 .card.state-shell:not(.ci-bad) { opacity: 0.78; }
 
 /* leftbar variant (default). data-border on :root selects between treatments. */
@@ -534,6 +545,22 @@ body[data-view="stream"] .stream-banner {
 .card-ci-ok      { color: var(--s-success); }
 .card-ci-bad     { color: var(--s-danger); }
 .card-ci-pending { color: var(--s-working); }
+
+/* CI failure badge: groups #PR + ✗ into a single red pill so the failure
+   mode is unambiguous at a glance. Renders inline in the meta row in
+   place of the loose `#7256 ✗` pair. */
+.card-pr-fail {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  background: color-mix(in oklch, var(--s-danger) 18%, transparent);
+  border: 1px solid color-mix(in oklch, var(--s-danger) 45%, transparent);
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.card-pr-fail .card-pr     { color: var(--s-danger); font-weight: 600; }
+.card-pr-fail .card-ci-bad { color: var(--s-danger); }
 
 .card-activity {
   font-size: 12px;
@@ -700,7 +727,8 @@ body[data-view="stream"] .stream-banner {
 /* State-keyed accent (same color mapping as cards). */
 .stream-row.state-needs-input { --card-accent: var(--s-needs); }
 .stream-row.state-working     { --card-accent: var(--s-working); }
-.stream-row.state-waiting     { --card-accent: var(--s-waiting); }
+.stream-row.state-done        { --card-accent: var(--s-done); }
+.stream-row.state-idle        { --card-accent: var(--s-idle); }
 .stream-row.state-shell       { --card-accent: var(--s-shell); }
 .stream-row.ci-bad            { --card-accent: var(--s-danger); }
 
