@@ -1,0 +1,21 @@
+[project]
+name = "periscope"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-dotenv",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-mock>=3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["history/tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers --strict-config"
