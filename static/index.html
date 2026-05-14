@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-density="compact" data-status-tx="current" data-border="leftbar">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,30 +8,32 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header>
-    <div class="header-row header-row-top">
-      <h1>periscope</h1>
-      <span id="usage" class="usage-pill" title=""></span>
+  <header class="periscope-header">
+    <div class="topbar">
+      <span class="brand">periscope<i class="brand-cursor"></i></span>
+      <div id="usage" class="usage"></div>
       <div class="meta">
         <span id="counts"></span>
         <span id="last-update"></span>
       </div>
     </div>
-    <div class="header-row header-row-bottom">
-      <nav class="filters" id="filters">
-        <button data-filter="all" class="active">all</button>
-        <button data-filter="needs-input">needs input</button>
-        <button data-filter="working">working</button>
-        <button data-filter="waiting">waiting</button>
-        <button data-filter="claude">claude</button>
-        <button data-filter="shell">shells</button>
-        <button data-filter="ci-bad">CI ✗</button>
-      </nav>
-      <div class="header-actions">
-        <button id="new-session" class="header-action" title="create a new tmux session">+ session</button>
-        <button id="toggle-all" class="header-action" title="collapse or expand all sessions"></button>
+    <nav class="filters" id="filters">
+      <button data-filter="all" class="filter-btn active">all</button>
+      <button data-filter="needs-input" class="filter-btn">needs input</button>
+      <button data-filter="working" class="filter-btn">working</button>
+      <button data-filter="waiting" class="filter-btn">waiting</button>
+      <button data-filter="claude" class="filter-btn">claude</button>
+      <button data-filter="shell" class="filter-btn">shells</button>
+      <button data-filter="ci-bad" class="filter-btn">CI ✗</button>
+      <span class="filters-sep"></span>
+      <button id="new-session" class="filter-btn is-action" title="create a new tmux session">+ session</button>
+      <button id="toggle-all" class="filter-btn is-action" title="collapse or expand all sessions"></button>
+      <span class="filters-spacer"></span>
+      <div class="view-switch" id="view-switch" role="tablist" aria-label="view">
+        <button class="view-switch-btn" data-view="grid" role="tab" aria-selected="true" title="grid view">▦ grid</button>
+        <button class="view-switch-btn" data-view="stream" role="tab" aria-selected="false" title="stream view — tabs you've opened, by priority">≡ stream</button>
       </div>
-    </div>
+    </nav>
   </header>
   <main id="grid"></main>
   <div id="modal" class="hidden">
@@ -47,7 +49,10 @@
           <button id="modal-close">×</button>
         </div>
       </div>
-      <div id="modal-xterm" class="modal-xterm"></div>
+      <div class="modal-body">
+        <div id="modal-xterm" class="modal-xterm"></div>
+        <aside id="modal-side" class="modal-side"></aside>
+      </div>
     </div>
   </div>
   <script src="/vendor/xterm.js"></script>

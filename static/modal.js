@@ -7,7 +7,7 @@
 // event handlers, never at module top level.
 
 import { state } from './state.js';
-import { escapeHtml, targetQuery, apiCall } from './util.js';
+import { escapeHtml, targetQuery, apiCall, relTime } from './util.js';
 import { startLiveTerminal, stopLiveTerminal, writeTerminalLine } from './terminal.js';
 import { poll } from './grid.js';
 
@@ -18,6 +18,7 @@ const modalFocus = document.getElementById("modal-focus");
 const modalClose = document.getElementById("modal-close");
 const modalSubtitle = document.getElementById("modal-subtitle");
 const modalAutoRename = document.getElementById("modal-auto-rename");
+const modalSide = document.getElementById("modal-side");
 
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
@@ -43,6 +44,7 @@ export function closeModal() {
     clearInterval(modalPollHandle);
     modalPollHandle = null;
   }
+  if (modalSide) modalSide.innerHTML = "";
   state.modalRenaming = false;
   state.activeTarget = null;
 }
@@ -91,7 +93,7 @@ function updateModalHeader(data) {
   if (data.model) parts.push(escapeHtml(data.model.replace(/\s*\(.*\)/, "")));
   if (data.state === "needs-input") {
     parts.push(
-      `<span class="spinner-tag" style="color: var(--needs-input); font-weight: 600;">⚠ needs input</span>`
+      `<span class="spinner-tag" style="color: var(--s-needs); font-weight: 600;">⚠ needs input</span>`
     );
   } else if (data.spinner) {
     parts.push(
@@ -99,10 +101,118 @@ function updateModalHeader(data) {
     );
   } else if (data.pending_input) {
     parts.push(
-      `<span class="spinner-tag" style="color: var(--fg-dim); font-style: normal;">↗ pending</span>`
+      `<span class="spinner-tag" style="color: var(--fg-3); font-style: normal;">↗ pending</span>`
     );
   }
   modalSubtitle.innerHTML = parts.join(`<span class="sep">·</span> `);
+  renderModalSidebar(data);
+}
+
+// ── Sidebar: Linked (PR + Linear placeholder) + Activity timeline. ───
+// Data rides on the existing 1.5s /api/pane poll — no extra request.
+function renderModalSidebar(data) {
+  if (!modalSide) return;
+  modalSide.innerHTML = `
+    <section class="modal-side-section">
+      <h4>Linked</h4>
+      ${renderPRCard(data)}
+      ${renderLinearPlaceholder()}
+    </section>
+    <section class="modal-side-section modal-side-activity">
+      <h4>Activity</h4>
+      ${renderActivityTimeline(data.activity)}
+    </section>
+  `;
+}
+
+function avatarChars(handle) {
+  if (!handle) return "?";
+  // GitHub usernames carry dashes/underscores; strip and take the first two
+  // letters for the avatar bubble (Inter, 2-char max per design).
+  const letters = handle.replace(/[^A-Za-z0-9]/g, "");
+  return (letters.slice(0, 2) || handle.slice(0, 1)).toUpperCase();
+}
+
+function renderPRCard(data) {
+  if (!data.pr) {
+    return `<button class="modal-side-link-btn" type="button" disabled title="link a PR — coming soon">+ link pull request</button>`;
+  }
+  const ciState = data.ci === "✓" ? "passing"
+    : data.ci === "✗" ? "failing"
+    : data.ci === "⟳" ? "running"
+    : "—";
+  const ciClass = data.ci === "✓" ? "ci-passing"
+    : data.ci === "✗" ? "ci-failing"
+    : data.ci === "⟳" ? "ci-running"
+    : "";
+  const draftPill = data.pr_draft
+    ? `<span class="pr-mini pr-mini-draft">draft</span>`
+    : `<span class="pr-mini pr-mini-open">open</span>`;
+  const reviewers = (data.pr_reviewers || [])
+    .map((r) => `<span class="modal-avatar" title="${escapeHtml(r)}">${escapeHtml(avatarChars(r))}</span>`)
+    .join("");
+  const title = escapeHtml(data.pr_title || "");
+  const url = `https://github.com/faradayio/fdy/pull/${data.pr}`;
+  const adds = data.pr_additions || 0;
+  const dels = data.pr_deletions || 0;
+  return `
+    <div class="modal-card-inset">
+      <div class="pr-head">
+        <a class="pr-num" href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${data.pr}</a>
+        <span class="pr-title" title="${title}">${title}</span>
+      </div>
+      <div class="pr-meta">
+        ${draftPill}
+        <span class="pr-diff"><span class="diff-plus">+${adds}</span> <span class="diff-minus">−${dels}</span></span>
+        <span class="pr-ci ${ciClass}"><span class="ci-dot"></span>ci ${ciState}</span>
+        ${reviewers ? `<span class="pr-reviewers">${reviewers}</span>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderLinearPlaceholder() {
+  // Linear connector is not wired yet (deferred to Phase 3.1 / a future
+  // skill). The disabled button keeps the visual slot — it'll become live
+  // when the connector lands without modal-layout churn.
+  return `<button class="modal-side-link-btn" type="button" disabled title="Linear integration coming soon">+ link Linear ticket</button>`;
+}
+
+function timelineColor(kind, evState) {
+  if (kind === "commit") return "var(--s-shell)";
+  if (kind === "ci") {
+    if (evState === "failed") return "var(--s-danger)";
+    if (evState === "running") return "var(--s-working)";
+    return "var(--s-success)";
+  }
+  if (kind === "open") return "var(--fg-3)";
+  return "var(--fg-3)";
+}
+
+function timelineLabel(kind, evState) {
+  if (kind === "commit") return "commit";
+  if (kind === "ci") return evState ? `ci ${evState}` : "ci";
+  if (kind === "open") return "opened";
+  return kind;
+}
+
+function renderActivityTimeline(events) {
+  if (!events || events.length === 0) {
+    return `<div class="timeline-empty">no recent activity</div>`;
+  }
+  return `
+    <ol class="timeline">
+      ${events.map((e) => `
+        <li class="timeline-row" data-kind="${escapeHtml(e.kind)}">
+          <span class="timeline-dot" style="background:${timelineColor(e.kind, e.state)}"></span>
+          <div class="timeline-body">
+            <div class="timeline-text">${escapeHtml(e.text || "")}</div>
+            <div class="timeline-when">${escapeHtml(timelineLabel(e.kind, e.state))} · ${escapeHtml(relTime(e.at))} ago</div>
+          </div>
+        </li>
+      `).join("")}
+    </ol>
+  `;
 }
 
 function startModalRename() {

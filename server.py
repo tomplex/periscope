@@ -45,6 +45,16 @@ STATIC = Path(__file__).parent / "static"
 # We instead record when each window most recently became the active window in
 # its session, plus any time the user acts on it via the dashboard.
 _focused_at: dict[str, int] = {}
+# `_acted_at` is a *user-action-only* recency stamp. Unlike `_focused_at` it
+# does NOT bump on tmux active-window changes (which fire when Tom switches
+# between sessions in his terminal, not when he engages a window via the
+# periscope UI). Stream view sorts by this; grid view continues to sort by
+# `_focused_at`. Bumped from the periscope-side handlers only:
+#   - /ws/pane WS-connect (modal-open is the canonical "opened in periscope")
+#   - /api/focus, /api/send, /api/paste-image, /api/rename
+#   - /api/session/new, /api/window/new (creation through periscope)
+# Reset on process restart; not persisted.
+_acted_at: dict[str, int] = {}
 _active_per_session: dict[str, str] = {}
 
 # Per-target spinner hysteresis. Tmux capture-pane occasionally catches Claude's
@@ -88,6 +98,14 @@ def smooth_is_claude(target: str, current: bool) -> bool:
 
 def note_focus(target: str) -> None:
     _focused_at[target] = int(time.time())
+
+
+def note_action(target: str) -> None:
+    """Stamp a periscope-side user action. Separate from `note_focus`: the
+    stream view orders by *only* actions the user took through periscope,
+    not tmux activity. Callers that bump focus due to a user action should
+    bump both; tmux-derived bumps go through `note_focus` alone."""
+    _acted_at[target] = int(time.time())
 
 
 def update_focus_from_windows(windows: list[dict]) -> None:
@@ -240,7 +258,9 @@ def cached_git_state(path: str) -> dict | None:
 
 
 def pr_state_for(path: str, branch: str) -> dict | None:
-    """Return {pr, ci} for the PR open against `branch` in repo at `path`."""
+    """Return PR metadata + CI rollup for the PR open against `branch` in
+    repo at `path`. Modal sidebar surfaces title/draft/+/−/reviewers; the
+    grid card uses {pr, ci} as before."""
     if not _GH_AVAILABLE or not path or not branch:
         return None
     code, out = _run(
@@ -248,7 +268,8 @@ def pr_state_for(path: str, branch: str) -> dict | None:
             "gh", "pr", "list",
             "--head", branch,
             "--state", "open",
-            "--json", "number,statusCheckRollup",
+            "--json",
+            "number,title,isDraft,additions,deletions,reviewRequests,statusCheckRollup",
             "--limit", "1",
         ],
         cwd=path,
@@ -273,7 +294,23 @@ def pr_state_for(path: str, branch: str) -> dict | None:
         ci = "⟳"
     elif states and states <= {"SUCCESS", "NEUTRAL", "SKIPPED"}:
         ci = "✓"
-    return {"pr": pr.get("number"), "ci": ci}
+    # gh exposes requested reviewers as either users (with `login`) or teams
+    # (with `name`) — take the login for users, name for teams, and trim to
+    # the leading letters as the avatar text (2 chars max).
+    reviewers: list[str] = []
+    for r in pr.get("reviewRequests") or []:
+        handle = r.get("login") or r.get("name") or ""
+        if handle:
+            reviewers.append(handle)
+    return {
+        "pr": pr.get("number"),
+        "ci": ci,
+        "pr_title": pr.get("title") or "",
+        "pr_draft": bool(pr.get("isDraft")),
+        "pr_additions": int(pr.get("additions") or 0),
+        "pr_deletions": int(pr.get("deletions") or 0),
+        "pr_reviewers": reviewers,
+    }
 
 
 def _fetch_pr_into_cache(path: str, branch: str) -> None:
@@ -284,6 +321,140 @@ def _fetch_pr_into_cache(path: str, branch: str) -> None:
     with _pr_lock:
         _pr_cache[(path, branch)] = (time.time(), data)
         _pr_fetching.discard((path, branch))
+
+
+# --- Activity timeline (for modal sidebar) -------------------------------
+#
+# Per pane, surface a short timeline of recent events: commits on the repo
+# in the last 24h, CI runs on the branch, and a single "opened in periscope"
+# anchor sourced from _acted_at. Repo+branch events are cached by
+# (cwd, branch) since they're the same for every window on the same branch;
+# the per-target open event is layered in fresh on each call.
+
+_ACTIVITY_TTL = 60.0
+_activity_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_activity_fetching: set[tuple[str, str]] = set()
+_activity_lock = threading.Lock()
+
+
+def _gh_run_state(run: dict) -> str | None:
+    """Map a gh run record to one of 'passed' / 'failed' / 'running', or
+    None for runs we don't surface (skipped, neutral)."""
+    s = (run.get("status") or "").upper()
+    c = (run.get("conclusion") or "").upper()
+    if c == "SUCCESS":
+        return "passed"
+    if c in ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"):
+        return "failed"
+    if c in ("NEUTRAL", "SKIPPED"):
+        return None
+    if s in ("QUEUED", "IN_PROGRESS", "WAITING"):
+        return "running"
+    return None
+
+
+def shared_activity_for(path: str, branch: str) -> list[dict]:
+    """Repo/branch-scoped events: commits in last 24h + CI runs on branch."""
+    events: list[dict] = []
+    if not path or not os.path.isdir(path):
+        return events
+    code, _ = _run(["git", "-C", path, "rev-parse", "--git-dir"])
+    if code != 0:
+        return events
+    # %ct = committer date as unix seconds; %s = subject. Tab-separated so
+    # subjects with spaces don't confuse the split.
+    code, out = _run(
+        ["git", "-C", path, "log", "-10", "--since=24h", "--pretty=format:%ct%x09%s"],
+        timeout=3.0,
+    )
+    if code == 0 and out:
+        for line in out.split("\n"):
+            tab = line.find("\t")
+            if tab < 0:
+                continue
+            try:
+                at = int(line[:tab])
+            except ValueError:
+                continue
+            subj = line[tab + 1 :].strip()
+            if subj:
+                events.append({"kind": "commit", "at": at, "text": subj})
+
+    if _GH_AVAILABLE and branch:
+        code, out = _run(
+            [
+                "gh", "run", "list",
+                "--branch", branch,
+                "--limit", "5",
+                "--json", "conclusion,status,createdAt,displayTitle,name",
+            ],
+            cwd=path,
+            timeout=5.0,
+        )
+        if code == 0 and out:
+            try:
+                runs = json.loads(out)
+            except Exception:
+                runs = []
+            from datetime import datetime
+            for run in runs:
+                state = _gh_run_state(run)
+                if state is None:
+                    continue
+                created = run.get("createdAt") or ""
+                try:
+                    # GitHub timestamps are RFC3339 with a trailing Z.
+                    at = int(
+                        datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+                    )
+                except Exception:
+                    continue
+                name = run.get("displayTitle") or run.get("name") or "workflow"
+                events.append(
+                    {"kind": "ci", "at": at, "text": name, "state": state}
+                )
+    return events
+
+
+def _fetch_activity_into_cache(path: str, branch: str) -> None:
+    try:
+        events = shared_activity_for(path, branch)
+    except Exception:
+        events = []
+    with _activity_lock:
+        _activity_cache[(path, branch)] = (time.time(), events)
+        _activity_fetching.discard((path, branch))
+
+
+def cached_pane_activity(target: str, path: str, branch: str | None) -> list[dict]:
+    """Return up to 8 timeline events for this pane, newest-first. Shared
+    (repo+branch) events come from a stale-while-revalidate cache; the
+    per-target 'open' event is layered in fresh from _acted_at."""
+    events: list[dict] = []
+    if path and branch:
+        key = (path, branch)
+        now = time.time()
+        with _activity_lock:
+            cached = _activity_cache.get(key)
+            stale = cached is None or (now - cached[0] >= _ACTIVITY_TTL)
+            if stale and key not in _activity_fetching:
+                _activity_fetching.add(key)
+                threading.Thread(
+                    target=_fetch_activity_into_cache,
+                    args=(path, branch),
+                    daemon=True,
+                ).start()
+            shared = cached[1] if cached else []
+        events.extend(shared)
+
+    opened_at = _acted_at.get(target, 0)
+    if opened_at:
+        events.append(
+            {"kind": "open", "at": opened_at, "text": "opened in periscope"}
+        )
+
+    events.sort(key=lambda e: e.get("at", 0), reverse=True)
+    return events[:8]
 
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
@@ -738,6 +909,9 @@ def state():
                 **w, **parsed, **git, **pr,
                 "target": target,
                 "focused_at": _focused_at.get(target, 0),
+                # 0 means "never engaged through periscope" — stream view
+                # filters these out; grid view ignores acted_at entirely.
+                "acted_at": _acted_at.get(target, 0),
             }
         )
     return {
@@ -776,6 +950,7 @@ def pane(session: str, index: int, lines: int = 200):
         window_name, cwd = "", ""
     git = cached_git_state(cwd) or {}
     pr = cached_pr_state(cwd, git.get("branch")) or {}
+    activity = cached_pane_activity(target, cwd, git.get("branch"))
     # Shorten $HOME → ~ for display. Done server-side because the browser
     # doesn't know the user's home dir.
     home = os.path.expanduser("~")
@@ -788,6 +963,7 @@ def pane(session: str, index: int, lines: int = 200):
         "name": window_name,
         "cwd": cwd_display,
         "session": session,
+        "activity": activity,
         **parsed,
         **git,
         **pr,
@@ -804,6 +980,7 @@ def focus(session: str, index: int):
             tmux("switch-client", "-c", c, "-t", target)
             switched.append(c)
     note_focus(target)
+    note_action(target)
     return {"ok": True, "switched": switched, "target": target}
 
 
@@ -839,6 +1016,7 @@ def rename(session: str, index: int, body: RenameBody):
     if not name:
         return {"ok": False, "error": "empty name"}
     tmux("rename-window", "-t", target, name)
+    note_action(target)
     return {"ok": True, "target": target, "name": name}
 
 
@@ -851,8 +1029,11 @@ def session_new(body: NewSessionBody):
     ok, msg = _tmux_mutate("new-session", "-d", "-s", name, "-c", cwd)
     if not ok:
         return {"ok": False, "error": msg}
-    # Stamp focus so the new session sorts to the top on next poll.
+    # Stamp focus so the new session sorts to the top on next poll. Stamping
+    # `acted_at` too: creating a session through periscope is a user action,
+    # so the new window earns a slot in the stream view.
     note_focus(f"{name}:0")
+    note_action(f"{name}:0")
     return {"ok": True, "session": name}
 
 
@@ -864,17 +1045,18 @@ def session_delete(session: str):
     prefix = f"{session}:"
     for t in [t for t in _focused_at if t.startswith(prefix)]:
         _focused_at.pop(t, None)
+    for t in [t for t in _acted_at if t.startswith(prefix)]:
+        _acted_at.pop(t, None)
     _active_per_session.pop(session, None)
     return {"ok": True, "session": session}
 
 
 @app.post("/api/window/new")
 def window_new(session: str, mode: str = "shell"):
-    """Spawn a window in `session`. `mode=claude` types `claude\\n` into the
-    new pane so the window comes up running Claude Code; `mode=shell` leaves
-    it at a bare prompt. cwd is inherited from the session's active pane —
-    without `-c`, tmux would use the periscope server's cwd, which is never
-    what you want."""
+    """Spawn a window in `session`. `mode=claude` types `claude\\n`,
+    `mode=vim` types `vim\\n`, `mode=shell` leaves it at a bare prompt.
+    cwd is inherited from the session's active pane — without `-c`, tmux
+    would use the periscope server's cwd, which is never what you want."""
     cwd = tmux(
         "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
     ).strip() or os.path.expanduser("~")
@@ -894,7 +1076,11 @@ def window_new(session: str, mode: str = "shell"):
         # command runs as a real prompt entry rather than mid-rc echoed text.
         time.sleep(0.1)
         tmux("send-keys", "-t", target, "claude", "Enter")
+    elif mode == "vim":
+        time.sleep(0.1)
+        tmux("send-keys", "-t", target, "vim", "Enter")
     note_focus(target)
+    note_action(target)
     return {"ok": True, "session": session, "index": index, "target": target, "mode": mode}
 
 
@@ -905,6 +1091,7 @@ def window_delete(session: str, index: int):
     if not ok:
         return {"ok": False, "error": msg}
     _focused_at.pop(target, None)
+    _acted_at.pop(target, None)
     return {"ok": True, "target": target}
 
 
@@ -1135,6 +1322,7 @@ def send(session: str, index: int, body: SendBody):
     if not body.keys and body.paste is None:
         return {"ok": False, "error": "no keys or paste"}
     note_focus(target)
+    note_action(target)
     return {"ok": True, "target": target}
 
 
@@ -1191,6 +1379,7 @@ async def paste_image(session: str, index: int, request: Request):
     tmux("set-buffer", "-b", buf, f"@{path} ")
     tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
     note_focus(target)
+    note_action(target)
     return {"ok": True, "path": str(path), "bytes": len(body)}
 
 
@@ -1212,6 +1401,10 @@ async def paste_image(session: str, index: int, request: Request):
 async def ws_pane(websocket: WebSocket, session: str, index: int):
     await websocket.accept()
     target = f"{session}:{index}"
+    # Modal-open is the canonical "opened in periscope" event. The grid view's
+    # `focused_at` doesn't move (no tmux focus shift here), but the stream view
+    # should treat this as engagement with the window.
+    note_action(target)
     fifo_path = f"/tmp/periscope.{uuid.uuid4().hex}.fifo"
     fd = None
     loop = asyncio.get_running_loop()

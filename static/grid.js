@@ -31,73 +31,112 @@ function passesFilter(w) {
 
 function ciSpan(ci) {
   if (!ci) return "";
-  const cls = ci === "✓" ? "ci-ok" : ci === "✗" ? "ci-bad" : "ci-pending";
+  const cls = ci === "✓" ? "card-ci-ok" : ci === "✗" ? "card-ci-bad" : "card-ci-pending";
   return `<span class="${cls}">${ci}</span>`;
+}
+
+// `git` from server is "clean" or "+N -M [*]". Split into clean/dirty +
+// formatted suffix for separate styling. The trailing " *" (unpushed) is
+// preserved as part of the dirty text.
+function gitMetaSpan(git) {
+  if (!git) return "";
+  if (git === "clean") return `<span class="card-clean">clean</span>`;
+  return `<span class="card-dirty">${escapeHtml(git)}</span>`;
 }
 
 function renderCard(w) {
   const stateClass = `state-${w.state}`;
-  const ciBad = w.ci === "✗" ? " ci-bad" : "";
-  const branch = w.branch
-    ? `<div class="card-branch">
-         <span>${escapeHtml(w.branch)}</span>
-         ${w.git ? `<span>· ${escapeHtml(w.git)}</span>` : ""}
-         ${
-           w.pr
-             ? `<a class="pr" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${w.pr}</a> ${ciSpan(w.ci)}`
-             : ""
-         }
-       </div>`
+  const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
+  const kind = w.is_claude ? "claude" : "shell";
+
+  // Meta row: branch · clean/dirty · #PR ci.  PR/CI stays on the card so
+  // a glance still surfaces CI breakage; matches the existing scan pattern.
+  const metaParts = [];
+  if (w.branch) metaParts.push(`<span class="card-branch">${escapeHtml(w.branch)}</span>`);
+  if (w.git) {
+    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
+    metaParts.push(gitMetaSpan(w.git));
+  }
+  if (w.pr) {
+    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
+    metaParts.push(
+      `<a class="card-pr" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${w.pr}</a>`
+    );
+    if (w.ci) metaParts.push(ciSpan(w.ci));
+  }
+  const metaRow = metaParts.length
+    ? `<div class="card-meta">${metaParts.join(" ")}</div>`
     : "";
 
-  let snippet = "";
+  // Activity row. is-pending for unsubmitted user input (loudest because it
+  // means "claude is going to act on whatever you type next"); is-output for
+  // recap / last_line; is-shell when it's a bare shell pane with nothing
+  // claude-shaped to show.
+  let activity = "";
   if (w.pending_input) {
-    snippet = `<div class="card-snippet pending">❯ ${escapeHtml(w.pending_input)}</div>`;
+    activity = `<div class="card-activity is-pending"><span class="prompt">›</span>${escapeHtml(w.pending_input)}</div>`;
   } else if (w.recap) {
-    snippet = `<div class="card-snippet recap">※ ${escapeHtml(w.recap)}</div>`;
+    activity = `<div class="card-activity is-output">${escapeHtml(w.recap)}</div>`;
   } else if (w.last_line) {
-    snippet = `<div class="card-snippet">${escapeHtml(w.last_line)}</div>`;
+    const cls = w.is_claude ? "is-output" : "is-shell";
+    activity = `<div class="card-activity ${cls}">${escapeHtml(w.last_line)}</div>`;
   }
 
-  // needs-input wins over the spinner verb (a stale "envisioning…" in
-  // scrollback shouldn't drown out the blocking prompt). For other states,
-  // show the spinner phrase if we have one, else the bare state name.
-  const stateLabel = w.state === "needs-input"
-    ? `<span class="card-state ${stateClass}">needs input</span>`
+  // Status label. needs-input wins over the spinner verb (a stale "envisioning…"
+  // in scrollback shouldn't drown out the blocking prompt).
+  const statusText = w.state === "needs-input"
+    ? "needs input"
     : w.spinner
-      ? `<span class="card-state ${stateClass}">${escapeHtml(w.spinner.toLowerCase())}…</span>`
-      : `<span class="card-state ${stateClass}">${w.state}</span>`;
+      ? `${w.spinner.toLowerCase()}…`
+      : w.state;
+  const statusLabel = `<span class="card-status">${escapeHtml(statusText)}</span>`;
 
-  const foot = [];
-  if (w.context_pct != null) foot.push(`${w.context_pct}%`);
-  if (w.model) foot.push(escapeHtml(w.model.replace(/\s*\(.*\)/, "")));
+  // Footer: progress bar + ctx% + model + viewed-age. Progress bar only when
+  // we have a context % to fill; otherwise the row reads "model · viewed Xm".
+  const footParts = [];
+  if (w.context_pct != null) {
+    footParts.push(`<div class="card-progress"><i style="width:${w.context_pct}%"></i></div>`);
+    footParts.push(`<span class="card-pct">${w.context_pct}%</span>`);
+  }
+  if (w.model) {
+    footParts.push(`<span class="card-model">${escapeHtml(w.model.replace(/\s*\(.*\)/, ""))}</span>`);
+  }
   const recent = relTime(w.focused_at);
-  if (recent) foot.push(`viewed ${recent}`);
-  const footHtml = foot.length
-    ? `<div class="card-foot">${foot.join(" · ")}</div>`
+  if (recent) footParts.push(`<span class="card-viewed">viewed ${recent}</span>`);
+  const footRow = footParts.length
+    ? `<div class="card-foot">${footParts.join(" ")}</div>`
     : "";
 
   return `
-    <div class="card ${stateClass}${ciBad}" data-target="${w.target}">
-      <div class="card-head">
-        <span class="card-name">${escapeHtml(w.name)}</span>
-        <span class="card-idx mono">${w.index}</span>
-        ${stateLabel}
+    <article class="card ${stateClass}${ciBadCls}" data-target="${w.target}" data-kind="${kind}">
+      <header class="card-head">
+        <span class="card-title">${escapeHtml(w.name)}</span>
+        <span class="card-idx">${w.index}</span>
+        ${statusLabel}
         <button class="card-kill" data-target="${w.target}" data-name="${escapeHtml(w.name)}" title="kill this window">✕</button>
-      </div>
-      ${branch}
-      ${snippet}
-      ${footHtml}
-    </div>
+      </header>
+      ${metaRow}
+      ${activity}
+      ${footRow}
+    </article>
   `;
 }
 
 function renderNewTile(session) {
+  // Three-way split: claude is the primary action (largest hit area) since
+  // it's the most-used; shell and vim share the other half stacked. All
+  // three POST to /api/window/new — the server picks the boot command from
+  // `mode`. (When worktree integration lands, `+ claude` will route to the
+  // separate /api/window/new-worktree endpoint instead; the other two stay
+  // here. data-mode is the contract handleNewWindow keys off.)
   const s = escapeHtml(session);
   return `
     <div class="card card-new" data-session="${s}">
-      <button class="new-window" data-session="${s}" data-mode="claude">+ claude</button>
-      <button class="new-window" data-session="${s}" data-mode="shell">+ shell</button>
+      <button class="new-window is-primary" data-session="${s}" data-mode="claude">+ claude</button>
+      <div class="new-window-stack">
+        <button class="new-window" data-session="${s}" data-mode="shell">+ shell</button>
+        <button class="new-window" data-session="${s}" data-mode="vim">+ vim</button>
+      </div>
     </div>
   `;
 }
@@ -194,7 +233,96 @@ function handleToggleAll() {
   render(state.lastWindows);
 }
 
-export function render(windows) {
+// Stream-view priority — needs > working > waiting > shell. Anything else
+// (e.g., a transient "error" state) sorts last.
+const STREAM_STATE_PRIORITY = { "needs-input": 0, working: 1, waiting: 2, shell: 3 };
+
+function streamIcon(s) {
+  if (s === "needs-input") return "!";
+  if (s === "working") return `<span class="stream-spin">◐</span>`;
+  if (s === "waiting") return "✓";
+  return "$";
+}
+
+function streamAction(s) {
+  if (s === "needs-input") return `<span class="stream-action-respond">respond ↵</span>`;
+  if (s === "working") return "watch";
+  if (s === "waiting") return "resume";
+  return "focus";
+}
+
+function renderStreamRow(w) {
+  const stateClass = `state-${w.state}`;
+  const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
+  const sessionLabel = escapeHtml(w.session);
+  const branchPart = w.branch
+    ? `${sessionLabel} · ${escapeHtml(w.branch)}`
+    : sessionLabel;
+  const ctxPart = w.is_claude && w.context_pct != null
+    ? ` · ${escapeHtml((w.model || "").replace(/\s*\(.*\)/, ""))} · ${w.context_pct}%`
+    : "";
+
+  let msg = "";
+  if (w.pending_input) {
+    msg = `<span class="stream-prompt">›</span> ${escapeHtml(w.pending_input)}`;
+  } else if (w.recap) {
+    msg = escapeHtml(w.recap);
+  } else if (w.last_line) {
+    msg = escapeHtml(w.last_line);
+  }
+
+  // acted_at is guaranteed > 0 here (renderStream filtered).
+  const when = relTime(w.acted_at) || "now";
+
+  return `
+    <div class="stream-row ${stateClass}${ciBadCls}" data-target="${w.target}">
+      <span class="stream-time">${when}</span>
+      <span class="stream-icon">${streamIcon(w.state)}</span>
+      <div class="stream-body">
+        <div class="stream-title">
+          <b>${escapeHtml(w.name)}</b>
+          <em>${branchPart}</em>
+          <span class="stream-extra">${ctxPart}</span>
+        </div>
+        <div class="stream-msg">${msg}</div>
+      </div>
+      <div class="stream-action">${streamAction(w.state)}</div>
+    </div>
+  `;
+}
+
+function renderStream(windows) {
+  // Stream considers *only* windows Tom has actually engaged with in
+  // periscope (acted_at > 0). Sessions Tom has switched to in tmux but
+  // never opened in the dashboard don't show here.
+  const opened = windows.filter((w) => w.acted_at > 0);
+  if (!opened.length) {
+    grid.innerHTML = `<div class="empty-state">no tabs opened yet — click a card in grid view to start tracking activity</div>`;
+    updateToggleAll([]);
+    return;
+  }
+  const visible = opened.filter(passesFilter);
+  if (!visible.length) {
+    grid.innerHTML = `<div class="empty-state">no opened tabs match the current filter</div>`;
+    updateToggleAll([]);
+    return;
+  }
+
+  visible.sort((a, b) => {
+    const da = (STREAM_STATE_PRIORITY[a.state] ?? 99) - (STREAM_STATE_PRIORITY[b.state] ?? 99);
+    if (da !== 0) return da;
+    return (b.acted_at || 0) - (a.acted_at || 0);
+  });
+
+  const attention = visible.filter(
+    (w) => w.state === "needs-input" || w.state === "working"
+  ).length;
+  const banner = `<div class="stream-banner">Now · ${attention} ${attention === 1 ? "needs" : "need"} attention</div>`;
+  grid.innerHTML = banner + `<div class="stream">${visible.map(renderStreamRow).join("")}</div>`;
+  updateToggleAll([]);  // toggle-all is grid-only; hide while in stream
+}
+
+function renderGrid(windows) {
   const filtered = windows.filter(passesFilter);
   const bySession = new Map();
   for (const w of filtered) {
@@ -225,18 +353,29 @@ export function render(windows) {
     .join("");
 
   updateToggleAll(sessionOrder);
+}
 
-  // Counts in header. Lead with needs-input — that's the only count that
-  // means "drop what you're doing and look here", so it earns top billing
-  // and only renders when nonzero.
+export function render(windows) {
+  // Dispatch on the view attribute the user toggled via the view-switch.
+  // Defaults to grid when unset (first paint, or no localStorage entry).
+  const view = document.body.dataset.view === "stream" ? "stream" : "grid";
+  if (view === "stream") renderStream(windows);
+  else renderGrid(windows);
+
+  // Counts in header — same in both views. Lead with needs-input — that's
+  // the only count that means "drop what you're doing"; renders only when
+  // nonzero. Each count is its own classed span so CSS colors them by
+  // status.
   const total = windows.length;
   const needsInput = windows.filter((w) => w.state === "needs-input").length;
   const working = windows.filter((w) => w.state === "working").length;
   const waiting = windows.filter((w) => w.state === "waiting").length;
-  const parts = [`${total} windows`];
-  if (needsInput) parts.push(`${needsInput} needs input`);
-  parts.push(`${working} working`, `${waiting} waiting`);
-  counts.textContent = parts.join(" · ");
+  const sep = `<span class="count-sep">·</span>`;
+  const segments = [`<span><b>${total}</b> windows</span>`];
+  if (needsInput) segments.push(`<span class="count-needs">${needsInput} needs input</span>`);
+  segments.push(`<span class="count-working">${working} working</span>`);
+  segments.push(`<span class="count-waiting">${waiting} waiting</span>`);
+  counts.innerHTML = segments.join(` ${sep} `);
 }
 
 function startRename(nameEl, target, currentName) {
@@ -404,12 +543,20 @@ function wireGrid() {
       header.closest(".session-group").classList.toggle("collapsed");
       return;
     }
+    // Stream-row click: open modal. Stream rows don't carry a renameable
+    // title surface, so no dblclick-defer needed — checked before .card so
+    // the next branch's renameable-title logic doesn't apply.
+    const streamRow = e.target.closest(".stream-row");
+    if (streamRow) {
+      openModal(streamRow.dataset.target);
+      return;
+    }
     // Card click: open modal, but defer if the click is on the name (so a
     // dblclick can win and start a rename instead).
     const card = e.target.closest(".card");
     if (!card) return;
     const target = card.dataset.target;
-    const onName = !!e.target.closest(".card-name");
+    const onName = !!e.target.closest(".card-title");
     if (!onName) {
       openModal(target);
       return;
@@ -423,7 +570,7 @@ function wireGrid() {
   });
 
   grid.addEventListener("dblclick", (e) => {
-    const nameEl = e.target.closest(".card-name");
+    const nameEl = e.target.closest(".card-title");
     if (!nameEl) return;
     const card = nameEl.closest(".card");
     const target = card.dataset.target;
@@ -519,10 +666,10 @@ function fmtResetCountdown(epochSec) {
 function meterBar(label, pct, resets) {
   const tone = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "ok";
   return `
-    <div class="usage-meter" title="${escapeHtml(label)} — ${pct}% used. Resets ${escapeHtml(resets || "")}">
-      <span class="usage-meter-label">${escapeHtml(label)}</span>
-      <span class="usage-meter-bar"><span class="usage-meter-fill ${tone}" style="width:${pct}%"></span></span>
-      <span class="usage-meter-pct">${pct}%</span>
+    <div class="usage-item" title="${escapeHtml(label)} — ${pct}% used. Resets ${escapeHtml(resets || "")}">
+      <span class="usage-item-label">${escapeHtml(label)}</span>
+      <span class="usage-item-bar"><span class="usage-item-fill ${tone}" style="width:${pct}%"></span></span>
+      <b>${pct}%</b>
     </div>
   `;
 }
@@ -536,7 +683,7 @@ function updateUsagePill(scraped, fallback) {
     const m = scraped.meters;
     const order = ["session", "week_all", "week_sonnet"];
     const compactLabels = { session: "session", week_all: "week", week_sonnet: "sonnet" };
-    usageEl.classList.add("usage-bars");
+    usageEl.classList.remove("usage-fallback");
     usageEl.innerHTML = order
       .filter((k) => m[k])
       .map((k) => meterBar(compactLabels[k], m[k].percent, m[k].resets))
@@ -547,13 +694,14 @@ function updateUsagePill(scraped, fallback) {
       .join("\n\n");
     return;
   }
-  usageEl.classList.remove("usage-bars");
   if (!fallback || !fallback.available) {
+    usageEl.classList.remove("usage-fallback");
     usageEl.textContent = "";
     usageEl.title = "";
     return;
   }
   const active = (fallback.input_tokens || 0) + (fallback.cache_creation_tokens || 0) + (fallback.output_tokens || 0);
+  usageEl.classList.add("usage-fallback");
   usageEl.textContent = `5h: ${fmtTokens(active)} · ${fmtResetCountdown(fallback.reset_at)}`;
   usageEl.title = `Claude Code plan usage estimate (JSONL-derived; scrape not yet ready)\n` +
     `  ${fallback.messages} assistant messages\n` +

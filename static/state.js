@@ -6,6 +6,9 @@
 
 const ORDER_KEY = "periscope:sessionOrder";
 const COLLAPSED_KEY = "periscope:collapsedSessions";
+const VIEW_KEY = "periscope:view";
+
+const VALID_VIEWS = new Set(["grid", "stream"]);
 
 // One-time migration from the pre-rename keys. Reads the old value if present
 // and the new key is empty, then deletes the old key. Safe to leave in place;
@@ -33,6 +36,14 @@ export function loadCollapsed() {
 }
 export function saveCollapsed(set) {
   localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set]));
+}
+
+export function loadView() {
+  const v = localStorage.getItem(VIEW_KEY);
+  return VALID_VIEWS.has(v) ? v : "grid";
+}
+export function saveView(v) {
+  if (VALID_VIEWS.has(v)) localStorage.setItem(VIEW_KEY, v);
 }
 
 export const state = {
