@@ -22,15 +22,23 @@ LIVE_MTIME_S = 60
 def _build_fts_query(query: str) -> str:
     """Convert a user query into an FTS5 MATCH expression.
 
-    FTS5's default tokenizer handles bare words fine. We escape double quotes
-    to avoid syntax errors, and split on whitespace into terms ANDed together.
+    Each whitespace-separated token becomes a `prefix*` term so partial typing
+    matches the full token — "meet" finds "meetingstech", "lookup" finds
+    "lookup-api" (porter unicode61 splits on the hyphen). All FTS5 special
+    chars (`"`, `:`, `(`, `)`, `-`, etc.) are scrubbed to spaces before
+    tokenizing — they'd otherwise either break syntax or be parsed as NEAR /
+    NOT / column operators.
     """
-    cleaned = query.replace('"', '""').strip()
+    # Replace anything that isn't a word char or whitespace with a space.
+    # Hyphens get split too — "lookup-api" → "lookup api" → ("lookup*" AND "api*").
+    cleaned = re.sub(r"[^\w\s]", " ", query, flags=re.UNICODE).strip()
     if not cleaned:
         return ""
-    # Wrap each whitespace-separated term as a quoted phrase so apostrophes/etc.
-    # don't blow up FTS5's tokenizer. AND-join.
-    terms = [f'"{t}"' for t in re.split(r"\s+", cleaned) if t]
+    # Lowercase tokens to defang FTS5's keyword parser — uppercase AND / OR /
+    # NOT / NEAR are operators; lowercased equivalents are content. FTS5's
+    # default unicode61 tokenizer lowercases the index too, so this is
+    # equivalence-preserving for actual matches.
+    terms = [f"{t.lower()}*" for t in re.split(r"\s+", cleaned) if t]
     return " AND ".join(terms) if terms else ""
 
 
