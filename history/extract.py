@@ -1,6 +1,7 @@
 """Aggregate parsed JSONL events into a SessionRecord ready for DB upsert."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections import Counter
@@ -189,3 +190,37 @@ def extract_record(jsonl_path: str, events: list[Event], *,
         source_mtime=source_mtime,
         source_size=source_size,
     )
+
+
+# Triviality thresholds.
+TRIVIAL_USER_MSG_THRESHOLD = 2
+TRIVIAL_DURATION_S = 60
+
+
+def compute_summary_input_hash(rec: SessionRecord) -> str:
+    """SHA256 over a canonical representation of the fields that drive the
+    Haiku summary. If any of these change, the summary should be re-derived;
+    if none change, we can reuse a stored summary."""
+    notable_cmds_first_20 = json.loads(rec.notable_cmds)[:20]
+    canonical = json.dumps([
+        rec.first_user_msg or "",
+        rec.user_messages_blob,
+        rec.final_assistant_msg or "",
+        rec.files_touched,
+        rec.branch or "",
+        notable_cmds_first_20,
+    ], sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def is_trivial(rec: SessionRecord) -> bool:
+    """Trivial sessions skip the Haiku call and get a heuristic summary."""
+    return (rec.user_msg_count < TRIVIAL_USER_MSG_THRESHOLD or
+            rec.duration_s < TRIVIAL_DURATION_S)
+
+
+def heuristic_summary(rec: SessionRecord) -> str:
+    """Concrete placeholder for trivial sessions; surfaces in search results."""
+    head = (rec.first_user_msg or "(no user message)")[:120]
+    return (f"Short session ({rec.user_msg_count} messages, "
+            f"{rec.duration_s}s) — first user message: {head}")

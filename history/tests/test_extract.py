@@ -96,3 +96,51 @@ def test_short_session(fixture_dir):
     assert rec.user_msg_count == 1   # only one real user message; the tool_result is excluded
     assert rec.asst_msg_count == 2
     assert rec.tool_use_count == 1
+
+
+from history.extract import compute_summary_input_hash, is_trivial, heuristic_summary
+
+
+def test_summary_input_hash_stable_for_same_inputs(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "normal_session.jsonl")
+    h1 = compute_summary_input_hash(rec)
+    h2 = compute_summary_input_hash(rec)
+    assert h1 == h2
+    assert isinstance(h1, str) and len(h1) == 64  # sha256 hex
+
+
+def test_summary_input_hash_changes_with_user_msgs(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "normal_session.jsonl")
+    h1 = compute_summary_input_hash(rec)
+    rec.user_messages_blob = rec.user_messages_blob + "\nextra user message"
+    h2 = compute_summary_input_hash(rec)
+    assert h1 != h2
+
+
+def test_summary_input_hash_ignores_counts(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "normal_session.jsonl")
+    h1 = compute_summary_input_hash(rec)
+    rec.tool_use_count = rec.tool_use_count + 99
+    rec.duration_s = rec.duration_s + 9999
+    h2 = compute_summary_input_hash(rec)
+    assert h1 == h2  # only summary-input-relevant fields contribute
+
+
+def test_trivial_session_short_duration(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "short_session.jsonl")
+    # short_session.jsonl: 1 user msg, ~9s duration → trivial
+    assert is_trivial(rec) is True
+
+
+def test_trivial_session_low_msg_count(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "normal_session.jsonl")
+    # normal_session: 3 user msgs, 3.5 min duration → not trivial
+    assert is_trivial(rec) is False
+
+
+def test_heuristic_summary_mentions_msg_count(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "short_session.jsonl")
+    text = heuristic_summary(rec)
+    assert "1 messages" in text or "1 message" in text
+    # Should include first user message snippet
+    assert "hi, run ls" in text
