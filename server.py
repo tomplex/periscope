@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1484,12 +1484,17 @@ def session_delete(session: str):
 
 
 @app.post("/api/window/new")
-def window_new(session: str, mode: str = "shell", resume_id: str | None = None):
-    """Spawn a window in `session`. `mode=claude` types `claude\\n`,
-    `mode=vim` types `vim\\n`, `mode=resume` runs `claude --resume <resume_id>`
-    in the original session's project dir, `mode=shell` leaves it at a bare
-    prompt. cwd is inherited from the session's active pane — without `-c`,
+def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str = "shell", resume_id: str | None = None):
+    """Spawn a window in `session`. `exec` param sends a command to the new window;
+    legacy `mode` maps to `exec` for backwards-compat. `mode=resume` runs
+    `claude --resume <resume_id>` in the original session's project dir.
+    cwd is inherited from the session's active pane — without `-c`,
     tmux would use the periscope server's cwd, which is never what you want."""
+    # Legacy `mode` → exec_cmd mapping for callers still on the old contract.
+    # Skips the resume case which has its own dedicated path below.
+    if not exec_cmd and mode in ("claude", "vim", "shell"):
+        exec_cmd = {"claude": "claude", "vim": "vim", "shell": ""}.get(mode, "")
+    
     # mode=resume looks up the original project_path and runs claude --resume
     # there; we resolve cwd up front so the rest of the spawn path is shared.
     resume_sess = None
@@ -1556,21 +1561,19 @@ def window_new(session: str, mode: str = "shell", resume_id: str | None = None):
     except ValueError:
         return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
     target = f"{session}:{index}"
-    if mode == "claude":
-        # Let the shell finish its rc before the `claude` line arrives, so the
-        # command runs as a real prompt entry rather than mid-rc echoed text.
+    
+    # Execute the command if provided via exec or legacy mode mapping.
+    cmd = exec_cmd.strip()
+    if cmd:
+        # Let the shell finish its rc before the command line arrives, so
+        # the command runs as a real prompt entry rather than mid-rc
+        # echoed text. (See CLAUDE.md "Key invariants" note 5.)
         time.sleep(0.1)
-        tmux("send-keys", "-t", target, "claude", "Enter")
-    elif mode == "vim":
-        time.sleep(0.1)
-        tmux("send-keys", "-t", target, "vim", "Enter")
-    elif mode == "resume":
-        time.sleep(0.1)
-        tmux("send-keys", "-t", target, f"claude --resume {resume_id}", "Enter")
-        _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
+        tmux("send-keys", "-t", target, cmd, "Enter")
+    
     note_focus(target)
     note_action(target)
-    result = {"ok": True, "session": session, "index": index, "target": target, "mode": mode}
+    result = {"ok": True, "session": session, "index": index, "target": target, "mode": mode, "exec": cmd}
     if mode == "resume":
         result["resumed_session_id"] = resume_id
     return result

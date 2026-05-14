@@ -57,6 +57,10 @@ export function getView() {
   return cache.ui.view === "stream" ? "stream" : "grid";
 }
 
+export function getCommands() {
+  return cache.commands || [];
+}
+
 async function patchUI(patch) {
   if (!cache.loaded) {
     // Try to load first; refuse the write if that still fails so we don't

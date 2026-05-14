@@ -128,20 +128,28 @@ function renderCard(w) {
 }
 
 function renderNewTile(session) {
-  // Three-way split: claude is the primary action (largest hit area) since
-  // it's the most-used; shell and vim share the other half stacked. All
-  // three POST to /api/window/new — the server picks the boot command from
-  // `mode`. (When worktree integration lands, `+ claude` will route to the
-  // separate /api/window/new-worktree endpoint instead; the other two stay
-  // here. data-mode is the contract handleNewWindow keys off.)
+  // Read commands from prefs. First entry is the primary (top, larger hit
+  // area); the rest stack below. Falls back to an empty tile if prefs hasn't
+  // loaded yet — render() runs again on every poll, so the buttons appear
+  // within the polling interval after bootstrap.
   const s = escapeHtml(session);
+  const commands = prefs.getCommands();
+  if (!commands.length) {
+    return `<div class="card card-new" data-session="${s}"></div>`;
+  }
+  const [primary, ...rest] = commands;
+  const btn = (cmd, cls) => {
+    const label = escapeHtml(cmd.label);
+    const execAttr = escapeHtml(cmd.exec || "");
+    return `<button class="new-window${cls}" data-session="${s}" data-exec="${execAttr}">+ ${label}</button>`;
+  };
+  const stack = rest.length
+    ? `<div class="new-window-stack">${rest.map((c) => btn(c, "")).join("")}</div>`
+    : "";
   return `
     <div class="card card-new" data-session="${s}">
-      <button class="new-window is-primary" data-session="${s}" data-mode="claude">+ claude</button>
-      <div class="new-window-stack">
-        <button class="new-window" data-session="${s}" data-mode="shell">+ shell</button>
-        <button class="new-window" data-session="${s}" data-mode="vim">+ vim</button>
-      </div>
+      ${btn(primary, " is-primary")}
+      ${stack}
     </div>
   `;
 }
@@ -479,15 +487,15 @@ async function handleKillWindow(btn) {
 
 async function handleNewWindow(btn) {
   const session = btn.dataset.session;
-  const mode = btn.dataset.mode;
+  const exec = btn.dataset.exec || "";
   const tile = btn.closest(".card-new");
-  // Disable both buttons in the tile while the request is in flight so a
+  // Disable all buttons in the tile while the request is in flight so a
   // double-click can't spawn two windows.
   tile.querySelectorAll("button").forEach((b) => (b.disabled = true));
   try {
     await apiCall(
       "new window",
-      `/api/window/new?session=${encodeURIComponent(session)}&mode=${encodeURIComponent(mode)}`,
+      `/api/window/new?session=${encodeURIComponent(session)}&exec=${encodeURIComponent(exec)}`,
       { method: "POST" }
     );
   } finally {
