@@ -91,6 +91,66 @@ export function setView(view) {
   return patchUI({ view });
 }
 
+// ── Window annotations ──────────────────────────────────────────────────
+
+export function getAnnotation(pid) {
+  if (!pid) return null;
+  const entry = cache.windows[pid];
+  if (!entry) return null;
+  const notes = entry.notes || "";
+  const tags = entry.tags || [];
+  if (!notes && !tags.length) return null;
+  return { notes, tags };
+}
+
+export function hasAnnotation(pid) {
+  return getAnnotation(pid) !== null;
+}
+
+export async function setAnnotation(pid, { notes, tags }) {
+  if (!cache.loaded) {
+    await loadPrefs();
+    if (!cache.loaded) return false;
+  }
+  const previous = cache.windows[pid];
+  const entry = cache.windows[pid] || {};
+  cache.windows[pid] = {
+    ...entry,
+    notes: notes ?? entry.notes,
+    tags: tags ?? entry.tags,
+  };
+  const data = await apiCall("save annotation", `/api/prefs/windows/${encodeURIComponent(pid)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes, tags }),
+  });
+  if (!data) {
+    if (previous === undefined) delete cache.windows[pid];
+    else cache.windows[pid] = previous;
+    return false;
+  }
+  // Server returns the cleaned annotation (deduped tags, trimmed); use it.
+  cache.windows[pid] = { ...(cache.windows[pid] || {}), ...data.annotation };
+  return true;
+}
+
+export async function deleteAnnotation(pid) {
+  if (!cache.loaded) return false;
+  const previous = cache.windows[pid];
+  if (cache.windows[pid]) {
+    delete cache.windows[pid].notes;
+    delete cache.windows[pid].tags;
+  }
+  const data = await apiCall("clear annotation", `/api/prefs/windows/${encodeURIComponent(pid)}`, {
+    method: "DELETE",
+  });
+  if (!data) {
+    cache.windows[pid] = previous;
+    return false;
+  }
+  return true;
+}
+
 // ── One-time localStorage → server migration ─────────────────────────────
 
 async function migrateLocalStorage() {
