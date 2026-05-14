@@ -611,6 +611,32 @@ body[data-view="stream"] .stream-banner {
   text-decoration: none;
 }
 .card-pr:hover { text-decoration: underline; }
+
+/* Linked PR — explicitly declared by Claude via the link_pr MCP tool.
+   Subtly distinguished from auto-detected with a left-side underscore so
+   you can tell at a glance whether it was inferred or asserted. */
+.card-pr-linked::before {
+  content: "🔗 ";
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+/* Linear chip — always Claude-declared (no auto-detection). Renders in the
+   card-meta row in a slightly distinct color from PR links so the two
+   resource types don't visually conflate. */
+.card-linear {
+  color: var(--s-working);
+  text-decoration: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in oklch, var(--s-working) 10%, transparent);
+}
+.card-linear:hover {
+  text-decoration: underline;
+  background: color-mix(in oklch, var(--s-working) 18%, transparent);
+}
 .card-ci-ok      { color: var(--s-success); }
 .card-ci-bad     { color: var(--s-danger); }
 .card-ci-pending { color: var(--s-working); }

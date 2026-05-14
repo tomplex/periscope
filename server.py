@@ -255,6 +255,68 @@ def _do_reply_tool(pane: str, arguments: dict):
     return [types.TextContent(type="text", text=json.dumps(body))]
 
 
+def _resolve_pid_for_pane(pane_id: str) -> str:
+    """Find the persistent @periscope_id (pid) for a tmux %N pane id.
+    Mints a fresh pid if the window hasn't been seen before. Returns ""
+    if the pane has vanished from tmux's list-windows."""
+    windows = list_windows()
+    for w in windows:
+        if w.get("pane_id") == pane_id:
+            _attach_git_then_resolve_pids([w])
+            return w.get("pid") or ""
+    return ""
+
+
+def _do_link_pr_tool(pane: str, arguments: dict):
+    """Persist a linked PR number on the window's state.json entry.
+    Overrides the auto-detected `pr` field when present."""
+    from mcp import types
+
+    try:
+        number = int(arguments["number"])
+    except (KeyError, TypeError, ValueError):
+        body = {"ok": False, "error": "number must be an integer"}
+        return [types.TextContent(type="text", text=json.dumps(body))]
+
+    pid = _resolve_pid_for_pane(pane)
+    if not pid:
+        body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
+        return [types.TextContent(type="text", text=json.dumps(body))]
+
+    with _STATE_LOCK:
+        wblock = _STATE.setdefault("windows", {})
+        entry = wblock.setdefault(pid, {})
+        entry["linked_pr"] = number
+        _write_state(_STATE)
+
+    body = {"ok": True, "linked_pr": number, "pid": pid}
+    return [types.TextContent(type="text", text=json.dumps(body))]
+
+
+def _do_link_linear_tool(pane: str, arguments: dict):
+    """Persist a linked Linear ticket id on the window's state.json entry."""
+    from mcp import types
+
+    ticket_id = str(arguments.get("id", "")).strip()
+    if not ticket_id:
+        body = {"ok": False, "error": "id is required and must be non-empty"}
+        return [types.TextContent(type="text", text=json.dumps(body))]
+
+    pid = _resolve_pid_for_pane(pane)
+    if not pid:
+        body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
+        return [types.TextContent(type="text", text=json.dumps(body))]
+
+    with _STATE_LOCK:
+        wblock = _STATE.setdefault("windows", {})
+        entry = wblock.setdefault(pid, {})
+        entry["linked_linear"] = ticket_id
+        _write_state(_STATE)
+
+    body = {"ok": True, "linked_linear": ticket_id, "pid": pid}
+    return [types.TextContent(type="text", text=json.dumps(body))]
+
+
 async def emit_channel_event(pane: str, content: str, meta: dict | None = None) -> bool:
     """Push a `notifications/claude/channel` event to the Claude connected
     on `pane`. Returns True on send, False if no session attached.
@@ -399,12 +461,52 @@ async def _run_mcp_for_pane(
                     "required": ["message"],
                 },
             ),
+            types.Tool(
+                name="link_pr",
+                description=(
+                    "Link this pane to a GitHub PR by number. Use when the user "
+                    "is working on a specific PR and periscope's auto-detection "
+                    "hasn't surfaced it on the pane card (periscope reads PR "
+                    "URLs from Claude's title-bar status line; if the card "
+                    "shows no #PR badge but you know there is one, link it). "
+                    "Overrides the auto-detected PR until the user removes the "
+                    "link."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "number": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["number"],
+                },
+            ),
+            types.Tool(
+                name="link_linear",
+                description=(
+                    "Link this pane to a Linear ticket by id. Use when the "
+                    "user is working on a Linear ticket. Periscope doesn't "
+                    "auto-detect Linear tickets, so this is the only way to "
+                    "surface one on the pane card. id format: TEAM-123 "
+                    "(e.g. FAR-456)."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "pattern": r"^[A-Z]+-\d+$"},
+                    },
+                    "required": ["id"],
+                },
+            ),
         ]
 
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         if name == "reply":
             return _do_reply_tool(pane, arguments)
+        if name == "link_pr":
+            return _do_link_pr_tool(pane, arguments)
+        if name == "link_linear":
+            return _do_link_linear_tool(pane, arguments)
         raise ValueError(f"unknown tool: {name}")
 
     # Bridge: asyncio socket → anyio object stream of SessionMessage.
@@ -1646,6 +1748,21 @@ def state():
             channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
             channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
 
+        # Persisted Claude-driven links (via the link_pr / link_linear MCP
+        # tools). `linked_pr` overrides the auto-detected `pr` field — when
+        # Claude has explicitly told us "this pane is for PR #N", we trust
+        # that over heuristic title-bar parsing.
+        linked_pr = persisted.get("linked_pr")
+        linked_linear = persisted.get("linked_linear")
+        if linked_pr:
+            pr = dict(pr)
+            pr["pr"] = str(linked_pr)
+            pr["pr_linked"] = True
+            # `ci` (CI glyph) is keyed to the auto-detected PR; an explicit
+            # linked PR may not have a fresh CI signal until a future poll
+            # resolves it. Drop the stale glyph rather than mislead.
+            pr.pop("ci", None)
+
         result.append(
             {
                 **w, **parsed, **git, **pr,
@@ -1659,6 +1776,7 @@ def state():
                 "channel_attached": channel_attached,
                 "channel_unread": channel_unread,
                 "channel_replies": channel_replies,
+                "linked_linear": linked_linear,
             }
         )
     _channel_gc({w["pane_id"] for w in windows if w.get("pane_id")})
@@ -1897,6 +2015,15 @@ def pane(session: str, index: int, lines: int = 200):
         channel_attached = pane_id in _MCP_SESSIONS if pane_id else False
         channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
         channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
+    # Persisted links — same override semantics as /api/state.
+    persisted = _STATE.get("windows", {}).get(pid or "", {})
+    linked_pr = persisted.get("linked_pr")
+    linked_linear = persisted.get("linked_linear")
+    if linked_pr:
+        pr = dict(pr)
+        pr["pr"] = str(linked_pr)
+        pr["pr_linked"] = True
+        pr.pop("ci", None)
     return {
         "content": content,
         "target": target,
@@ -1909,6 +2036,7 @@ def pane(session: str, index: int, lines: int = 200):
         "channel_attached": channel_attached,
         "channel_unread": channel_unread,
         "channel_replies": channel_replies,
+        "linked_linear": linked_linear,
         **parsed,
         **git,
         **pr,

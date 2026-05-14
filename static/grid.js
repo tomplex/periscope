@@ -79,7 +79,11 @@ function renderCard(w) {
   }
   if (w.pr) {
     if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
-    const prLink = `<a class="card-pr" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${w.pr}</a>`;
+    // pr_linked: Claude explicitly linked this PR via the link_pr MCP tool
+    // (overrides periscope's auto-detection from the title bar).
+    const linkedTitle = w.pr_linked ? " (linked by claude)" : "";
+    const linkedClass = w.pr_linked ? " card-pr-linked" : "";
+    const prLink = `<a class="card-pr${linkedClass}" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="PR #${w.pr}${linkedTitle}">#${w.pr}</a>`;
     if (w.ci === "✗") {
       // Bundle #PR + ✗ into a single red badge so the failure mode is
       // immediately legible without claiming the card's state accent.
@@ -88,6 +92,16 @@ function renderCard(w) {
       metaParts.push(prLink);
       if (w.ci) metaParts.push(ciSpan(w.ci));
     }
+  }
+  if (w.linked_linear) {
+    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
+    // Linear linking is always explicit — periscope doesn't auto-detect, so
+    // every linked_linear chip is something Claude (or a future UI affordance)
+    // declared. URL points at app.linear.app/issue/<id> which redirects to
+    // the workspace's canonical URL.
+    metaParts.push(
+      `<a class="card-linear" href="https://linear.app/issue/${escapeHtml(w.linked_linear)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ticket ${escapeHtml(w.linked_linear)} (linked by claude)">${escapeHtml(w.linked_linear)}</a>`
+    );
   }
   const metaRow = metaParts.length
     ? `<div class="card-meta">${metaParts.join(" ")}</div>`
