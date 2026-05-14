@@ -226,6 +226,45 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
 ]
 
 
+# ── Ghost-text filter cases ─────────────────────────────────────────────
+# Each row: (tag, content_with_ansi, expected_pending_input).
+# These fixtures embed SGR escapes (`\x1b[38;5;Nm`) — what tmux capture-pane
+# -e emits. parse_pane keeps `pending_input` only when the prompt line shows
+# ≥2 distinct fg colors (prefix in one color, typed text in another). Ghost
+# text from Claude Code shares the prefix color and must be filtered out.
+
+GHOST_CASES: list[tuple[str, str, str | None]] = [
+    # Ghost text only — single fg color across the prompt line. The
+    # visible text is Claude Code's suggestion, not user input.
+    ("ghost-leave-it",
+     f"\x1b[38;5;239m❯ leave it\x1b[39m\n{STATUS_LINE}\n",
+     None),
+
+    # Real input — prefix is dim grey, typed text switches to bright fg.
+    ("real-input",
+     f"\x1b[38;5;239m❯ \x1b[38;5;231mhello world\x1b[39m\n{STATUS_LINE}\n",
+     "hello world"),
+
+    # Empty prompt — no text after `❯ `, no pending input regardless of color.
+    ("empty-prompt",
+     f"\x1b[38;5;239m❯ \x1b[39m\n{STATUS_LINE}\n",
+     None),
+
+    # Backward-compat: a fixture with no SGR escapes at all (existing tests
+    # don't include them). Trust the visible text — can't distinguish ghost
+    # from real without color info.
+    ("no-ansi-trust-visible",
+     f"❯ some text the user typed\n{STATUS_LINE}\n",
+     "some text the user typed"),
+
+    # Realistic shape from periscope:4 capture: bg color escape mixed in
+    # with fg escapes. Only fg codes count toward the distinct-color check.
+    ("real-with-bg-color",
+     f"\x1b[38;5;239m\x1b[48;5;237m❯ \x1b[38;5;231mreal user input\x1b[39m\n{STATUS_LINE}\n",
+     "real user input"),
+]
+
+
 # ── Runner ──────────────────────────────────────────────────────────────
 
 def run_regex_cases() -> int:
@@ -252,20 +291,34 @@ def run_parse_cases() -> int:
         ok_state = result["state"] == want_state
         ok_spinner = result["spinner"] == want_spinner
         if ok_state and ok_spinner:
-            print(f"  OK   [{tag:>13}] state={result['state']!r:11} spinner={result['spinner']!r}")
+            print(f"  OK   [{tag:>27}] state={result['state']!r:11} spinner={result['spinner']!r}")
         else:
             failures += 1
             print(
-                f"  FAIL [{tag:>13}] "
+                f"  FAIL [{tag:>27}] "
                 f"state={result['state']!r} (want {want_state!r})  "
                 f"spinner={result['spinner']!r} (want {want_spinner!r})"
             )
     return failures
 
 
+def run_ghost_cases() -> int:
+    print("\n── ghost-text filter ──────────────────────────────────────")
+    failures = 0
+    for tag, content, want_pending in GHOST_CASES:
+        result = server.parse_pane(content)
+        got = result.get("pending_input")
+        if got == want_pending:
+            print(f"  OK   [{tag:>22}] pending_input={got!r}")
+        else:
+            failures += 1
+            print(f"  FAIL [{tag:>22}] pending_input={got!r} (want {want_pending!r})")
+    return failures
+
+
 def main() -> int:
-    fails = run_regex_cases() + run_parse_cases()
-    total = len(REGEX_CASES) + len(PARSE_CASES)
+    fails = run_regex_cases() + run_parse_cases() + run_ghost_cases()
+    total = len(REGEX_CASES) + len(PARSE_CASES) + len(GHOST_CASES)
     print()
     if fails:
         print(f"=== {fails}/{total} FAIL ===")

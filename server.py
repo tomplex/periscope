@@ -1037,8 +1037,18 @@ def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
             w["branch"] = git["branch"]
     resolve_pids(windows)
 
+# SGR (Select Graphic Rendition) escape codes from capture-pane -e. Stripped
+# for the bulk of parse_pane, but the prompt-line detection inspects the raw
+# colored line to distinguish real user input from Claude's ghost-text
+# suggestion — the two differ only in fg color.
+_ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
+_FG_COLOR_RE = re.compile(r"\x1b\[38(?:;\d+)+m")
+
+
 def capture(target: str, lines: int = 100) -> str:
-    return tmux("capture-pane", "-t", target, "-p", "-S", f"-{lines}")
+    # -e preserves SGR escapes; parse_pane strips them for content parsing
+    # but uses the raw prompt-line color info to filter ghost-text input.
+    return tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
 
 
 def deliver_input(target: str, text: str) -> None:
@@ -1061,8 +1071,13 @@ def deliver_input(target: str, text: str) -> None:
 
 
 def parse_pane(content: str) -> dict:
-    raw_lines = content.rstrip("\n").split("\n")
-    lines = [ln for ln in raw_lines if ln.strip() != ""]
+    # `content` from capture() includes SGR escape sequences (-e). Strip them
+    # for the bulk of parsing; keep the raw rows for the prompt-line check
+    # below, which needs the color info to distinguish real input from
+    # Claude's ghost-text suggestion.
+    raw_rows = content.rstrip("\n").split("\n")
+    plain_rows = [_ANSI_SGR_RE.sub("", row) for row in raw_rows]
+    lines = [p for p in plain_rows if p.strip() != ""]
 
     status = None
     # Claude Code's bottom status line ("X% | ↑n ↓n | $cost | model") signals
@@ -1120,13 +1135,33 @@ def parse_pane(content: str) -> dict:
     # Pending input: ❯ followed by some text the user has typed but not
     # submitted. Skip when needs_input is true — `❯ 1.` is the dialog's
     # selection line, not user typing.
+    #
+    # Ghost-text filter: Claude Code shows a greyed-out suggestion in the
+    # input slot when nothing's been typed. The suggestion looks like real
+    # input in plain text, but in the colored row it shares the prompt
+    # prefix's fg color (single distinct fg code on the line). Real typed
+    # input switches to a different fg color (≥2 distinct fg codes). When
+    # the row carries no SGR escapes at all (e.g. test fixtures), we have
+    # no color info and trust the visible text.
     pending_input = None
     if not needs_input:
-        for line in reversed(lines[-15:]):
-            m = PROMPT_LINE_RE.match(line.strip())
-            if m and m.group("input").strip():
-                pending_input = m.group("input").strip()
+        for raw, plain in zip(reversed(raw_rows), reversed(plain_rows)):
+            if not plain.strip():
+                continue
+            m = PROMPT_LINE_RE.match(plain.strip())
+            if not m:
+                continue
+            input_text = m.group("input").strip()
+            if not input_text:
                 break
+            if "\x1b[" in raw:
+                fg_codes = set(_FG_COLOR_RE.findall(raw))
+                if len(fg_codes) >= 2:
+                    pending_input = input_text
+                # else: ghost text — leave pending_input as None
+            else:
+                pending_input = input_text
+            break
 
     # Most recent recap block
     full = "\n".join(lines)
@@ -1396,12 +1431,11 @@ def pane(session: str, index: int, lines: int = 200):
     passed as query params so slash-bearing session names (e.g. 'tc/foo/bar')
     don't conflict with path routing."""
     target = f"{session}:{index}"
-    # -e preserves ANSI escape sequences for the modal viewer.
+    # -e preserves ANSI escape sequences for the modal viewer. parse_pane
+    # handles the colored content itself — it strips for content parsing
+    # but uses the raw prompt-line color info to filter ghost-text input.
     content = tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
-    # Parse the same buffer (after stripping ANSI) so the modal can render a
-    # live status header alongside the pane content from one request.
-    plain = re.sub(r"\x1b\[[\d;]*m", "", content)
-    parsed = parse_pane(plain)
+    parsed = parse_pane(content)
     parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
     parsed["is_claude"] = smooth_is_claude(target, parsed.get("is_claude", False))
     if not parsed["is_claude"]:
