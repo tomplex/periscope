@@ -1,12 +1,8 @@
-// Entry point. Filter buttons + new-session button + bootstrap. Everything
-// else lives in its subsystem module:
-//   state.js     — shared mutable state + localStorage persistence
-//   util.js      — escapeHtml, targetQuery, relTime, apiCall
-//   terminal.js  — xterm.js + WebSocket lifecycle (with auto-reconnect)
-//   modal.js     — modal open/close/header/rename/paste
-//   grid.js      — grid rendering, polling, drag-reorder, card handlers
+// Entry point. Loads prefs first so render() sees collapsed/order, then wires
+// the filter + new-session + view switch handlers and starts the grid loop.
 
-import { state, loadView, saveView } from './state.js';
+import { state } from './state.js';
+import * as prefs from './prefs.js';
 import { apiCall } from './util.js';
 import { initModal } from './modal.js';
 import { initGrid, poll, render } from './grid.js';
@@ -34,7 +30,7 @@ document.getElementById("new-session").addEventListener("click", async () => {
   poll();
 });
 
-// View switch (grid ↔ stream). Persisted via state.js. Applied via
+// View switch (grid ↔ stream). Persisted via prefs.js. Applied via
 // body.dataset.view; the renderer dispatches on the attribute, and CSS keys
 // off it to hide grid-only chrome (collapse-all toggle) in stream view.
 const viewSwitch = document.getElementById("view-switch");
@@ -47,16 +43,25 @@ function applyView(view) {
     b.setAttribute("aria-selected", active ? "true" : "false");
   });
 }
-applyView(loadView());
+
+async function bootstrap() {
+  await prefs.loadPrefs();
+  // Seed the in-memory collapsed set from server state. Subsequent toggles
+  // mutate `state.collapsedSessions` directly and call prefs.setCollapsed.
+  state.collapsedSessions = prefs.getCollapsed();
+  applyView(prefs.getView());
+  initModal();
+  initGrid();
+}
+
 viewSwitch.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-view]");
   if (!btn) return;
   const v = btn.dataset.view;
   if (document.body.dataset.view === v) return;  // no-op click on active
   applyView(v);
-  saveView(v);
+  prefs.setView(v);
   render(state.lastWindows);  // re-render against cached data, no refetch
 });
 
-initModal();
-initGrid();
+bootstrap();

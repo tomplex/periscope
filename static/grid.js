@@ -4,7 +4,8 @@
 // target/session from data-attributes — so a render() innerHTML rebuild
 // doesn't invalidate any listeners.
 
-import { state, loadOrder, saveOrder, saveCollapsed } from './state.js';
+import { state } from './state.js';
+import * as prefs from './prefs.js';
 import { escapeHtml, targetQuery, apiCall, relTime } from './util.js';
 import { openModal } from './modal.js';
 
@@ -144,7 +145,7 @@ function renderNewTile(session) {
 function orderedSessions(allSessions, bySession) {
   // User-pinned (drag-reordered) sessions float to the top in saved order.
   // Everything else sorts by most-recent activity across its windows, descending.
-  const saved = loadOrder();
+  const saved = prefs.getSessionOrder();
   const present = new Set(allSessions);
   const ordered = saved.filter((s) => present.has(s));
   const remaining = allSessions.filter((s) => !ordered.includes(s));
@@ -229,7 +230,7 @@ function handleToggleAll() {
   } else {
     for (const s of visible) state.collapsedSessions.add(s);
   }
-  saveCollapsed(state.collapsedSessions);
+  prefs.setCollapsed(state.collapsedSessions);
   render(state.lastWindows);
 }
 
@@ -499,7 +500,7 @@ function reorderSessions(src, dst, before) {
   const dstIdx = without.indexOf(dst);
   const insertAt = before ? dstIdx : dstIdx + 1;
   without.splice(insertAt, 0, src);
-  saveOrder(without);
+  prefs.setSessionOrder(without);
   render(state.lastWindows);
 }
 
@@ -539,7 +540,7 @@ function wireGrid() {
       const session = header.dataset.session;
       if (state.collapsedSessions.has(session)) state.collapsedSessions.delete(session);
       else state.collapsedSessions.add(session);
-      saveCollapsed(state.collapsedSessions);
+      prefs.setCollapsed(state.collapsedSessions);
       header.closest(".session-group").classList.toggle("collapsed");
       return;
     }
