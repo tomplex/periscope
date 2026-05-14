@@ -1,0 +1,5 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"abc-002"}
+{"type":"user","sessionId":"abc-002","cwd":"/Users/tom/dev/foo","timestamp":"2026-04-13T10:00:00.000Z","uuid":"u-1","parentUuid":null,"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"assistant","sessionId":"abc-002","cwd":"/Users/tom/dev/foo","timestamp":"2026-04-13T10:00:05.000Z","uuid":"a-1","parentUuid":"u-1","message":{"role":"assistant","content":[{"type":"text","text":"hello!  this line is truncated mid-json
+not even valid json at all }
+{"type":"assistant","sessionId":"abc-002","cwd":"/Users/tom/dev/foo","timestamp":"2026-04-13T10:00:10.000Z","uuid":"a-2","parentUuid":"u-1","message":{"role":"assistant","content":[{"type":"text","text":"recovered"}]}}
