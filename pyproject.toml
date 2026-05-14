@@ -7,6 +7,11 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "python-dotenv",
+    # channel_server.py (sibling script) uses these via PEP-723; mirrored
+    # here so the project venv resolves them for editor / LSP support.
+    "mcp==1.27.*",
+    "httpx",
+    "websockets>=15,<17",
 ]
 
 [dependency-groups]
