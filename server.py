@@ -1195,6 +1195,59 @@ async def patch_prefs_ui(body: UIPatch):
         _write_state(_STATE)
     return {"ok": True, "ui": _STATE["ui"]}
 
+
+class WindowAnnotation(BaseModel):
+    notes: str | None = None
+    tags: list[str] | None = None
+
+
+@app.put("/api/prefs/windows/{pid}")
+async def put_window_annotation(pid: str, body: WindowAnnotation):
+    """Set/replace the annotation fields on a window. `last_seen` is left
+    intact — only notes/tags are managed via this endpoint."""
+    if not pid or not pid.isalnum():
+        return {"ok": False, "error": "invalid pid"}
+    patch = body.model_dump(exclude_none=True)
+    # Coerce tags to a trimmed unique list, preserving order.
+    if "tags" in patch:
+        seen: set[str] = set()
+        clean: list[str] = []
+        for t in patch["tags"]:
+            t = (t or "").strip()
+            if t and t not in seen:
+                seen.add(t)
+                clean.append(t)
+        patch["tags"] = clean
+    with _STATE_LOCK:
+        entry = _STATE["windows"].setdefault(pid, {})
+        for k in ("notes", "tags"):
+            if k in patch:
+                entry[k] = patch[k]
+        # Drop empty notes / empty tag list to keep the file tidy.
+        if entry.get("notes") == "":
+            entry.pop("notes", None)
+        if entry.get("tags") == []:
+            entry.pop("tags", None)
+        _write_state(_STATE)
+    return {"ok": True, "pid": pid, "annotation": {
+        "notes": entry.get("notes"),
+        "tags": entry.get("tags") or [],
+    }}
+
+
+@app.delete("/api/prefs/windows/{pid}")
+async def delete_window_annotation(pid: str):
+    """Remove notes + tags. last_seen is preserved (it's the rebind hint)."""
+    if not pid or not pid.isalnum():
+        return {"ok": False, "error": "invalid pid"}
+    with _STATE_LOCK:
+        entry = _STATE["windows"].get(pid)
+        if entry:
+            entry.pop("notes", None)
+            entry.pop("tags", None)
+            _write_state(_STATE)
+    return {"ok": True, "pid": pid}
+
 @app.get("/api/pane")
 def pane(session: str, index: int, lines: int = 200):
     """Capture last N lines of a pane plus parsed status fields. Session/index
