@@ -781,16 +781,19 @@ def list_windows() -> list[dict]:
         "list-windows",
         "-a",
         "-F",
-        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}",
+        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{@periscope_id}",
     )
     rows = []
     for line in out.strip().split("\n"):
         if not line:
             continue
-        # pane_current_path is the active pane's cwd; safe even when missing.
         parts = line.split("\t")
+        # pane_current_path is the active pane's cwd; safe even when missing.
+        # @periscope_id is empty for unmanaged windows — `resolve_pids` mints
+        # one on first sighting and stamps it onto the window.
         s, idx, name, active = parts[:4]
         cwd = parts[4] if len(parts) > 4 else ""
+        pid_raw = parts[5] if len(parts) > 5 else ""
         rows.append(
             {
                 "session": s,
@@ -798,10 +801,10 @@ def list_windows() -> list[dict]:
                 "name": name,
                 "active": active == "1",
                 "cwd": cwd,
+                "pid_raw": pid_raw,
             }
         )
     return rows
-
 
 def capture(target: str, lines: int = 100) -> str:
     return tmux("capture-pane", "-t", target, "-p", "-S", f"-{lines}")
@@ -1192,6 +1195,31 @@ def window_new(session: str, mode: str = "shell", resume_id: str | None = None):
         cwd = resume_sess["project_path"] or os.path.expanduser("~")
         if not os.path.isdir(cwd):
             cwd = os.path.expanduser("~")
+        # Resume convention: the frontend always sends `session=resumes`
+        # (or any sentinel). If that session doesn't exist yet, create it
+        # on first use so the resume button doesn't bounce. Side-effect-
+        # only when actually missing; existing sessions pass through.
+        code, _ = _run(["tmux", "has-session", "-t", session])
+        if code != 0:
+            ok, msg = _tmux_mutate("new-session", "-d", "-s", session, "-c", cwd)
+            if not ok:
+                return {"ok": False, "error": f"failed to create session '{session}': {msg}"}
+            # tmux new-session creates window 0; turn that into our resume
+            # window directly rather than spawning a second one.
+            target = f"{session}:0"
+            time.sleep(0.1)
+            tmux("send-keys", "-t", target, f"claude --resume {resume_id}", "Enter")
+            _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
+            note_focus(target)
+            note_action(target)
+            return {
+                "ok": True,
+                "session": session,
+                "index": 0,
+                "target": target,
+                "mode": mode,
+                "resumed_session_id": resume_id,
+            }
     else:
         cwd = tmux(
             "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
@@ -1252,19 +1280,34 @@ def history_search(
     rerank: bool = False,
     limit: int = 50,
 ):
-    """FTS5-ranked search across the history index. See history.search.search."""
+    """FTS5-ranked search across the history index. Empty q falls back to
+    `recent()` (newest-first) so the UI can populate before the user types."""
     import history
     started = time.time()
-    results = history.search(
-        q,
-        project=project,
-        branch=branch,
-        since=since,
-        until=until,
-        include_trivial=include_trivial,
-        rerank=rerank,
-        limit=limit,
-    )
+    if q and q.strip():
+        results = history.search(
+            q,
+            project=project,
+            branch=branch,
+            since=since,
+            until=until,
+            include_trivial=include_trivial,
+            rerank=rerank,
+            limit=limit,
+        )
+    else:
+        # branch / until aren't part of recent's filter set (the UI doesn't
+        # surface them either); plumb through what the route accepts.
+        results = history.recent(
+            project=project,
+            since=since,
+            include_trivial=include_trivial,
+            limit=limit,
+        )
+    # is_resuming belongs to periscope's in-process _resuming dict, not to
+    # the history index — apply it here so the frontend can render guards.
+    for r in results:
+        r["is_resuming"] = r["session_id"] in _resuming
     return {
         "query": q,
         "rerank_used": rerank,
@@ -1285,7 +1328,24 @@ def history_session(session_id: str):
     data = get_session(session_id)
     if data is None:
         return JSONResponse({"ok": False, "error": "unknown session_id"}, status_code=404)
+    data["is_resuming"] = session_id in _resuming
     return data
+
+
+@app.get("/api/history/stats")
+def history_stats():
+    """Index summary for the /history route header + footer."""
+    import history
+    return history.stats()
+
+
+@app.get("/history")
+def history_page():
+    """Serve the /history single-page route. The StaticFiles mount below
+    can't resolve /history without a trailing slash + an index.html in a
+    subdir; this explicit route keeps the URL clean."""
+    from fastapi.responses import FileResponse
+    return FileResponse(STATIC / "history.html")
 
 
 # --- auto-rename via the Anthropic SDK ------------------------------------
