@@ -13,6 +13,10 @@ export default defineConfig({
     proxy: {
       "/api": "http://127.0.0.1:8765",
       "/ws": { target: "ws://127.0.0.1:8765", ws: true },
+      // Vite's extensionless URL resolution picks up history.js for /history
+      // (returns the JS source with Content-Type: text/html). Hand /history
+      // off to FastAPI's explicit route instead, which serves history.html.
+      "/history": "http://127.0.0.1:8765",
     },
   },
 });

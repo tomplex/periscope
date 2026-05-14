@@ -940,6 +940,17 @@ def resolve_pids(windows: list[dict]) -> None:
         if dirty:
             _write_state(_STATE)
 
+
+def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
+    """resolve_pids relies on `branch` for its secondary match. Populate it
+    via cached_git_state before calling so the rebind heuristic has
+    everything it needs."""
+    for w in windows:
+        git = cached_git_state(w.get("cwd", "")) or {}
+        if "branch" in git:
+            w["branch"] = git["branch"]
+    resolve_pids(windows)
+
 def capture(target: str, lines: int = 100) -> str:
     return tmux("capture-pane", "-t", target, "-p", "-S", f"-{lines}")
 
@@ -1084,6 +1095,7 @@ def parse_pane(content: str) -> dict:
 def state():
     windows = list_windows()
     update_focus_from_windows(windows)
+    _attach_git_then_resolve_pids(windows)
     result = []
     for w in windows:
         target = f"{w['session']}:{w['index']}"
@@ -1555,6 +1567,7 @@ def build_rename_prompt(windows: list[dict]) -> str:
 def auto_rename_session(session: str):
     all_windows = list_windows()
     target_windows = [w for w in all_windows if w["session"] == session]
+    _attach_git_then_resolve_pids(target_windows)
     if not target_windows:
         return {"ok": False, "error": f"session {session!r} not found"}
 
@@ -1636,6 +1649,12 @@ def auto_rename_window(session: str, index: int):
         current_name, _, cwd = meta.partition("\t")
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+    # Single-window pid resolution: build a one-element list and reuse the
+    # batch helper so `last_seen` stays current for this window too.
+    one = [{"session": session, "index": index, "name": current_name, "active": False, "cwd": cwd, "pid_raw": ""}]
+    _attach_git_then_resolve_pids(one)
+    pid = one[0].get("pid")
     if not current_name:
         return {"ok": False, "error": f"target {target!r} not found"}
 
