@@ -49,6 +49,9 @@ function renderCard(w) {
   const stateClass = `state-${w.state}`;
   const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
   const kind = w.is_claude ? "claude" : "shell";
+  const anno = prefs.hasAnnotation(w.pid)
+    ? `<span class="card-anno" title="has notes">📝</span>`
+    : "";
 
   // Meta row: branch · clean/dirty · #PR ci.  PR/CI stays on the card so
   // a glance still surfaces CI breakage; matches the existing scan pattern.
@@ -114,6 +117,7 @@ function renderCard(w) {
         <span class="card-title">${escapeHtml(w.name)}</span>
         <span class="card-idx">${w.index}</span>
         ${statusLabel}
+        ${anno}
         <button class="card-kill" data-target="${w.target}" data-name="${escapeHtml(w.name)}" title="kill this window">✕</button>
       </header>
       ${metaRow}
@@ -283,6 +287,7 @@ function renderStreamRow(w) {
         <div class="stream-title">
           <b>${escapeHtml(w.name)}</b>
           <em>${branchPart}</em>
+          ${prefs.hasAnnotation(w.pid) ? `<span class="stream-anno" title="has notes">📝</span>` : ""}
           <span class="stream-extra">${ctxPart}</span>
         </div>
         <div class="stream-msg">${msg}</div>
