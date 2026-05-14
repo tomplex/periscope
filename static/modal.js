@@ -113,6 +113,24 @@ function updateModalHeader(data) {
 
 // ── Sidebar: Linked (PR + Linear placeholder) + Activity timeline. ───
 // Data rides on the existing 1.5s /api/pane poll — no extra request.
+function renderMessages(data) {
+  const replies = data.channel_replies || [];
+  if (!replies.length) {
+    return `<em class="modal-msg-empty">No messages from Claude yet.</em>`;
+  }
+  return replies.map(r => {
+    const kind = r.kind || "info";
+    const severity = r.severity || "info";
+    const time = new Date(r.ts * 1000).toLocaleTimeString();
+    return `
+      <div class="modal-msg modal-msg-${kind} modal-msg-sev-${severity}">
+        <div class="modal-msg-meta">${time} · ${escapeHtml(kind)}</div>
+        <div class="modal-msg-body">${escapeHtml(r.message)}</div>
+      </div>
+    `;
+  }).join("");
+}
+
 function renderModalSidebar(data) {
   if (!modalSide) return;
   modalSide.innerHTML = `
@@ -129,8 +147,19 @@ function renderModalSidebar(data) {
       <h4>Activity</h4>
       ${renderActivityTimeline(data.activity)}
     </section>
+    <section class="modal-side-section modal-side-messages">
+      <h4>Messages</h4>
+      ${renderMessages(data)}
+    </section>
   `;
   wireNotesEditor(data);
+
+  // Clear unread when the modal is showing replies. Fire-and-forget.
+  if (data.pane_id && (data.channel_unread || 0) > 0) {
+    fetch(`/api/channel/clear-unread?pane=${encodeURIComponent(data.pane_id)}`, {
+      method: "POST",
+    });
+  }
 }
 
 function avatarChars(handle) {

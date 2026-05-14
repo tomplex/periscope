@@ -1349,3 +1349,40 @@ body.modal-open { overflow: hidden; }
     text-align: center;
     vertical-align: middle;
 }
+
+.modal-side-messages .modal-msg {
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    border-radius: 4px;
+    background: var(--bg-3, #222);
+    font-size: 12px;
+    line-height: 1.4;
+    border-left: 3px solid transparent;
+}
+
+.modal-side-messages .modal-msg-need_human {
+    border-left-color: #ef4444;
+}
+
+.modal-side-messages .modal-msg-done {
+    border-left-color: #4ade80;
+}
+
+.modal-side-messages .modal-msg-sev-warning {
+    background: rgba(234, 179, 8, 0.1);
+}
+
+.modal-side-messages .modal-msg-sev-bad {
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.modal-side-messages .modal-msg-meta {
+    font-size: 10px;
+    opacity: 0.6;
+    margin-bottom: 2px;
+}
+
+.modal-msg-empty {
+    opacity: 0.5;
+    font-size: 12px;
+}

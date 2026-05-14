@@ -1682,6 +1682,18 @@ def pane(session: str, index: int, lines: int = 200):
     cwd_display = cwd
     if cwd and (cwd == home or cwd.startswith(home + "/")):
         cwd_display = "~" + cwd[len(home):]
+    # Channel data: look up pane_id via list_windows since the route doesn't
+    # take it directly. Single iteration is fine — list_windows is cached at
+    # tmux's speed (sub-ms) and we already pay it on every state() poll.
+    pane_id = ""
+    for w in list_windows():
+        if w["session"] == session and w["index"] == index:
+            pane_id = w.get("pane_id", "")
+            break
+    with _CHANNELS_LOCK:
+        channel_attached = pane_id in _CHANNEL_SUBSCRIBERS if pane_id else False
+        channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
+        channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
     return {
         "content": content,
         "target": target,
@@ -1689,7 +1701,11 @@ def pane(session: str, index: int, lines: int = 200):
         "cwd": cwd_display,
         "session": session,
         "pid": pid,
+        "pane_id": pane_id,
         "activity": activity,
+        "channel_attached": channel_attached,
+        "channel_unread": channel_unread,
+        "channel_replies": channel_replies,
         **parsed,
         **git,
         **pr,
@@ -2252,6 +2268,15 @@ def channel_reply(body: ChannelReplyBody, pane: str = Query(...)):
     with _CHANNELS_LOCK:
         _CHANNEL_REPLIES.setdefault(pane, []).append(entry)
         _CHANNEL_UNREAD[pane] = _CHANNEL_UNREAD.get(pane, 0) + 1
+    return {"ok": True}
+
+
+@app.post("/api/channel/clear-unread")
+def channel_clear_unread(pane: str = Query(...)):
+    if not pane.startswith("%"):
+        return {"ok": False, "error": "pane must be a %N tmux pane id"}
+    with _CHANNELS_LOCK:
+        _CHANNEL_UNREAD[pane] = 0
     return {"ok": True}
 
 
