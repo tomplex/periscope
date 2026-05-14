@@ -44,6 +44,9 @@ def run_hook() -> int:
         return 0
     try:
         index_one(transcript_path)
-    except Exception as e:
-        log.warning("history.hook: index_one failed for %s: %s", transcript_path, e)
+    except Exception:
+        # Indexer crashes are real bugs worth a traceback. Hooks must not
+        # block Claude Code shutdown, so we still return 0 below; the
+        # traceback gives us something to triage after the fact.
+        log.exception("history.hook: index_one failed for %s", transcript_path)
     return 0
