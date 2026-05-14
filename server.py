@@ -104,6 +104,32 @@ def _write_state(data: dict) -> None:
 # _write_state under the lock. Loaded once at startup.
 _STATE: dict = _load_state()
 
+_DEFAULT_COMMANDS = [
+    {"label": "claude", "exec": "claude"},
+    {"label": "shell", "exec": ""},
+    {"label": "vim", "exec": "vim"},
+]
+
+
+def _seed_commands_if_empty() -> None:
+    """If `commands` is empty (fresh install or pre-phase-4 state.json),
+    seed the three legacy defaults so the new-window tile keeps working
+    while phase 4 is in flight.
+
+    Side effect: if a user deliberately drains commands to zero, the next
+    server restart re-seeds the defaults. To keep zero commands, leave at
+    least one no-op entry around. This tradeoff is deliberate — making
+    "empty by accident" recoverable matters more than supporting a
+    zero-commands configuration nobody asks for."""
+    with _STATE_LOCK:
+        if not _STATE["commands"]:
+            _STATE["commands"] = [dict(c) for c in _DEFAULT_COMMANDS]
+            _write_state(_STATE)
+
+
+_seed_commands_if_empty()
+
+
 
 # Server-tracked "last user-focused" per target.
 # Tmux's window_activity bumps on any output (Claude streaming, build logs, dev
@@ -1147,7 +1173,8 @@ def state():
                 "target": target,
                 "focused_at": _focused_at.get(target, 0),
                 # 0 means "never engaged through periscope" — stream view
-                # filters these out; grid view ignores acted_at entirely.
+                # filters these out; grid view sorts cards within each session
+                # by acted_at desc (most-recently-opened leftmost).
                 "acted_at": _acted_at.get(target, 0),
             }
         )
@@ -1247,6 +1274,81 @@ async def delete_window_annotation(pid: str):
             entry.pop("tags", None)
             _write_state(_STATE)
     return {"ok": True, "pid": pid}
+
+class Command(BaseModel):
+    label: str
+    exec: str = ""
+
+
+class CommandPatch(BaseModel):
+    """For PUT: both fields are optional. Sending only `label` renames
+    without clobbering `exec`; sending only `exec` updates the command
+    without renaming. The frontend always sends both, but keeping them
+    optional protects against curl-from-shell footguns."""
+    label: str | None = None
+    exec: str | None = None
+
+
+@app.post("/api/prefs/commands")
+async def add_command(body: Command):
+    label = body.label.strip()
+    if not label:
+        return {"ok": False, "error": "empty label"}
+    with _STATE_LOCK:
+        if any(c["label"] == label for c in _STATE["commands"]):
+            return {"ok": False, "error": f"duplicate label: {label!r}"}
+        _STATE["commands"].append({"label": label, "exec": body.exec or ""})
+        _write_state(_STATE)
+    return {"ok": True, "commands": _STATE["commands"]}
+
+
+@app.put("/api/prefs/commands/{label}")
+async def update_command(label: str, body: CommandPatch):
+    with _STATE_LOCK:
+        for c in _STATE["commands"]:
+            if c["label"] == label:
+                new_label = (body.label or label).strip()
+                if not new_label:
+                    return {"ok": False, "error": "empty label"}
+                if new_label != label and any(
+                    other["label"] == new_label for other in _STATE["commands"] if other is not c
+                ):
+                    return {"ok": False, "error": f"duplicate label: {new_label!r}"}
+                c["label"] = new_label
+                if body.exec is not None:
+                    c["exec"] = body.exec
+                _write_state(_STATE)
+                return {"ok": True, "commands": _STATE["commands"]}
+    return {"ok": False, "error": f"unknown label: {label!r}"}
+
+
+@app.delete("/api/prefs/commands/{label}")
+async def delete_command(label: str):
+    with _STATE_LOCK:
+        before = len(_STATE["commands"])
+        _STATE["commands"] = [c for c in _STATE["commands"] if c["label"] != label]
+        if len(_STATE["commands"]) == before:
+            return {"ok": False, "error": f"unknown label: {label!r}"}
+        _write_state(_STATE)
+    return {"ok": True, "commands": _STATE["commands"]}
+
+
+class CommandsReorder(BaseModel):
+    labels: list[str]
+
+
+@app.put("/api/prefs/commands")
+async def reorder_commands(body: CommandsReorder):
+    """Reorder the commands list to match `labels`. Unknown labels are
+    ignored; missing labels stay in place at the end."""
+    with _STATE_LOCK:
+        by_label = {c["label"]: c for c in _STATE["commands"]}
+        ordered = [by_label[l] for l in body.labels if l in by_label]
+        leftover = [c for c in _STATE["commands"] if c["label"] not in {l for l in body.labels if l in by_label}]
+        _STATE["commands"] = ordered + leftover
+        _write_state(_STATE)
+    return {"ok": True, "commands": _STATE["commands"]}
+
 
 @app.get("/api/pane")
 def pane(session: str, index: int, lines: int = 200):
