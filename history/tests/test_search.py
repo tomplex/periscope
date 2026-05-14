@@ -142,3 +142,63 @@ def test_rerank_falls_back_to_fts_order_on_client_failure(seeded_db):
     assert len(results) >= 1
     for r in results:
         assert r["rerank_reason"] is None
+
+
+def test_get_session_returns_full_row_and_messages(tmp_path, fixture_dir, monkeypatch):
+    from history.search import get_session
+    from history.indexer import index_one
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr("history.indexer.ARCHIVE_DIR", archive_dir)
+    db_path = tmp_path / "h.db"
+    client = MagicMock()
+    blk = MagicMock(); blk.type = "tool_use"; blk.name = "save_session_summary"
+    blk.input = {"summary": "fake", "tags": ["a", "b", "c"]}
+    m = MagicMock(); m.content = [blk]
+    client.messages.create.return_value = m
+    with patch("history.indexer.get_anthropic_client", return_value=client):
+        index_one(str(fixture_dir / "normal_session.jsonl"), db_path=db_path)
+    sess = get_session("normal-001", db_path=db_path)
+    assert sess is not None
+    assert sess["session_id"] == "normal-001"
+    assert sess["project_path"] == "/Users/tom/dev/foo"
+    assert sess["branch"] == "feat/bar"
+    assert sess["summary"] == "fake"
+    assert sess["tags"] == ["a", "b", "c"]
+    # Full record fields that search() drops
+    assert sess["final_assistant_msg"].startswith("index works")
+    assert sess["ended_cleanly"] is True
+    assert sess["was_interrupted"] is False
+    assert "Read" in sess["tool_use_counts"]
+    # Messages are parsed from the JSONL
+    roles = [m["role"] for m in sess["messages"]]
+    assert "user" in roles and "assistant" in roles
+    assert sess["jsonl_missing"] is False
+
+
+def test_get_session_returns_none_for_missing(tmp_path):
+    from history.search import get_session
+    db_path = tmp_path / "h.db"
+    from history.db import connect
+    connect(db_path).close()  # init schema
+    assert get_session("does-not-exist", db_path=db_path) is None
+
+
+def test_get_session_marks_jsonl_missing(tmp_path):
+    from history.search import get_session
+    from history.db import connect
+    db_path = tmp_path / "h.db"
+    conn = connect(db_path)
+    # Insert a row pointing at a path that doesn't exist
+    conn.execute(
+        "INSERT INTO sessions(session_id, jsonl_path, project_path, started_at, ended_at, "
+        "duration_s, user_msg_count, asst_msg_count, tool_use_count, indexed_at, "
+        "mechanical_version, source_mtime, source_size, files_touched, notable_cmds, "
+        "tool_use_counts) "
+        "VALUES ('orphan', '/nope/missing.jsonl', '/p', 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, '[]', '[]', '{}')"
+    )
+    conn.commit()
+    conn.close()
+    sess = get_session("orphan", db_path=db_path)
+    assert sess is not None
+    assert sess["jsonl_missing"] is True
+    assert sess["messages"] == []

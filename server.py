@@ -57,6 +57,12 @@ _focused_at: dict[str, int] = {}
 _acted_at: dict[str, int] = {}
 _active_per_session: dict[str, str] = {}
 
+# Active resume operations, keyed by session_id. Each entry tracks where a
+# `claude --resume <id>` is currently running so we can refuse concurrent
+# resume requests (they'd interleave appends into the same JSONL).
+_resuming: dict[str, dict] = {}
+RESUME_EXPIRY_S = 30 * 60  # forget about a resume after 30 min idle
+
 # Per-target spinner hysteresis. Tmux capture-pane occasionally catches Claude's
 # TUI mid-redraw, dropping the spinner line for one cycle even when Claude is
 # still working. We remember the last positive detection per target and treat
@@ -914,6 +920,14 @@ def state():
                 "acted_at": _acted_at.get(target, 0),
             }
         )
+    # Garbage-collect stale resumes: targets that are no longer in tmux's
+    # list-windows output, or older than 30 min.
+    now = int(time.time())
+    live_targets = {f"{w['session']}:{w['index']}" for w in windows}
+    for sid in list(_resuming):
+        entry = _resuming[sid]
+        if entry["target"] not in live_targets or now - entry["started_at"] > RESUME_EXPIRY_S:
+            del _resuming[sid]
     return {
         "windows": result,
         "ts": int(time.time()),
@@ -1052,14 +1066,42 @@ def session_delete(session: str):
 
 
 @app.post("/api/window/new")
-def window_new(session: str, mode: str = "shell"):
+def window_new(session: str, mode: str = "shell", resume_id: str | None = None):
     """Spawn a window in `session`. `mode=claude` types `claude\\n`,
-    `mode=vim` types `vim\\n`, `mode=shell` leaves it at a bare prompt.
-    cwd is inherited from the session's active pane — without `-c`, tmux
-    would use the periscope server's cwd, which is never what you want."""
-    cwd = tmux(
-        "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
-    ).strip() or os.path.expanduser("~")
+    `mode=vim` types `vim\\n`, `mode=resume` runs `claude --resume <resume_id>`
+    in the original session's project dir, `mode=shell` leaves it at a bare
+    prompt. cwd is inherited from the session's active pane — without `-c`,
+    tmux would use the periscope server's cwd, which is never what you want."""
+    # mode=resume looks up the original project_path and runs claude --resume
+    # there; we resolve cwd up front so the rest of the spawn path is shared.
+    resume_sess = None
+    if mode == "resume":
+        if not resume_id:
+            return {"ok": False, "error": "resume_id required for mode=resume"}
+        from history.search import get_session
+        resume_sess = get_session(resume_id)
+        if resume_sess is None:
+            return {"ok": False, "error": f"unknown session_id: {resume_id}"}
+        # Liveness guard: refuse if the jsonl was written to in the last 60s
+        # (the session may be currently active in another window/process,
+        # and two concurrent appenders would interleave into the same JSONL).
+        if resume_sess["jsonl_path"] and os.path.isfile(resume_sess["jsonl_path"]):
+            mtime_age = time.time() - os.path.getmtime(resume_sess["jsonl_path"])
+            if mtime_age < 60:
+                return {"ok": False, "error": "session looks live; wait a minute or pick another"}
+        # Already resumed elsewhere in this periscope process?
+        if resume_id in _resuming:
+            existing = _resuming[resume_id]
+            return {"ok": False,
+                    "error": f"already resumed in {existing['target']}",
+                    "existing_target": existing["target"]}
+        cwd = resume_sess["project_path"] or os.path.expanduser("~")
+        if not os.path.isdir(cwd):
+            cwd = os.path.expanduser("~")
+    else:
+        cwd = tmux(
+            "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
+        ).strip() or os.path.expanduser("~")
     ok, msg = _tmux_mutate(
         "new-window", "-t", f"{session}:", "-c", cwd,
         "-P", "-F", "#{window_index}",
@@ -1079,9 +1121,16 @@ def window_new(session: str, mode: str = "shell"):
     elif mode == "vim":
         time.sleep(0.1)
         tmux("send-keys", "-t", target, "vim", "Enter")
+    elif mode == "resume":
+        time.sleep(0.1)
+        tmux("send-keys", "-t", target, f"claude --resume {resume_id}", "Enter")
+        _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
     note_focus(target)
     note_action(target)
-    return {"ok": True, "session": session, "index": index, "target": target, "mode": mode}
+    result = {"ok": True, "session": session, "index": index, "target": target, "mode": mode}
+    if mode == "resume":
+        result["resumed_session_id"] = resume_id
+    return result
 
 
 @app.delete("/api/window")
@@ -1093,6 +1142,56 @@ def window_delete(session: str, index: int):
     _focused_at.pop(target, None)
     _acted_at.pop(target, None)
     return {"ok": True, "target": target}
+
+
+# --- history index API ----------------------------------------------------
+
+
+@app.get("/api/history/search")
+def history_search(
+    q: str,
+    project: str | None = None,
+    branch: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+    include_trivial: bool = False,
+    rerank: bool = False,
+    limit: int = 50,
+):
+    """FTS5-ranked search across the history index. See history.search.search."""
+    import history
+    started = time.time()
+    results = history.search(
+        q,
+        project=project,
+        branch=branch,
+        since=since,
+        until=until,
+        include_trivial=include_trivial,
+        rerank=rerank,
+        limit=limit,
+    )
+    return {
+        "query": q,
+        "rerank_used": rerank,
+        "results": results,
+        "took_ms": int((time.time() - started) * 1000),
+    }
+
+
+@app.get("/api/history/session/{session_id}")
+def history_session(session_id: str):
+    """Full session record + parsed conversation messages.
+
+    Returns 404 if the session_id is not in the index. The `jsonl_missing`
+    field is true if the row exists but the underlying JSONL has been
+    deleted (search will hide it until `history clean` removes the row)."""
+    from fastapi.responses import JSONResponse
+    from history.search import get_session
+    data = get_session(session_id)
+    if data is None:
+        return JSONResponse({"ok": False, "error": "unknown session_id"}, status_code=404)
+    return data
 
 
 # --- auto-rename via the Anthropic SDK ------------------------------------

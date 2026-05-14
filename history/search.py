@@ -99,6 +99,72 @@ def search(query: str, *,
     return out
 
 
+def get_session(session_id: str, *,
+                db_path: Path | str | None = None) -> dict | None:
+    """Return the full session row + parsed conversation messages.
+
+    Reads the JSONL on demand and shapes it for a UI detail view. Returns
+    None if no row matches session_id, or if the JSONL file is missing on
+    disk (the row exists but is orphaned; `clean` would remove it)."""
+    import os
+    from .jsonl import parse_jsonl
+
+    conn = connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM sessions WHERE session_id = ?",
+                           (session_id,)).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+    finally:
+        conn.close()
+
+    jsonl_path = record.get("jsonl_path") or ""
+    messages: list[dict] = []
+    jsonl_missing = not os.path.isfile(jsonl_path)
+    if not jsonl_missing:
+        for ev in parse_jsonl(jsonl_path):
+            if ev.type == "user" and ev.user_text:
+                messages.append({
+                    "role": "user",
+                    "ts_ms": ev.ts_ms,
+                    "text": ev.user_text,
+                })
+            elif ev.type == "assistant":
+                messages.append({
+                    "role": "assistant",
+                    "ts_ms": ev.ts_ms,
+                    "text": ev.assistant_text or "",
+                    "tool_uses": ev.tool_uses,
+                })
+
+    # Normalize JSON columns + decode tags
+    return {
+        "session_id": record["session_id"],
+        "jsonl_path": record["jsonl_path"],
+        "project_path": record["project_path"],
+        "branch": record["branch"],
+        "started_at": record["started_at"],
+        "ended_at": record["ended_at"],
+        "duration_s": record["duration_s"],
+        "user_msg_count": record["user_msg_count"],
+        "asst_msg_count": record["asst_msg_count"],
+        "tool_use_count": record["tool_use_count"],
+        "was_interrupted": bool(record["was_interrupted"]),
+        "ended_cleanly": bool(record["ended_cleanly"]),
+        "summary": record["summary"],
+        "tags": (record["tags"] or "").split(",") if record["tags"] else [],
+        "first_user_msg": record["first_user_msg"],
+        "last_user_msg": record["last_user_msg"],
+        "final_assistant_msg": record["final_assistant_msg"],
+        "files_touched": json.loads(record["files_touched"]) if record["files_touched"] else [],
+        "notable_cmds": json.loads(record["notable_cmds"]) if record["notable_cmds"] else [],
+        "tool_use_counts": json.loads(record["tool_use_counts"]) if record["tool_use_counts"] else {},
+        "messages": messages,
+        "jsonl_missing": jsonl_missing,
+    }
+
+
 def _rerank(rows: list[dict], query: str) -> list[dict]:
     """Send candidate rows + the query to Haiku for semantic re-ranking.
     Returns rows reordered, each annotated with `rerank_reason`. If the
