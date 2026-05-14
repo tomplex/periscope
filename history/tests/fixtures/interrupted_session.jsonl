@@ -1,0 +1,4 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"interrupted-001"}
+{"type":"user","sessionId":"interrupted-001","cwd":"/Users/tom/dev/foo","timestamp":"2026-04-13T11:00:00.000Z","uuid":"u-1","parentUuid":null,"message":{"role":"user","content":[{"type":"text","text":"do a big refactor"}]}}
+{"type":"assistant","sessionId":"interrupted-001","cwd":"/Users/tom/dev/foo","timestamp":"2026-04-13T11:00:10.000Z","uuid":"a-1","parentUuid":"u-1","message":{"role":"assistant","content":[{"type":"text","text":"starting"},{"type":"tool_use","id":"tu-1","name":"Read","input":{"file_path":"/Users/tom/dev/foo/big.py"}}]}}
+{"type":"user","sessionId":"interrupted-001","cwd":"/Users/tom/dev/foo","timestamp":"2026-04-13T11:00:15.000Z","uuid":"u-2","parentUuid":"a-1","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}

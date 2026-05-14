@@ -1,0 +1,79 @@
+import json
+from history.extract import extract_record
+from history.jsonl import parse_jsonl
+
+
+def _extract_fixture(fixture_dir, name):
+    path = fixture_dir / name
+    events = list(parse_jsonl(str(path)))
+    return extract_record(str(path), events, source_mtime=1000000, source_size=path.stat().st_size)
+
+
+def test_counts_and_timestamps(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "normal_session.jsonl")
+    assert rec.session_id == "normal-001"
+    assert rec.project_path == "/Users/tom/dev/foo"
+    assert rec.branch == "feat/bar"
+    assert rec.user_msg_count == 3   # excludes tool_result wrappers
+    assert rec.asst_msg_count == 4
+    assert rec.tool_use_count == 3
+    assert rec.duration_s == 3 * 60 + 30  # 10:00:00 → 10:03:30
+    assert rec.was_interrupted == 0
+    assert rec.ended_cleanly == 1  # last event is assistant text
+
+
+def test_first_last_final_messages(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "normal_session.jsonl")
+    assert rec.first_user_msg.startswith("investigate the slow query")
+    assert rec.last_user_msg.startswith("now verify with EXPLAIN")
+    assert rec.final_assistant_msg.startswith("index works")
+
+
+def test_files_touched_dedup_and_order(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "normal_session.jsonl")
+    files = json.loads(rec.files_touched)
+    # First-touched ordering: resolve_cohort.py, then migrations/0042.sql
+    assert files == [
+        "/Users/tom/dev/foo/resolve_cohort.py",
+        "/Users/tom/dev/foo/migrations/0042.sql",
+    ]
+
+
+def test_notable_cmds_filters_trivial(fixture_dir, tmp_path):
+    # Build a session with both notable and trivial Bash commands
+    p = tmp_path / "cmds.jsonl"
+    p.write_text(
+        '{"type":"user","sessionId":"x","cwd":"/p","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","parentUuid":null,"message":{"role":"user","content":[{"type":"text","text":"go"}]}}\n'
+        '{"type":"assistant","sessionId":"x","cwd":"/p","timestamp":"2026-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":['
+        '{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}},'
+        '{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"pwd"}},'
+        '{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"pytest tests/foo_test.py -k slow"}},'
+        '{"type":"tool_use","id":"t4","name":"Bash","input":{"command":"grep -r needle ./src"}}'
+        ']}}\n'
+    )
+    events = list(parse_jsonl(str(p)))
+    rec = extract_record(str(p), events, source_mtime=0, source_size=p.stat().st_size)
+    cmds = json.loads(rec.notable_cmds)
+    assert "ls" not in cmds
+    assert "pwd" not in cmds
+    assert "pytest tests/foo_test.py -k slow" in cmds
+    assert "grep -r needle ./src" in cmds
+
+
+def test_tool_use_counts(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "normal_session.jsonl")
+    counts = json.loads(rec.tool_use_counts)
+    assert counts == {"Read": 1, "Bash": 1, "Write": 1}
+
+
+def test_interrupted_detection(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "interrupted_session.jsonl")
+    assert rec.was_interrupted == 1
+    assert rec.ended_cleanly == 0  # last event is a user "Request interrupted" message
+
+
+def test_short_session(fixture_dir):
+    rec = _extract_fixture(fixture_dir, "short_session.jsonl")
+    assert rec.user_msg_count == 1   # only one real user message; the tool_result is excluded
+    assert rec.asst_msg_count == 2
+    assert rec.tool_use_count == 1
