@@ -133,7 +133,14 @@ SPINNER_RE = re.compile(r"^\s*[^\x00-\x7f]\s+(?P<phrase>\S+?)…")
 # is the live uplink meter; only the running op shows it. Distinguishable
 # from STATUS_RE because the status line has both ↑ and ↓ and no `tokens`
 # word, and it isn't wrapped in parens.
-ACTIVE_OP_RE = re.compile(r"\([^)]*↑\s*[\d.]+\w*\s+tokens[^)]*\)")
+#
+# Anchored to line start (used with `.match()`) so it doesn't trigger on
+# assistant prose that quotes the marker mid-sentence — the actual TUI line
+# always begins with the spinner glyph + verb, not embedded in surrounding
+# words. (This rule is the same one SPINNER_RE relies on.)
+ACTIVE_OP_RE = re.compile(
+    r"\s*[^\x00-\x7f]\s+\S+.*\([^)]*↑\s*[\d.]+\w*\s+tokens[^)]*\)"
+)
 
 # Pull out a verb-shaped word for the card label (`envisioning…`,
 # `planning…`). Falls back to the first word if there's no clean verb.
@@ -619,7 +626,7 @@ def parse_pane(content: str) -> dict:
                 first = phrase.split(None, 1)[0] if phrase else ""
                 spinner = first or "working"
             break
-        if ACTIVE_OP_RE.search(line):
+        if ACTIVE_OP_RE.match(line):
             vm = SPINNER_VERB_RE.search(line)
             spinner = vm.group(1) if vm else "working"
             break
