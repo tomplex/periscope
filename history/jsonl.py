@@ -31,7 +31,7 @@ class Event:
 
 
 def _parse_ts(s: str | None) -> int | None:
-    if not s:
+    if not isinstance(s, str) or not s:
         return None
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))

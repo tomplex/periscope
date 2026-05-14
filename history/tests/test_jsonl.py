@@ -35,7 +35,7 @@ def test_assistant_blocks_classified(fixture_dir):
     assert assistants[1].tool_uses == []
 
 
-def test_unknown_types_pass_through(fixture_dir, tmp_path):
+def test_unknown_types_pass_through(tmp_path):
     p = tmp_path / "novel.jsonl"
     p.write_text('{"type":"future-feature","x":1}\n{"type":"user","sessionId":"s","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}\n')
     events = list(parse_jsonl(str(p)))
@@ -71,3 +71,22 @@ def test_user_text_from_string_content(tmp_path):
     asst_ev = next(e for e in events if e.type == "assistant")
     assert user_ev.user_text == "plain string prompt"
     assert asst_ev.assistant_text == "plain string reply"
+
+
+def test_non_string_timestamp_doesnt_crash_generator(tmp_path):
+    """Real JSONL has occasionally carried int/null timestamps. _parse_ts must
+    return None for non-string values rather than letting AttributeError abort
+    the whole stream — that would defeat the malformed-line tolerance contract."""
+    p = tmp_path / "bad_ts.jsonl"
+    p.write_text(
+        '{"type":"user","sessionId":"s","timestamp":12345,"message":{"role":"user","content":"first"}}\n'
+        '{"type":"user","sessionId":"s","timestamp":null,"message":{"role":"user","content":"second"}}\n'
+        '{"type":"user","sessionId":"s","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"third"}}\n'
+    )
+    events = list(parse_jsonl(str(p)))
+    assert len(events) == 3
+    assert events[0].ts_ms is None
+    assert events[1].ts_ms is None
+    assert events[2].ts_ms is not None
+    assert events[0].user_text == "first"
+    assert events[2].user_text == "third"
