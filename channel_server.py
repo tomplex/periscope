@@ -26,6 +26,7 @@ import asyncio
 import json
 import os
 import sys
+from urllib.parse import quote
 
 
 def _assert_sdk_compatibility() -> None:
@@ -279,7 +280,12 @@ async def main():
         instructions=INSTRUCTIONS,
     )
 
-    ws_url = f"{PERISCOPE_WS}/ws/channel?pane={TMUX_PANE}"
+    # URL-encode TMUX_PANE — values like "%481" would otherwise be parsed as
+    # malformed percent-escapes on the server side (%48 → "H", leaving "H1"),
+    # which fails the %N-prefix validation and slams the WS closed. httpx's
+    # params= dict on the reply path encodes automatically; this f-string
+    # construction does not, so we do it explicitly.
+    ws_url = f"{PERISCOPE_WS}/ws/channel?pane={quote(TMUX_PANE)}"
 
     async with stdio_server() as (read_stream, write_stream):
         async with anyio.create_task_group() as tg:
