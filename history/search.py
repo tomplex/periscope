@@ -137,6 +137,7 @@ def _normalize_rows(rows: list[dict]) -> list[dict]:
             "is_live": is_live,
             "rank": i + 1,
             "rerank_reason": r.get("rerank_reason"),
+            "rerank_score": r.get("rerank_score"),
         })
     return out
 
@@ -296,7 +297,8 @@ def _rerank(rows: list[dict], query: str) -> list[dict]:
                 "type": "text",
                 "text": (
                     "You re-rank candidate Claude Code session summaries by their relevance "
-                    "to the user's query. Always call rank_search_results."
+                    "to the user's query. For each candidate, assign a score from 0.0 "
+                    "(irrelevant) to 1.0 (perfect match). Always call rank_search_results."
                 ),
                 "cache_control": {"type": "ephemeral"},
             }],
@@ -314,7 +316,11 @@ def _rerank(rows: list[dict], query: str) -> list[dict]:
         for block in getattr(msg, "content", []):
             if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == RERANK_TOOL["name"]:
                 data = getattr(block, "input", None) or {}
-                ranked = data.get("results") or []
+                ranked = list(data.get("results") or [])
+                # Haiku tends to preserve input order in the array; sort by
+                # score descending so the per-item scores actually drive the
+                # final ordering. Missing scores fall through to bottom.
+                ranked.sort(key=lambda e: float(e.get("score") or 0.0), reverse=True)
                 by_id = {r["session_id"]: r for r in rows}
                 reordered = []
                 for entry in ranked:
@@ -322,6 +328,7 @@ def _rerank(rows: list[dict], query: str) -> list[dict]:
                     if sid in by_id:
                         row = dict(by_id[sid])
                         row["rerank_reason"] = entry.get("reason")
+                        row["rerank_score"] = entry.get("score")
                         reordered.append(row)
                 # Append any candidates the model omitted at the end
                 seen = {r["session_id"] for r in reordered}
