@@ -7,6 +7,15 @@ import { apiCall } from './util.js';
 import { initModal } from './modal.js';
 import { initGrid, poll, render } from './grid.js';
 
+// ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
+// the same shortcut focuses the search input — handled in history.js.)
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "/") {
+    e.preventDefault();
+    window.location.href = "/history";
+  }
+});
+
 // `[data-filter]` scope excludes the action chips (+ session, collapse all)
 // that share the .filters parent — those have their own handlers.
 const filterButtons = document.querySelectorAll("#filters button[data-filter]");

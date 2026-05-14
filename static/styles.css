@@ -1129,6 +1129,22 @@ body.modal-open { overflow: hidden; }
   font-style: italic;
 }
 
+/* ─── kbd glyphs (used in nav chips and the history footer) ──────────── */
+.ps-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-2);
+  background: var(--bg-2);
+  border: 1px solid var(--line-soft);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  margin: 0 2px;
+}
+
 /* ─── Reduced motion ─────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {

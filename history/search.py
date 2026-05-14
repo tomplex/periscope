@@ -3,12 +3,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import time
 from pathlib import Path
 
 from .db import connect
 
 log = logging.getLogger(__name__)
+
+# Periscope's resume guardrails refuse if the JSONL has been written within
+# the last `LIVE_MTIME_S` seconds — the session likely has an active
+# appender. The search result mirrors that check up-front so the UI can
+# render the disabled state without round-tripping.
+LIVE_MTIME_S = 60
 
 
 def _build_fts_query(query: str) -> str:
@@ -78,25 +86,114 @@ def search(query: str, *,
     if rerank and len(rows) > 1:
         rows = _rerank(rows, query)
 
-    # Normalize for the API surface: parse JSON columns, drop verbose blobs.
+    return _normalize_rows(rows[:limit])
+
+
+def _normalize_rows(rows: list[dict]) -> list[dict]:
+    """Shape DB rows into the API surface: parse JSON columns, drop verbose
+    blobs, compute `is_live`. `is_resuming` belongs to periscope's in-process
+    `_resuming` dict and is added at the API route layer — keep this
+    function pure (no periscope coupling)."""
+    now = time.time()
     out = []
-    for i, r in enumerate(rows[:limit]):
+    for i, r in enumerate(rows):
+        jsonl_path = r["jsonl_path"] or ""
+        is_live = False
+        if jsonl_path:
+            try:
+                is_live = (now - os.path.getmtime(jsonl_path)) < LIVE_MTIME_S
+            except OSError:
+                is_live = False
         out.append({
             "session_id": r["session_id"],
-            "jsonl_path": r["jsonl_path"],
+            "jsonl_path": jsonl_path,
             "project_path": r["project_path"],
             "branch": r["branch"],
             "started_at": r["started_at"],
+            "ended_at": r["ended_at"],
             "duration_s": r["duration_s"],
             "user_msg_count": r["user_msg_count"],
+            "asst_msg_count": r["asst_msg_count"],
+            "tool_use_count": r["tool_use_count"],
+            "was_interrupted": bool(r["was_interrupted"]),
+            "ended_cleanly": bool(r["ended_cleanly"]),
             "summary": r["summary"],
+            "summary_model": r["summary_model"],
             "tags": (r["tags"] or "").split(",") if r["tags"] else [],
             "first_user_msg": r["first_user_msg"],
+            "last_user_msg": r["last_user_msg"],
             "files_touched": json.loads(r["files_touched"]) if r["files_touched"] else [],
+            "notable_cmds": json.loads(r["notable_cmds"]) if r["notable_cmds"] else [],
+            "tool_use_counts": json.loads(r["tool_use_counts"]) if r["tool_use_counts"] else {},
+            "trivial": r["summary_model"] is None,
+            "is_live": is_live,
             "rank": i + 1,
             "rerank_reason": r.get("rerank_reason"),
         })
     return out
+
+
+def stats(*, db_path: Path | str | None = None) -> dict:
+    """Index summary for the route header + footer: total / summarized /
+    heuristic counts, distinct projects, last full scan, DB file size.
+    Single round trip; not cached (each call ~1-3ms on a populated index)."""
+    from .db import get_meta, DEFAULT_DB_PATH
+    path = Path(db_path) if db_path else DEFAULT_DB_PATH
+    conn = connect(db_path)
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        summarized = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE summary_model IS NOT NULL"
+        ).fetchone()[0]
+        heuristic = total - summarized
+        projects = conn.execute(
+            "SELECT COUNT(DISTINCT project_path) FROM sessions"
+        ).fetchone()[0]
+        last_scan = get_meta(conn, "last_full_scan_at")
+        haiku_model = get_meta(conn, "haiku_model")
+    finally:
+        conn.close()
+    try:
+        db_bytes = path.stat().st_size
+    except OSError:
+        db_bytes = 0
+    return {
+        "total": total,
+        "summarized": summarized,
+        "heuristic": heuristic,
+        "projects": projects,
+        "last_scan_at": int(last_scan) if last_scan else None,
+        "haiku_model": haiku_model,
+        "db_bytes": db_bytes,
+    }
+
+
+def recent(*,
+           db_path: Path | str | None = None,
+           project: str | None = None,
+           since: int | None = None,
+           include_trivial: bool = False,
+           limit: int = 50) -> list[dict]:
+    """List recent sessions by `started_at desc` — what the UI shows on an
+    empty query. Same filters as `search()`, no FTS rank."""
+    conn = connect(db_path)
+    try:
+        sql = "SELECT * FROM sessions WHERE 1=1"
+        params: dict = {}
+        if project:
+            sql += " AND project_path = :project"
+            params["project"] = project
+        if since is not None:
+            sql += " AND started_at >= :since"
+            params["since"] = since
+        if not include_trivial:
+            sql += " AND summary_model IS NOT NULL"
+        sql += " ORDER BY started_at DESC LIMIT :limit"
+        params["limit"] = max(1, min(limit, 200))
+        rows = [dict(r) for r in conn.execute(sql, params)]
+    finally:
+        conn.close()
+    return _normalize_rows(rows)
 
 
 def get_session(session_id: str, *,
