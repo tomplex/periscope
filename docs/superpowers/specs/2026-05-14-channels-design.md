@@ -182,10 +182,13 @@ channel subprocesses register their new `%N` on reconnect, old `%N`
 entries GC when periscope's poll notices the panes are gone.
 
 Periscope today enumerates panes via `tmux list-windows -a` (see
-`server.py:836` for the format string); it needs to add
-`#{pane_id}` to that format string so the active pane's `%N` is
-captured on the window row. Multi-pane windows are out of v1 scope
-(see Non-goals), so the active-pane-only capture is sufficient.
+`list_windows()` at `server.py:858-890`, with the format string at
+`server.py:863`). The format already captures `#{@periscope_id}`
+(the persistent-config-layer phase-2 stable id used in
+`state.json/windows[]`); we append `#{pane_id}` so the active pane's
+`%N` is captured on the window row too. Multi-pane windows are out
+of v1 scope (see Non-goals), so the active-pane-only capture is
+sufficient.
 
 ### Addressing tabulation
 
@@ -194,7 +197,7 @@ Three identifiers coexist after this spec lands. Each route uses one:
 | Surface | Keys on | Notes |
 |---|---|---|
 | `/api/state` payload | n/a; returns `(session, index, pid, pane_id)` per window | Single read endpoint, all three keys present |
-| `/api/send`, `/ws/pane`, `/api/window/new`, `/api/window/focus` | `(session, index)` | Existing surface, breaks under rename today, not migrated by this PR |
+| `/api/send`, `/ws/pane`, `/api/window/new`, `/api/window/focus` | `(session, index)` | Existing surface; breaks under window-reorder and (less obviously) move-window/swap-window; not migrated by this PR |
 | `state.json windows[]` rows | `pid` (from persistent-config phase 2) | Rebind-after-tmux-restart heuristic |
 | `/api/channel/push`, `/api/channel/reply`, `/ws/channel` | `pane_id` (`%N`) | First surface to use this; stable within tmux-server lifetime |
 
@@ -260,9 +263,9 @@ research preview, but two product implications worth naming:
    who customizes commands or inspects state will encounter it.
 2. **Graduation path.** Channels eventually leave research preview;
    the flag changes or disappears. Periscope's seeded default will
-   need to update. Adding a small `version_mark` to seeded command
-   entries (see "Migration for existing users") gives us a hook to
-   rewrite the exec on future server startups.
+   need to update. The migration uses a global `channels_migration_v1_done`
+   flag in `state.json` (see "Migration for existing users"); a
+   future v2 migration adds its own flag and rewrites in turn.
 
 We accept the wart for v1 because the alternatives (publishing a
 channels plugin to Anthropic's allowlist, or shipping channels-free
@@ -318,12 +321,28 @@ bug worth catching at the boundary.
 is a correctness escape valve — under normal operation the queue is
 empty because the channel server consumes events as they arrive.
 When overflow happens, periscope coalesces a single synthetic event
-on the queue: `{ "content": "<periscope dropped N earlier events; "
-"oldest was at T>", "meta": { "severity": "warning", "kind": "dropped" } }`.
+on the queue:
+
+```json
+{
+  "content": "periscope dropped N earlier events; oldest was at T",
+  "meta": {
+    "severity": "warning",
+    "kind": "dropped",
+    "synthetic": true
+  }
+}
+```
+
 The synthetic event is consumed normally on reconnect, giving Claude
 a chance to notice and react. One synthetic event per overflow
 window — successive drops update the same event's `N` until the
-queue drains.
+queue drains. `meta.synthetic=true` is a separate, generic flag so
+future consumers can filter periscope-originated infrastructure
+notices without enumerating semantic `kind` values. The prose is
+unbracketed — angle brackets in `content` would land literally
+inside the `<channel>...</channel>` wrapper Claude sees, which looks
+like a nested pseudo-tag and is mildly confusing in transcripts.
 
 ### `POST /api/channel/reply?pane=%N`
 
@@ -354,6 +373,12 @@ The channel server declares one experimental capability, one
 
 ### Capability and instructions
 
+We use the **lowlevel** `mcp.server.Server` (not `FastMCP`). FastMCP
+hides `InitializationOptions` construction, which we need to control
+to set `experimental` capabilities; and the notification-emission
+path bypasses both APIs anyway (see next subsection). One API across
+the file is cleaner than mixing flavors.
+
 ```python
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
@@ -367,6 +392,10 @@ Use the `reply` tool to surface status back to periscope's UI:
   - kind="need_human" when blocked and waiting on the user
   - kind="done" when the current task is complete
   - kind="info" (default) for everything else
+
+A <channel> block with meta.kind="dropped" is an infrastructure
+notice — periscope's queue overflowed and dropped earlier events.
+It is not a message from the user.
 
 The pane this channel is attached to is identified by $TMUX_PANE on
 the server side; you don't need to address it explicitly.
@@ -388,13 +417,13 @@ init_options = InitializationOptions(
 `instructions` lands in Claude's system prompt at session start and
 is the documented discoverability surface for channels (per
 channels-reference §"Server options"). It explains the relationship
-between inbound `<channel>` blocks and the outbound `reply` tool —
-without it, Claude has no automatic linkage between the two halves.
+between inbound `<channel>` blocks, the synthetic-overflow event,
+and the outbound `reply` tool — without it, Claude has no automatic
+linkage between these.
 
-The exact API for setting `experimental` capabilities depends on the
-Python MCP SDK version. Pin in the implementation plan; if the
-high-level helper doesn't accept `experimental`, hand-set
-`init_options.capabilities.experimental` after construction.
+`ServerCapabilities.experimental` is typed `dict[str, dict[str, Any]] | None`
+in the SDK (verified against `mcp==1.27.*`'s `types.py`), so the
+literal above passes through without a workaround.
 
 ### Notification emission
 
@@ -402,12 +431,14 @@ The Python MCP SDK's public `session.send_notification(...)` is
 constrained to a closed Pydantic union of spec-defined notification
 types (`mcp.types.ServerNotification`). It has no `method`/`params`
 escape hatch the way the TypeScript SDK's `mcp.notification()` does.
-We bypass it and write a `JSONRPCNotification` straight to the
-session's output stream:
+We bypass it and write straight to the session's output stream,
+mirroring what the SDK's own `send_notification` does internally:
+wrap the `JSONRPCNotification` in a `JSONRPCMessage`, then in a
+`SessionMessage`.
 
 ```python
-from mcp.shared.session import SessionMessage
-from mcp.types import JSONRPCNotification
+from mcp.shared.message import SessionMessage
+from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 async def emit_channel_event(session, content: str, meta: dict | None):
     notification = JSONRPCNotification(
@@ -415,20 +446,31 @@ async def emit_channel_event(session, content: str, meta: dict | None):
         method="notifications/claude/channel",
         params={"content": content, "meta": meta or {}},
     )
-    await session._write_stream.send(SessionMessage(message=notification))
+    await session._write_stream.send(
+        SessionMessage(message=JSONRPCMessage(notification))
+    )
 ```
 
-`_write_stream` is a protected attribute, not part of the SDK's
-public surface. This is the price of staying in Python. The
-alternative — subclass `Notification` with a `Literal["notifications/
-claude/channel"]` method and hope `send_notification` doesn't
-reject it on its way through the typed dispatcher — is brittler.
-Direct stream writes are the same path the SDK takes internally;
-the risk is an SDK update changing the attribute name.
+The `JSONRPCMessage(...)` wrapper is required — `SessionMessage.message`
+is typed as `JSONRPCMessage`, and the SDK's `send_notification`
+(`mcp/shared/session.py:331-335` in `mcp==1.27.0`) constructs the
+wrapper before sending. Skipping it fails at the dataclass
+boundary.
 
-The implementation plan pins a known-working SDK version and adds a
-single smoke test that asserts emitted notifications reach a fake
-peer with the expected `method` and `params`.
+`_write_stream` is a protected attribute; the SDK explicitly
+disclaims stability for underscore-prefixed members. This is the
+price of staying in Python. The implementation plan pins
+`mcp==1.27.*` (where this exact path is current) and adds two
+guards:
+
+1. A **startup assertion** in `channel_server.py`:
+   `hasattr(session, "_write_stream") and hasattr(session._write_stream, "send")`.
+   Failing this raises a clear "upgrade required: SDK changed
+   private-API surface" before anything else runs.
+2. A **smoke test** in `tests/` that runs the channel server end-to-
+   end against a fake peer and asserts emitted notifications arrive
+   with the expected `method` and `params`. Caught-on-upgrade is the
+   point of this test.
 
 The notification surfaces in Claude's next turn as e.g.
 `<channel source="periscope" severity="good">tests passed: 47/47</channel>`.
@@ -438,43 +480,85 @@ the block body.
 
 ### Reply tool
 
+The lowlevel API registers tools via two decorators —
+`@server.list_tools()` returning a tool schema, and
+`@server.call_tool()` doing the actual dispatch. `@server.tool()`
+(the FastMCP one-liner) does not exist on `mcp.server.Server`.
+
 ```python
 import httpx
+from mcp import types
 
-@server.tool()
-async def reply(
-    message: str,
-    kind: str = "info",       # "info" | "need_human" | "done"
-    severity: str = "info",   # "info" | "good" | "warning" | "bad"
-) -> str:
-    """Surface a message in periscope's UI for this pane.
+@server.list_tools()
+async def _list_tools() -> list[types.Tool]:
+    return [
+        types.Tool(
+            name="reply",
+            description=(
+                "Surface a message in periscope's UI for this pane. "
+                "Use kind=\"need_human\" when blocked and waiting on the user, "
+                "kind=\"done\" when the current task is complete, "
+                "otherwise kind=\"info\"."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["info", "need_human", "done"],
+                        "default": "info",
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["info", "good", "warning", "bad"],
+                        "default": "info",
+                    },
+                },
+                "required": ["message"],
+            },
+        )
+    ]
 
-    Use kind="need_human" when blocked and waiting on the user.
-    Use kind="done" when the current task is complete.
-    Otherwise kind="info".
-    """
+@server.call_tool()
+async def _call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    if name != "reply":
+        raise ValueError(f"unknown tool: {name}")
+
+    message = arguments["message"]
+    kind = arguments.get("kind", "info")
+    severity = arguments.get("severity", "info")
+
     async with httpx.AsyncClient(timeout=5) as client:
         resp = await client.post(
             f"{PERISCOPE_URL}/api/channel/reply",
             params={"pane": TMUX_PANE},
             json={"message": message, "kind": kind, "severity": severity},
         )
-    return f"posted to periscope (kind={kind}, severity={severity}, status={resp.status_code})"
+
+    body = {
+        "ok": resp.is_success,
+        "status": resp.status_code,
+        "kind": kind,
+        "severity": severity,
+    }
+    return [types.TextContent(type="text", text=json.dumps(body))]
 ```
 
 `async def` + `AsyncClient` is mandatory — a sync `httpx.post` would
-block the MCP event loop alongside the WS consumer. The return
-string gives Claude an audit-trail-useful confirmation rather than
-the conventional opaque `"ok"`; it costs nothing and might save
-debugging later.
+block the MCP event loop alongside the WS consumer. The return is a
+small JSON dict (serialized as `TextContent`) rather than an opaque
+`"ok"`: Claude can parse it cleanly, and a human reading the
+transcript sees a structured audit trail.
 
-The docstring is a secondary discoverability signal; the primary one
-is the `instructions` field on the server. They should agree.
+The tool description and the server-level `instructions` should
+agree. `instructions` is the primary discoverability surface; the
+tool description is what Claude sees on tool-list introspection.
 
 ## Spawn integration
 
 Couples to the existing spawn path and to the worktree spec
-(2026-05-13). Today's spawn (`/api/window/new` in `server.py:1515`)
+(2026-05-13). Today's spawn (`/api/window/new` at `server.py:1632`)
 sends `claude` (or whatever exec the user's `commands` entry
 specifies). After this spec:
 
@@ -496,18 +580,36 @@ have `commands` seeded with `[{label: "claude", exec: "claude"}, ...]`.
 Changing the default seed only affects fresh installs; existing
 users get no channels until they manually edit prefs.
 
-Add a one-shot migration on server startup: for each `commands`
-entry where `exec == "claude"` (exactly, no flags) and a new
-`version_mark` field is absent, rewrite to
-`"claude --dangerously-load-development-channels server:periscope"`
-and stamp `version_mark: "channels-v1"`. The mark prevents re-
-migration if the user later removes the flag intentionally, and is
-the hook for future flag-name updates when channels graduate from
-research preview.
+Add a one-shot migration on server startup, gated by a global
+`state.json` key (not a per-entry mark — see below):
+
+```
+if state.get("channels_migration_v1_done") is not True:
+    for cmd in state["commands"]:
+        if cmd.get("exec") == "claude":
+            cmd["exec"] = (
+                "claude --dangerously-load-development-channels "
+                "server:periscope"
+            )
+    state["channels_migration_v1_done"] = True
+    write_state()
+```
+
+The global flag is deliberate: a per-entry `version_mark` would
+re-migrate any new `{exec: "claude"}` entry a user adds later
+(intentionally — "I want plain claude, no channels"). A global
+flag suppresses the migration after first run regardless of
+`commands[]` state. The user's later edits to `commands` are
+respected verbatim.
+
+Graduation path: when channels leave research preview and the flag
+name changes, a future `channels_migration_v2_done` key carries the
+next rewrite. The pattern stays the same; the v1 flag just becomes
+historical.
 
 Migration runs once per startup behind the same coarse lock the
 rest of `state.json` mutation uses. Idempotent — replaying it does
-nothing.
+nothing after the first run.
 
 ### Detecting whether a pane has a channel
 
@@ -605,7 +707,10 @@ must-have.
    subprocess side. `channel_server.py` must wire its lifecycle so
    stdin EOF terminates the process within a few seconds. Concrete
    requirement: the WS consumer task and the MCP run loop live in
-   the same `asyncio.TaskGroup` (or equivalent), and exception
+   the same `anyio.create_task_group()` (the SDK's structured-
+   concurrency primitive — `stdio_server` and the lowlevel `Server`
+   both use anyio internally; mixing in `asyncio.TaskGroup` adds a
+   backend-coupling seam that's easy to mis-cancel). Exception
    propagation from the MCP loop's natural exit on stdin EOF
    cancels the WS task. An implementation that puts the two halves
    in a bare `asyncio.gather()` and doesn't propagate cancellation
@@ -633,44 +738,54 @@ account for them:
    Claude, not by uvicorn. A sibling file is the right shape. It
    carries its own PEP-723 header.
 
-2. **Python MCP SDK pinning.** Pin a known version that exposes
-   `Server`, `InitializationOptions`, `ServerCapabilities`,
-   `JSONRPCNotification`, and a session with a `_write_stream`
-   attribute. Spec a smoke test that asserts our direct-write path
-   produces the right JSON-RPC bytes. If a future SDK release
-   refactors `_write_stream` away, the smoke test catches it before
-   prod.
+2. **MCP SDK pin: `mcp==1.27.*`.** This is the version verified
+   against during spec review — `Server`, `InitializationOptions`,
+   `ServerCapabilities`, `JSONRPCNotification`, `JSONRPCMessage`,
+   `SessionMessage`, and `session._write_stream.send(...)` all
+   work as the spec describes. Pin the minor in `channel_server.py`'s
+   PEP-723 header; pin major-bound (`>=1.27,<2`) is too loose given
+   the underscore-prefixed attribute we depend on. The startup
+   assertion (see "Notification emission") plus an end-to-end smoke
+   test guard against SDK churn.
 
-3. **`%N` capture in pane parsing.** `server.py:836`'s
-   `tmux list-windows -a` format string needs `#{pane_id}`
-   appended, the parser needs a new field, and `/api/state`'s
-   window-object schema gains `pane_id`. Multi-pane windows are out
-   of scope (active pane only).
+3. **`websockets` SDK pin: `websockets>=15,<17`.** Use the modern
+   async client: `from websockets.asyncio.client import connect`.
+   The legacy `websockets.connect()` import path is being phased out
+   and we want code that's still building in mid-2026. The PEP-723
+   header lists `mcp==1.27.*`, `httpx`, and `websockets>=15,<17`.
 
-4. **In-memory state survives the FastAPI app lifetime.** Pane
+4. **`%N` capture in pane parsing.** `server.py:863`'s
+   `tmux list-windows -a` format string already has `#{@periscope_id}`
+   (phase-2 stable id); append `#{pane_id}`. The parser needs a new
+   field; `/api/state`'s window-object schema gains `pane_id`.
+   Multi-pane windows are out of scope (active pane only).
+
+5. **In-memory state survives the FastAPI app lifetime.** Pane
    queues and reply logs go in module-level dicts protected by a
    single lock (read traffic is low, contention non-issue). GC
    tied to pane enumeration — when a `%N` disappears from
    `list-windows -a`, drop its state.
 
-5. **Channel subprocess lifecycle.** Per Failure mode #8: use
-   `asyncio.TaskGroup` for the MCP loop + WS consumer, propagate
-   cancellation, test the kill-claude-confirm-subprocess-exit
-   path. Leaked channel servers consume FastAPI WS connection slots
-   and aren't free.
+6. **Channel subprocess lifecycle.** Per Failure mode #8: use
+   `anyio.create_task_group()` (not `asyncio.TaskGroup` — the SDK
+   transport is anyio-based and mixing primitives is a known
+   structured-concurrency footgun) for the MCP loop + WS consumer,
+   propagate cancellation, test the kill-claude-confirm-subprocess-
+   exit path. Leaked channel servers consume FastAPI WS connection
+   slots and aren't free.
 
-6. **The `--dangerously-load-development-channels server:periscope`
+7. **The `--dangerously-load-development-channels server:periscope`
    flag is required at spawn.** The spawn integration changes are
-   tiny but touch `/api/window/new` in `server.py:1515` and (when
+   tiny but touch `/api/window/new` at `server.py:1632` and (when
    worktree integration lands) `/api/window/new-worktree`. Both
    must pass the flag through. The seeded `commands` entry default
    and the one-shot migration handle the persisted-prefs side.
 
-7. **The `instructions` string is product copy.** Claude's
+8. **The `instructions` string is product copy.** Claude's
    discoverability of `reply` depends on it. Treat its wording the
    same as user-visible docs.
 
-8. **Meta-key validation lives at the push endpoint, not the
+9. **Meta-key validation lives at the push endpoint, not the
    subscriber.** Validating on the way in (`/api/channel/push`)
    catches the bug at the right boundary — by the time the channel
    server emits the notification, it's too late and the keys are
@@ -741,9 +856,10 @@ Ship-criteria:
    string be in the UI?** Today's plan: it lives in `commands[].exec`
    in `state.json`, which is user-inspectable but not surfaced in
    the new-window tile (which shows `label`). Could go further —
-   hide the flag in a generated wrapper script that the seeded
-   exec invokes. Probably not worth it for v1, but worth a beat of
-   thought before someone screenshots the spawn log and the word
-   "dangerously" ends up in a public bug report.
+   hide the flag in a generated wrapper script (`bin/periscope-claude`,
+   ~20 lines, no Claude-side complications expected) that the seeded
+   exec invokes. Probably not worth it for v1, but cheap enough that
+   the right call may flip if someone screenshots the spawn log and
+   the word "dangerously" ends up in a public bug report.
 
 None blocking.
