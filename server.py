@@ -39,6 +39,72 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 STATIC = Path(__file__).parent / "static"
 
+# --- Persistent state (state.json) ----------------------------------------
+#
+# Single JSON file mutated only by the server, under a threading.Lock, with
+# atomic tempfile+rename writes. See
+# docs/superpowers/specs/2026-05-13-persistent-config-layer-design.md.
+#
+# Lock primitive choice: threading.Lock (not asyncio.Lock). FastAPI runs
+# sync `def` endpoints on anyio's threadpool, so two concurrent /api/state
+# polls execute in parallel threads. asyncio.Lock only blocks coroutines,
+# not threads — it would let sync handlers race past each other into the
+# critical section. threading.Lock works correctly from both sync handlers
+# and async ones (acquired synchronously; the file write is fast enough
+# that briefly blocking the event loop is fine).
+
+def _state_path() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return Path(base) / "periscope" / "state.json"
+
+
+_STATE_LOCK = threading.Lock()
+_STATE_DEFAULTS: dict = {
+    "version": 1,
+    "ui": {},
+    "windows": {},
+    "commands": [],
+}
+
+
+def _load_state() -> dict:
+    """Read state.json. On parse failure rename to .corrupt-<ts> and return
+    defaults — the next save writes a fresh valid file, and the user can
+    recover from the renamed file if they care."""
+    path = _state_path()
+    if not path.exists():
+        return json.loads(json.dumps(_STATE_DEFAULTS))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        # Missing keys default to their empty value — older files written by
+        # earlier phases never carry `windows` or `commands`.
+        for k, v in _STATE_DEFAULTS.items():
+            data.setdefault(k, json.loads(json.dumps(v)))
+        return data
+    except (json.JSONDecodeError, OSError) as e:
+        corrupt = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+        try:
+            path.rename(corrupt)
+            print(f"periscope: state.json unreadable ({e}); renamed to {corrupt}")
+        except OSError:
+            pass
+        return json.loads(json.dumps(_STATE_DEFAULTS))
+
+
+def _write_state(data: dict) -> None:
+    """Atomic write: tempfile + os.replace. Caller must hold _STATE_LOCK."""
+    path = _state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+# In-memory cache — every endpoint reads from this, writes go through
+# _write_state under the lock. Loaded once at startup.
+_STATE: dict = _load_state()
+
+
 # Server-tracked "last user-focused" per target.
 # Tmux's window_activity bumps on any output (Claude streaming, build logs, dev
 # servers, etc), which surprises users expecting "last accessed" semantics.
