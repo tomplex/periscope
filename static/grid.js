@@ -101,6 +101,15 @@ function renderCard(w) {
       : w.state;
   const statusLabel = `<span class="card-status">${escapeHtml(statusText)}</span>`;
 
+  // Channel indicators: green dot when a subscriber is attached, red badge
+  // with count when there are unread replies waiting for the user.
+  const channelDot = w.channel_attached
+    ? `<span class="channel-dot" title="channel attached"></span>`
+    : "";
+  const unreadBadge = (w.channel_unread || 0) > 0
+    ? `<span class="channel-unread" title="${w.channel_unread} unread reply(s)">${w.channel_unread}</span>`
+    : "";
+
   // Footer: progress bar + ctx% + model + viewed-age. Progress bar only when
   // we have a context % to fill; otherwise the row reads "model · viewed Xm".
   const footParts = [];
@@ -122,6 +131,7 @@ function renderCard(w) {
       <header class="card-head">
         <span class="card-title">${escapeHtml(w.name)}</span>
         <span class="card-idx">${w.index}</span>
+        ${channelDot}${unreadBadge}
         ${statusLabel}
         ${anno}
         <button class="card-kill" data-target="${w.target}" data-name="${escapeHtml(w.name)}" title="kill this window">✕</button>

@@ -1323,3 +1323,29 @@ body.modal-open { overflow: hidden; }
   cursor: pointer;
 }
 .commands-modal-add:hover { color: var(--fg-0); border-color: var(--accent); }
+
+/* Channels — pane card indicators */
+.channel-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #4ade80; /* green-400 */
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.channel-unread {
+    display: inline-block;
+    background: #ef4444; /* red-500 */
+    color: white;
+    font-size: 10px;
+    line-height: 14px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 4px;
+    border-radius: 7px;
+    margin-left: 4px;
+    text-align: center;
+    vertical-align: middle;
+}
