@@ -30,7 +30,8 @@ A single JSON file at `${XDG_CONFIG_HOME:-~/.config}/periscope/state.json`.
   "version": 1,
   "ui": {
     "session_order": ["tc/foo", "tc/bar"],
-    "collapsed_sessions": ["tc/baz"]
+    "collapsed_sessions": ["tc/baz"],
+    "view": "grid"
   },
   "windows": {
     "a1b2c3d4": {
@@ -50,7 +51,8 @@ A single JSON file at `${XDG_CONFIG_HOME:-~/.config}/periscope/state.json`.
   },
   "commands": [
     { "label": "claude", "exec": "claude" },
-    { "label": "shell", "exec": "$SHELL -l" }
+    { "label": "shell", "exec": "" },
+    { "label": "vim", "exec": "vim" }
   ]
 }
 ```
@@ -59,7 +61,7 @@ Notes on the shape:
 
 - `version` is reserved for future schema migrations. Server reads it; on mismatch, applies an in-place migration.
 - `windows` entries have mixed cardinality. An id with an annotation carries `notes`/`tags`. An id with no annotation carries only `last_seen` — it exists purely to support the rebind heuristic (see below). The two cases coexist in one map for simplicity.
-- `commands` is an ordered list. Order determines button order in the new-window tile.
+- `commands` is an ordered list. Order determines button order in the new-window tile, and the **first entry is the primary button** (larger hit area, top of the tile) — matching the current `+ claude` primary / `+ shell` / `+ vim` stacked layout. Empty `exec` means "open a bare shell, send no keys" (the current `mode=shell` semantics).
 - **Missing keys default to their empty/default value.** A phase-1 state file with no `windows` or `commands` key is valid; later phases that consume those keys treat absence as empty (with `commands` further defaulting to the seeded `claude`/`shell` entries — see phase 4).
 
 ### Write discipline
@@ -145,15 +147,15 @@ The existing `/api/state`, `/api/auto-rename-session`, and `/api/auto-rename-win
 
 ### `/api/window/new` contract change (phase 4)
 
-The current endpoint takes `mode: "claude" | "shell"` and special-cases `mode == "claude"` to send `claude\n` via `send-keys`. In phase 4 this is replaced by an `exec` parameter:
+The current endpoint takes `mode: "claude" | "shell" | "vim"` and hardcodes a separate `send-keys` branch for each. In phase 4 this is replaced by an `exec` parameter:
 
 ```
 POST /api/window/new?session=<s>&exec=<command>
 ```
 
-The server spawns a new window with no command attached, then (after the existing 100ms post-create sleep) sends `<command>\n` via `send-keys` if `exec` is non-empty and non-whitespace. Empty `exec` = "just open a shell, don't run anything" (replaces today's `mode=shell` path).
+The server spawns a new window with no command attached, then (after the existing 100ms post-create sleep) sends `<command>\n` via `send-keys` if `exec` is non-empty and non-whitespace. Empty `exec` = "just open a shell, don't run anything" (replaces today's `mode=shell` path). The three hardcoded mode branches in `window_new()` collapse into a single conditional `send-keys` call.
 
-The frontend new-window tile reads `prefs.getCommands()` and renders one button per entry; the click handler calls `/api/window/new` with `exec` set to the row's resolved exec string. The legacy `mode` query param is dropped at the same time the new-window tile switches to command-driven rendering.
+The frontend new-window tile reads `prefs.getCommands()` and renders one button per entry — the first command in the list becomes the primary (top of the tile, larger hit area), the rest stack below. The click handler calls `/api/window/new` with `exec` set to the row's `exec` string. The legacy `mode` query param is dropped at the same time the new-window tile switches to command-driven rendering.
 
 ## Frontend changes
 
@@ -174,10 +176,12 @@ All mutators update the local cache eagerly and issue the corresponding API call
 
 ### Migration from localStorage
 
+Three legacy keys to migrate: `periscope:sessionOrder`, `periscope:collapsedSessions`, `periscope:view`.
+
 On every successful `loadPrefs()` after upgrade:
 
-1. If the server returned an empty `ui` block AND `localStorage` contains `periscope:sessionOrder` or `periscope:collapsedSessions`, push those values to `/api/prefs/ui`.
-2. Regardless of step 1, delete the legacy localStorage keys. Once the server has authoritative state, the client copies are noise — leaving them around lets a "fresh state.json" event silently re-migrate stale data.
+1. If the server returned an empty `ui` block AND any of the three legacy keys exist, push their values to `/api/prefs/ui` (mapping `view` to `ui.view`, etc.).
+2. Regardless of step 1, delete all three legacy keys. Once the server has authoritative state, the client copies are noise — leaving them around lets a "fresh state.json" event silently re-migrate stale data.
 
 The shim lives in `prefs.js` until the operator confirms migration ran, then is deleted in a follow-up commit.
 
@@ -193,27 +197,34 @@ If `loadPrefs()` fails (server down, network error, parse error), the in-memory 
 
 ### Annotations UI
 
-Each card gains a small `i` button next to the existing `✕` kill button. Clicking opens an inline popover (positioned over the card) with:
+Annotations live in the **modal sidebar** (`#modal-side`), as a new section alongside the existing "Linked" and "Activity" sections. The modal is the user's natural editing surface — opening a card already shows the live terminal plus PR/CI/activity context, and notes belong with that context, not as a separate popover on the grid.
 
-- A `<textarea>` for `notes`.
-- A free-text tag input that splits on space/comma into the `tags` array.
-- Save / cancel.
+The new section "Notes" renders:
 
-Cards with non-empty `notes` or `tags` show a subtle indicator (e.g. a tinted bubble in the corner of the card head). The card snippet area is untouched — annotations are visible on hover or open, not in the default card body, to keep the dashboard density unchanged.
+- A `<textarea>` for `notes`, auto-saving on blur (debounced 600ms during typing).
+- A free-text tag input that splits on space/comma into the `tags` array, with the existing tags rendered as removable chips above the input.
+
+Save uses the same eager-local + background-PUT pattern as the other prefs mutators. Failed PUTs revert the cache and surface via `apiCall()`.
+
+Grid cards (and stream rows, where applicable) get a small unobtrusive indicator (e.g. a `📝` glyph in the card-head row) when the card's pid has non-empty `notes` or `tags`. The indicator is purely a visual cue; clicking it opens the modal like a regular card click. Card density and layout stay unchanged.
+
+The annotation lookup hangs off the `pid` field that `/api/state` and `/api/pane` already emit (after phase 2 lands).
 
 ### Commands UI
 
-A gear icon in the header (row 2, next to the existing action buttons) opens a modal with:
+A gear icon in the filters row (next to the view-switch — both are "global UI controls" and visually belong together) opens a modal with:
 
-- A list of current commands. Each row: label input, exec input, delete button.
+- A list of current commands. Each row: label input, exec input, drag handle, delete button.
 - An "+ add" row at the bottom.
 - Save persists all rows via the appropriate POST/PUT/DELETE calls.
+
+Drag handles let the user reorder; the first row in the list becomes the new-window tile's primary button.
 
 `modal.js` is bespoke for the terminal pane (xterm wiring, `state.activeTarget`, header polling). Rather than overload it, phase 4 adds:
 
 - A second `#commands-modal` `<div>` in `index.html` with its own structure.
 - A new `commands-modal.js` module that owns open/close + form state for that modal.
-- The Escape-closes-modal handler in `modal.js` is extracted into a tiny shared helper that both modals register against. This is the only refactor `modal.js` takes on; everything else stays as-is.
+- The Escape-closes-modal handler in `modal.js` is extracted into a tiny shared helper (`overlay.js`) that both modals register against. This is the only refactor `modal.js` takes on; everything else stays as-is.
 
 A separate, larger refactor that extracts a generic overlay primitive can happen later if a third modal ever appears — explicitly deferred.
 
