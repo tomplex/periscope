@@ -16,8 +16,11 @@ _TRIVIAL_CMDS = {"ls", "pwd", "cat", "echo", "cd", "clear", "exit", "whoami", "d
 _TRIVIAL_CMD_LENGTH = 20
 _NON_TRIVIAL_CHARS = {"|", ">", "<", "/"}
 
-# Path-bearing tool input keys we recognize as file touches.
-_FILE_KEYS = ("file_path", "path", "notebook_path", "old_path", "new_path")
+# Path-bearing tool input keys that identify a single FILE touch. We deliberately
+# exclude "path" (directory parameter on Glob/Grep) and rename-style keys not in
+# Claude Code's current built-in tool set — they'd pollute the index with
+# directory entries.
+_FILE_KEYS = ("file_path", "notebook_path")
 
 # Truncation lengths.
 MAX_FIRST_LAST_USER = 500

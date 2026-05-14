@@ -39,7 +39,26 @@ def test_files_touched_dedup_and_order(fixture_dir):
     ]
 
 
-def test_notable_cmds_filters_trivial(fixture_dir, tmp_path):
+def test_glob_grep_paths_excluded_from_files_touched(tmp_path):
+    """Glob and Grep tools use `path` to mean a search directory, not a file
+    touch. Including them in _FILE_KEYS pollutes the index with directory
+    entries. Regression test for that fix."""
+    p = tmp_path / "glob.jsonl"
+    p.write_text(
+        '{"type":"user","sessionId":"s","cwd":"/p","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","parentUuid":null,"message":{"role":"user","content":[{"type":"text","text":"go"}]}}\n'
+        '{"type":"assistant","sessionId":"s","cwd":"/p","timestamp":"2026-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":['
+        '{"type":"tool_use","id":"t1","name":"Glob","input":{"pattern":"*.py","path":"/Users/tom/dev/foo/src"}},'
+        '{"type":"tool_use","id":"t2","name":"Grep","input":{"pattern":"needle","path":"/Users/tom/dev/foo"}},'
+        '{"type":"tool_use","id":"t3","name":"Read","input":{"file_path":"/Users/tom/dev/foo/real_file.py"}}'
+        ']}}\n'
+    )
+    events = list(parse_jsonl(str(p)))
+    rec = extract_record(str(p), events, source_mtime=0, source_size=p.stat().st_size)
+    files = json.loads(rec.files_touched)
+    assert files == ["/Users/tom/dev/foo/real_file.py"]
+
+
+def test_notable_cmds_filters_trivial(tmp_path):
     # Build a session with both notable and trivial Bash commands
     p = tmp_path / "cmds.jsonl"
     p.write_text(
