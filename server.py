@@ -1275,6 +1275,9 @@ def pane(session: str, index: int, lines: int = 200):
     except Exception:
         window_name, cwd = "", ""
     git = cached_git_state(cwd) or {}
+    one = [{"session": session, "index": index, "name": window_name, "active": False, "cwd": cwd, "pid_raw": ""}]
+    _attach_git_then_resolve_pids(one)
+    pid = one[0].get("pid")
     pr = cached_pr_state(cwd, git.get("branch")) or {}
     activity = cached_pane_activity(target, cwd, git.get("branch"))
     # Shorten $HOME → ~ for display. Done server-side because the browser
@@ -1289,6 +1292,7 @@ def pane(session: str, index: int, lines: int = 200):
         "name": window_name,
         "cwd": cwd_display,
         "session": session,
+        "pid": pid,
         "activity": activity,
         **parsed,
         **git,

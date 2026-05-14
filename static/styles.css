@@ -966,6 +966,64 @@ body.modal-open { overflow: hidden; }
   min-height: 0;
 }
 
+.modal-side-notes .modal-notes {
+  width: 100%;
+  min-height: 80px;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+}
+.modal-side-notes .modal-notes:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.tag-row {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 8px;
+  font-size: 10.5px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--fg-2);
+}
+.tag-chip-x {
+  background: none;
+  border: 0;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+}
+.tag-chip-x:hover { color: var(--s-danger); }
+.modal-tag-input {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: 3px 6px;
+  color: var(--fg-1);
+}
+
 .modal-side-link-btn {
   display: block;
   width: 100%;

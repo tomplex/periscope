@@ -10,6 +10,7 @@ import { state } from './state.js';
 import { escapeHtml, targetQuery, apiCall, relTime } from './util.js';
 import { startLiveTerminal, stopLiveTerminal, writeTerminalLine } from './terminal.js';
 import { poll } from './grid.js';
+import * as prefs from './prefs.js';
 
 const modal = document.getElementById("modal");
 const modalTitle = document.getElementById("modal-title");
@@ -118,11 +119,16 @@ function renderModalSidebar(data) {
       ${renderPRCard(data)}
       ${renderLinearPlaceholder()}
     </section>
+    <section class="modal-side-section modal-side-notes">
+      <h4>Notes</h4>
+      ${renderNotesEditor(data)}
+    </section>
     <section class="modal-side-section modal-side-activity">
       <h4>Activity</h4>
       ${renderActivityTimeline(data.activity)}
     </section>
   `;
+  wireNotesEditor(data);
 }
 
 function avatarChars(handle) {
@@ -213,6 +219,84 @@ function renderActivityTimeline(events) {
       `).join("")}
     </ol>
   `;
+}
+
+function renderNotesEditor(data) {
+  const pid = data.pid || "";
+  const ann = pid ? prefs.getAnnotation(pid) : null;
+  const notes = ann?.notes || "";
+  const tags = ann?.tags || [];
+  const chips = tags
+    .map(
+      (t, i) =>
+        `<span class="tag-chip" data-tag-i="${i}">${escapeHtml(t)}<button class="tag-chip-x" data-tag-i="${i}" title="remove">×</button></span>`
+    )
+    .join("");
+  return `
+    <textarea id="modal-notes" class="modal-notes" placeholder="${
+      pid ? "Notes — saves on blur" : "Notes unavailable (no pid)"
+    }" ${pid ? "" : "disabled"}>${escapeHtml(notes)}</textarea>
+    <div class="tag-row">
+      <div class="tag-chips" id="modal-tags">${chips}</div>
+      <input id="modal-tag-input" class="modal-tag-input" type="text"
+             placeholder="add tag, Enter or comma" ${pid ? "" : "disabled"}>
+    </div>
+  `;
+}
+
+let _notesTimer = null;
+
+function wireNotesEditor(data) {
+  const pid = data.pid;
+  if (!pid) return;
+  const ta = document.getElementById("modal-notes");
+  const ti = document.getElementById("modal-tag-input");
+  const tagsHost = document.getElementById("modal-tags");
+  if (!ta || !ti || !tagsHost) return;
+
+  // Debounce typing 600ms; flush immediately on blur.
+  const flushNotes = () => {
+    const ann = prefs.getAnnotation(pid) || { notes: "", tags: [] };
+    prefs.setAnnotation(pid, { notes: ta.value, tags: ann.tags });
+  };
+  ta.addEventListener("input", () => {
+    clearTimeout(_notesTimer);
+    _notesTimer = setTimeout(flushNotes, 600);
+  });
+  ta.addEventListener("blur", () => {
+    clearTimeout(_notesTimer);
+    flushNotes();
+  });
+  // Stop Escape/Enter from bubbling to the modal handler.
+  ta.addEventListener("keydown", (e) => e.stopPropagation());
+
+  const submitTag = () => {
+    const raw = ti.value.trim();
+    if (!raw) return;
+    const ann = prefs.getAnnotation(pid) || { notes: ta.value, tags: [] };
+    const parts = raw.split(/[\s,]+/).filter(Boolean);
+    const nextTags = [...ann.tags, ...parts];
+    prefs.setAnnotation(pid, { notes: ta.value, tags: nextTags });
+    ti.value = "";
+    refreshModalHeader();  // re-render the sidebar with the new chip
+  };
+  ti.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      submitTag();
+    }
+  });
+
+  tagsHost.addEventListener("click", (e) => {
+    const btn = e.target.closest(".tag-chip-x");
+    if (!btn) return;
+    const i = Number(btn.dataset.tagI);
+    const ann = prefs.getAnnotation(pid) || { notes: ta.value, tags: [] };
+    const nextTags = ann.tags.filter((_, idx) => idx !== i);
+    prefs.setAnnotation(pid, { notes: ta.value, tags: nextTags });
+    refreshModalHeader();
+  });
 }
 
 function startModalRename() {
