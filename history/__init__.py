@@ -3,10 +3,13 @@
 __all__ = ["index_one", "search"]
 
 
-def index_one(jsonl_path: str) -> dict:
-    """Index (or re-index) one session. Returns a status dict."""
+def index_one(jsonl_path: str, **kwargs) -> dict:
+    """Index (or re-index) one session. Returns a status dict.
+
+    Forwards keyword arguments to history.indexer.index_one. Supported:
+    db_path=Path|str|None, force=bool."""
     from .indexer import index_one as _impl
-    return _impl(jsonl_path)
+    return _impl(jsonl_path, **kwargs)
 
 
 def search(query: str, **kwargs) -> list[dict]:

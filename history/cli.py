@@ -10,6 +10,20 @@ from .db import connect, get_meta, set_meta
 
 
 def main(argv: list[str] | None = None) -> int:
+    import logging
+    logging.basicConfig(
+        level=os.environ.get("HISTORY_LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    # Mirror server.py: load ANTHROPIC_API_KEY from the periscope repo's .env.
+    # The CLI is normally invoked from the repo root via `uv run` so this works.
+    try:
+        from dotenv import load_dotenv
+        from pathlib import Path as _Path
+        # Walk up from this file: history/cli.py → history/ → repo root
+        load_dotenv(_Path(__file__).parent.parent / ".env")
+    except ImportError:
+        pass  # python-dotenv not installed; ANTHROPIC_API_KEY must be exported
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         _print_help()
@@ -78,6 +92,11 @@ def _cmd_backfill(argv: list[str]) -> int:
     finally:
         conn.close()
     print(json.dumps(result, indent=2))
+    # Non-zero exit when any row failed outright. summary-failed is treated as
+    # a soft failure (mechanical row landed; summary just NULL) and doesn't
+    # bump the exit code — running --resummarize-missing later picks them up.
+    if result.get("errors"):
+        return 1
     return 0
 
 
