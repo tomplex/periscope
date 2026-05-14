@@ -60,6 +60,62 @@ cp .env.example .env
 - `POST /api/rename?session=…&index=…` — body `{name: "..."}`; renames a window
 - `POST /api/auto-rename-session?session=…` — Haiku-driven batch rename of every window in a session
 - `WS   /ws/pane?session=…&index=…` — live bidirectional pane stream (xterm.js powers the modal)
+- `POST /api/channel/push?pane=%N` — body `{content, meta?}`; queues an event for the pane's channel server
+- `POST /api/channel/reply?pane=%N` — body `{message, kind?, severity?}`; called by the channel server's `reply` tool
+- `POST /api/channel/clear-unread?pane=%N` — zeroes the pane's unread reply count
+- `WS   /ws/channel?pane=%N` — subscriber endpoint for the per-pane channel server (last-writer-wins)
+
+## Channels (Claude push/reply)
+
+Periscope can push messages into the Claude Code sessions it spawns and
+surface Claude's replies in its UI. This uses Claude Code's
+[channels](https://code.claude.com/docs/en/channels) feature, currently
+in research preview.
+
+### One-time setup
+
+Add the following entry to `~/.claude/.mcp.json` (create the file if it
+doesn't exist):
+
+```json
+{
+  "mcpServers": {
+    "periscope": {
+      "command": "uv",
+      "args": ["run", "--script", "/ABSOLUTE/PATH/TO/periscope/channel_server.py"],
+      "env": {
+        "PERISCOPE_URL": "http://127.0.0.1:8765"
+      }
+    }
+  }
+}
+```
+
+Replace `/ABSOLUTE/PATH/TO/periscope/` with your local checkout path.
+
+### How it works
+
+When you click `+ claude` in periscope, the spawned command is
+`claude --dangerously-load-development-channels server:periscope`. Claude
+launches `channel_server.py` as a stdio child. The server connects to
+periscope's `/ws/channel` and bridges events both directions.
+
+The `--dangerously-load-development-channels` flag is required because
+channels are in research preview — bare `--channels` only resolves
+allowlisted entries.
+
+### Using channels
+
+- **Push to Claude:** open a pane's modal, type a message in the
+  composer in the Messages section, and submit. Claude sees it on its
+  next turn as a `<channel source="periscope">` block.
+- **Replies from Claude:** Claude can call the `reply` tool with
+  `kind="need_human"`, `kind="done"`, or `kind="info"` (the default).
+  Messages show in the modal's Messages section; `need_human` triggers a
+  pulsing red border on the pane card and fades the rest of the grid.
+
+If a session was started outside periscope (no dev-channels flag), the
+push composer is disabled with a tooltip.
 
 ## License
 
