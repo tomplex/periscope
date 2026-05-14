@@ -66,15 +66,23 @@ Notes on the shape:
 
 All writes go through a single module-level `asyncio.Lock` in `server.py`. Inside the lock, the server reads the file, mutates the dict, writes to `state.json.tmp`, then `os.replace()` onto the live path. The lock is held for the full read-modify-write — the file is tiny (kilobytes), so coarse locking is fine.
 
+### Load discipline
+
+On startup, the server attempts to read and JSON-parse `state.json`. On parse failure, it renames the bad file to `state.json.corrupt-<unix-ts>`, logs loudly, and continues with empty defaults. This protects against a hand-edit, a torn write from an earlier crash, or disk corruption: the next save writes a fresh valid file and the user can recover annotations from the saved corrupt file if they care.
+
+### Schema migrations
+
+`version` exists for future evolution. v1 has no migration paths. When v2 lands, a `_migrations` dict keyed by `(from_version, to_version)` is added to the load path; ad-hoc inline migrations are explicitly disallowed.
+
 ### GC
 
-On server startup, drop any `windows` entry that (a) has no `notes` and no `tags`, and (b) `last_seen.ts` is older than 30 days. This keeps the file from accumulating dead orphan-rebind hints indefinitely.
+After each poll (post-pid-resolution), drop any `windows` entry that (a) has no `notes` and no `tags`, and (b) `last_seen.ts` is older than 30 days, and (c) was not refreshed this poll. This keeps the file from accumulating dead orphan-rebind hints indefinitely. Running GC after pid resolution (rather than at startup) means we never drop an entry that's about to rebind to a window we just polled. The cost of accidentally dropping a hint-only entry is at most a re-mint — annotations are not at risk because annotated entries are excluded by clause (a).
 
 ## Identity model
 
 ### Periscope id
 
-Every tmux window periscope sees acquires a periscope-assigned 8-character hex id, stored as a tmux user option on the window: `@periscope_id`. The id is opaque — clients treat it as a string.
+Every tmux window periscope sees acquires a periscope-assigned 8-character hex id, stored as a tmux user option on the window: `@periscope_id`. The id is opaque — clients treat it as a string. Throughout this spec and the wire payload the field is named `pid` (short for "periscope id" — not Unix process id, despite the name collision; an inline comment in `server.py` calls this out).
 
 Why a periscope-owned id rather than tmux's `#{window_id}` (e.g. `@7`):
 
@@ -84,11 +92,12 @@ Why a periscope-owned id rather than tmux's `#{window_id}` (e.g. `@7`):
 
 ### Assignment
 
-The `list-windows` format string in `server.py` gains `#{@periscope_id}`. For every window seen during a poll:
+The `list-windows` format string in `server.py` (consumed by `list_windows()`) gains `#{@periscope_id}` as a new tab-separated field. Pid resolution does **not** live in `parse_pane()` — that function only knows the capture-pane text. Instead, a new helper `resolve_pids(windows)` runs after `cached_git_state` has populated each window's `branch`/`cwd`, and is called by every endpoint that produces window objects (`/api/state`, `/api/auto-rename-session`, `/api/auto-rename-window`). For each window:
 
-1. If the value is non-empty, use it as the `pid`.
+1. If `#{@periscope_id}` is non-empty, use it as the `pid`.
 2. If empty, attempt rebind (next section). If rebind hits, reuse the matched id. Otherwise mint a fresh 8-char hex uuid.
-3. In either case where we synthesized an id (rebind or mint), `tmux set-option -wt <target> @periscope_id <pid>`. This is fire-and-forget; if it fails (e.g. the window is gone), the next poll repeats the attempt.
+3. In either case where we synthesized an id (rebind or mint), invoke tmux with flags split house-style: `tmux("set-option", "-w", "-t", target, "@periscope_id", pid)`. Fire-and-forget; if it fails (e.g. the window is gone), the next poll repeats the attempt.
+4. Update the pid's `last_seen` block with current `(session, name, branch, cwd, now)`.
 
 ### Rebind heuristic
 
@@ -106,11 +115,13 @@ When a window is seen with no `@periscope_id`, before minting a new id:
 
 ### Last-seen update
 
-After resolving a window's `pid` for the current poll, the server updates that pid's `last_seen` block with the current `(session, name, branch, cwd, now)`. This is what makes the rebind heuristic improve over time — every poll refreshes the hint.
+The `last_seen` update in step 4 of assignment is what makes the rebind heuristic improve over time — every poll refreshes the hint, so a recreated window matches the freshest available `(session, name, branch, cwd)`.
 
-### Known consequence
+### Known consequences
 
-If a window is killed and a different window is later created with the same `(session, name)` within 30 days, the new window inherits the old annotations. This is intentional: from the user's perspective, naming a window `gitops` in session `tc/foo` again is them saying "this is that window." Documented behavior; not a bug.
+1. If a window is killed and a different window is later created with the same `(session, name)` within 30 days, the new window inherits the old annotations. Intentional: from the user's perspective, naming a window `gitops` in session `tc/foo` again is them saying "this is that window."
+
+2. Between the moment we mint a fresh pid for an orphaned window and the moment tmux commits `@periscope_id` to that window, a parallel poll could theoretically re-attempt the match. In practice this is not a problem because the matching is deterministic (same `(session, name)` → same orphan candidate), so any racing pollers converge on the same pid. After the `set-option` lands, subsequent polls take the fast path at step 1 and the question is moot.
 
 ## Server endpoints
 
@@ -130,7 +141,19 @@ DELETE /api/prefs/commands/{label}
 
 `DELETE /api/prefs/windows/{pid}` only removes `notes` and `tags`. `last_seen` is left intact so the rebind heuristic still works if the window is later recreated.
 
-The existing `/api/state` poll endpoint gains a `pid` field on each window object.
+The existing `/api/state`, `/api/auto-rename-session`, and `/api/auto-rename-window` endpoints all gain `pid` on each window object (they share the `resolve_pids` helper described above).
+
+### `/api/window/new` contract change (phase 4)
+
+The current endpoint takes `mode: "claude" | "shell"` and special-cases `mode == "claude"` to send `claude\n` via `send-keys`. In phase 4 this is replaced by an `exec` parameter:
+
+```
+POST /api/window/new?session=<s>&exec=<command>
+```
+
+The server spawns a new window with no command attached, then (after the existing 100ms post-create sleep) sends `<command>\n` via `send-keys` if `exec` is non-empty and non-whitespace. Empty `exec` = "just open a shell, don't run anything" (replaces today's `mode=shell` path).
+
+The frontend new-window tile reads `prefs.getCommands()` and renders one button per entry; the click handler calls `/api/window/new` with `exec` set to the row's resolved exec string. The legacy `mode` query param is dropped at the same time the new-window tile switches to command-driven rendering.
 
 ## Frontend changes
 
@@ -151,7 +174,16 @@ All mutators update the local cache eagerly and issue the corresponding API call
 
 ### Migration from localStorage
 
-On the first `loadPrefs()` after upgrade, if the server returned an empty `ui` block AND `localStorage` contains `periscope:sessionOrder` or `periscope:collapsedSessions`, the client pushes those values to `/api/prefs/ui`, then removes the localStorage keys. The migration shim lives in `prefs.js` until the operator confirms the migration ran, then is deleted in a follow-up commit.
+On every successful `loadPrefs()` after upgrade:
+
+1. If the server returned an empty `ui` block AND `localStorage` contains `periscope:sessionOrder` or `periscope:collapsedSessions`, push those values to `/api/prefs/ui`.
+2. Regardless of step 1, delete the legacy localStorage keys. Once the server has authoritative state, the client copies are noise — leaving them around lets a "fresh state.json" event silently re-migrate stale data.
+
+The shim lives in `prefs.js` until the operator confirms migration ran, then is deleted in a follow-up commit.
+
+### `loadPrefs()` failure mode
+
+If `loadPrefs()` fails (server down, network error, parse error), the in-memory cache is marked **not-loaded**. The grid still renders using whatever the server's `/api/state` poll returns. Mutators (`setSessionOrder`, `setCollapsed`, etc.) refuse to issue writes while not-loaded; they retry the initial `loadPrefs()` first and only proceed on success. The error surfaces in the existing `last-update` slot ("prefs load failed: …"). This avoids the footgun where a transient server hiccup at boot causes the user's first mutation to overwrite real server state with empty defaults.
 
 ### Consumers
 
@@ -177,7 +209,13 @@ A gear icon in the header (row 2, next to the existing action buttons) opens a m
 - An "+ add" row at the bottom.
 - Save persists all rows via the appropriate POST/PUT/DELETE calls.
 
-The modal reuses the existing modal infrastructure (`modal.js`) where it makes sense.
+`modal.js` is bespoke for the terminal pane (xterm wiring, `state.activeTarget`, header polling). Rather than overload it, phase 4 adds:
+
+- A second `#commands-modal` `<div>` in `index.html` with its own structure.
+- A new `commands-modal.js` module that owns open/close + form state for that modal.
+- The Escape-closes-modal handler in `modal.js` is extracted into a tiny shared helper that both modals register against. This is the only refactor `modal.js` takes on; everything else stays as-is.
+
+A separate, larger refactor that extracts a generic overlay primitive can happen later if a third modal ever appears — explicitly deferred.
 
 ## Phasing
 
