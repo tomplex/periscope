@@ -134,6 +134,31 @@ def _seed_commands_if_empty() -> None:
 _seed_commands_if_empty()
 
 
+def _channels_migration_v1() -> None:
+    """One-shot: rewrite seeded `claude` exec entries to include the
+    dev-channels flag so spawned Claudes get a channel server attached.
+
+    Idempotent — gated by `channels_migration_v1_done`. Does not re-run on
+    later restarts even if the user re-adds an `{exec: "claude"}` entry
+    by hand. See docs/superpowers/specs/2026-05-14-channels-design.md
+    §"Migration for existing users" for the policy rationale.
+    """
+    with _STATE_LOCK:
+        if _STATE.get("channels_migration_v1_done"):
+            return
+        new_exec = (
+            "claude --dangerously-load-development-channels server:periscope"
+        )
+        for cmd in _STATE.get("commands", []):
+            if cmd.get("exec") == "claude":
+                cmd["exec"] = new_exec
+        _STATE["channels_migration_v1_done"] = True
+        _write_state(_STATE)
+
+
+_channels_migration_v1()
+
+
 # --- Channels state -------------------------------------------------------
 #
 # Per-pane (keyed on %N from $TMUX_PANE) in-memory queues, reply logs, and
