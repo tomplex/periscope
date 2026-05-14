@@ -115,10 +115,26 @@ STATUS_RE = re.compile(
 
 # Spinner: any non-ASCII glyph at line start (Claude Code rotates through
 # ✻ ✶ ✷ ✳ ✦ … and others — enumerating breaks every time Claude adds a new
-# one) + whitespace + content + a literal `…`. The ellipsis is what
-# distinguishes an active spinner from past-tense status lines like
+# one) + whitespace + a single-word verb + a literal `…`. The ellipsis is
+# what distinguishes an active spinner from past-tense status lines like
 # "✻ Brewed for 31s" (no `…`).
-SPINNER_RE = re.compile(r"^\s*[^\x00-\x7f]\s+(?P<phrase>\S.*?)…")
+#
+# The phrase is `\S+?` (single token, no whitespace) on purpose: Claude Code
+# tool-call headers look like `⏺ Bash(cd /Users/tom/… --skip-glo…)`, with the
+# `…` truncating the command inside the parens. A laxer pattern that allowed
+# whitespace inside the phrase would match those scrollback lines and falsely
+# promote idle Claude panes to the "working" state.
+SPINNER_RE = re.compile(r"^\s*[^\x00-\x7f]\s+(?P<phrase>\S+?)…")
+
+# Newer Claude Code task UI dropped the trailing `…`. An active operation now
+# renders as `<glyph> <verb> <noun?> (Xm Ys · ↑Nk tokens · thought for Zs)`
+# and signals completion by dropping the up-arrow — e.g. `Done (5 tool uses ·
+# 25.5k tokens · 21s)` is a finished agent. The `↑ Nk tokens` inside parens
+# is the live uplink meter; only the running op shows it. Distinguishable
+# from STATUS_RE because the status line has both ↑ and ↓ and no `tokens`
+# word, and it isn't wrapped in parens.
+ACTIVE_OP_RE = re.compile(r"\([^)]*↑\s*[\d.]+\w*\s+tokens[^)]*\)")
+
 # Pull out a verb-shaped word for the card label (`envisioning…`,
 # `planning…`). Falls back to the first word if there's no clean verb.
 SPINNER_VERB_RE = re.compile(r"\b([A-Z]\w+(?:ing|ed))\b")
@@ -578,8 +594,12 @@ def parse_pane(content: str) -> dict:
 
     is_claude = status is not None
 
-    # Spinner: most recent "<glyph> <phrase>…" line. Verb extraction is a
-    # display nicety — detection only requires the glyph + ellipsis.
+    # Spinner: most recent active-op signal in the bottom rows. Two forms,
+    # tried at each line so whichever sits closer to the bottom wins (a fresh
+    # active op should override an older `…` line lingering in scrollback):
+    #   - old: "<glyph> <phrase>…"           (SPINNER_RE)
+    #   - new: "<glyph> <verb> ... (↑Nk tokens ...)"  (ACTIVE_OP_RE)
+    # Verb extraction is a display nicety — detection only requires the match.
     spinner = None
     for line in reversed(lines[-40:]):
         m = SPINNER_RE.match(line)
@@ -591,6 +611,10 @@ def parse_pane(content: str) -> dict:
             else:
                 first = phrase.split(None, 1)[0] if phrase else ""
                 spinner = first or "working"
+            break
+        if ACTIVE_OP_RE.search(line):
+            vm = SPINNER_VERB_RE.search(line)
+            spinner = vm.group(1) if vm else "working"
             break
 
     # Needs-input: look for the dialog's footer line in the last few lines.
