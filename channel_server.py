@@ -83,7 +83,97 @@ the server side; you don't need to address it explicitly.
 """
 
 
+# Module-level reference set when MCP request_context first becomes available
+# (typically during tools/list right after initialize). T8/T9 read this for
+# notification emission.
+_ACTIVE_SESSION = None
+
+
 server = Server("periscope")
+
+
+@server.list_tools()
+async def _list_tools() -> list[types.Tool]:
+    global _ACTIVE_SESSION
+    if _ACTIVE_SESSION is None:
+        try:
+            _ACTIVE_SESSION = server.request_context.session  # type: ignore[attr-defined]
+        except LookupError:
+            # Not in a request context yet. Won't happen for list_tools, but
+            # the defensive try costs nothing and protects against SDK changes.
+            pass
+    return [
+        types.Tool(
+            name="reply",
+            description=(
+                "Surface a message in periscope's UI for this pane. "
+                "Use kind=\"need_human\" when blocked and waiting on the user, "
+                "kind=\"done\" when the current task is complete, "
+                "otherwise kind=\"info\"."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["info", "need_human", "done"],
+                        "default": "info",
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["info", "good", "warning", "bad"],
+                        "default": "info",
+                    },
+                },
+                "required": ["message"],
+            },
+        )
+    ]
+
+
+@server.call_tool()
+async def _call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    global _ACTIVE_SESSION
+    if _ACTIVE_SESSION is None:
+        try:
+            _ACTIVE_SESSION = server.request_context.session  # type: ignore[attr-defined]
+        except LookupError:
+            pass
+
+    if name != "reply":
+        raise ValueError(f"unknown tool: {name}")
+
+    message = arguments["message"]
+    kind = arguments.get("kind", "info")
+    severity = arguments.get("severity", "info")
+
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            resp = await client.post(
+                f"{PERISCOPE_URL}/api/channel/reply",
+                params={"pane": TMUX_PANE},
+                json={
+                    "message": message,
+                    "kind": kind,
+                    "severity": severity,
+                },
+            )
+            body = {
+                "ok": resp.is_success,
+                "status": resp.status_code,
+                "kind": kind,
+                "severity": severity,
+            }
+        except httpx.HTTPError as e:
+            body = {
+                "ok": False,
+                "error": f"periscope unreachable: {e}",
+                "kind": kind,
+                "severity": severity,
+            }
+
+    return [types.TextContent(type="text", text=json.dumps(body))]
 
 
 async def main():
