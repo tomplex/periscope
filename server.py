@@ -860,7 +860,7 @@ def list_windows() -> list[dict]:
         "list-windows",
         "-a",
         "-F",
-        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{@periscope_id}",
+        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{@periscope_id}\t#{pane_id}",
     )
     rows = []
     for line in out.strip().split("\n"):
@@ -877,6 +877,9 @@ def list_windows() -> list[dict]:
             continue
         cwd = parts[4] if len(parts) > 4 else ""
         pid_raw = parts[5] if len(parts) > 5 else ""
+        # pane_id (%N) is tmux's stable handle for the active pane within the
+        # current server lifetime — the addressing key for channel pushes.
+        pane_id = parts[6] if len(parts) > 6 else ""
         rows.append(
             {
                 "session": s,
@@ -885,6 +888,7 @@ def list_windows() -> list[dict]:
                 "active": active == "1",
                 "cwd": cwd,
                 "pid_raw": pid_raw,
+                "pane_id": pane_id,
             }
         )
     return rows
