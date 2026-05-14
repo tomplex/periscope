@@ -58,7 +58,9 @@ periscope/
 │           └── corrupted_session.jsonl
 ```
 
-Phase 0 modifies (no new files): `periscope/server.py` (lines around `claude_complete`, `auto_rename_session`, `auto_rename_window`).
+Phase 0 modifies (no new files): `periscope/server.py` — specifically the
+functions `claude_complete`, `build_rename_prompt`, `auto_rename_session`,
+and `auto_rename_window` (cluster near the bottom of the file).
 
 ---
 
@@ -645,6 +647,22 @@ def test_session_id_inferred_from_filename(tmp_path):
     p.write_text('{"type":"permission-mode","permissionMode":"default","sessionId":"abc-999"}\n')
     events = list(parse_jsonl(str(p)))
     assert events[0].session_id == "abc-999"
+
+
+def test_user_text_from_string_content(tmp_path):
+    """Many real Claude JSONLs use message.content as a plain string, not a
+    list of blocks. Dropping these silently corrupted ~85% of user prompts in
+    an early version of the parser — kept as a regression test."""
+    p = tmp_path / "str.jsonl"
+    p.write_text(
+        '{"type":"user","sessionId":"s","cwd":"/p","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"plain string prompt"}}\n'
+        '{"type":"assistant","sessionId":"s","cwd":"/p","timestamp":"2026-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":"plain string reply"}}\n'
+    )
+    events = list(parse_jsonl(str(p)))
+    user_ev = next(e for e in events if e.type == "user")
+    asst_ev = next(e for e in events if e.type == "assistant")
+    assert user_ev.user_text == "plain string prompt"
+    assert asst_ev.assistant_text == "plain string reply"
 ```
 
 - [ ] **Step 4: Run tests to confirm they fail.**
@@ -715,6 +733,16 @@ def _classify(raw: dict) -> Event:
         return ev
     role = msg.get("role")
     content = msg.get("content")
+    # Claude Code JSONLs put user prompts under message.content either as a
+    # plain string OR as a list of content blocks (text/tool_use/tool_result).
+    # Real data is overwhelmingly mixed — handle both shapes or we silently
+    # drop the majority of human prompts.
+    if isinstance(content, str):
+        if role == "user":
+            ev.user_text = content
+        elif role == "assistant":
+            ev.assistant_text = content
+        return ev
     if not isinstance(content, list):
         return ev
     texts: list[str] = []
@@ -735,8 +763,11 @@ def _classify(raw: dict) -> Event:
         elif btype == "tool_result" and role == "user":
             content_val = block.get("content")
             if isinstance(content_val, list):
+                # Filter empty/missing-text blocks (image blocks contribute "")
+                # so we don't pad with blank lines.
                 content_val = "\n".join(
-                    c.get("text", "") for c in content_val if isinstance(c, dict)
+                    t for c in content_val
+                    if isinstance(c, dict) and (t := c.get("text"))
                 )
             ev.tool_results.append({
                 "tool_use_id": block.get("tool_use_id"),
@@ -783,7 +814,7 @@ def parse_jsonl(path: str | Path) -> Iterator[Event]:
 - [ ] **Step 6: Run tests to verify they pass.**
 
 Run: `uv run pytest history/tests/test_jsonl.py -v`
-Expected: 7 passed.
+Expected: 8 passed.
 
 - [ ] **Step 7: Commit.**
 
@@ -974,13 +1005,21 @@ class SessionRecord:
 
 
 def _decode_project_path(jsonl_path: str, events: list[Event]) -> str:
-    """Project path = first cwd seen in events; fallback to decoded filename dir."""
+    """Project path = first cwd seen in events.
+
+    Falls back to the encoded directory name unchanged when no event carries a
+    cwd. Claude Code's encoding (`/Users/tom/dev/foo` → `-Users-tom-dev-foo`,
+    plus `--` for dot-prefixed dirs like `~/.claude`) is ambiguous to invert
+    (a dash-in-path-segment vs a dot-marker are indistinguishable), and real
+    transcripts always carry cwd somewhere — this branch is a near-zero path."""
     for ev in events:
         if ev.cwd:
             return ev.cwd
-    # Filename is `~/.claude/projects/-Users-tom-dev-foo/<uuid>.jsonl`
-    encoded = Path(jsonl_path).parent.name
-    return encoded.replace("-", "/", 1).replace("--", "-") if encoded.startswith("-") else encoded
+    import logging
+    logging.getLogger(__name__).warning(
+        "extract: no cwd in any event for %s — using encoded dir name as-is", jsonl_path,
+    )
+    return Path(jsonl_path).parent.name
 
 
 def _is_notable_cmd(cmd: str) -> bool:
@@ -2183,21 +2222,25 @@ from history.search import search, _build_fts_query
 
 
 def _seed_session(conn, session_id, summary, tags, project, branch="main",
-                   first_user="hello", final_asst="done", started_at=1000):
+                   first_user="hello", final_asst="done", started_at=1000,
+                   summary_model="claude-haiku-4-5"):
+    """Insert a row representing a Haiku-summarized (non-trivial) session.
+    Pass summary_model=None for a row that should be filtered by the default
+    `include_trivial=False`."""
     conn.execute(
         """
         INSERT INTO sessions(
           session_id, jsonl_path, project_path, branch,
           started_at, ended_at, duration_s,
           user_msg_count, asst_msg_count, tool_use_count,
-          summary, tags, first_user_msg, last_user_msg, final_assistant_msg,
+          summary, tags, summary_model, first_user_msg, last_user_msg, final_assistant_msg,
           files_touched, notable_cmds, tool_use_counts,
           indexed_at, mechanical_version, source_mtime, source_size
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '{}', 0, 1, 0, 0)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '{}', 0, 1, 0, 0)
         """,
         (session_id, f"/p/{session_id}.jsonl", project, branch,
          started_at, started_at + 60, 60, 3, 3, 2,
-         summary, tags, first_user, first_user, final_asst),
+         summary, tags, summary_model, first_user, first_user, final_asst),
     )
     conn.execute(
         """
@@ -2257,10 +2300,11 @@ def test_search_filters_by_since(seeded_db):
 def test_search_excludes_trivial_by_default(tmp_path):
     db_path = tmp_path / "h.db"
     conn = connect(db_path)
-    # Trivial sessions have summary_model IS NULL (heuristic) AND user_msg_count < 2.
-    _seed_session(conn, "trivial-1", "Short session (1 messages, 5s) — first user message: hi",
-                  None, "/Users/tom/dev/foo")
-    conn.execute("UPDATE sessions SET user_msg_count = 1, duration_s = 5, summary_model = NULL")
+    # Trivial sessions have summary_model IS NULL (heuristic-only summary).
+    _seed_session(conn, "trivial-1",
+                  "Short session (1 messages, 5s) — first user message: hi",
+                  None, "/Users/tom/dev/foo", summary_model=None)
+    conn.execute("UPDATE sessions SET user_msg_count = 1, duration_s = 5 WHERE session_id = 'trivial-1'")
     conn.commit()
     results = search("session", db_path=db_path, rerank=False)
     assert results == []
