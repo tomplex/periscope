@@ -1002,6 +1002,16 @@ def state():
     }
 
 
+
+# --- /api/prefs endpoints -------------------------------------------------
+
+@app.get("/api/prefs")
+def get_prefs():
+    """Full state blob, for client boot. Reads from the in-memory cache —
+    every mutation refreshes the cache atomically, so this is safe to call
+    without the lock."""
+    return _STATE
+
 @app.get("/api/pane")
 def pane(session: str, index: int, lines: int = 200):
     """Capture last N lines of a pane plus parsed status fields. Session/index
