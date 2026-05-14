@@ -50,6 +50,13 @@ function renderCard(w) {
   const stateClass = `state-${w.state}`;
   const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
   const kind = w.is_claude ? "claude" : "shell";
+  // Needs-attention pulse: only when Claude has actively flagged need_human
+  // *and* there are unread replies. Opening the modal clears unread (T13),
+  // which auto-dismisses the pulse on the next render.
+  const needsAttention = (w.channel_replies || []).some(
+    (r) => r.kind === "need_human"
+  ) && (w.channel_unread || 0) > 0;
+  const cardClass = `card${needsAttention ? " card-needs-attention" : ""}`;
   const anno = prefs.hasAnnotation(w.pid)
     ? `<span class="card-anno" title="has notes">📝</span>`
     : "";
@@ -127,7 +134,7 @@ function renderCard(w) {
     : "";
 
   return `
-    <article class="card ${stateClass}${ciBadCls}" data-target="${w.target}" data-kind="${kind}">
+    <article class="${cardClass} ${stateClass}${ciBadCls}" data-target="${w.target}" data-kind="${kind}">
       <header class="card-head">
         <span class="card-title">${escapeHtml(w.name)}</span>
         <span class="card-idx">${w.index}</span>
@@ -397,6 +404,14 @@ export function render(windows) {
   const view = document.body.dataset.view === "stream" ? "stream" : "grid";
   if (view === "stream") renderStream(windows);
   else renderGrid(windows);
+
+  // Fade non-alerting cards when something needs the user's eyes. Same gate
+  // as the per-card needsAttention so the two stay in sync.
+  const anyAttention = windows.some((w) => {
+    return (w.channel_replies || []).some((r) => r.kind === "need_human")
+        && (w.channel_unread || 0) > 0;
+  });
+  grid.classList.toggle("grid-has-attention", anyAttention);
 
   // Counts in header — same in both views. Lead with needs-input — that's
   // the only count that means "drop what you're doing"; renders only when

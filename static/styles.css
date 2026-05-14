@@ -1427,3 +1427,21 @@ body.modal-open { overflow: hidden; }
     padding: 4px;
     cursor: not-allowed;
 }
+
+/* Needs-attention treatment: a pane card pulses red when Claude has called
+   reply(kind="need_human") and there are unread replies. Opening the modal
+   clears unread, which removes the pulse on the next poll. */
+.card-needs-attention {
+    box-shadow: 0 0 0 2px #ef4444, 0 4px 12px rgba(239, 68, 68, 0.3);
+    animation: attention-pulse 2s ease-in-out infinite;
+}
+
+@keyframes attention-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px #ef4444, 0 4px 12px rgba(239, 68, 68, 0.3); }
+    50%      { box-shadow: 0 0 0 2px #ef4444, 0 4px 24px rgba(239, 68, 68, 0.6); }
+}
+
+.grid-has-attention .card:not(.card-needs-attention) {
+    opacity: 0.55;
+    transition: opacity 200ms ease;
+}
