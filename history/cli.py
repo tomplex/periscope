@@ -46,7 +46,7 @@ def _cmd_hook(_argv: list[str]) -> int:
 
 def _cmd_backfill(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="history backfill")
-    parser.add_argument("--workers", type=int, default=5)
+    parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--projects-dir", default=None)
     parser.add_argument("--db-path", default=None)
     parser.add_argument("--since", default=None, help="YYYY-MM-DD or unix ts")
@@ -175,7 +175,7 @@ def _cmd_reindex(argv: list[str]) -> int:
                         help="re-extract every row (mechanical_version bump effect)")
     parser.add_argument("--db-path", default=None)
     parser.add_argument("--projects-dir", default=None)
-    parser.add_argument("--workers", type=int, default=5)
+    parser.add_argument("--workers", type=int, default=2)
     args = parser.parse_args(argv)
     # Bumping local MECHANICAL_VERSION constant happens at code-edit time;
     # this verb forces re-extraction in case rows were inserted under an older
@@ -202,7 +202,7 @@ def _cmd_resummarize(argv: list[str]) -> int:
     grp.add_argument("--all", action="store_true",
                      help="force re-summary of every row (clears summary_input_hash)")
     parser.add_argument("--db-path", default=None)
-    parser.add_argument("--workers", type=int, default=5)
+    parser.add_argument("--workers", type=int, default=2)
     args = parser.parse_args(argv)
     conn = connect(args.db_path)
     try:

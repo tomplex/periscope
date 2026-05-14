@@ -85,7 +85,7 @@ def build_summary_prompt(rec: SessionRecord) -> str:
 
 def call_summarizer(client, rec: SessionRecord, *,
                     model: str = "claude-haiku-4-5",
-                    max_retries: int = 1) -> SummaryResult | None:
+                    max_retries: int = 3) -> SummaryResult | None:
     """Single Haiku call with forced tool-use. Returns None on persistent failure
     (caller stores summary=NULL and logs)."""
     body = build_summary_prompt(rec)
@@ -94,7 +94,7 @@ def call_summarizer(client, rec: SessionRecord, *,
         try:
             msg = client.messages.create(
                 model=model,
-                max_tokens=512,
+                max_tokens=1024,
                 # cache_control here may be silently ignored: Anthropic prompt
                 # caching has a ~1024-token minimum prefix and our system+tools
                 # together fall short. Task 13 verifies actual caching via
@@ -113,21 +113,51 @@ def call_summarizer(client, rec: SessionRecord, *,
             last_failure = f"API error: {e!r}"
             log.warning("summarize: API error on attempt %d for %s: %s",
                         attempt + 1, rec.session_id, e)
+            # If the API surfaced a 429 even after the SDK's own backoff,
+            # sleep longer before our wrapper retries — bursting another call
+            # immediately would just re-trigger the same limit.
+            if "429" in str(e) or "rate_limit" in str(e).lower():
+                import time as _t
+                sleep_s = 30 * (attempt + 1)  # 30s, 60s, 90s...
+                log.info("summarize: rate-limited, sleeping %ds before retry", sleep_s)
+                _t.sleep(sleep_s)
             continue
+        # Walk the response. Track WHY parsing fell through so the error log
+        # tells us whether the model didn't call the tool, or called it but
+        # with malformed/truncated input.
+        found_block = False
+        bad_block_reason = None
         for block in getattr(msg, "content", []):
-            if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == SUMMARIZE_TOOL["name"]:
-                data = getattr(block, "input", None) or {}
-                summary = data.get("summary")
-                tags = data.get("tags")
-                if isinstance(summary, str) and isinstance(tags, list):
-                    # Normalize + filter empty tags (the schema's minItems=3 makes
-                    # this rare, but a stray empty string would still index).
-                    norm_tags = [s for s in (str(t).lower().strip() for t in tags) if s]
-                    return SummaryResult(summary=summary.strip(),
-                                          tags=norm_tags,
-                                          model=model)
+            if getattr(block, "type", None) != "tool_use":
+                continue
+            if getattr(block, "name", None) != SUMMARIZE_TOOL["name"]:
+                bad_block_reason = f"unexpected tool name {getattr(block, 'name', None)!r}"
+                continue
+            found_block = True
+            data = getattr(block, "input", None)
+            if not isinstance(data, dict):
+                bad_block_reason = f"input is {type(data).__name__}, expected dict"
+                continue
+            summary = data.get("summary")
+            tags = data.get("tags")
+            if not isinstance(summary, str):
+                bad_block_reason = f"summary is {type(summary).__name__}, expected str (keys={list(data.keys())})"
+                continue
+            if not isinstance(tags, list):
+                bad_block_reason = f"tags is {type(tags).__name__}, expected list"
+                continue
+            # Normalize + filter empty tags
+            norm_tags = [s for s in (str(t).lower().strip() for t in tags) if s]
+            return SummaryResult(summary=summary.strip(),
+                                  tags=norm_tags,
+                                  model=model)
         stop_reason = getattr(msg, "stop_reason", "?")
-        last_failure = f"no valid tool_use block (stop_reason={stop_reason})"
+        if not found_block:
+            last_failure = f"no tool_use block in response (stop_reason={stop_reason})"
+        elif bad_block_reason:
+            last_failure = f"tool_use block malformed: {bad_block_reason} (stop_reason={stop_reason})"
+        else:
+            last_failure = f"tool_use block found but skipped (stop_reason={stop_reason})"
         log.warning("summarize: %s on attempt %d for %s",
                     last_failure, attempt + 1, rec.session_id)
     # All attempts exhausted — always emit a single ERROR so backfill summaries

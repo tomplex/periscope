@@ -81,7 +81,7 @@ def test_call_summarizer_retries_on_missing_tool_use():
     assert mock_client.messages.create.call_count == 2
 
 
-def test_call_summarizer_returns_none_after_two_failures():
+def test_call_summarizer_returns_none_after_exhausting_retries():
     mock_client = MagicMock()
     bad_block = MagicMock(); bad_block.type = "text"; bad_block.text = "no"
     bad_msg = MagicMock(); bad_msg.content = [bad_block]
@@ -89,4 +89,5 @@ def test_call_summarizer_returns_none_after_two_failures():
 
     result = call_summarizer(mock_client, _sample_record())
     assert result is None
-    assert mock_client.messages.create.call_count == 2
+    # Default max_retries=3 → 4 total attempts (initial + 3 retries)
+    assert mock_client.messages.create.call_count == 4

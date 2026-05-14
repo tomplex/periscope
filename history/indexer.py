@@ -45,7 +45,9 @@ def get_anthropic_client():
             if not os.environ.get("ANTHROPIC_API_KEY"):
                 raise RuntimeError("ANTHROPIC_API_KEY is not set")
             from anthropic import Anthropic
-            _anthropic_client = Anthropic()
+            # max_retries=8 → SDK handles 429s with exponential backoff up to ~2 min cumulative,
+            # parsing Retry-After headers. Our wrapper's max_retries handles cases the SDK gave up on.
+            _anthropic_client = Anthropic(max_retries=8)
     return _anthropic_client
 
 

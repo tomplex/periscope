@@ -40,7 +40,7 @@ def find_jsonl_files(projects_dir: Path | None = None) -> list[Path]:
 
 def backfill(*, projects_dir: Path | None = None,
              db_path: Path | str | None = None,
-             workers: int = 5,
+             workers: int = 2,
              since: int | None = None) -> dict:
     """Index every JSONL under projects_dir (or both live + archive if None)."""
     paths = find_jsonl_files(projects_dir)
