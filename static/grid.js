@@ -155,19 +155,15 @@ function renderNewTile(session) {
 }
 
 function orderedSessions(allSessions, bySession) {
-  // User-pinned (drag-reordered) sessions float to the top in saved order.
-  // Everything else sorts by most-recent activity across its windows, descending.
+  // Sessions don't move on activity — they stay where the user put them.
+  // User-pinned (drag-reordered) sessions appear in saved order; anything
+  // new the user hasn't placed yet falls in alphabetically.
   const saved = prefs.getSessionOrder();
   const present = new Set(allSessions);
   const ordered = saved.filter((s) => present.has(s));
-  const remaining = allSessions.filter((s) => !ordered.includes(s));
-  const lastFocus = (s) =>
-    Math.max(0, ...(bySession.get(s) || []).map((w) => w.focused_at || 0));
-  remaining.sort((a, b) => {
-    const da = lastFocus(b) - lastFocus(a);
-    if (da !== 0) return da;
-    return a.localeCompare(b);
-  });
+  const remaining = allSessions
+    .filter((s) => !ordered.includes(s))
+    .sort((a, b) => a.localeCompare(b));
   return [...ordered, ...remaining];
 }
 
@@ -356,9 +352,12 @@ function renderGrid(windows) {
 
   grid.innerHTML = sessionOrder
     .map((s) => {
-      // Within a session, sort by recent user focus desc; index as tiebreak.
+      // Hard rule: the leftmost card in a session is the one most recently
+      // opened in periscope (acted_at). Nothing else influences order — tmux
+      // active-window changes don't move cards. Cards never opened from the
+      // dashboard fall back to tmux index for a stable position.
       const ws = bySession.get(s).slice().sort((a, b) => {
-        const da = (b.focused_at || 0) - (a.focused_at || 0);
+        const da = (b.acted_at || 0) - (a.acted_at || 0);
         if (da !== 0) return da;
         return a.index - b.index;
       });

@@ -13,8 +13,6 @@ import { targetQuery } from './util.js';
 
 const modalXtermEl = document.getElementById("modal-xterm");
 
-const DOUBLE_ESC_MS = 300;
-
 let term = null;
 let termWs = null;
 let termWsTarget = null;            // target the current/pending socket is for
@@ -25,12 +23,8 @@ let termReconnectedNotified = false; // only print "reconnecting…" once per ou
 let fitAddon = null;
 let termResizeObserver = null;
 let fitDebounce = null;
-// Esc-tap state. Single Esc fires onCloseRequested (after a brief debounce
-// window so we can distinguish from double-tap). Double Esc within the window
-// cancels the close and forwards Esc to the terminal for Claude to interrupt.
-let escCloseTimer = null;
 
-export function startLiveTerminal(target, { onCloseRequested }) {
+export function startLiveTerminal(target) {
   // Fresh xterm.js instance per modal-open. Dispose any leftover from a prior
   // session before creating a new one.
   if (term) {
@@ -87,20 +81,21 @@ export function startLiveTerminal(target, { onCloseRequested }) {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
 
-    // Esc handling: first tap schedules a close; second tap within DOUBLE_ESC_MS
-    // cancels the close and lets xterm send Esc to the pane (so Claude sees it
-    // for interrupt / cancel).
-    if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-      if (escCloseTimer) {
-        clearTimeout(escCloseTimer);
-        escCloseTimer = null;
-        return true;  // let xterm emit ESC normally
-      }
+    // Esc handling:
+    //   Shift+Esc — passthrough: send a real \x1b to the pane (vim / Claude
+    //     get an Escape) and stop the event so the modal stays open.
+    //   plain Esc — let it bubble to the overlay.js Esc stack so the modal
+    //     closes; return false so xterm doesn't ALSO emit \x1b to the pane
+    //     in the background.
+    //   Ctrl+[ also works as a passthrough Esc via xterm's standard ANSI
+    //     mapping — no special handling needed here.
+    if (e.key === "Escape" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
-      escCloseTimer = setTimeout(() => {
-        escCloseTimer = null;
-        onCloseRequested();
-      }, DOUBLE_ESC_MS);
+      e.stopPropagation();
+      if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send("\x1b");
+      return false;
+    }
+    if (e.key === "Escape" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
       return false;
     }
 
@@ -220,10 +215,6 @@ export function stopLiveTerminal() {
   // schedule a retry against a target whose modal we've just torn down.
   termIntentionalClose = true;
   termWsTarget = null;
-  if (escCloseTimer) {
-    clearTimeout(escCloseTimer);
-    escCloseTimer = null;
-  }
   if (termReconnectTimer) {
     clearTimeout(termReconnectTimer);
     termReconnectTimer = null;

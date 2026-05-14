@@ -27,10 +27,14 @@ load_dotenv(Path(__file__).parent / ".env")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # prewarm_pr_cache and cached_scraped_usage are defined later in the file;
-    # Python resolves the names at call-time, so the forward references are
-    # fine. We kick off both eagerly so the first /api/state poll already has
-    # PR badges and the usage bars populated.
+    # prewarm_pr_cache, cached_scraped_usage, and kill_orphan_usage_sessions
+    # are defined later; Python resolves the names at call-time, so forward
+    # references are fine.
+    # Reap any periscope-usage-* tmux sessions left behind by a prior crash
+    # before the new scrape thread spawns a fresh one.
+    kill_orphan_usage_sessions()
+    # Kick off cache prewarms eagerly so the first /api/state poll already
+    # has PR badges and the usage bars populated.
     threading.Thread(target=prewarm_pr_cache, daemon=True).start()
     threading.Thread(target=cached_scraped_usage, daemon=True).start()
     yield
@@ -257,6 +261,21 @@ SPINNER_RE = re.compile(r"^\s*[^\x00-\x7f]\s+(?P<phrase>[^(\n…]+?)…")
 # `tokens` word, and no parens around the metering.
 ACTIVE_OP_RE = re.compile(
     r"^\s*[^\x00-\x7f]\s+\S+.*\([^)]*[↑↓]\s*[\d.]+\w*\s+tokens[^)]*\)"
+)
+
+# Past-tense indicator: when Claude finishes a thinking phase, the spinner
+# line transforms from `<glyph> Verbing…` into `<glyph> Verb-past for Xs`
+# (e.g. `Cooked for 3m 42s`, `Brewed for 31s`, `Thought for 10s`). Same glyph
+# rotation, different verb form.
+#
+# Used as a positional "stop searching" boundary: when iterating from the
+# bottom, hitting this line before any active marker means Claude is idle
+# and any active-marker-shape lines higher up are stale (from scrollback,
+# or from the assistant's own response quoting the marker form verbatim in
+# code blocks). The shape is specific enough — `<glyph> <Verb-past> for
+# <digits><h|m|s>` — that prose embeds are very unlikely to match.
+IDLE_INDICATOR_RE = re.compile(
+    r"^\s*[^\x00-\x7f]\s+(?:\w+ed|Thought)\s+for\s+\d+\s*[hms]"
 )
 
 # Pull out a verb-shaped word for the card label (`envisioning…`,
@@ -696,9 +715,30 @@ def parse_usage_screen(text: str) -> dict:
     return {"available": bool(meters), "meters": meters}
 
 
+# Hidden tmux sessions we spawn to drive `claude /usage`. Named with this
+# prefix so we can filter them out of the dashboard and reap any leaked ones
+# on startup (if the server died before its `finally: kill-session` ran).
+USAGE_SESSION_PREFIX = "periscope-usage-"
+
+
+def kill_orphan_usage_sessions() -> None:
+    """Kill any leftover periscope-usage-* sessions from a prior server run.
+    Idempotent; safe to call at startup before the scrape thread launches."""
+    try:
+        out = tmux("list-sessions", "-F", "#{session_name}")
+    except Exception:
+        return
+    for name in out.strip().split("\n"):
+        if name.startswith(USAGE_SESSION_PREFIX):
+            subprocess.run(
+                ["tmux", "kill-session", "-t", name],
+                capture_output=True, check=False, timeout=5,
+            )
+
+
 def scrape_usage_via_tmux() -> dict | None:
     """Drive `claude` in a hidden tmux session to capture its /usage output."""
-    sess = f"periscope-usage-{uuid.uuid4().hex[:8]}"
+    sess = f"{USAGE_SESSION_PREFIX}{uuid.uuid4().hex[:8]}"
     empty_mcp = STATIC.parent / ".empty-mcp.json"
     if not empty_mcp.exists():
         empty_mcp.write_text('{"mcpServers":{}}')
@@ -819,6 +859,10 @@ def list_windows() -> list[dict]:
         # @periscope_id is empty for unmanaged windows — `resolve_pids` mints
         # one on first sighting and stamps it onto the window.
         s, idx, name, active = parts[:4]
+        # Hide the hidden `/usage`-scraper sessions from every caller; they're
+        # our internal scaffolding, not user-visible tmux state.
+        if s.startswith(USAGE_SESSION_PREFIX):
+            continue
         cwd = parts[4] if len(parts) > 4 else ""
         pid_raw = parts[5] if len(parts) > 5 else ""
         rows.append(
@@ -1034,30 +1078,26 @@ def parse_pane(content: str) -> dict:
 
     is_claude = status is not None
 
-    # Spinner: most recent active-op signal in the bottom rows. Two forms,
-    # tried at each line so whichever sits closer to the bottom wins (a fresh
-    # active op should override an older `…` line lingering in scrollback):
-    #   - old: "<glyph> <phrase>…"           (SPINNER_RE)
-    #   - new: "<glyph> <verb> ... (↑Nk tokens ...)"  (ACTIVE_OP_RE)
-    # Verb extraction is a display nicety — detection only requires the match.
+    # Iterate the bottom rows looking for a state signal. Whichever signal
+    # is closest to the prompt wins:
+    #   - IDLE_INDICATOR_RE: Claude finished thinking → spinner stays None.
+    #     Stops the search so we never reach quoted/stale markers in
+    #     scrollback or in the assistant's own response code blocks.
+    #   - SPINNER_RE / ACTIVE_OP_RE: an active marker is below the past-tense
+    #     line (or there is no past-tense line) → spinner gets the verb.
     #
-    # Window is tight (15 lines) because both patterns are short enough strings
-    # that Claude assistant prose can incidentally render them — a prior
-    # response quoting `✻ Envisioning…` or `(...↑22.1k tokens...)` as example
-    # text would false-positive against a wider window. The actual TUI marker
-    # sits ~7-11 rows above the prompt even with a long subtask list, so the
-    # 15-line ceiling never excludes a real one.
+    # Verb extraction always falls back to the string "working" if no clean
+    # [A-Z]\w+(ing|ed) match — a phrase like "3 reasons why" used to surface
+    # "3…" via a "first word" fallback, which was uninformative noise.
     spinner = None
     for line in reversed(lines[-15:]):
+        if IDLE_INDICATOR_RE.match(line):
+            break
         m = SPINNER_RE.match(line)
         if m:
             phrase = m.group("phrase").strip()
             vm = SPINNER_VERB_RE.search(phrase)
-            if vm:
-                spinner = vm.group(1)
-            else:
-                first = phrase.split(None, 1)[0] if phrase else ""
-                spinner = first or "working"
+            spinner = vm.group(1) if vm else "working"
             break
         if ACTIVE_OP_RE.match(line):
             vm = SPINNER_VERB_RE.search(line)

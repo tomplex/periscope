@@ -32,7 +32,7 @@ export function openModal(target) {
   modalSubtitle.innerHTML = "";
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
-  startLiveTerminal(target, { onCloseRequested: closeModal });
+  startLiveTerminal(target);
   // Header poll keeps the subtitle/brief/spinner fresh; the terminal body
   // itself streams live via the WebSocket, no polling needed.
   refreshModalHeader();

@@ -157,6 +157,72 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
         ❯
         {STATUS_LINE}
     """), "working", "Researching"),
+
+    # IDLE_INDICATOR_RE acts as a positional "stop searching" boundary.
+    # Code-block marker quotes from the assistant's own response sit ABOVE
+    # the past-tense indicator and must not false-positive as working.
+    # (Iteration 6 — the bug that showed `working 3…` because a stale phrase
+    # starting with a digit got picked up by the old first-word fallback.)
+    ("idle-with-code-block-marker", textwrap.dedent(f"""\
+        Look at these Claude TUI active marker examples:
+
+        ✻ Envisioning…
+        ✶ Bootstrapping…
+        ✳ Wiring resolve_pids into endpoints…(910m 2 · ↓ 14.78 tokens · thought for 10s)
+        ● Bootstrapping packages (7m 29s · ↑ 22.1k tokens · thought for 2s)
+
+        normal-0 jumped #2 → #1, e151d2dc jumped #5 → #3, both real semantic wins.
+
+        ✻ Cooked for 3m 42s
+
+        ❯
+        {STATUS_LINE}
+    """), "waiting", None),
+
+    # Past-tense lines in the bottom rows for each verb form we know about.
+    ("idle-brewed", textwrap.dedent(f"""\
+        ● Some prior response.
+        ✻ Brewed for 31s
+        ❯
+        {STATUS_LINE}
+    """), "waiting", None),
+    ("idle-thought", textwrap.dedent(f"""\
+        ● Some prior response.
+        ✻ Thought for 10s
+        ❯
+        {STATUS_LINE}
+    """), "waiting", None),
+    ("idle-pondered", textwrap.dedent(f"""\
+        ● Some prior response.
+        ✻ Pondered for 2m 15s
+        ❯
+        {STATUS_LINE}
+    """), "waiting", None),
+
+    # Active marker present BELOW an older past-tense line from a prior
+    # turn — iteration hits the active marker first (it's closer to the
+    # bottom), so we correctly report working.
+    ("active-after-old-brewed", textwrap.dedent(f"""\
+        First turn response.
+        ✻ Brewed for 30s
+
+        Second turn started.
+        ✳ Working on the next task…
+          ⎿  subtask 1
+             subtask 2
+
+        ❯
+        {STATUS_LINE}
+    """), "working", "Working"),
+
+    # Verb fallback: an active marker with a digit-starting phrase used to
+    # surface `3…` via the first-word fallback. Now falls back to "working".
+    ("verb-fallback", textwrap.dedent(f"""\
+        ✻ 3 items remaining…
+
+        ❯
+        {STATUS_LINE}
+    """), "working", "working"),
 ]
 
 
