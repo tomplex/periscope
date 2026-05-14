@@ -58,7 +58,7 @@ def _row_needs_resummary(row, *, new_hash: str, target_model: str) -> bool:
     return False
 
 
-def _is_live(jsonl_path: Path, source_mtime: int, last_event_ts: int) -> bool:
+def _is_live(source_mtime: int, last_event_ts: int) -> bool:
     now = time.time()
     if last_event_ts and now - last_event_ts < LIVE_LAST_EVENT_S:
         return True
@@ -68,9 +68,14 @@ def _is_live(jsonl_path: Path, source_mtime: int, last_event_ts: int) -> bool:
 
 
 def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
-             summary: str | None, tags: list[str] | None,
+             summary: str | None, tags_csv: str | None,
              summary_input_hash: str | None, summary_model: str | None) -> None:
-    """One transaction: UPSERT sessions + refresh sessions_fts."""
+    """One transaction: UPSERT sessions + refresh sessions_fts.
+
+    `tags_csv` is the canonical stored form (comma-separated). The sessions
+    table stores it as NULL when absent; the sessions_fts virtual table
+    cannot hold NULL in indexed columns, so we substitute "" there. This
+    asymmetry is intentional — don't change one side without the other."""
     conn.execute(
         """
         INSERT INTO sessions (
@@ -125,7 +130,7 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
             rec.started_at, rec.ended_at, rec.duration_s,
             rec.user_msg_count, rec.asst_msg_count, rec.tool_use_count,
             rec.was_interrupted, rec.ended_cleanly,
-            summary, ",".join(tags) if tags else None,
+            summary, tags_csv,
             summary_input_hash, summary_model,
             rec.first_user_msg, rec.last_user_msg, rec.final_assistant_msg,
             rec.files_touched, rec.notable_cmds, rec.tool_use_counts,
@@ -144,7 +149,7 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            rec.session_id, summary or "", ",".join(tags) if tags else "",
+            rec.session_id, summary or "", tags_csv or "",
             rec.first_user_msg or "", rec.last_user_msg or "",
             rec.final_assistant_msg or "",
             rec.user_messages_blob, rec.assistant_text_blob,
@@ -153,8 +158,7 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
     )
 
 
-def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
-              force_summary: bool = False) -> dict[str, Any]:
+def index_one(jsonl_path: str, *, db_path: Path | str | None = None) -> dict[str, Any]:
     """Index (or re-index) one session. Returns a status dict."""
     p = Path(jsonl_path)
     if not p.is_file():
@@ -167,7 +171,7 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
                          source_mtime=int(stat.st_mtime),
                          source_size=stat.st_size)
 
-    if _is_live(p, rec.source_mtime, rec.ended_at):
+    if _is_live(rec.source_mtime, rec.ended_at):
         return {"status": "skipped-live", "session_id": rec.session_id}
 
     new_hash = compute_summary_input_hash(rec)
@@ -183,17 +187,16 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
         # Decide summary path
         if is_trivial(rec):
             _upsert(conn, rec,
-                    summary=heuristic_summary(rec), tags=None,
+                    summary=heuristic_summary(rec), tags_csv=None,
                     summary_input_hash=new_hash, summary_model=None)
             conn.commit()
             return {"status": "trivial", "session_id": rec.session_id,
                     "source_mtime": rec.source_mtime}
 
-        if not force_summary and not _row_needs_resummary(
-                row, new_hash=new_hash, target_model=target_model):
+        if not _row_needs_resummary(row, new_hash=new_hash, target_model=target_model):
             # Re-extract but reuse existing summary.
             _upsert(conn, rec,
-                    summary=row["summary"], tags=(row["tags"] or "").split(",") if row["tags"] else None,
+                    summary=row["summary"], tags_csv=row["tags"],
                     summary_input_hash=new_hash, summary_model=row["summary_model"])
             conn.commit()
             return {"status": "hash-cache-hit", "session_id": rec.session_id,
@@ -205,7 +208,7 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
         except RuntimeError as e:
             log.warning("summarize: %s - storing mechanical fields only", e)
             _upsert(conn, rec,
-                    summary=None, tags=None,
+                    summary=None, tags_csv=None,
                     summary_input_hash=new_hash, summary_model=None)
             conn.commit()
             return {"status": "no-api-key", "session_id": rec.session_id,
@@ -214,14 +217,15 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
         result: SummaryResult | None = call_summarizer(client, rec, model=target_model)
         if result is None:
             _upsert(conn, rec,
-                    summary=None, tags=None,
+                    summary=None, tags_csv=None,
                     summary_input_hash=new_hash, summary_model=None)
             conn.commit()
             return {"status": "summary-failed", "session_id": rec.session_id,
                     "source_mtime": rec.source_mtime}
 
         _upsert(conn, rec,
-                summary=result.summary, tags=result.tags,
+                summary=result.summary,
+                tags_csv=",".join(result.tags) if result.tags else None,
                 summary_input_hash=new_hash, summary_model=result.model)
         conn.commit()
         return {"status": "summarized", "session_id": rec.session_id,

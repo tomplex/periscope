@@ -46,19 +46,20 @@ def test_index_one_creates_row_and_fts(temp_db, fixture_dir):
 
 
 def test_index_one_is_idempotent_when_content_unchanged(temp_db, fixture_dir):
-    conn, db_path = temp_db
+    _, db_path = temp_db
     client = _fake_anthropic()
     fixture = fixture_dir / "normal_session.jsonl"
     with patch("history.indexer.get_anthropic_client", return_value=client):
         result1 = index_one(str(fixture), db_path=db_path)
-        # Bump mtime but keep it well in the past so live-skip doesn't fire.
+        # Bump mtime by +100s; OLD_MTIME (1700000000, year 2023) gives years of
+        # margin past the 60s LIVE_MTIME_S threshold, so _is_live stays False.
         import os
         new_mtime = result1["source_mtime"] + 100
         os.utime(str(fixture), (new_mtime, new_mtime))
         result2 = index_one(str(fixture), db_path=db_path)
     assert result1["status"] == "summarized"
     assert result2["status"] == "hash-cache-hit"
-    assert client.messages.create.call_count == 1   # only the first call hit Haiku
+    assert client.messages.create.call_count == 1
 
 
 def test_index_one_skips_live_session(temp_db, fixture_dir, tmp_path):
