@@ -1335,19 +1335,65 @@ body.modal-open { overflow: hidden; }
     vertical-align: middle;
 }
 
-.channel-unread {
+/* Card tints when Claude has unread replies. The kind drives the color;
+   the message itself rides in card-activity (see .card-activity.is-channel
+   below) so the card surfaces the actual content, not just a badge. */
+.card-channel {
+    /* Subtle outline accents whichever tint applies — keeps the card
+       readable but unmistakable in a grid scan. */
+    transition: background-color 200ms ease;
+}
+
+.card-channel-need_human {
+    background-color: color-mix(in oklch, var(--s-danger) 18%, var(--bg-1));
+}
+.card.card-channel-need_human:hover {
+    background-color: color-mix(in oklch, var(--s-danger) 22%, var(--bg-1));
+}
+
+.card-channel-done {
+    background-color: color-mix(in oklch, var(--s-done) 14%, var(--bg-1));
+}
+.card.card-channel-done:hover {
+    background-color: color-mix(in oklch, var(--s-done) 18%, var(--bg-1));
+}
+
+.card-channel-info {
+    background-color: color-mix(in oklch, var(--s-working) 12%, var(--bg-1));
+}
+.card.card-channel-info:hover {
+    background-color: color-mix(in oklch, var(--s-working) 16%, var(--bg-1));
+}
+
+/* Activity row when Claude's message is overriding the snippet. The
+   "claude" prefix is a small label so it reads as a quoted source, not
+   the user's own input. */
+.card-activity.is-channel {
+    color: var(--fg-0);
+    font-weight: 500;
+}
+
+.card-channel-prefix {
     display: inline-block;
-    background: #ef4444; /* red-500 */
-    color: white;
-    font-size: 10px;
-    line-height: 14px;
-    min-width: 14px;
-    height: 14px;
-    padding: 0 4px;
-    border-radius: 7px;
-    margin-left: 4px;
-    text-align: center;
-    vertical-align: middle;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.65;
+    margin-right: 6px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: color-mix(in oklch, currentColor 14%, transparent);
+    vertical-align: 1px;
+}
+
+.card-activity.is-channel-need_human {
+    color: var(--s-danger);
+}
+.card-activity.is-channel-done {
+    color: var(--s-done);
+}
+.card-activity.is-channel-info {
+    color: var(--fg-0);
 }
 
 .modal-side-messages .modal-msg {
@@ -1430,15 +1476,24 @@ body.modal-open { overflow: hidden; }
 
 /* Needs-attention treatment: a pane card pulses red when Claude has called
    reply(kind="need_human") and there are unread replies. Opening the modal
-   clears unread, which removes the pulse on the next poll. */
+   clears unread, which removes the pulse on the next poll. The pulsing
+   ring stacks on top of the card-channel-need_human background tint
+   (defined above) for two layers of "look here." */
 .card-needs-attention {
-    box-shadow: 0 0 0 2px #ef4444, 0 4px 12px rgba(239, 68, 68, 0.3);
+    box-shadow: 0 0 0 2px var(--s-danger),
+                0 4px 12px color-mix(in oklch, var(--s-danger) 32%, transparent);
     animation: attention-pulse 2s ease-in-out infinite;
 }
 
 @keyframes attention-pulse {
-    0%, 100% { box-shadow: 0 0 0 2px #ef4444, 0 4px 12px rgba(239, 68, 68, 0.3); }
-    50%      { box-shadow: 0 0 0 2px #ef4444, 0 4px 24px rgba(239, 68, 68, 0.6); }
+    0%, 100% {
+        box-shadow: 0 0 0 2px var(--s-danger),
+                    0 4px 12px color-mix(in oklch, var(--s-danger) 32%, transparent);
+    }
+    50% {
+        box-shadow: 0 0 0 2px var(--s-danger),
+                    0 4px 24px color-mix(in oklch, var(--s-danger) 60%, transparent);
+    }
 }
 
 .grid-has-attention .card:not(.card-needs-attention) {

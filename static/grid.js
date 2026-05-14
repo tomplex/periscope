@@ -50,13 +50,21 @@ function renderCard(w) {
   const stateClass = `state-${w.state}`;
   const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
   const kind = w.is_claude ? "claude" : "shell";
+
+  // Claude reply override: while there are unread replies, the most recent
+  // one takes over the card's activity line and tints the card background.
+  // Opening the modal clears unread (T13), and the card drops back to its
+  // normal pending/recap/last_line activity on the next poll.
+  const hasUnread = (w.channel_unread || 0) > 0 && (w.channel_replies || []).length > 0;
+  const unreadReply = hasUnread ? w.channel_replies[w.channel_replies.length - 1] : null;
+  const channelKind = unreadReply ? (unreadReply.kind || "info") : null;
+  const channelClass = channelKind ? ` card-channel card-channel-${channelKind}` : "";
+
   // Needs-attention pulse: only when Claude has actively flagged need_human
   // *and* there are unread replies. Opening the modal clears unread (T13),
   // which auto-dismisses the pulse on the next render.
-  const needsAttention = (w.channel_replies || []).some(
-    (r) => r.kind === "need_human"
-  ) && (w.channel_unread || 0) > 0;
-  const cardClass = `card${needsAttention ? " card-needs-attention" : ""}`;
+  const needsAttention = channelKind === "need_human";
+  const cardClass = `card${needsAttention ? " card-needs-attention" : ""}${channelClass}`;
   const anno = prefs.hasAnnotation(w.pid)
     ? `<span class="card-anno" title="has notes">📝</span>`
     : "";
@@ -85,12 +93,14 @@ function renderCard(w) {
     ? `<div class="card-meta">${metaParts.join(" ")}</div>`
     : "";
 
-  // Activity row. is-pending for unsubmitted user input (loudest because it
-  // means "claude is going to act on whatever you type next"); is-output for
-  // recap / last_line; is-shell when it's a bare shell pane with nothing
-  // claude-shaped to show.
+  // Activity row. Priority: unread Claude reply (highest — Claude is actively
+  // saying something the user hasn't seen) > pending_input (claude is going
+  // to act on whatever you type next) > recap > last_line. is-shell when
+  // it's a bare shell pane with nothing claude-shaped to show.
   let activity = "";
-  if (w.pending_input) {
+  if (unreadReply) {
+    activity = `<div class="card-activity is-channel is-channel-${channelKind}"><span class="card-channel-prefix">claude</span>${escapeHtml(unreadReply.message)}</div>`;
+  } else if (w.pending_input) {
     activity = `<div class="card-activity is-pending"><span class="prompt">›</span>${escapeHtml(w.pending_input)}</div>`;
   } else if (w.recap) {
     activity = `<div class="card-activity is-output">${escapeHtml(w.recap)}</div>`;
@@ -108,13 +118,11 @@ function renderCard(w) {
       : w.state;
   const statusLabel = `<span class="card-status">${escapeHtml(statusText)}</span>`;
 
-  // Channel indicators: green dot when a subscriber is attached, red badge
-  // with count when there are unread replies waiting for the user.
+  // Channel attached indicator. Unread replies are surfaced via the card
+  // background tint + activity-row override (above), so no numeric badge
+  // is needed here.
   const channelDot = w.channel_attached
     ? `<span class="channel-dot" title="channel attached"></span>`
-    : "";
-  const unreadBadge = (w.channel_unread || 0) > 0
-    ? `<span class="channel-unread" title="${w.channel_unread} unread reply(s)">${w.channel_unread}</span>`
     : "";
 
   // Footer: progress bar + ctx% + model + viewed-age. Progress bar only when
@@ -138,7 +146,7 @@ function renderCard(w) {
       <header class="card-head">
         <span class="card-title">${escapeHtml(w.name)}</span>
         <span class="card-idx">${w.index}</span>
-        ${channelDot}${unreadBadge}
+        ${channelDot}
         ${statusLabel}
         ${anno}
         <button class="card-kill" data-target="${w.target}" data-name="${escapeHtml(w.name)}" title="kill this window">✕</button>
