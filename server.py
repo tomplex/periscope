@@ -938,6 +938,21 @@ def resolve_pids(windows: list[dict]) -> None:
             entry["last_seen"] = new_seen
             if identity_changed:
                 dirty = True
+        # GC: drop windows entries that (a) carry no notes and no tags, AND
+        # (b) weren't refreshed this pass, AND (c) have a last_seen older
+        # than 30 days. Annotated entries are immune — losing one would
+        # lose notes.
+        cutoff = now_ts - _PID_TTL_S
+        for pid in list(wblock.keys()):
+            if pid in taken:
+                continue
+            entry = wblock[pid]
+            if entry.get("notes") or entry.get("tags"):
+                continue
+            ts = (entry.get("last_seen") or {}).get("ts") or 0
+            if ts < cutoff:
+                del wblock[pid]
+                dirty = True
         if dirty:
             _write_state(_STATE)
 
