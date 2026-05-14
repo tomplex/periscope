@@ -1491,9 +1491,14 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
     cwd is inherited from the session's active pane — without `-c`,
     tmux would use the periscope server's cwd, which is never what you want."""
     # Legacy `mode` → exec_cmd mapping for callers still on the old contract.
-    # Skips the resume case which has its own dedicated path below.
-    if not exec_cmd and mode in ("claude", "vim", "shell"):
-        exec_cmd = {"claude": "claude", "vim": "vim", "shell": ""}.get(mode, "")
+    # `mode=resume` synthesizes the actual command from resume_id; the
+    # _resuming registration happens after the spawn (below) so the existing-
+    # session fall-through path doesn't lose either side-effect.
+    if not exec_cmd:
+        if mode in ("claude", "vim", "shell"):
+            exec_cmd = {"claude": "claude", "vim": "vim", "shell": ""}.get(mode, "")
+        elif mode == "resume" and resume_id:
+            exec_cmd = f"claude --resume {resume_id}"
     
     # mode=resume looks up the original project_path and runs claude --resume
     # there; we resolve cwd up front so the rest of the spawn path is shared.
@@ -1570,7 +1575,13 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
         # echoed text. (See CLAUDE.md "Key invariants" note 5.)
         time.sleep(0.1)
         tmux("send-keys", "-t", target, cmd, "Enter")
-    
+
+    # Resume bookkeeping for the fall-through path (existing `resumes`
+    # session). The new-session branch above already set this inline before
+    # its early return.
+    if mode == "resume" and resume_id and resume_id not in _resuming:
+        _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
+
     note_focus(target)
     note_action(target)
     result = {"ok": True, "session": session, "index": index, "target": target, "mode": mode, "exec": cmd}
