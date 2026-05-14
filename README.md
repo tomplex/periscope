@@ -74,24 +74,22 @@ in research preview.
 
 ### One-time setup
 
-Add the following entry to `~/.claude/.mcp.json` (create the file if it
-doesn't exist):
+Claude Code keeps user-level MCP servers under the `mcpServers` key in
+`~/.claude.json`. Merge the periscope entry in (don't overwrite the
+file — it holds lots of other Claude Code state):
 
-```json
-{
-  "mcpServers": {
-    "periscope": {
-      "command": "uv",
-      "args": ["run", "--script", "/ABSOLUTE/PATH/TO/periscope/channel_server.py"],
-      "env": {
-        "PERISCOPE_URL": "http://127.0.0.1:8765"
-      }
-    }
-  }
-}
+```sh
+jq '.mcpServers.periscope = {
+  "command": "uv",
+  "args": ["run", "--script", "/ABSOLUTE/PATH/TO/periscope/channel_server.py"],
+  "env": {"PERISCOPE_URL": "http://127.0.0.1:8765"}
+}' ~/.claude.json > ~/.claude.json.tmp && mv ~/.claude.json.tmp ~/.claude.json
 ```
 
 Replace `/ABSOLUTE/PATH/TO/periscope/` with your local checkout path.
+After this, restart any running `claude` sessions you want channels in
+(it's read at invocation time) or spawn fresh ones via periscope's
+`+ claude` button.
 
 ### How it works
 
