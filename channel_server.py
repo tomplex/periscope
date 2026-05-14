@@ -195,6 +195,71 @@ async def emit_channel_event(session, content: str, meta: dict | None) -> None:
     )
 
 
+# Bounded buffer for events that arrive over WS before the session is ready.
+# Drained into Claude once _ACTIVE_SESSION is set. Bounded so a runaway
+# pre-handshake push storm doesn't consume unbounded memory.
+_PRE_HANDSHAKE_BUFFER: list[dict] = []
+_PRE_HANDSHAKE_MAX = 100
+
+
+async def _drain_pre_handshake_buffer() -> None:
+    """Flush any events that arrived before the session was captured."""
+    if _ACTIVE_SESSION is None or not _PRE_HANDSHAKE_BUFFER:
+        return
+    pending = _PRE_HANDSHAKE_BUFFER[:]
+    _PRE_HANDSHAKE_BUFFER.clear()
+    for event in pending:
+        await emit_channel_event(
+            _ACTIVE_SESSION,
+            event.get("content", ""),
+            event.get("meta") or {},
+        )
+
+
+async def _ws_consumer(url: str) -> None:
+    """Subscribe to periscope's /ws/channel and emit each event to Claude.
+
+    Reconnects with exponential backoff capped at 5s. Each connection
+    flushes the periscope-side backlog in order before live events resume.
+    Events arriving before the MCP handshake completes are queued in
+    _PRE_HANDSHAKE_BUFFER and drained when the session becomes available.
+    """
+    backoff = 0.5
+    while True:
+        try:
+            async with ws_connect(url) as websocket:
+                backoff = 0.5  # reset on successful connect
+                async for raw in websocket:
+                    if not isinstance(raw, str):
+                        continue
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if _ACTIVE_SESSION is None:
+                        # Buffer until handshake completes. Drop oldest on
+                        # overflow rather than block — the periscope-side
+                        # queue is the source of truth.
+                        if len(_PRE_HANDSHAKE_BUFFER) >= _PRE_HANDSHAKE_MAX:
+                            _PRE_HANDSHAKE_BUFFER.pop(0)
+                        _PRE_HANDSHAKE_BUFFER.append(event)
+                        continue
+                    await _drain_pre_handshake_buffer()
+                    await emit_channel_event(
+                        _ACTIVE_SESSION,
+                        event.get("content", ""),
+                        event.get("meta") or {},
+                    )
+        except Exception as e:
+            print(
+                f"channel_server: WS to {url} failed ({e}); "
+                f"reconnecting in {backoff:.1f}s",
+                file=sys.stderr,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 5.0)
+
+
 async def main():
     if not TMUX_PANE.startswith("%"):
         print(
@@ -214,8 +279,21 @@ async def main():
         instructions=INSTRUCTIONS,
     )
 
+    ws_url = f"{PERISCOPE_WS}/ws/channel?pane={TMUX_PANE}"
+
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, init_options)
+        async with anyio.create_task_group() as tg:
+            # WS consumer runs alongside the MCP loop. When stdin EOFs and
+            # server.run() returns, we cancel the task group so the WS task
+            # exits and the process can terminate.
+            tg.start_soon(_ws_consumer, ws_url)
+
+            await server.run(read_stream, write_stream, init_options)
+
+            # MCP loop ended (stdin EOF or transport error). Cancel siblings
+            # so the process exits within seconds rather than hanging on the
+            # WS task's infinite reconnect loop.
+            tg.cancel_scope.cancel()
 
 
 if __name__ == "__main__":
