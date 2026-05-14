@@ -118,3 +118,74 @@ def test_row_needs_resummary_logic():
     # NULL summary -> always needs resummary
     row_null = {"summary_input_hash": "h1", "summary_model": "claude-haiku-4-5", "summary": None}
     assert _row_needs_resummary(row_null, new_hash="h1", target_model="claude-haiku-4-5") is True
+
+
+def test_index_one_archives_source_jsonl(temp_db, fixture_dir, tmp_path, monkeypatch):
+    """After successful index, source JSONL is copied to the archive dir,
+    and the DB row's jsonl_path points to the archive copy."""
+    # Redirect the archive to a tmp path so we don't touch ~/.claude/projects-archive
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr("history.indexer.ARCHIVE_DIR", archive_dir)
+
+    conn, db_path = temp_db
+    client = _fake_anthropic()
+    fixture = fixture_dir / "normal_session.jsonl"
+    with patch("history.indexer.get_anthropic_client", return_value=client):
+        result = index_one(str(fixture), db_path=db_path)
+    assert result["status"] == "summarized"
+    # Archive should contain a copy under <encoded-project>/<uuid>.jsonl
+    encoded = fixture.parent.name  # the fixture's parent dir name
+    archive_copy = archive_dir / encoded / fixture.name
+    assert archive_copy.exists()
+    assert archive_copy.read_bytes() == fixture.read_bytes()
+    # DB row's jsonl_path should point at the archive copy, not the original
+    row = conn.execute("SELECT jsonl_path FROM sessions WHERE session_id = 'normal-001'").fetchone()
+    assert row["jsonl_path"] == str(archive_copy)
+
+
+def test_index_one_archive_idempotent(temp_db, fixture_dir, tmp_path, monkeypatch):
+    """Re-indexing doesn't re-copy if archive already has matching content."""
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr("history.indexer.ARCHIVE_DIR", archive_dir)
+
+    conn, db_path = temp_db
+    client = _fake_anthropic()
+    fixture = fixture_dir / "normal_session.jsonl"
+    encoded = fixture.parent.name
+    archive_copy = archive_dir / encoded / fixture.name
+
+    with patch("history.indexer.get_anthropic_client", return_value=client):
+        index_one(str(fixture), db_path=db_path)
+    first_mtime = archive_copy.stat().st_mtime
+    with patch("history.indexer.get_anthropic_client", return_value=client):
+        index_one(str(fixture), db_path=db_path)
+    second_mtime = archive_copy.stat().st_mtime
+    # No re-copy — mtime preserved
+    assert first_mtime == second_mtime
+
+
+def test_index_one_force_bypasses_live_skip(temp_db, fixture_dir, tmp_path, monkeypatch):
+    """SessionEnd hook uses force=True to index a session whose mtime is
+    within the live window (mtime check fires for backfill, not for the hook)."""
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr("history.indexer.ARCHIVE_DIR", archive_dir)
+
+    import shutil
+    src = fixture_dir / "normal_session.jsonl"
+    dst = tmp_path / "live.jsonl"
+    shutil.copy(src, dst)
+    import os
+    import time as _t
+    now = _t.time()
+    os.utime(dst, (now, now))  # mtime is now → would normally trigger live-skip
+
+    conn, db_path = temp_db
+    client = _fake_anthropic()
+    # Default behaviour (no force): live-skip fires
+    with patch("history.indexer.get_anthropic_client", return_value=client):
+        result_no_force = index_one(str(dst), db_path=db_path)
+    assert result_no_force["status"] == "skipped-live"
+    # With force=True: the live check is bypassed, session gets indexed
+    with patch("history.indexer.get_anthropic_client", return_value=client):
+        result_force = index_one(str(dst), db_path=db_path, force=True)
+    assert result_force["status"] in ("summarized", "trivial")  # depends on content

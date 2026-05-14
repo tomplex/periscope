@@ -76,3 +76,45 @@ def test_backfill_resumable(tmp_path, fixture_dir):
     assert result2["scanned"] == 1
     assert result2["statuses"].get("hash-cache-hit", 0) == 1
     assert client.messages.create.call_count == 1  # only the first backfill called
+
+
+def test_backfill_walks_archive_dir_too(tmp_path, fixture_dir, monkeypatch):
+    """find_jsonl_files with no explicit projects_dir walks both projects/ and
+    the archive. A session that exists only in the archive must still be
+    rediscovered."""
+    projects = tmp_path / "projects"
+    archive = tmp_path / "archive"
+    monkeypatch.setattr("history.indexer.ARCHIVE_DIR", archive)
+    monkeypatch.setattr("history.backfill.DEFAULT_PROJECTS_DIR", projects)
+    # Place a fixture only in the archive (simulating a rotated-out session)
+    (archive / "-Users-tom-dev-foo").mkdir(parents=True)
+    import shutil
+    shutil.copy(fixture_dir / "short_session.jsonl",
+                archive / "-Users-tom-dev-foo" / "short_session.jsonl")
+    # And one only in the live projects dir
+    (projects / "-Users-tom-dev-bar").mkdir(parents=True)
+    shutil.copy(fixture_dir / "normal_session.jsonl",
+                projects / "-Users-tom-dev-bar" / "normal_session.jsonl")
+    from history.backfill import find_jsonl_files
+    found = find_jsonl_files()  # no arg → walks both dirs
+    names = sorted(p.name for p in found)
+    assert "short_session.jsonl" in names
+    assert "normal_session.jsonl" in names
+
+
+def test_backfill_prefers_archive_over_live(tmp_path, fixture_dir, monkeypatch):
+    """When the same session_id exists in both projects/ and archive/, prefer
+    the archive copy (because that's where the DB jsonl_path points)."""
+    projects = tmp_path / "projects"
+    archive = tmp_path / "archive"
+    monkeypatch.setattr("history.indexer.ARCHIVE_DIR", archive)
+    monkeypatch.setattr("history.backfill.DEFAULT_PROJECTS_DIR", projects)
+    # Same filename in both — content differs to detect which one was picked
+    (archive / "-Users-tom-foo").mkdir(parents=True)
+    (projects / "-Users-tom-foo").mkdir(parents=True)
+    (archive / "-Users-tom-foo" / "session.jsonl").write_text('{"src":"archive"}')
+    (projects / "-Users-tom-foo" / "session.jsonl").write_text('{"src":"projects"}')
+    from history.backfill import find_jsonl_files
+    found = find_jsonl_files()
+    assert len(found) == 1  # deduplicated
+    assert "archive" in found[0].read_text()  # archive wins

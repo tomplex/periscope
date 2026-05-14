@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 LIVE_LAST_EVENT_S = 5 * 60      # skip if last event newer than 5 min ago
 LIVE_MTIME_S = 60               # skip if jsonl mtime newer than 60 s ago
 
+ARCHIVE_DIR = Path(os.environ.get("CLAUDE_HISTORY_ARCHIVE_DIR") or
+                   Path.home() / ".claude" / "projects-archive")
+
 _anthropic_client = None
 _anthropic_lock = threading.Lock()
 
@@ -56,6 +59,28 @@ def _row_needs_resummary(row, *, new_hash: str, target_model: str) -> bool:
     if row["summary_model"] != target_model:
         return True
     return False
+
+
+def _ensure_archived(jsonl_path: Path) -> Path:
+    """Copy a JSONL into our permanent archive (idempotent). Returns archive path.
+
+    Claude Code rotates ~/.claude/projects/ entries after ~30 days. Once a
+    session is archived, our DB row points to the archive copy and survives
+    rotation. Tom owns the archive's lifecycle — we never delete from it."""
+    import shutil
+    encoded_project = jsonl_path.parent.name  # e.g. -Users-tom-dev-foo
+    archive_path = ARCHIVE_DIR / encoded_project / jsonl_path.name
+    if archive_path.resolve() == jsonl_path.resolve():
+        return archive_path  # already inside the archive — no-op
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    src_stat = jsonl_path.stat()
+    if archive_path.exists():
+        dst_stat = archive_path.stat()
+        # Only re-copy when source is genuinely newer or larger
+        if dst_stat.st_size >= src_stat.st_size and dst_stat.st_mtime >= src_stat.st_mtime:
+            return archive_path
+    shutil.copy2(jsonl_path, archive_path)  # preserves mtime
+    return archive_path
 
 
 def _is_live(source_mtime: int, last_event_ts: int) -> bool:
@@ -158,7 +183,8 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
     )
 
 
-def index_one(jsonl_path: str, *, db_path: Path | str | None = None) -> dict[str, Any]:
+def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
+              force: bool = False) -> dict[str, Any]:
     """Index (or re-index) one session. Returns a status dict."""
     p = Path(jsonl_path)
     if not p.is_file():
@@ -171,8 +197,16 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None) -> dict[str
                          source_mtime=int(stat.st_mtime),
                          source_size=stat.st_size)
 
-    if _is_live(rec.source_mtime, rec.ended_at):
+    if not force and _is_live(rec.source_mtime, rec.ended_at):
         return {"status": "skipped-live", "session_id": rec.session_id}
+
+    # Archive the source before anything else. From here on, the DB stores
+    # the archive path — surviving Claude Code's ~30-day rotation of projects/.
+    try:
+        archive_path = _ensure_archived(p)
+        rec.jsonl_path = str(archive_path)
+    except Exception as e:
+        log.warning("history.indexer: archive failed for %s: %s — falling back to source path", p, e)
 
     new_hash = compute_summary_input_hash(rec)
 

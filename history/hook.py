@@ -43,7 +43,9 @@ def run_hook() -> int:
     if not isinstance(transcript_path, str) or not os.path.isfile(transcript_path):
         return 0
     try:
-        index_one(transcript_path)
+        # SessionEnd fires AFTER the session ends — bypass the live-skip
+        # guard that backfill scans use (mtime is recent but session is done).
+        index_one(transcript_path, force=True)
     except Exception:
         # Indexer crashes are real bugs worth a traceback. Hooks must not
         # block Claude Code shutdown, so we still return 0 below; the

@@ -19,7 +19,7 @@ def test_hook_indexes_session_from_stdin(monkeypatch, tmp_path):
     with patch("history.hook.index_one", side_effect=fake_index_one):
         rc = run_hook()
     assert rc == 0
-    assert calls == [(str(jsonl), {})]
+    assert calls == [(str(jsonl), {"force": True})]
 
 
 def test_hook_returns_0_on_missing_payload(monkeypatch):
@@ -75,3 +75,22 @@ def test_hook_returns_0_on_non_string_transcript_path(monkeypatch):
         rc = run_hook()
     assert rc == 0
     m.assert_not_called()
+
+
+def test_hook_passes_force_to_index_one(monkeypatch, tmp_path):
+    """SessionEnd hook must bypass the indexer's live-skip guard."""
+    import json as _json
+    jsonl = tmp_path / "x.jsonl"
+    jsonl.write_text('{"type":"permission-mode","permissionMode":"default","sessionId":"x"}\n')
+    payload = _json.dumps({"transcript_path": str(jsonl)})
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    seen_kwargs = {}
+
+    def fake_index_one(path, **kw):
+        seen_kwargs.update(kw)
+        return {"status": "trivial"}
+
+    with patch("history.hook.index_one", side_effect=fake_index_one):
+        rc = run_hook()
+    assert rc == 0
+    assert seen_kwargs.get("force") is True
