@@ -1012,6 +1012,24 @@ def get_prefs():
     without the lock."""
     return _STATE
 
+class UIPatch(BaseModel):
+    session_order: list[str] | None = None
+    collapsed_sessions: list[str] | None = None
+    view: str | None = None  # "grid" or "stream"
+
+
+@app.patch("/api/prefs/ui")
+async def patch_prefs_ui(body: UIPatch):
+    """Merge partial UI prefs. Only fields present in the body get written."""
+    patch = body.model_dump(exclude_none=True)
+    # `view` is validated against a fixed enum to keep junk out of the file.
+    if "view" in patch and patch["view"] not in ("grid", "stream"):
+        return {"ok": False, "error": f"invalid view: {patch['view']!r}"}
+    with _STATE_LOCK:
+        _STATE["ui"].update(patch)
+        _write_state(_STATE)
+    return {"ok": True, "ui": _STATE["ui"]}
+
 @app.get("/api/pane")
 def pane(session: str, index: int, lines: int = 200):
     """Capture last N lines of a pane plus parsed status fields. Session/index
