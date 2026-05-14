@@ -61,6 +61,52 @@ export function getCommands() {
   return cache.commands || [];
 }
 
+export async function addCommand({ label, exec }) {
+  if (!cache.loaded) return false;
+  const data = await apiCall("add command", "/api/prefs/commands", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, exec: exec || "" }),
+  });
+  if (!data) return false;
+  cache.commands = data.commands;
+  return true;
+}
+
+export async function updateCommand(oldLabel, { label, exec }) {
+  if (!cache.loaded) return false;
+  const data = await apiCall("update command", `/api/prefs/commands/${encodeURIComponent(oldLabel)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, exec: exec || "" }),
+  });
+  if (!data) return false;
+  cache.commands = data.commands;
+  return true;
+}
+
+export async function deleteCommand(label) {
+  if (!cache.loaded) return false;
+  const data = await apiCall("delete command", `/api/prefs/commands/${encodeURIComponent(label)}`, {
+    method: "DELETE",
+  });
+  if (!data) return false;
+  cache.commands = data.commands;
+  return true;
+}
+
+export async function reorderCommands(labels) {
+  if (!cache.loaded) return false;
+  const data = await apiCall("reorder commands", "/api/prefs/commands", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ labels }),
+  });
+  if (!data) return false;
+  cache.commands = data.commands;
+  return true;
+}
+
 async function patchUI(patch) {
   if (!cache.loaded) {
     // Try to load first; refuse the write if that still fails so we don't

@@ -1221,3 +1221,77 @@ body.modal-open { overflow: hidden; }
   .brand-cursor { animation: none; }
   *, *::before, *::after { transition-duration: 0.001s !important; }
 }
+
+.commands-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: oklch(0 0 0 / 0.55);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.commands-modal-overlay.hidden { display: none; }
+
+.commands-modal-card {
+  background: var(--bg-modal);
+  border-radius: var(--r-lg);
+  padding: 18px 22px 16px;
+  width: min(620px, 90vw);
+  box-shadow: var(--shadow-modal);
+}
+.commands-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.commands-modal-head h2 { margin: 0; font-size: 15px; }
+.commands-modal-head button {
+  background: none; border: 0; color: var(--fg-2); font-size: 18px;
+  cursor: pointer;
+}
+.commands-modal-sub {
+  font-size: 11px; color: var(--fg-3); margin: 0 0 10px;
+}
+.commands-modal-sub code {
+  background: var(--bg-2); padding: 1px 4px; border-radius: 3px;
+  font-size: 10.5px;
+}
+.commands-row {
+  display: grid;
+  grid-template-columns: 18px 1fr 2fr 24px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 4px;
+  border-radius: var(--r-sm);
+  cursor: grab;
+}
+.commands-row.dragging { opacity: 0.4; }
+.commands-row.drag-over-top { box-shadow: inset 0 2px 0 0 var(--accent); }
+.commands-row.drag-over-bottom { box-shadow: inset 0 -2px 0 0 var(--accent); }
+.commands-grip { color: var(--fg-4); user-select: none; }
+.commands-label, .commands-exec {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--bg-1); color: var(--fg-1);
+  border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  padding: 4px 8px;
+}
+.commands-del {
+  background: none; border: 0; color: var(--fg-3); cursor: pointer;
+  font-size: 14px;
+}
+.commands-del:hover { color: var(--s-danger); }
+.commands-modal-add {
+  margin-top: 8px;
+  width: 100%;
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--fg-2);
+  padding: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.commands-modal-add:hover { color: var(--fg-0); border-color: var(--accent); }

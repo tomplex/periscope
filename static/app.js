@@ -6,6 +6,7 @@ import * as prefs from './prefs.js';
 import { apiCall } from './util.js';
 import { initModal } from './modal.js';
 import { initGrid, poll, render } from './grid.js';
+import { initCommandsModal, openCommandsModal } from './commands-modal.js';
 
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
 // the same shortcut focuses the search input — handled in history.js.)
@@ -61,6 +62,8 @@ async function bootstrap() {
   applyView(prefs.getView());
   initModal();
   initGrid();
+  initCommandsModal();
+  document.getElementById("open-commands").addEventListener("click", openCommandsModal);
 }
 
 viewSwitch.addEventListener("click", (e) => {
