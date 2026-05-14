@@ -47,16 +47,24 @@ Locate the existing block in `server.py` near line 39 (right after `app = FastAP
 ```python
 # --- Persistent state (state.json) ----------------------------------------
 #
-# Single JSON file mutated only by the server, under an asyncio.Lock, with
+# Single JSON file mutated only by the server, under a threading.Lock, with
 # atomic tempfile+rename writes. See
 # docs/superpowers/specs/2026-05-13-persistent-config-layer-design.md.
+#
+# Lock primitive choice: threading.Lock (not asyncio.Lock). FastAPI runs
+# sync `def` endpoints on anyio's threadpool, so two concurrent /api/state
+# polls execute in parallel threads. asyncio.Lock only blocks coroutines,
+# not threads — it would let sync handlers race past each other into the
+# critical section. threading.Lock works correctly from both sync handlers
+# and async ones (acquired synchronously; the file write is fast enough
+# that briefly blocking the event loop is fine).
 
 def _state_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return Path(base) / "periscope" / "state.json"
 
 
-_STATE_LOCK = asyncio.Lock()
+_STATE_LOCK = threading.Lock()
 _STATE_DEFAULTS: dict = {
     "version": 1,
     "ui": {},
@@ -197,7 +205,7 @@ async def patch_prefs_ui(body: UIPatch):
     # `view` is validated against a fixed enum to keep junk out of the file.
     if "view" in patch and patch["view"] not in ("grid", "stream"):
         return {"ok": False, "error": f"invalid view: {patch['view']!r}"}
-    async with _STATE_LOCK:
+    with _STATE_LOCK:
         _STATE["ui"].update(patch)
         _write_state(_STATE)
     return {"ok": True, "ui": _STATE["ui"]}
@@ -360,6 +368,9 @@ async function migrateLocalStorage() {
       const raw = localStorage.getItem(k);
       if (raw === null) continue;
       try {
+        // Asymmetry by design: state.js saved `view` as a bare string and
+        // sessionOrder/collapsedSessions as JSON-encoded arrays. We mirror
+        // that here so each value parses back to its original shape.
         patch[field] = field === "view" ? raw : JSON.parse(raw);
       } catch (_) {
         // unparseable legacy data — skip, the user can re-establish in UI
@@ -668,11 +679,9 @@ def _mint_pid() -> str:
 
 def _stamp_pid(target: str, pid: str) -> None:
     """Fire-and-forget set-option. If it fails (window gone, tmux racy),
-    the next poll repeats the attempt."""
-    subprocess.run(
-        ["tmux", "set-option", "-w", "-t", target, "@periscope_id", pid],
-        capture_output=True, check=False, timeout=2,
-    )
+    the next poll repeats the attempt. Uses the project's read-style
+    `tmux()` helper because we don't need stderr-surfacing here."""
+    tmux("set-option", "-w", "-t", target, "@periscope_id", pid)
 
 
 def _rebind_pid(
@@ -729,52 +738,58 @@ def resolve_pids(windows: list[dict]) -> None:
     if not windows:
         return
     now_ts = int(time.time())
-    # _STATE writes need the async lock; resolve_pids runs in sync endpoint
-    # context. The lock is asyncio.Lock; we use the sync .locked()-style
-    # mutation by reaching directly into _STATE here because every endpoint
-    # that calls us is single-threaded relative to other prefs writes.
-    # ARG: if we ever introduce a writer that races with this, this section
-    # needs to move under the lock.
-    wblock = _STATE.setdefault("windows", {})
-    taken: set[str] = set()
-    dirty = False
-    for w in windows:
-        target = f"{w['session']}:{w['index']}"
-        pid_raw = (w.get("pid_raw") or "").strip()
-        pid: str | None = None
-        if pid_raw and len(pid_raw) == 8 and all(c in "0123456789abcdef" for c in pid_raw):
-            pid = pid_raw
-        if pid is None:
-            pid = _rebind_pid(
-                wblock,
-                session=w["session"],
-                name=w["name"],
-                branch=w.get("branch"),
-                cwd=w.get("cwd"),
-                taken_pids=taken,
+    # Everything that reads/writes _STATE goes through _STATE_LOCK. We hold
+    # the lock for the full resolve pass — it's cheap (kilobyte-scale JSON
+    # write at the end) and gives us a single consistent snapshot of the
+    # windows block to score rebinds against.
+    with _STATE_LOCK:
+        wblock = _STATE.setdefault("windows", {})
+        taken: set[str] = set()
+        dirty = False
+        for w in windows:
+            target = f"{w['session']}:{w['index']}"
+            pid_raw = (w.get("pid_raw") or "").strip()
+            pid: str | None = None
+            if pid_raw and len(pid_raw) == 8 and all(c in "0123456789abcdef" for c in pid_raw):
+                pid = pid_raw
+            if pid is None:
+                pid = _rebind_pid(
+                    wblock,
+                    session=w["session"],
+                    name=w["name"],
+                    branch=w.get("branch"),
+                    cwd=w.get("cwd"),
+                    taken_pids=taken,
+                )
+            if pid is None:
+                pid = _mint_pid()
+            # Stamp tmux only when we synthesized the id (mint or rebind).
+            if pid != pid_raw:
+                _stamp_pid(target, pid)
+                dirty = True
+            taken.add(pid)
+            w["pid"] = pid
+            # `pid_raw` was internal — strip it before emit.
+            w.pop("pid_raw", None)
+            # Refresh last_seen. Only flag dirty if something *other than*
+            # `ts` changed — a pure ts bump every 3s would thrash state.json
+            # to disk thousands of times an hour for no semantic gain.
+            entry = wblock.setdefault(pid, {})
+            prev = entry.get("last_seen") or {}
+            new_seen = {
+                "session": w["session"],
+                "name": w["name"],
+                "branch": w.get("branch"),
+                "cwd": w.get("cwd"),
+                "ts": now_ts,
+            }
+            identity_changed = (
+                "last_seen" not in entry
+                or any(prev.get(k) != new_seen[k] for k in ("session", "name", "branch", "cwd"))
             )
-        if pid is None:
-            pid = _mint_pid()
-        # Stamp + last_seen update for synthesized ids only.
-        if pid != pid_raw:
-            _stamp_pid(target, pid)
-        taken.add(pid)
-        w["pid"] = pid
-        # `pid_raw` was internal — strip it before emit.
-        w.pop("pid_raw", None)
-        # Update last_seen for every sighted window (including ones that
-        # already had a pid stamped) — keeps the rebind hint fresh.
-        entry = wblock.setdefault(pid, {})
-        entry["last_seen"] = {
-            "session": w["session"],
-            "name": w["name"],
-            "branch": w.get("branch"),
-            "cwd": w.get("cwd"),
-            "ts": now_ts,
-        }
-        dirty = True
-    if dirty:
-        _write_state(_STATE)
+            entry["last_seen"] = new_seen
+            if identity_changed:
+                dirty = True
 ```
 
 - [ ] **Step 2: Verify the helper compiles**
@@ -905,29 +920,31 @@ git commit -m "config: /api/state and /api/auto-rename-* resolve and emit @peris
 **Files:**
 - Modify: `server.py` (`resolve_pids`)
 
-- [ ] **Step 1: Add GC at the end of `resolve_pids`**
+- [ ] **Step 1: Add GC at the end of `resolve_pids`'s locked region**
 
-In `server.py`, find the end of `resolve_pids` (the `if dirty: _write_state(_STATE)` line). Replace that line with:
+In `server.py`, find the end of `resolve_pids`'s `with _STATE_LOCK:` block (immediately after the for-loop that updates each window's `last_seen`). Insert this code as the **last block inside the `with`**, before the function returns:
 
 ```python
-    # GC: drop windows entries that (a) carry no notes and no tags, AND (b)
-    # weren't refreshed this pass, AND (c) have a last_seen older than 30
-    # days. Annotated entries are immune — losing one would lose notes.
-    refreshed = taken
-    cutoff = now_ts - _PID_TTL_S
-    for pid in list(wblock.keys()):
-        if pid in refreshed:
-            continue
-        entry = wblock[pid]
-        if entry.get("notes") or entry.get("tags"):
-            continue
-        ts = (entry.get("last_seen") or {}).get("ts") or 0
-        if ts < cutoff:
-            del wblock[pid]
-            dirty = True
-    if dirty:
-        _write_state(_STATE)
+        # GC: drop windows entries that (a) carry no notes and no tags, AND
+        # (b) weren't refreshed this pass, AND (c) have a last_seen older
+        # than 30 days. Annotated entries are immune — losing one would
+        # lose notes.
+        cutoff = now_ts - _PID_TTL_S
+        for pid in list(wblock.keys()):
+            if pid in taken:
+                continue
+            entry = wblock[pid]
+            if entry.get("notes") or entry.get("tags"):
+                continue
+            ts = (entry.get("last_seen") or {}).get("ts") or 0
+            if ts < cutoff:
+                del wblock[pid]
+                dirty = True
+        if dirty:
+            _write_state(_STATE)
 ```
+
+(The GC and the single write live inside the same `with _STATE_LOCK:` opened by the resolver — the lock is held across the whole pass.)
 
 - [ ] **Step 2: Verify GC fires on a synthetic stale entry**
 
@@ -988,7 +1005,7 @@ async def put_window_annotation(pid: str, body: WindowAnnotation):
                 seen.add(t)
                 clean.append(t)
         patch["tags"] = clean
-    async with _STATE_LOCK:
+    with _STATE_LOCK:
         entry = _STATE["windows"].setdefault(pid, {})
         for k in ("notes", "tags"):
             if k in patch:
@@ -1012,7 +1029,7 @@ async def delete_window_annotation(pid: str):
     """Remove notes + tags. last_seen is preserved (it's the rebind hint)."""
     if not pid or not pid.isalnum():
         return {"ok": False, "error": "invalid pid"}
-    async with _STATE_LOCK:
+    with _STATE_LOCK:
         entry = _STATE["windows"].get(pid)
         if entry:
             entry.pop("notes", None)
@@ -1544,10 +1561,17 @@ _DEFAULT_COMMANDS = [
 def _seed_commands_if_empty() -> None:
     """If `commands` is empty (fresh install or pre-phase-4 state.json),
     seed the three legacy defaults so the new-window tile keeps working
-    while phase 4 is in flight."""
-    if not _STATE["commands"]:
-        _STATE["commands"] = [dict(c) for c in _DEFAULT_COMMANDS]
-        _write_state(_STATE)
+    while phase 4 is in flight.
+
+    Side effect: if a user deliberately drains commands to zero, the next
+    server restart re-seeds the defaults. To keep zero commands, leave at
+    least one no-op entry around. This tradeoff is deliberate — making
+    "empty by accident" recoverable matters more than supporting a
+    zero-commands configuration nobody asks for."""
+    with _STATE_LOCK:
+        if not _STATE["commands"]:
+            _STATE["commands"] = [dict(c) for c in _DEFAULT_COMMANDS]
+            _write_state(_STATE)
 
 
 _seed_commands_if_empty()
@@ -1565,12 +1589,21 @@ class Command(BaseModel):
     exec: str = ""
 
 
+class CommandPatch(BaseModel):
+    """For PUT: both fields are optional. Sending only `label` renames
+    without clobbering `exec`; sending only `exec` updates the command
+    without renaming. The frontend always sends both, but keeping them
+    optional protects against curl-from-shell footguns."""
+    label: str | None = None
+    exec: str | None = None
+
+
 @app.post("/api/prefs/commands")
 async def add_command(body: Command):
     label = body.label.strip()
     if not label:
         return {"ok": False, "error": "empty label"}
-    async with _STATE_LOCK:
+    with _STATE_LOCK:
         if any(c["label"] == label for c in _STATE["commands"]):
             return {"ok": False, "error": f"duplicate label: {label!r}"}
         _STATE["commands"].append({"label": label, "exec": body.exec or ""})
@@ -1579,19 +1612,20 @@ async def add_command(body: Command):
 
 
 @app.put("/api/prefs/commands/{label}")
-async def update_command(label: str, body: Command):
-    new_label = body.label.strip()
-    if not new_label:
-        return {"ok": False, "error": "empty label"}
-    async with _STATE_LOCK:
+async def update_command(label: str, body: CommandPatch):
+    with _STATE_LOCK:
         for c in _STATE["commands"]:
             if c["label"] == label:
+                new_label = (body.label or label).strip()
+                if not new_label:
+                    return {"ok": False, "error": "empty label"}
                 if new_label != label and any(
                     other["label"] == new_label for other in _STATE["commands"] if other is not c
                 ):
                     return {"ok": False, "error": f"duplicate label: {new_label!r}"}
                 c["label"] = new_label
-                c["exec"] = body.exec or ""
+                if body.exec is not None:
+                    c["exec"] = body.exec
                 _write_state(_STATE)
                 return {"ok": True, "commands": _STATE["commands"]}
     return {"ok": False, "error": f"unknown label: {label!r}"}
@@ -1599,7 +1633,7 @@ async def update_command(label: str, body: Command):
 
 @app.delete("/api/prefs/commands/{label}")
 async def delete_command(label: str):
-    async with _STATE_LOCK:
+    with _STATE_LOCK:
         before = len(_STATE["commands"])
         _STATE["commands"] = [c for c in _STATE["commands"] if c["label"] != label]
         if len(_STATE["commands"]) == before:
@@ -1616,7 +1650,7 @@ class CommandsReorder(BaseModel):
 async def reorder_commands(body: CommandsReorder):
     """Reorder the commands list to match `labels`. Unknown labels are
     ignored; missing labels stay in place at the end."""
-    async with _STATE_LOCK:
+    with _STATE_LOCK:
         by_label = {c["label"]: c for c in _STATE["commands"]}
         ordered = [by_label[l] for l in body.labels if l in by_label]
         leftover = [c for c in _STATE["commands"] if c["label"] not in {l for l in body.labels if l in by_label}]
@@ -1684,19 +1718,38 @@ git commit -m "config: /api/prefs/commands CRUD + reorder; seed claude/shell/vim
 
 In `server.py`, locate `window_new` (~line 1054). Replace it with:
 
+First add `Query` to the FastAPI import at the top of `server.py` if not already present:
+
+```python
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+```
+
+Then:
+
 ```python
 @app.post("/api/window/new")
-def window_new(session: str, exec: str = "", mode: str | None = None):
+def window_new(
+    session: str,
+    exec_cmd: str = Query("", alias="exec"),
+    mode: str | None = None,
+):
     """Spawn a window in `session`. If `exec` is non-empty, type it followed
     by Enter into the new pane (after a 100ms pause so the shell's rc has
     completed loading). Empty `exec` = bare prompt.
 
+    The Python parameter is `exec_cmd` (avoiding the `exec` builtin); the
+    query param is still `exec` via Query(alias=...).
+
     The legacy `mode` query param is supported for one release for the
     benefit of clients still on the old contract; it maps to claude/vim/shell
     -> 'claude'/'vim'/''.
+
+    `exec` is single-line; if you pass embedded newlines they get stripped
+    by `cmd.strip()` below. Multi-line bootstrap belongs in your shell rc,
+    not in a one-shot send-keys.
     """
-    if mode and not exec:
-        exec = {"claude": "claude", "vim": "vim", "shell": ""}.get(mode, "")
+    if mode and not exec_cmd:
+        exec_cmd = {"claude": "claude", "vim": "vim", "shell": ""}.get(mode, "")
     cwd = tmux(
         "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
     ).strip() or os.path.expanduser("~")
@@ -1711,7 +1764,7 @@ def window_new(session: str, exec: str = "", mode: str | None = None):
     except ValueError:
         return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
     target = f"{session}:{index}"
-    cmd = exec.strip()
+    cmd = exec_cmd.strip()
     if cmd:
         # Let the shell finish its rc before the command line arrives, so the
         # command runs as a real prompt entry rather than mid-rc echoed text.
