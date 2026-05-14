@@ -36,7 +36,8 @@ def _print_help(*, file=None) -> None:
 
 # --- verb: hook ---------------------------------------------------------
 
-def _cmd_hook(argv: list[str]) -> int:
+def _cmd_hook(_argv: list[str]) -> int:
+    """Hook doesn't accept argv — it reads JSON from stdin."""
     from .hook import run_hook
     return run_hook()
 
@@ -62,7 +63,7 @@ def _cmd_backfill(argv: list[str]) -> int:
             from datetime import datetime
             since_ts = int(datetime.fromisoformat(args.since).timestamp())
     if args.dry_run:
-        paths = find_jsonl_files(projects or None)
+        paths = find_jsonl_files(projects) if projects is not None else find_jsonl_files()
         print(f"would scan {len(paths)} jsonl files")
         return 0
     kwargs = {"workers": args.workers, "db_path": args.db_path, "since": since_ts}

@@ -103,3 +103,20 @@ def test_cli_clean_removes_missing_files(tmp_path, capsys):
     conn = connect(db_path)
     assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
     conn.close()
+
+
+def test_cli_backfill_dry_run_without_projects_dir(tmp_path, capsys):
+    """Regression: --dry-run with no --projects-dir crashed with AttributeError
+    because find_jsonl_files(None) doesn't work; we now resolve to the default."""
+    # Point at a real (empty) dir so the test is deterministic
+    proj_dir = tmp_path / "empty-projects"
+    proj_dir.mkdir()
+    rc = main(["backfill", "--dry-run", "--projects-dir", str(proj_dir)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "would scan 0 jsonl files" in out
+    # Now check the no-projects-dir path doesn't crash. We can't predict the
+    # count (depends on the real user's ~/.claude/projects), so just assert
+    # no exception and rc=0.
+    rc2 = main(["backfill", "--dry-run"])
+    assert rc2 == 0
