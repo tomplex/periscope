@@ -1410,6 +1410,14 @@ def state():
 
         git = cached_git_state(w.get("cwd", "")) or {}
         pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
+
+        # Channel state (added by 2026-05-14-channels-design.md).
+        pane_id = w.get("pane_id") or ""
+        with _CHANNELS_LOCK:
+            channel_attached = pane_id in _CHANNEL_SUBSCRIBERS if pane_id else False
+            channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
+            channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
+
         result.append(
             {
                 **w, **parsed, **git, **pr,
@@ -1420,6 +1428,9 @@ def state():
                 # by acted_at desc (most-recently-opened leftmost).
                 "acted_at": acked,
                 "completed_at": completed,
+                "channel_attached": channel_attached,
+                "channel_unread": channel_unread,
+                "channel_replies": channel_replies,
             }
         )
     _channel_gc({w["pane_id"] for w in windows if w.get("pane_id")})
@@ -1677,6 +1688,12 @@ class NewSessionBody(BaseModel):
 class ChannelPushBody(BaseModel):
     content: str
     meta: dict | None = None
+
+
+class ChannelReplyBody(BaseModel):
+    message: str
+    kind: str = "info"          # "info" | "need_human" | "done" (unknowns degrade)
+    severity: str = "info"      # "info" | "good" | "warning" | "bad"
 
 
 def _tmux_mutate(*args: str) -> tuple[bool, str]:
@@ -2193,6 +2210,23 @@ def channel_push(body: ChannelPushBody, pane: str = Query(...)):
         "ts": int(time.time()),
     }
     _channel_enqueue(pane, event)
+    return {"ok": True}
+
+
+@app.post("/api/channel/reply")
+def channel_reply(body: ChannelReplyBody, pane: str = Query(...)):
+    if not pane.startswith("%"):
+        return {"ok": False, "error": "pane must be a %N tmux pane id"}
+
+    entry = {
+        "message": body.message,
+        "kind": body.kind,
+        "severity": body.severity,
+        "ts": int(time.time()),
+    }
+    with _CHANNELS_LOCK:
+        _CHANNEL_REPLIES.setdefault(pane, []).append(entry)
+        _CHANNEL_UNREAD[pane] = _CHANNEL_UNREAD.get(pane, 0) + 1
     return {"ok": True}
 
 
