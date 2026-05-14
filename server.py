@@ -600,8 +600,15 @@ def parse_pane(content: str) -> dict:
     #   - old: "<glyph> <phrase>…"           (SPINNER_RE)
     #   - new: "<glyph> <verb> ... (↑Nk tokens ...)"  (ACTIVE_OP_RE)
     # Verb extraction is a display nicety — detection only requires the match.
+    #
+    # Window is tight (15 lines) because both patterns are short enough strings
+    # that Claude assistant prose can incidentally render them — a prior
+    # response quoting `✻ Envisioning…` or `(...↑22.1k tokens...)` as example
+    # text would false-positive against a wider window. The actual TUI marker
+    # sits ~7-11 rows above the prompt even with a long subtask list, so the
+    # 15-line ceiling never excludes a real one.
     spinner = None
-    for line in reversed(lines[-40:]):
+    for line in reversed(lines[-15:]):
         m = SPINNER_RE.match(line)
         if m:
             phrase = m.group("phrase").strip()
