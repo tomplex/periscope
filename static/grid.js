@@ -198,6 +198,36 @@ function orderedSessions(allSessions, bySession) {
   return [...ordered, ...remaining];
 }
 
+// Channel-alert pill rolled up across a session's panes. Visible in both
+// expanded and collapsed states so a collapsed group still signals when one
+// of its hidden cards has an unread Claude alert.
+const _KIND_RANK = { need_human: 3, done: 2, info: 1 };
+const _KIND_ICON = { need_human: "⚠", done: "✓", info: "•" };
+
+function sessionChannelAlert(ws) {
+  const alerts = ws
+    .filter(w => (w.channel_unread || 0) > 0 && (w.channel_replies || []).length > 0)
+    .map(w => ({
+      kind: (w.channel_replies[w.channel_replies.length - 1].kind || "info"),
+      message: w.channel_replies[w.channel_replies.length - 1].message || "",
+    }));
+  if (!alerts.length) return { html: "", kind: null };
+  const topKind = alerts.reduce(
+    (a, b) => (_KIND_RANK[a.kind] || 0) >= (_KIND_RANK[b.kind] || 0) ? a : b
+  ).kind;
+  const count = alerts.length;
+  const icon = _KIND_ICON[topKind] || "•";
+  // Preview the top alert's message (truncated) so collapsed sessions reveal
+  // *what* needs attention, not just *that* something does.
+  const top = alerts.find(a => a.kind === topKind);
+  const preview = top ? escapeHtml(top.message.slice(0, 60)) : "";
+  const more = count > 1 ? ` <span class="session-channel-more">+${count - 1}</span>` : "";
+  return {
+    html: `<span class="session-channel-pill session-channel-${topKind}" title="${count} unread Claude alert(s)">${icon} ${preview}${more}</span>`,
+    kind: topKind,
+  };
+}
+
 function sessionPill(ws) {
   const needsInput = ws.filter((w) => w.state === "needs-input").length;
   const done = ws.filter((w) => w.state === "done").length;
@@ -231,13 +261,16 @@ function renderSession(session, ws, totalWindows) {
   const recent = Math.max(0, ...ws.map((w) => w.focused_at || 0));
   const recentLabel = recent ? relTime(recent) : "";
   const s = escapeHtml(session);
+  const alert = sessionChannelAlert(ws);
+  const alertClass = alert.kind ? ` session-has-channel session-has-channel-${alert.kind}` : "";
   return `
-    <section class="session-group${collapsed}" data-session="${s}">
+    <section class="session-group${collapsed}${alertClass}" data-session="${s}">
       <div class="session-header" draggable="true" data-session="${s}">
         <span class="chevron">▾</span>
         <h2>${s}</h2>
         <span class="session-meta">${meta}${recentLabel ? ` · ${recentLabel}` : ""}</span>
         ${sessionPill(ws)}
+        ${alert.html}
         <button class="auto-rename" data-session="${s}" title="ask Claude to auto-rename windows in this session">✨ rename</button>
         <button class="kill-session" data-session="${s}" title="kill this tmux session">✕</button>
       </div>
@@ -412,6 +445,22 @@ export function render(windows) {
   const view = document.body.dataset.view === "stream" ? "stream" : "grid";
   if (view === "stream") renderStream(windows);
   else renderGrid(windows);
+
+  // "send to N" bulk-broadcast button. Scoped to whatever the current filter
+  // already shows — composes with the existing filter UX instead of inventing
+  // a new "pick which panes" modal. Hidden when there's nothing to broadcast
+  // to (zero or one matching pane); the singular case has plenty of single-
+  // pane affordances already.
+  const sendBulkBtn = document.getElementById("send-bulk");
+  if (sendBulkBtn) {
+    const visible = windows.filter(passesFilter);
+    if (visible.length > 1) {
+      sendBulkBtn.hidden = false;
+      sendBulkBtn.textContent = `→ send to ${visible.length}`;
+    } else {
+      sendBulkBtn.hidden = true;
+    }
+  }
 
   // Fade non-alerting cards when something needs the user's eyes. Same gate
   // as the per-card needsAttention so the two stay in sync.

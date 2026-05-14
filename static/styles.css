@@ -379,6 +379,75 @@ body[data-view="stream"] .stream-banner {
   border-color: color-mix(in oklch, var(--s-danger) 35%, transparent);
 }
 
+/* Channel-alert pill: rolled-up unread Claude alerts across a session.
+   Inherits the session-pill chip shape; kind drives the color. Truncates
+   long preview text so it doesn't crowd the header. */
+.session-channel-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-family: var(--mono);
+}
+
+.session-channel-pill.session-channel-need_human {
+  color: var(--s-danger);
+  background: color-mix(in oklch, var(--s-danger) 16%, transparent);
+  border-color: color-mix(in oklch, var(--s-danger) 40%, transparent);
+  font-weight: 500;
+}
+.session-channel-pill.session-channel-done {
+  color: var(--s-done);
+  background: var(--s-done-bg);
+  border-color: color-mix(in oklch, var(--s-done) 35%, transparent);
+}
+.session-channel-pill.session-channel-info {
+  color: var(--s-working);
+  background: var(--s-working-bg);
+  border-color: color-mix(in oklch, var(--s-working) 35%, transparent);
+}
+
+.session-channel-more {
+  opacity: 0.7;
+  margin-left: 2px;
+  font-size: 10px;
+}
+
+/* When a session has unread Claude alerts, give the header itself a
+   matching accent. The pill carries the legible signal; the header tint
+   is what makes a collapsed group visible at-a-glance from across the
+   dashboard. */
+.session-has-channel-need_human .session-header {
+  background: color-mix(in oklch, var(--s-danger) 8%, transparent);
+}
+.session-has-channel-done .session-header {
+  background: color-mix(in oklch, var(--s-done) 8%, transparent);
+}
+.session-has-channel-info .session-header {
+  background: color-mix(in oklch, var(--s-working) 6%, transparent);
+}
+
+/* When collapsed, raise the contrast a bit — this is the only surface the
+   user sees for that session, so the alert needs to read across the grid. */
+.session-group.collapsed.session-has-channel-need_human .session-header {
+  background: color-mix(in oklch, var(--s-danger) 14%, transparent);
+}
+.session-group.collapsed.session-has-channel-done .session-header {
+  background: color-mix(in oklch, var(--s-done) 12%, transparent);
+}
+.session-group.collapsed.session-has-channel-info .session-header {
+  background: color-mix(in oklch, var(--s-working) 10%, transparent);
+}
+
 .auto-rename, .kill-session {
   display: inline-flex;
   align-items: center;
