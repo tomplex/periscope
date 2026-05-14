@@ -176,6 +176,25 @@ async def _call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=json.dumps(body))]
 
 
+async def emit_channel_event(session, content: str, meta: dict | None) -> None:
+    """Push a notifications/claude/channel notification to Claude.
+
+    The public session.send_notification is constrained to a closed Pydantic
+    union of spec-defined notification types and does not accept arbitrary
+    method strings. We mirror what the SDK does internally: wrap the
+    JSONRPCNotification in a JSONRPCMessage, then a SessionMessage, then send
+    via the session's write stream.
+    """
+    notification = JSONRPCNotification(
+        jsonrpc="2.0",
+        method="notifications/claude/channel",
+        params={"content": content, "meta": meta or {}},
+    )
+    await session._write_stream.send(
+        SessionMessage(message=JSONRPCMessage(notification))
+    )
+
+
 async def main():
     if not TMUX_PANE.startswith("%"):
         print(
