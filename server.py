@@ -4,6 +4,7 @@
 #     "fastapi",
 #     "uvicorn[standard]",
 #     "anthropic",
+#     "httpx",
 #     "python-dotenv",
 #     "mcp==1.27.*",
 # ]
@@ -191,11 +192,18 @@ async def lifespan(_app: FastAPI):
     # MCP unix-socket listener: accepts connections from channel_shim.py
     # (one per Claude pane), runs an MCP Server per connection in-process.
     mcp_task = _task(_mcp_listener(), "mcp-listener")
+    # LGTM mirror: polls localhost:9900 + subscribes per-session SSE.
+    # No-op while LGTM isn't running; surfaces on the dashboard the
+    # moment it comes up.
+    lgtm_task = _task(_lgtm_periodic_refresh(), "lgtm-refresh")
     try:
         yield
     finally:
         log.info("periscope shutting down (pid=%d)", os.getpid())
         mcp_task.cancel()
+        lgtm_task.cancel()
+        for t in list(_LGTM_SSE_TASKS.values()):
+            t.cancel()
         try:
             await mcp_task
         except (asyncio.CancelledError, Exception):
@@ -1074,6 +1082,157 @@ def tmux(*args: str) -> str:
         ["tmux", *args], capture_output=True, text=True, timeout=5
     )
     return r.stdout
+
+
+# --- LGTM integration ----------------------------------------------------
+#
+# Periscope mirrors LGTM's active review sessions onto pane cards. A
+# pane whose cwd matches a known LGTM repoPath grows a Review tab in
+# the modal (iframed LGTM UI) and a small grid badge with comment
+# counts. Discovery is all over HTTP against LGTM's existing API:
+#   - GET /projects                  full session list
+#   - GET /project/:slug/events      SSE stream of comment/item changes
+# Cross-origin from periscope's :8765 to LGTM's :9900 is fine for the
+# iframe (LGTM sets no X-Frame-Options / CSP frame-ancestors) and the
+# server-side fetch dodges any CORS question entirely.
+#
+# Everything degrades silently when LGTM isn't running. We never log
+# transport errors as exceptions because the common case is "LGTM is
+# not installed / not started" and that's not a periscope problem.
+
+LGTM_BASE_URL = os.environ.get("PERISCOPE_LGTM_URL", "http://127.0.0.1:9900")
+LGTM_REFRESH_S = 30.0  # full /projects refresh interval; SSE handles in-between deltas
+
+_LGTM_LOCK = threading.Lock()
+# repoPath (resolved, absolute) -> session info dict, see _lgtm_refresh_all
+_LGTM_BY_REPO: dict[str, dict[str, Any]] = {}
+# slug -> running SSE task; reconciled against /projects each refresh
+_LGTM_SSE_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _normalize_repo_path(p: str | None) -> str:
+    if not p:
+        return ""
+    try:
+        return str(Path(p).resolve())
+    except OSError:
+        return p
+
+
+def cached_lgtm_state(cwd: str | None) -> dict | None:
+    """Return the LGTM session info for a pane's cwd, or None.
+
+    Result shape:
+        {"slug", "url", "branch", "base_branch", "pr",
+         "claude_comments", "user_comments", "submitted"}
+    """
+    if not cwd:
+        return None
+    key = _normalize_repo_path(cwd)
+    with _LGTM_LOCK:
+        entry = _LGTM_BY_REPO.get(key)
+        return dict(entry) if entry else None
+
+
+def _lgtm_submitted(slug: str) -> bool:
+    """True if the user has submitted feedback for this session.
+
+    LGTM writes /tmp/claude-review/<slug>.md.signal on every submit.
+    Existence of the signal file is the cheapest reliable check; we
+    don't read it because periscope doesn't need the round number.
+    """
+    return Path(f"/tmp/claude-review/{slug}.md.signal").exists()
+
+
+async def _lgtm_refresh_all() -> None:
+    """Pull /projects, rebuild the cache, reconcile per-slug SSE subs."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(f"{LGTM_BASE_URL}/projects")
+            r.raise_for_status()
+            payload = r.json()
+    except (httpx.HTTPError, OSError):
+        # LGTM not running, port closed, etc. Keep the existing cache; the
+        # next refresh will fix it. No log — silence on the common path.
+        return
+
+    projects = payload.get("projects", []) or []
+    new_map: dict[str, dict[str, Any]] = {}
+    seen_slugs: set[str] = set()
+    for p in projects:
+        slug = p.get("slug")
+        repo = _normalize_repo_path(p.get("repoPath"))
+        if not slug or not repo:
+            continue
+        seen_slugs.add(slug)
+        new_map[repo] = {
+            "slug": slug,
+            "url": f"{LGTM_BASE_URL}/project/{slug}/",
+            "branch": p.get("branch"),
+            "base_branch": p.get("baseBranch"),
+            "pr": p.get("pr"),
+            "claude_comments": int(p.get("claudeCommentCount") or 0),
+            "user_comments": int(p.get("userCommentCount") or 0),
+            "submitted": _lgtm_submitted(slug),
+        }
+    with _LGTM_LOCK:
+        _LGTM_BY_REPO.clear()
+        _LGTM_BY_REPO.update(new_map)
+
+    # Reconcile SSE subscriptions: subscribe to new slugs, cancel gone ones.
+    for slug in list(_LGTM_SSE_TASKS):
+        if slug not in seen_slugs:
+            t = _LGTM_SSE_TASKS.pop(slug)
+            if not t.done():
+                t.cancel()
+    for slug in seen_slugs - set(_LGTM_SSE_TASKS):
+        _LGTM_SSE_TASKS[slug] = _task(_lgtm_sse_loop(slug), f"lgtm-sse-{slug}")
+
+
+async def _lgtm_sse_loop(slug: str) -> None:
+    """Long-lived SSE subscription that refreshes the cache on every event.
+
+    Any event (comments_changed, items_changed) is treated as "this slug's
+    counts changed" — we just rerun /projects rather than diffing the SSE
+    payload, since the canonical numbers come from /projects anyway.
+    """
+    import httpx
+    url = f"{LGTM_BASE_URL}/project/{slug}/events"
+    backoff = 1.0
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", url) as r:
+                    if r.status_code != 200:
+                        raise httpx.HTTPError(f"sse status {r.status_code}")
+                    backoff = 1.0
+                    async for line in r.aiter_lines():
+                        # SSE payloads are "event: ..."/"data: ..." pairs; any
+                        # non-empty content means there was a delta worth
+                        # refreshing on.
+                        if line.startswith("data:"):
+                            await _lgtm_refresh_all()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Stream errored / LGTM restarted. Back off and retry.
+            pass
+        await asyncio.sleep(min(backoff, 30.0))
+        backoff *= 2
+
+
+async def _lgtm_periodic_refresh() -> None:
+    """Top-level loop. Catches both 'LGTM just started' and 'new session
+    appeared we don't have an SSE for yet'."""
+    while True:
+        try:
+            await _lgtm_refresh_all()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("lgtm refresh failed")
+        await asyncio.sleep(LGTM_REFRESH_S)
 
 
 # --- Git + PR state derived from each pane's current working directory ----
