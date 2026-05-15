@@ -1144,20 +1144,44 @@ def _lgtm_submitted(slug: str) -> bool:
     return Path(f"/tmp/claude-review/{slug}.md.signal").exists()
 
 
+async def _lgtm_fetch_items(client, slug: str) -> list[dict]:
+    """One project's item list. Returns [] on any failure so the caller
+    doesn't need to special-case missing items per slug."""
+    try:
+        r = await client.get(f"{LGTM_BASE_URL}/project/{slug}/items", timeout=2.0)
+        if r.status_code != 200:
+            return []
+        items = r.json().get("items", []) or []
+        # Keep only the fields the frontend needs for tab rendering.
+        return [
+            {"id": i.get("id"), "type": i.get("type"), "title": i.get("title")}
+            for i in items if i.get("id")
+        ]
+    except Exception:
+        return []
+
+
 async def _lgtm_refresh_all() -> None:
-    """Pull /projects, rebuild the cache, reconcile per-slug SSE subs."""
+    """Pull /projects + per-slug /items, rebuild the cache, reconcile SSE subs."""
     import httpx
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             r = await client.get(f"{LGTM_BASE_URL}/projects")
             r.raise_for_status()
             payload = r.json()
+            projects = payload.get("projects", []) or []
+            # Fetch each project's items in parallel — keeps refresh latency
+            # at one round-trip even with a dozen sessions.
+            slugs = [p["slug"] for p in projects if p.get("slug")]
+            items_lists = await asyncio.gather(
+                *[_lgtm_fetch_items(client, s) for s in slugs]
+            )
+            items_by_slug = dict(zip(slugs, items_lists))
     except (httpx.HTTPError, OSError):
         # LGTM not running, port closed, etc. Keep the existing cache; the
         # next refresh will fix it. No log — silence on the common path.
         return
 
-    projects = payload.get("projects", []) or []
     new_map: dict[str, dict[str, Any]] = {}
     seen_slugs: set[str] = set()
     for p in projects:
@@ -1175,6 +1199,7 @@ async def _lgtm_refresh_all() -> None:
             "claude_comments": int(p.get("claudeCommentCount") or 0),
             "user_comments": int(p.get("userCommentCount") or 0),
             "submitted": _lgtm_submitted(slug),
+            "items": items_by_slug.get(slug, []),
         }
     with _LGTM_LOCK:
         _LGTM_BY_REPO.clear()
