@@ -25,25 +25,31 @@ const modalReviewContent = document.getElementById("modal-review-content");
 
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
-// Slug of the LGTM session currently mounted in the iframe. Lets us skip
-// remounts when /api/pane reports the same session on subsequent polls,
-// which would otherwise reset scroll and any in-flight UI state.
-let mountedLgtmSlug = null;
+// Tab id currently mounted in the review pane. Lets us skip needless
+// iframe.src reassignments and DOM rebuilds on every 1.5s poll.
+let mountedTabId = null;
 // Last /api/pane response. Cached so a tab switch can render the Review
 // pane immediately using already-known data, rather than waiting for the
 // next 1.5s poll to land. Cleared on modal close.
 let lastPaneData = null;
+// Set by openModal({tab: "review"}) — switches to the first LGTM tab as
+// soon as data arrives. Cleared after the switch or on modal close.
+let pendingReviewOpen = false;
 
 export function openModal(target, opts = {}) {
   state.activeTarget = target;
   pushEscape(closeModal);
   modalTitle.textContent = target;
   modalSubtitle.innerHTML = "";
-  // Reset tab to terminal unless the caller asked otherwise (e.g. clicking
-  // an LGTM badge on the grid card). Clear any iframe from a previous pane.
-  setActiveTab(opts.tab === "review" ? "review" : "terminal");
+  // The Review tab is now a class of tabs (one per LGTM item). When
+  // opened via an LGTM badge on the card, pick the first non-terminal
+  // tab once data arrives; until then, default to terminal.
+  setActiveTab("terminal");
+  pendingReviewOpen = opts.tab === "review";
   modalReviewContent.innerHTML = "";
-  mountedLgtmSlug = null;
+  modalTabs.innerHTML = "";
+  modalTabs.dataset.signature = "";
+  mountedTabId = null;
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
   startLiveTerminal(target);
@@ -65,21 +71,92 @@ export function closeModal() {
   // Drop the iframe so it stops holding the LGTM SSE connection open while
   // the modal is closed. Next open re-mounts.
   modalReviewContent.innerHTML = "";
-  mountedLgtmSlug = null;
+  modalTabs.innerHTML = "";
+  modalTabs.dataset.signature = "";
+  mountedTabId = null;
   lastPaneData = null;
+  pendingReviewOpen = false;
   state.modalRenaming = false;
   state.activeTarget = null;
   popEscape(closeModal);
 }
 
+// Tab id model:
+//   "terminal"            — live pane terminal (always present, first)
+//   "lgtm-start"          — bootstrap-a-review button (only when no session yet)
+//   "lgtm:<item-id>"      — one tab per LGTM item (diff or document)
+// CSS treats "terminal" specially via `#modal[data-tab="terminal"]`;
+// everything else maps to the review pane.
 function setActiveTab(name) {
-  if (name !== "terminal" && name !== "review") name = "terminal";
-  modal.dataset.tab = name;
+  modal.dataset.tab = name === "terminal" ? "terminal" : "review";
+  modal.dataset.tabId = name;
   if (!modalTabs) return;
   for (const btn of modalTabs.querySelectorAll(".modal-tab")) {
     const active = btn.dataset.tab === name;
     btn.classList.toggle("is-active", active);
     btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+}
+
+function buildTabSpec(data) {
+  const items = data?.lgtm?.items || [];
+  const slug = data?.lgtm?.slug;
+  const tabs = [{ id: "terminal", label: "Terminal" }];
+  if (slug && items.length > 0) {
+    for (const it of items) {
+      tabs.push({
+        id: `lgtm:${it.id}`,
+        label: it.id === "diff" ? "Diff" : (it.title || it.id),
+      });
+    }
+  } else if (data?.cwd_raw) {
+    // No LGTM session yet — single bootstrap tab kicks off /api/lgtm/start.
+    tabs.push({ id: "lgtm-start", label: "+ Start review" });
+  }
+  return tabs;
+}
+
+function renderTabStrip(data) {
+  if (!modalTabs) return;
+  const tabs = buildTabSpec(data);
+  const signature = tabs.map(t => `${t.id}\x1f${t.label}`).join("\x1e");
+  // Only rebuild when the spec actually changed — every 1.5s poll runs
+  // through here and rebuilding always would interfere with hover/focus.
+  if (modalTabs.dataset.signature !== signature) {
+    modalTabs.dataset.signature = signature;
+    modalTabs.innerHTML = "";
+    for (const t of tabs) {
+      const btn = document.createElement("button");
+      btn.className = "modal-tab";
+      btn.dataset.tab = t.id;
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", "false");
+      btn.textContent = t.label;
+      modalTabs.appendChild(btn);
+    }
+  }
+  // Auto-switch logic. Three triggers:
+  //   1. Caller asked for review (clicked the grid badge) and a real
+  //      LGTM tab is now available — pick the first one.
+  //   2. The active tab disappeared (e.g. the document was removed
+  //      from LGTM) — fall back to terminal.
+  const validIds = new Set(tabs.map(t => t.id));
+  const current = modal.dataset.tabId || "terminal";
+  let target = current;
+  if (pendingReviewOpen) {
+    const firstLgtm = tabs.find(t => t.id.startsWith("lgtm"));
+    if (firstLgtm) {
+      target = firstLgtm.id;
+      pendingReviewOpen = false;
+    }
+  }
+  if (!validIds.has(target)) target = "terminal";
+  if (target !== current) {
+    setActiveTab(target);
+  } else {
+    // Even when the active id is unchanged, the button DOM may have just
+    // been rebuilt — re-apply is-active so the right one is highlighted.
+    setActiveTab(target);
   }
 }
 
@@ -141,37 +218,10 @@ function updateModalHeader(data) {
   }
   modalSubtitle.innerHTML = parts.join(`<span class="sep">·</span> `);
   renderModalSidebar(data);
-  updateReviewTab(data);
-}
-
-// ── Review tab: LGTM badge + iframe / Start-review empty state. ───────
-// The Review tab is wired off /api/pane.lgtm (or null). When a session
-// exists we mount its URL in an iframe; otherwise we render a button
-// that POSTs /api/lgtm/start with the pane's cwd.
-function updateReviewTab(data) {
-  const reviewTabBtn = modalTabs?.querySelector('.modal-tab[data-tab="review"]');
-  const lgtm = data.lgtm;
-  // Badge on the tab: unresolved comment count (claude + user). 0 → no badge.
-  if (reviewTabBtn) {
-    const count = lgtm ? (lgtm.claude_comments || 0) + (lgtm.user_comments || 0) : 0;
-    const existing = reviewTabBtn.querySelector(".lgtm-tab-badge");
-    if (count > 0) {
-      if (existing) {
-        existing.textContent = String(count);
-      } else {
-        const b = document.createElement("span");
-        b.className = "lgtm-tab-badge";
-        b.textContent = String(count);
-        reviewTabBtn.appendChild(b);
-      }
-    } else if (existing) {
-      existing.remove();
-    }
-  }
-  // Only touch the review content while the user is actually viewing it,
-  // so we don't churn DOM on every poll for users who never open it.
-  if (modal.dataset.tab !== "review") return;
-  renderReviewPane(data);
+  renderTabStrip(data);
+  // Render the review pane only when actually viewing it; saves us from
+  // churning DOM on every poll for users sitting on the Terminal tab.
+  if (modal.dataset.tab === "review") renderReviewPane(data);
 }
 
 function rewriteLgtmHost(url) {
@@ -189,35 +239,53 @@ function rewriteLgtmHost(url) {
 }
 
 function renderReviewPane(data) {
+  const tabId = modal.dataset.tabId || "terminal";
+  if (tabId === "terminal") return;
+
+  if (tabId === "lgtm-start") {
+    renderStartReview(data);
+    return;
+  }
+
+  if (tabId.startsWith("lgtm:")) {
+    renderLgtmItem(data, tabId.slice(5));
+    return;
+  }
+}
+
+function renderLgtmItem(data, itemId) {
   const lgtm = data.lgtm;
-  if (lgtm && lgtm.slug && lgtm.url) {
-    // Mount the iframe once per slug; skip if it's already mounted to
-    // preserve scroll position and the iframe's own state.
-    if (mountedLgtmSlug === lgtm.slug && modalReviewContent.querySelector("iframe")) {
-      return;
-    }
+  if (!lgtm?.slug || !lgtm?.url) {
+    // The tab disappeared (session deregistered) but renderTabStrip
+    // hasn't run yet for this poll. Bail; the next render will fall
+    // back to terminal.
+    return;
+  }
+  // Build the embedded iframe URL. Rewrite the host to match the parent
+  // so localhost/127.0.0.1/LAN-IP all converge on a single hostname pair.
+  const baseUrl = rewriteLgtmHost(lgtm.url);
+  const url = `${baseUrl}?embedded=1&item=${encodeURIComponent(itemId)}`;
+  const tabKey = `lgtm:${itemId}`;
+  if (mountedTabId === tabKey) return;
+
+  let iframe = modalReviewContent.querySelector("iframe");
+  if (!iframe) {
     modalReviewContent.innerHTML = "";
-    const iframe = document.createElement("iframe");
-    // Use the parent page's host (localhost vs 127.0.0.1 vs LAN IP)
-    // instead of whatever the server cached. Keeps both origins under
-    // the same hostname so subdomain/port differences are the only
-    // cross-origin axis, which is the friendlier case.
-    iframe.src = rewriteLgtmHost(lgtm.url);
+    iframe = document.createElement("iframe");
     iframe.title = "LGTM review";
     // No loading=lazy: the iframe lives inside a tabbed pane that's
     // display:none while on the Terminal tab. Some browsers refuse to
-    // load lazy iframes whose ancestors aren't visible, which is exactly
-    // the failure mode "Review tab is blank" looks like.
+    // load lazy iframes whose ancestors aren't visible.
     iframe.referrerPolicy = "no-referrer";
     modalReviewContent.appendChild(iframe);
-    mountedLgtmSlug = lgtm.slug;
-    return;
   }
-  // No session yet — render the Start-review affordance. Skip if it's
-  // already there (poll runs every 1.5s; we don't want to rebuild the
-  // button mid-click).
-  if (modalReviewContent.querySelector(".modal-review-empty")) return;
-  mountedLgtmSlug = null;
+  iframe.src = url;
+  mountedTabId = tabKey;
+}
+
+function renderStartReview(data) {
+  if (mountedTabId === "lgtm-start") return;
+  mountedTabId = "lgtm-start";
   const cwd = data.cwd_raw || "";
   modalReviewContent.innerHTML = `
     <div class="modal-review-empty">
@@ -241,10 +309,10 @@ function renderReviewPane(data) {
       });
       const payload = await res.json();
       if (!payload.ok) throw new Error(payload.error || "unknown error");
-      // Don't mount the iframe inline — let the next poll tick pick up
-      // the lgtm field from /api/pane and render through renderReviewPane.
-      // That keeps a single mount path (avoids two slightly-different
-      // render branches drifting apart).
+      // Queue an auto-switch to the first LGTM tab as soon as items
+      // arrive in the next refresh.
+      pendingReviewOpen = true;
+      mountedTabId = null;
       refreshModalHeader();
     } catch (e) {
       btn.disabled = false;
@@ -614,11 +682,10 @@ export function initModal() {
       if (!btn) return;
       e.stopPropagation();
       setActiveTab(btn.dataset.tab);
-      if (btn.dataset.tab === "review") {
+      if (btn.dataset.tab !== "terminal") {
         // Render immediately from cached pane data so the user sees the
         // iframe (or the Start-review button) without waiting 1.5s for
-        // the next poll. If no data has arrived yet, show a placeholder
-        // and the next poll will replace it.
+        // the next poll.
         if (lastPaneData) {
           renderReviewPane(lastPaneData);
         } else if (!modalReviewContent.firstChild) {

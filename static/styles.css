@@ -1058,12 +1058,19 @@ body.modal-open { overflow: hidden; }
 }
 
 /* Tab strip lives between the title block and the action buttons in the
-   modal head. Tabs toggle which `.modal-pane` is visible inside the body. */
+   modal head. Tabs toggle which `.modal-pane` is visible inside the body.
+   Populated dynamically by modal.js: Terminal + one tab per LGTM item. */
 .modal-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   align-self: center;
+  /* Cap the strip so a session with many documents wraps rather than
+     pushing the close button off-screen. */
+  max-width: 60%;
 }
+/* Hide the strip when only the Terminal tab exists — nothing to choose. */
+.modal-tabs:has(> .modal-tab:only-child) { display: none; }
 .modal-tab {
   background: transparent;
   border: 1px solid var(--line-soft);
@@ -1074,6 +1081,12 @@ body.modal-open { overflow: hidden; }
   border-radius: var(--r-sm);
   cursor: pointer;
   transition: color 0.12s, background 0.12s, border-color 0.12s;
+  /* Document titles can be long — clip with ellipsis so the strip
+     stays scannable. Diff/Terminal tabs are always short. */
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .modal-tab:hover:not(.is-active) {
   color: var(--fg-0);
@@ -1083,21 +1096,6 @@ body.modal-open { overflow: hidden; }
   color: var(--fg-0);
   background: var(--bg-1);
   border-color: var(--accent);
-}
-.modal-tab .lgtm-tab-badge {
-  margin-left: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  padding: 0 5px;
-  height: 14px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--bg-modal);
-  background: var(--accent);
-  border-radius: 7px;
-  line-height: 1;
 }
 
 /* Modal body holds one or more `.modal-pane`s; only the one matching
