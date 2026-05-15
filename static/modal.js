@@ -154,7 +154,7 @@ function renderModalSidebar(data) {
     <section class="modal-side-section">
       <h4>Linked</h4>
       ${renderPRCard(data)}
-      ${renderLinearPlaceholder()}
+      ${renderLinearCard(data)}
     </section>
     <section class="modal-side-section modal-side-notes">
       <h4>Notes</h4>
@@ -227,10 +227,24 @@ function renderPRCard(data) {
   `;
 }
 
-function renderLinearPlaceholder() {
-  // Linear connector is not wired yet (deferred to Phase 3.1 / a future
-  // skill). The disabled button keeps the visual slot — it'll become live
-  // when the connector lands without modal-layout churn.
+function renderLinearCard(data) {
+  // Linear linking is always Claude-declared (via the link_linear MCP tool);
+  // periscope doesn't auto-detect. When set, render the same inset shape as
+  // the PR card so the two linked resources read as a visual pair. When
+  // unset, fall back to a disabled placeholder — a manual-link affordance is
+  // deferred to a future UI pass.
+  if (data.linked_linear) {
+    const id = escapeHtml(data.linked_linear);
+    const url = `https://linear.app/issue/${id}`;
+    return `
+      <div class="modal-card-inset">
+        <div class="pr-head">
+          <a class="pr-num" href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ticket ${id} (linked by claude)">${id}</a>
+          <span class="pr-title">linear ticket</span>
+        </div>
+      </div>
+    `;
+  }
   return `<button class="modal-side-link-btn" type="button" disabled title="Linear integration coming soon">+ link Linear ticket</button>`;
 }
 
