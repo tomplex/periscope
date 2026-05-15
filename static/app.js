@@ -4,7 +4,7 @@
 import { state } from './state.js';
 import * as prefs from './prefs.js';
 import { apiCall } from './util.js';
-import { initModal } from './modal.js';
+import { initModal, openModal } from './modal.js';
 import { initGrid, poll, render } from './grid.js';
 import { initCommandsModal, openCommandsModal } from './commands-modal.js';
 
@@ -133,6 +133,18 @@ async function bootstrap() {
   initGrid();
   initCommandsModal();
   document.getElementById("open-commands").addEventListener("click", openCommandsModal);
+
+  // `?modal=<target>` is the handoff signal from /history resume (and any
+  // future deep-link). Strip it before opening so a refresh doesn't keep
+  // re-popping the modal.
+  const params = new URLSearchParams(window.location.search);
+  const modalTarget = params.get("modal");
+  if (modalTarget) {
+    params.delete("modal");
+    const qs = params.toString();
+    history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : ""));
+    openModal(modalTarget);
+  }
 }
 
 viewSwitch.addEventListener("click", (e) => {

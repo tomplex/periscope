@@ -541,12 +541,11 @@ async function doResume(sessionId) {
   const data = await apiCall("resume", `/api/window/new?${params.toString()}`, {
     method: "POST",
   });
-  if (data) {
-    // Optimistic: flip the row's is_resuming locally so the UI reflects the
-    // guard immediately. Next search will re-fetch authoritative state.
-    const row = S.results.find((r) => r.session_id === sessionId);
-    if (row) row.is_resuming = true;
-    render();
+  if (data && data.target) {
+    // Hand off to the dashboard and ask it to pop the modal for the freshly-
+    // spawned window. The dashboard reads `modal` once and strips it from the
+    // URL so a refresh doesn't keep re-opening the same modal.
+    window.location.href = `/?modal=${encodeURIComponent(data.target)}`;
   }
 }
 
