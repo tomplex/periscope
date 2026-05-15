@@ -2,19 +2,28 @@
 
 ## What this is
 
-A single-file FastAPI server (`server.py`) plus a vanilla-JS frontend
+A FastAPI server (`server.py`) plus a vanilla-JS ES-module frontend
 (`static/`) that gives a browser dashboard over the host's tmux sessions.
 No bundling step in production — `uv run server.py` reads its dependencies
 from the PEP-723 inline metadata at the top of the file and serves
 `static/` as-is.
+
+Bolted on alongside the dashboard:
+- **`history/`** — Python package that indexes every Claude Code
+  conversation under `~/.claude/projects/` into SQLite + FTS5, with
+  optional Haiku summaries. Mounted under `/history` and `/api/history/*`
+  in `server.py`.
+- **`channel_shim.py`** + the channels block in `server.py` — an
+  in-process MCP server over a unix socket. Each Claude pane spawns the
+  shim, which proxies stdio↔socket so periscope can offer tools
+  (`reply`, `link_pr`, `link_linear`, `spawn_claude`) and push
+  notifications back into the pane's prompt context.
 
 ## Running
 
 ```sh
 uv run server.py     # http://127.0.0.1:8765/
 ```
-
-That's it. There's no test suite; iterate against the live dashboard.
 
 For frontend HMR (CSS reloads instantly, JS without losing scroll position):
 
@@ -27,33 +36,91 @@ npm run dev                     # http://127.0.0.1:5174/
 under a single shell with `trap 'kill 0' EXIT INT TERM` — ctrl+c kills the
 whole process group at once, so uvicorn's reload-worker child never gets
 orphaned regardless of how each intermediate layer forwards signals.
-`vite.config.js` proxies
-`/api/*` and `/ws/*` to FastAPI on :8765. Vite is purely a dev convenience —
-production keeps loading `static/app.js` and the vendored xterm scripts
-directly from FastAPI with no build artifact.
+`vite.config.js` proxies `/api/*` and `/ws/*` to FastAPI on :8765. Vite is
+purely a dev convenience — production keeps loading the modules in
+`static/` directly from FastAPI with no build artifact.
+
+`dev.sh` exports `PERISCOPE_DEV=1` so uvicorn runs with `--reload`. The
+pidfile reclaim path (see below) treats a reloader child as the same
+instance.
+
+## Tests
+
+There IS a test suite — small, surgical, run with `uv run`:
+
+```sh
+uv run test_parse_pane.py            # spinner / status-line regex regressions
+uv run tests/test_channel_smoke.py   # MCP wire-format compat against pinned mcp==1.27.*
+```
+
+These exist because each one tracks a class of regression that has bitten
+us repeatedly: parse_pane every time Claude tweaks its TUI; the channel
+smoke test every time we'd otherwise discover an SDK break only at
+runtime when a pane connects. Add cases here when you find a new
+variation, don't open a parallel framework.
 
 ## Architecture
 
 ```
-browser (static/app.js, vanilla JS, polls /api/state every 3s)
-   │
-   │   ── modal open ──>  WS /ws/pane  ──>  xterm.js terminal
-   │                                            ▲
-   v                                            │
-FastAPI (server.py)                       tmux pipe-pane FIFO
-   │
-   └─> tmux CLI (subprocess)
+browser
+ ├── /            → static/index.html + app.js (grid dashboard)
+ │       polls /api/state every 3s, renders cards, opens modal on click
+ │       modal opens WS /ws/pane → xterm.js mirror of the live tmux pane
+ └── /history     → static/history.html + history.js (search UI)
+         hits /api/history/{search,session/:id,stats}
+
+FastAPI (server.py, single process)
+ ├── /api/*       all REST endpoints (state, prefs, send, window/*, history/*, ...)
+ ├── /ws/pane     bidirectional terminal bridge (capture-pane snapshot + pipe-pane FIFO)
+ └── unix socket  /tmp/periscope-mcp.sock — in-process MCP server for channels
+                                              ▲
+                                              │ stdio
+                          claude (per pane) → channel_shim.py
 ```
 
-- **`server.py`** holds everything server-side: pane parsing, the focus
-  bookkeeping, all `/api/*` routes, and the `/ws/pane` WebSocket bridge.
-- **`static/app.js`** is the entire frontend — grid rendering, filters,
-  drag-to-reorder sessions, modal, xterm.js wiring. Loaded as
-  `<script type="module">` so Vite can do HMR; otherwise plain ES modules,
-  no bundle required.
-- **`static/vendor/xterm.{js,css}`** is vendored upstream xterm.js, loaded
-  as plain `<script>` tags (not modules) so `Terminal` and `FitAddon` end
-  up on `window`. Don't edit; replace wholesale if upgrading.
+### Server (`server.py`)
+
+One file, intentionally. Sections marked with `# --- Title ---` banner
+comments — search those to navigate. The big ones:
+
+- **Logging** — rotating file at `~/.config/periscope/periscope.log` plus
+  stderr. Set up before anything else.
+- **Background-task error capture** — `_bg(name, fn, ...)` /
+  `_task(coro, name)` wrappers; every fire-and-forget MUST go through
+  one of these or crashes vanish silently.
+- **Pidfile / single-instance reclaim** — `~/.config/periscope/periscope.pid`,
+  reclaim-on-startup so a stuck old instance doesn't block a new one.
+- **Persistent state (`state.json`)** — the `/api/prefs` layer. UI
+  preferences, per-window annotations (alias, linear ticket, …),
+  command palette entries. Written through a lock + atomic-rename.
+- **Channels (in-process MCP)** — see "Channels" below.
+- **Pane introspection** — `parse_pane`, status-line regexes, spinner
+  smoothing, focus tracking, git/PR/CI cache.
+- **Routes** — `@app.get/post/...` blocks; mostly thin wrappers around
+  the helpers above plus tmux subprocess calls.
+
+### Frontend (`static/`)
+
+Plain ES modules, no bundler. Files are small, single-purpose, and
+import each other directly:
+
+| Module | Role |
+|---|---|
+| `app.js` | Entry point — wires header buttons, view switch, bootstraps grid + modal |
+| `state.js` | Cross-module mutable in-flight state (no persistence) |
+| `prefs.js` | Cache of `/api/prefs` + mutators; the persistence boundary |
+| `grid.js` | Card rendering, `/api/state` polling, drag-reorder, event delegation |
+| `modal.js` | Pane modal lifecycle, header, rename, image paste |
+| `terminal.js` | xterm.js + `/ws/pane` lifecycle, reconnect logic |
+| `commands-modal.js` | "+ command" palette editor |
+| `overlay.js` | Shared Escape-handler registry so multiple modals don't fight |
+| `history.js` | `/history` SPA — search, results list, detail pane |
+| `util.js` | Pure helpers (escapeHtml, apiCall, …) |
+| `sw.js` | No-op service worker — exists only as a PWA installability gate |
+| `vendor/xterm.{js,css}` | Vendored upstream; loaded as plain `<script>` so `Terminal`/`FitAddon` land on `window`. Don't edit; replace wholesale to upgrade. |
+
+`grid.js` ↔ `modal.js` is a tolerated circular import (modal needs to
+trigger a poll after rename; grid needs to open the modal on click).
 
 ## Key invariants (the things that broke and we fixed)
 
@@ -92,6 +159,21 @@ These are the non-obvious behaviors worth preserving:
    mid-redraw drop the spinner line; without smoothing, the "thinking"
    indicator flickers. Done in `app.js`, not the server.
 
+8. **Background-thread crashes must surface.** Every `threading.Thread`
+   and `asyncio.create_task` call goes through `_bg` / `_task`. A naked
+   `Thread(daemon=True)` that raises just disappears, and "the server's
+   flakey" becomes uninvestigable.
+
+9. **Pidfile reclaim treats reloader-child as the same instance.** Under
+   `--reload`, uvicorn forks a worker. The pidfile holds the parent;
+   killing the parent in reclaim would also nuke a healthy reloader.
+   Check `PERISCOPE_DEV` and the process tree before terminating.
+
+10. **`channel_shim.py` exits 0 on every failure mode.** Missing
+    `$TMUX_PANE`, periscope not running, unreachable socket — all clean
+    exits. A non-zero exit pops macOS's crash reporter every time Claude
+    reconnects, which is intolerable for a nice-to-have channel.
+
 ## Status-line parsing
 
 Claude Code renders a two-line block at the very bottom of its pane:
@@ -106,18 +188,79 @@ the line above (project, branch, git state, PR URL). `PR_RE` pulls the PR
 number and CI glyph (⟳ ✓ ✗) out of the URL field. If Claude changes its
 status format, these regexes break and `is_claude` returns false for every
 window — fix the regexes first when triaging "everything looks like a
-shell."
+shell." Add a case to `test_parse_pane.py` for any new variation.
+
+## History (`history/`)
+
+Standalone Python package. `python -m history backfill` does a one-shot
+index of every JSONL transcript under `~/.claude/projects/` into
+`~/.claude/history.db` (FTS5 + per-session Haiku summaries; ~13 min,
+~$4-6 the first time). `python -m history hook` is a SessionEnd hook
+entry point that ingests one file at a time.
+
+The DB is a derived index — JSONL on disk is the source of truth, the DB
+can always be rebuilt from `backfill`. Periscope mounts a search UI at
+`/history` and three endpoints under `/api/history/*`.
+
+See `history/README.md` for the verb list and hook installation.
+
+## Channels (in-process MCP)
+
+`# --- Channels ---` block in `server.py` plus `channel_shim.py`. The
+shim is the documented stdio MCP entry point; the actual server logic
+(tool implementations, notification emission, session registry) is in
+`server.py` so it has access to the same state the dashboard does.
+
+Tools exposed to Claude:
+- `reply(message, kind=done|need_human|info)` — surfaces a status badge
+  on the pane card without opening the modal.
+- `link_pr(number)` — bind a GitHub PR to the pane, even if Claude's
+  status-line URL isn't visible.
+- `link_linear(id)` — same for Linear tickets (no auto-detection path).
+- `spawn_claude(prompt, session?, cwd?, name?)` — fork a fresh Claude
+  pane in a new tmux window with the given first message.
+
+Notifications go the other way as `notifications/claude/channel`
+messages, surfacing in Claude's prompt as `<channel source="periscope">`
+blocks. The pinned `mcp==1.27.*` is checked at startup and exercised by
+`tests/test_channel_smoke.py`; bump both together.
 
 ## Conventions
 
-- Single-file server; resist the urge to split it until it actually hurts.
-- No frontend framework; vanilla JS is part of the value prop. Vite is a
-  dev-only HMR convenience — anything that requires the build step to run
-  (npm-imported deps, JSX, TypeScript) breaks the "just `uv run server.py`"
-  promise and shouldn't land without a deliberate conversation.
+- Single-file server; resist the urge to split it until it actually
+  hurts. The banner comments (`# --- Title ---`) are the navigation
+  aid.
+- No frontend framework; vanilla ES modules are part of the value prop.
+  Vite is a dev-only HMR convenience — anything that requires the build
+  step to run (npm-imported deps, JSX, TypeScript) breaks the "just
+  `uv run server.py`" promise and shouldn't land without a deliberate
+  conversation.
 - Comments explain *why*, not what. The existing comments around
   pipe-pane, the cursor sync, and the bracketed-paste delay are the
-  template — terse, points at the failure that motivated the code.
-- `uv run server.py` must keep working — keep dependencies declared in the
-  PEP-723 header at the top of `server.py`.
+  template — terse, point at the failure that motivated the code.
+- `uv run server.py` must keep working — keep dependencies declared in
+  the PEP-723 header at the top of `server.py`.
 - The `.env` file is for local Anthropic API key only; never commit.
+
+### Commit as you go — always
+
+**Every meaningful change gets its own commit, immediately, before
+moving on.** Not at the end of the session. Not "I'll commit when this
+feature is done." A working tweak to spinner detection, a fix to the
+modal header layout, a new endpoint — each is a commit on its own.
+
+Why: this is a single-user tool that runs against the live dashboard
+with no test suite for most of the surface area. The git log IS the
+audit trail. When something regresses, `git bisect` or a one-line
+`git revert` is the recovery — both require small atomic commits to
+work. Batched commits ("did a bunch of stuff to the modal") destroy
+that recovery path.
+
+Practical rules:
+- Commit straight to `main`. Feature branches are overhead here.
+- Single-line commit messages (project-wide rule, see global
+  `~/.claude/CLAUDE.md`).
+- If a change touches multiple unrelated concerns, split it into
+  multiple commits before pushing.
+- Don't ask "should I commit?" after a self-contained change — just
+  commit it.
