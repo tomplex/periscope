@@ -1130,6 +1130,11 @@ body.modal-open { overflow: hidden; }
   flex: 1;
   border: 0;
   width: 100%;
+  /* Explicit height: 100% — iframes don't size to flex containers as
+     reliably as block elements, especially when the parent had
+     display:none until a tab switch. */
+  height: 100%;
+  min-height: 0;
   background: var(--bg-modal);
 }
 .modal-review-empty {

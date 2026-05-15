@@ -29,6 +29,10 @@ let modalPollHandle = null;
 // remounts when /api/pane reports the same session on subsequent polls,
 // which would otherwise reset scroll and any in-flight UI state.
 let mountedLgtmSlug = null;
+// Last /api/pane response. Cached so a tab switch can render the Review
+// pane immediately using already-known data, rather than waiting for the
+// next 1.5s poll to land. Cleared on modal close.
+let lastPaneData = null;
 
 export function openModal(target, opts = {}) {
   state.activeTarget = target;
@@ -62,6 +66,7 @@ export function closeModal() {
   // the modal is closed. Next open re-mounts.
   modalReviewContent.innerHTML = "";
   mountedLgtmSlug = null;
+  lastPaneData = null;
   state.modalRenaming = false;
   state.activeTarget = null;
   popEscape(closeModal);
@@ -96,6 +101,7 @@ async function refreshModalHeader() {
 }
 
 function updateModalHeader(data) {
+  lastPaneData = data;
   // Title: window name (prominent), then session and cwd in dim text.
   // tmux window index is intentionally omitted — not useful for orientation.
   const name = data.name || data.target;
@@ -168,6 +174,20 @@ function updateReviewTab(data) {
   renderReviewPane(data);
 }
 
+function rewriteLgtmHost(url) {
+  // Replace the URL's hostname with whatever the parent page is on. The
+  // server hands out 127.0.0.1 by default, but the user may be on
+  // localhost or a LAN IP; matching the parent's host keeps the iframe
+  // and parent on the same hostname (port still differs).
+  try {
+    const u = new URL(url);
+    u.hostname = window.location.hostname;
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 function renderReviewPane(data) {
   const lgtm = data.lgtm;
   if (lgtm && lgtm.slug && lgtm.url) {
@@ -178,11 +198,16 @@ function renderReviewPane(data) {
     }
     modalReviewContent.innerHTML = "";
     const iframe = document.createElement("iframe");
-    iframe.src = lgtm.url;
+    // Use the parent page's host (localhost vs 127.0.0.1 vs LAN IP)
+    // instead of whatever the server cached. Keeps both origins under
+    // the same hostname so subdomain/port differences are the only
+    // cross-origin axis, which is the friendlier case.
+    iframe.src = rewriteLgtmHost(lgtm.url);
     iframe.title = "LGTM review";
-    iframe.setAttribute("loading", "lazy");
-    // Avoid sending periscope's referrer to LGTM; not a meaningful
-    // security boundary on localhost but a clean default.
+    // No loading=lazy: the iframe lives inside a tabbed pane that's
+    // display:none while on the Terminal tab. Some browsers refuse to
+    // load lazy iframes whose ancestors aren't visible, which is exactly
+    // the failure mode "Review tab is blank" looks like.
     iframe.referrerPolicy = "no-referrer";
     modalReviewContent.appendChild(iframe);
     mountedLgtmSlug = lgtm.slug;
@@ -589,9 +614,18 @@ export function initModal() {
       if (!btn) return;
       e.stopPropagation();
       setActiveTab(btn.dataset.tab);
-      // Re-render the review pane in case the tab was just made visible
-      // without a fresh poll having arrived yet.
-      if (btn.dataset.tab === "review") refreshModalHeader();
+      if (btn.dataset.tab === "review") {
+        // Render immediately from cached pane data so the user sees the
+        // iframe (or the Start-review button) without waiting 1.5s for
+        // the next poll. If no data has arrived yet, show a placeholder
+        // and the next poll will replace it.
+        if (lastPaneData) {
+          renderReviewPane(lastPaneData);
+        } else if (!modalReviewContent.firstChild) {
+          modalReviewContent.innerHTML = `<div class="modal-review-empty"><p>Loading…</p></div>`;
+        }
+        refreshModalHeader();
+      }
     });
   }
 
