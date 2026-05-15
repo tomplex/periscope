@@ -156,10 +156,9 @@ function renderCard(w) {
     : "";
 
   return `
-    <article class="${cardClass} ${stateClass}${ciBadCls}" data-target="${w.target}" data-kind="${kind}">
+    <article class="${cardClass} ${stateClass}${ciBadCls}" data-target="${w.target}" data-kind="${kind}" draggable="true">
       <header class="card-head">
         <span class="card-title">${escapeHtml(w.name)}</span>
-        <span class="card-idx">${w.index}</span>
         ${channelDot}
         ${statusLabel}
         ${anno}
@@ -707,25 +706,49 @@ function wireGrid() {
     startRename(nameEl, target, nameEl.textContent);
   });
 
-  // Drag-and-drop session reordering — delegated. dragstart/dragover/etc all
-  // bubble, so a single listener on grid covers every header.
+  // Drag-and-drop — delegated on grid. Two drags coexist via MIME type:
+  //   text/plain                    → session header reorder
+  //   application/periscope-card    → card move into another session
+  // Card drags don't also set text/plain so the reorder branch ignores them.
+  const CARD_MIME = "application/periscope-card";
+
   grid.addEventListener("dragstart", (e) => {
     const header = e.target.closest(".session-header");
-    if (!header) return;
-    header.classList.add("dragging");
-    e.dataTransfer.setData("text/plain", header.dataset.session);
-    e.dataTransfer.effectAllowed = "move";
+    if (header) {
+      header.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", header.dataset.session);
+      e.dataTransfer.effectAllowed = "move";
+      return;
+    }
+    const card = e.target.closest(".card");
+    // Skip the "+ new" tile (no data-target). Cards have data-target = "sess:idx".
+    if (card && card.dataset.target) {
+      card.classList.add("dragging");
+      e.dataTransfer.setData(CARD_MIME, card.dataset.target);
+      e.dataTransfer.effectAllowed = "move";
+    }
   });
 
-  grid.addEventListener("dragend", (e) => {
-    const header = e.target.closest(".session-header");
-    if (header) header.classList.remove("dragging");
-    grid.querySelectorAll(".session-header").forEach((h) => {
-      h.classList.remove("drag-over-top", "drag-over-bottom");
-    });
+  grid.addEventListener("dragend", () => {
+    grid.querySelectorAll(".dragging").forEach((el) => el.classList.remove("dragging"));
+    grid.querySelectorAll(".drag-over-top, .drag-over-bottom, .card-drop-target")
+      .forEach((el) => el.classList.remove("drag-over-top", "drag-over-bottom", "card-drop-target"));
   });
 
   grid.addEventListener("dragover", (e) => {
+    if (e.dataTransfer.types.includes(CARD_MIME)) {
+      const group = e.target.closest(".session-group");
+      if (!group) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      // Single active drop target at a time so the highlight follows the cursor
+      // instead of accumulating as the pointer crosses groups.
+      grid.querySelectorAll(".card-drop-target").forEach((g) => {
+        if (g !== group) g.classList.remove("card-drop-target");
+      });
+      group.classList.add("card-drop-target");
+      return;
+    }
     const header = e.target.closest(".session-header");
     if (!header) return;
     e.preventDefault();
@@ -739,9 +762,20 @@ function wireGrid() {
   grid.addEventListener("dragleave", (e) => {
     const header = e.target.closest(".session-header");
     if (header) header.classList.remove("drag-over-top", "drag-over-bottom");
+    // Group highlight is cleaned up in dragend; per-leave clearing flickers
+    // because moving between a group's children fires leave/enter rapidly.
   });
 
   grid.addEventListener("drop", (e) => {
+    if (e.dataTransfer.types.includes(CARD_MIME)) {
+      const group = e.target.closest(".session-group");
+      if (!group) return;
+      e.preventDefault();
+      const src = e.dataTransfer.getData(CARD_MIME);
+      const dest = group.dataset.session;
+      moveCard(src, dest);
+      return;
+    }
     const header = e.target.closest(".session-header");
     if (!header) return;
     e.preventDefault();
@@ -752,6 +786,21 @@ function wireGrid() {
     const before = e.clientY < rect.top + rect.height / 2;
     reorderSessions(src, dst, before);
   });
+}
+
+async function moveCard(target, dest) {
+  // target = "session:index"; split on the *last* colon so session names
+  // containing ":" still parse (matches util.targetQuery's convention).
+  const i = target.lastIndexOf(":");
+  if (i < 0) return;
+  const session = target.slice(0, i);
+  const index = target.slice(i + 1);
+  if (session === dest) return;  // no-op drop on source session
+  const params = new URLSearchParams({ session, index, dest });
+  const data = await apiCall("move window", `/api/window/move?${params.toString()}`, {
+    method: "POST",
+  });
+  if (data) poll();
 }
 
 export async function poll() {

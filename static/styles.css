@@ -311,6 +311,18 @@ body[data-view="stream"] .stream-banner {
 .session-header.drag-over-top    { box-shadow: inset 0 2px 0 0 var(--accent); }
 .session-header.drag-over-bottom { box-shadow: inset 0 -2px 0 0 var(--accent); }
 
+/* Card drag-to-move between sessions. `.dragging` dims the card being lifted;
+   `.card-drop-target` outlines the session group the cursor is over so the
+   drop intent is unambiguous. Kept off `*` children to avoid hit-test gaps
+   while dragging — pointer events on descendants don't pass through. */
+.card[draggable="true"] { cursor: grab; }
+.card.dragging { opacity: 0.4; cursor: grabbing; }
+.session-group.card-drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-md);
+}
+
 .session-header h2 {
   margin: 0;
   font-size: 14px;
@@ -534,10 +546,11 @@ body[data-view="stream"] .stream-banner {
 .card-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 .card-title {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
   color: var(--fg-0);
@@ -546,15 +559,17 @@ body[data-view="stream"] .stream-banner {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.card-idx {
-  font-size: 10.5px;
-  color: var(--fg-4);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  min-width: 14px;
-  text-align: right;
-}
+/* Spinner verbs vary wildly in length ("hashing" vs "flibbertigibbeting"
+   — Claude picks one per turn). Cap their width so the window name (which
+   is what you scan for) keeps priority; the state color on the leftbar
+   still conveys "is working" even when the verb truncates. */
 .card-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 13ch;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 11px;
   font-weight: 500;
   color: var(--card-accent, var(--fg-3));
@@ -601,7 +616,7 @@ body[data-view="stream"] .stream-banner {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 18ch;
+  max-width: 24ch;
 }
 .card-dot { color: var(--fg-4); }
 .card-clean { color: var(--s-shell); }
