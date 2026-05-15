@@ -3137,6 +3137,46 @@ def channel_clear_unread(pane: str = Query(...)):
     return {"ok": True}
 
 
+# --- LGTM integration: start a review from the dashboard -----------------
+#
+# Lets the modal's Review tab register a project with LGTM without going
+# through Claude. We just POST to LGTM's /projects with the pane's cwd
+# and trigger an immediate cache refresh so the next /api/state poll
+# carries the new session info.
+
+class LgtmStartBody(BaseModel):
+    cwd: str
+
+
+@app.post("/api/lgtm/start")
+async def lgtm_start(body: LgtmStartBody):
+    import httpx
+    cwd = (body.cwd or "").strip()
+    if not cwd or not Path(cwd).is_dir():
+        return {"ok": False, "error": "cwd must be an existing directory"}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(
+                f"{LGTM_BASE_URL}/projects",
+                json={"repoPath": cwd},
+            )
+            r.raise_for_status()
+            payload = r.json()
+    except (httpx.HTTPError, OSError) as e:
+        return {"ok": False, "error": f"lgtm unreachable: {e}"}
+
+    # Refresh the cache now so the response carries the freshly-registered
+    # session — the caller can use the URL immediately to mount the iframe
+    # rather than waiting for the next periodic refresh tick.
+    await _lgtm_refresh_all()
+    slug = payload.get("slug")
+    return {
+        "ok": True,
+        "slug": slug,
+        "url": f"{LGTM_BASE_URL}/project/{slug}/" if slug else None,
+    }
+
+
 # --- Paste image (screenshot) → temp file → @path into pane --------------
 #
 # xterm.js has no way to carry image bytes through to Claude Code, and tmux
