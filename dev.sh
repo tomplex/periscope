@@ -8,6 +8,9 @@
 
 trap 'kill 0' EXIT INT TERM
 
-uv run server.py &
+# PERISCOPE_DEV=1 enables uvicorn's reload supervisor so backend edits
+# bounce the worker. Production (`uv run server.py`) runs as a single
+# process so it's easy to kill and leaves no orphans.
+PERISCOPE_DEV=1 uv run server.py &
 vite &
 wait

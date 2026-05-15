@@ -11,10 +11,14 @@
 """Periscope — live tmux dashboard. Run with: uv run server.py"""
 
 import asyncio
+import atexit
 import json
+import logging
+import logging.handlers
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -33,24 +37,164 @@ from pydantic import BaseModel
 load_dotenv(Path(__file__).parent / ".env")
 
 
+# --- Logging --------------------------------------------------------------
+#
+# Real logger with a rotating file at ~/.config/periscope/periscope.log plus
+# stderr. Set up before anything else so module-init / lifespan / handlers
+# all land in the same sink. Without this, background-thread crashes go to
+# nowhere and "the server's flakey" is uninvestigable.
+
+def _log_path() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return Path(base) / "periscope" / "periscope.log"
+
+
+_LOG_PATH = _log_path()
+_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[
+        logging.handlers.RotatingFileHandler(
+            _LOG_PATH, maxBytes=2_000_000, backupCount=3
+        ),
+        logging.StreamHandler(sys.stderr),
+    ],
+)
+log = logging.getLogger("periscope")
+
+
+# --- Background-task error capture ----------------------------------------
+#
+# threading.Thread(daemon=True) and asyncio.create_task() both swallow
+# exceptions silently — a daemon thread that crashes just disappears, and a
+# task with no awaiter leaves an unretrieved-exception warning at GC time
+# (or nothing at all if the loop exits first). Wrap every fire-and-forget
+# in one of these so crashes land in the log instead of the void.
+
+def _bg(name: str, fn, *args, **kwargs) -> threading.Thread:
+    """Start a daemon thread that logs any uncaught exception."""
+    def wrapped():
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            log.exception("background thread %s crashed", name)
+    t = threading.Thread(target=wrapped, daemon=True, name=name)
+    t.start()
+    return t
+
+
+def _task(coro, name: str) -> asyncio.Task:
+    """Schedule an asyncio task with a done-callback that logs crashes."""
+    t = asyncio.create_task(coro, name=name)
+
+    def _done(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("task %s crashed", name, exc_info=exc)
+
+    t.add_done_callback(_done)
+    return t
+
+
+# --- Pidfile / single-instance reclaim ------------------------------------
+#
+# Periscope's uvicorn reload supervisor + worker dance plus the fact that
+# Claude-driven sessions sometimes spawn one-off `python -c "uvicorn.run(...)"`
+# instances mean orphan periscopes accumulate on adjacent ports. Pidfile
+# reclaim solves the common case: starting periscope kicks out the previous
+# periscope cleanly so `uv run server.py` is idempotent.
+#
+# Reclaim runs in __main__ before uvicorn binds the port. Writing happens
+# there too, recording the supervisor pid in dev mode (which is what you
+# want to kill — killing the worker alone just gets it respawned). atexit
+# handles cleanup for both normal exits and SIGTERM (via the handler below).
+
+def _pidfile_path() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return Path(base) / "periscope" / "periscope.pid"
+
+
+def _pid_is_periscope(pid: int) -> bool:
+    """True if `pid` is alive and looks like a periscope process. We check
+    the command line for 'server.py' to avoid SIGTERMing some unrelated
+    process that happens to have inherited an old pid."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=2.0,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+    if out.returncode != 0:
+        return False
+    return "server.py" in out.stdout
+
+
+def _reclaim_existing_instance() -> None:
+    """If the pidfile points at a live periscope, SIGTERM it (escalate to
+    SIGKILL after 3s) so we can bind the port cleanly."""
+    path = _pidfile_path()
+    try:
+        prev = int(path.read_text().strip())
+    except (OSError, ValueError):
+        return
+    if prev == os.getpid() or not _pid_is_periscope(prev):
+        return
+    log.info("reclaiming previous periscope instance pid=%d", prev)
+    try:
+        os.kill(prev, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if not _pid_is_periscope(prev):
+            return
+        time.sleep(0.1)
+    log.warning("pid=%d ignored SIGTERM; sending SIGKILL", prev)
+    try:
+        os.kill(prev, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _write_pidfile() -> None:
+    path = _pidfile_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()))
+
+
+def _remove_pidfile() -> None:
+    path = _pidfile_path()
+    try:
+        if path.read_text().strip() == str(os.getpid()):
+            path.unlink()
+    except (OSError, ValueError):
+        pass
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # prewarm_pr_cache, cached_scraped_usage, and kill_orphan_usage_sessions
     # are defined later; Python resolves the names at call-time, so forward
     # references are fine.
+    log.info("periscope starting (pid=%d)", os.getpid())
     # Reap any periscope-usage-* tmux sessions left behind by a prior crash
     # before the new scrape thread spawns a fresh one.
     kill_orphan_usage_sessions()
     # Kick off cache prewarms eagerly so the first /api/state poll already
     # has PR badges and the usage bars populated.
-    threading.Thread(target=prewarm_pr_cache, daemon=True).start()
-    threading.Thread(target=cached_scraped_usage, daemon=True).start()
+    _bg("prewarm-pr", prewarm_pr_cache)
+    _bg("prewarm-usage", cached_scraped_usage)
     # MCP unix-socket listener: accepts connections from channel_shim.py
     # (one per Claude pane), runs an MCP Server per connection in-process.
-    mcp_task = asyncio.create_task(_mcp_listener())
+    mcp_task = _task(_mcp_listener(), "mcp-listener")
     try:
         yield
     finally:
+        log.info("periscope shutting down (pid=%d)", os.getpid())
         mcp_task.cancel()
         try:
             await mcp_task
@@ -111,7 +255,7 @@ def _load_state() -> dict:
         corrupt = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
         try:
             path.rename(corrupt)
-            print(f"periscope: state.json unreadable ({e}); renamed to {corrupt}")
+            log.warning("state.json unreadable (%s); renamed to %s", e, corrupt)
         except OSError:
             pass
         return json.loads(json.dumps(_STATE_DEFAULTS))
@@ -232,6 +376,16 @@ specific enough that you won't over-call them:
   not blocking on (e.g., "tests pass, about to commit"). Use sparingly
   — this is the lowest-signal kind and adds dashboard noise if overused.
 
+- spawn_claude(prompt, session?, cwd?, name?): launch a fresh Claude
+  session in a new tmux window with the given prompt as its first
+  message. The new window appears on the dashboard. Use when the user
+  asks you to delegate, parallelize, or "spin up another session" — or
+  when the task at hand decomposes into independent sub-tasks that
+  each deserve their own focused context. Default `session` is yours,
+  `cwd` is your pane's working directory; override to group sub-agents
+  in a dedicated session or point them at a different repo. Keep the
+  returned target/pid so you can refer to the spawned pane later.
+
 Messages going the other direction (periscope → you) arrive as
 <channel source="periscope" ...> blocks at the start of each turn. A
 <channel> block with meta.kind="dropped" is an infrastructure notice
@@ -345,6 +499,109 @@ def _do_link_linear_tool(pane: str, arguments: dict):
     return [types.TextContent(type="text", text=json.dumps(body))]
 
 
+async def _do_spawn_claude_tool(pane: str, arguments: dict):
+    """Spawn a new tmux window running `claude`, deliver an initial prompt.
+
+    Async because Claude's TUI needs ~1.5s to mount before it can absorb a
+    paste — using time.sleep here would block the event loop for every
+    other pane's MCP connection sharing it."""
+    from mcp import types
+
+    prompt = str(arguments.get("prompt", "")).strip()
+    if not prompt:
+        body = {"ok": False, "error": "prompt is required and must be non-empty"}
+        return [types.TextContent(type="text", text=json.dumps(body))]
+
+    # Caller's pane → its session + cwd. If the pane has vanished (rare —
+    # the connection would normally drop first), tmux returns empty and we
+    # fall through to defaults.
+    info = tmux(
+        "display-message", "-t", pane, "-p", "#{session_name}|#{pane_current_path}",
+    ).strip()
+    caller_session, _, caller_cwd = info.partition("|")
+
+    session = str(arguments.get("session") or caller_session or "spawned").strip()
+    cwd = str(arguments.get("cwd") or caller_cwd or os.path.expanduser("~")).strip()
+    if not os.path.isdir(cwd):
+        cwd = os.path.expanduser("~")
+    name = str(arguments.get("name") or "").strip()
+
+    # Create the session if missing, otherwise add a window to it. Both
+    # paths use `-P -F #{window_index}` so we know the spawned slot — with
+    # base-index 1 in tmux.conf, hardcoding :0 would silently target the
+    # wrong window (see /api/window/new resume notes).
+    code, _ = _run(["tmux", "has-session", "-t", session])
+    if code != 0:
+        ok, msg = _tmux_mutate(
+            "new-session", "-d", "-s", session, "-c", cwd,
+            "-P", "-F", "#{window_index}",
+            *(["-n", name] if name else []),
+        )
+    else:
+        ok, msg = _tmux_mutate(
+            "new-window", "-t", f"{session}:", "-c", cwd,
+            "-P", "-F", "#{window_index}",
+            *(["-n", name] if name else []),
+        )
+    if not ok:
+        body = {"ok": False, "error": msg}
+        return [types.TextContent(type="text", text=json.dumps(body))]
+    try:
+        index = int(msg)
+    except ValueError:
+        body = {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
+        return [types.TextContent(type="text", text=json.dumps(body))]
+    target = f"{session}:{index}"
+
+    # Let the shell rc finish before the `claude` command line arrives, so
+    # it runs as a real prompt entry rather than mid-rc echoed text.
+    await asyncio.sleep(0.1)
+    tmux("send-keys", "-t", target, "claude", "Enter")
+
+    # Claude Code's React TUI takes a moment to mount; pasting before it's
+    # ready leaves the prompt stranded in shell history instead of the
+    # input box. 1.5s is empirically enough.
+    await asyncio.sleep(1.5)
+
+    # Deliver the prompt via paste-buffer because send-keys strips embedded
+    # newlines (see CLAUDE.md key invariant 5). Same buffer-name uuid trick
+    # as `_send_to_target` so concurrent spawns don't trample each other.
+    import uuid
+    buf = f"spawn-{uuid.uuid4().hex[:8]}"
+    tmux("set-buffer", "-b", buf, prompt)
+    tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+    # Same 100ms bracketed-paste delay as /api/send — without it the Enter
+    # can land before the paste applies, submitting empty input.
+    await asyncio.sleep(0.1)
+    tmux("send-keys", "-t", target, "Enter")
+
+    note_focus(target)
+    note_action(target)
+
+    # Resolve the spawned window's stable @periscope_id so the caller can
+    # reference it across restarts. Same lookup pattern as
+    # _resolve_pid_for_pane but matched on (session, index) because we
+    # don't have the pane_id %N yet.
+    pid = ""
+    pane_id = ""
+    for w in list_windows():
+        if w.get("session") == session and w.get("index") == index:
+            _attach_git_then_resolve_pids([w])
+            pid = w.get("pid") or ""
+            pane_id = w.get("pane_id") or ""
+            break
+
+    body = {
+        "ok": True,
+        "target": target,
+        "session": session,
+        "index": index,
+        "pid": pid,
+        "pane_id": pane_id,
+    }
+    return [types.TextContent(type="text", text=json.dumps(body))]
+
+
 async def emit_channel_event(pane: str, content: str, meta: dict | None = None) -> bool:
     """Push a `notifications/claude/channel` event to the Claude connected
     on `pane`. Returns True on send, False if no session attached.
@@ -386,17 +643,22 @@ async def _mcp_listener() -> None:
         _handle_mcp_connection, path=MCP_SOCKET_PATH
     )
     os.chmod(MCP_SOCKET_PATH, 0o600)
-    print(f"periscope: MCP listener bound to {MCP_SOCKET_PATH}", file=sys.stderr)
+    log.info("MCP listener bound to %s", MCP_SOCKET_PATH)
     try:
         async with server:
             await server.serve_forever()
-    except asyncio.CancelledError:
-        pass
     finally:
+        # Tearing the listener down on uvicorn reload needs all three steps:
+        # close() stops accept, close_clients() closes the transports, and a
+        # bounded wait_closed() lets the per-pane handlers unwind. The bound
+        # is essential — anyio-bridged MCP handlers don't always notice their
+        # underlying socket is gone, and an unbounded wait_closed() wedges
+        # the lifespan handler so every dev save hangs the server.
         server.close()
+        server.close_clients()
         try:
-            await server.wait_closed()
-        except Exception:
+            await asyncio.wait_for(server.wait_closed(), timeout=1.0)
+        except (asyncio.TimeoutError, Exception):
             pass
 
 
@@ -421,7 +683,7 @@ async def _handle_mcp_connection(
 
         await _run_mcp_for_pane(reader, writer, pane)
     except Exception as e:
-        print(f"periscope MCP: connection {pane or '<no-pane>'} failed: {e}", file=sys.stderr)
+        log.warning("MCP connection %s failed: %s", pane or "<no-pane>", e)
     finally:
         if pane:
             with _CHANNELS_LOCK:
@@ -525,6 +787,43 @@ async def _run_mcp_for_pane(
                     "required": ["id"],
                 },
             ),
+            types.Tool(
+                name="spawn_claude",
+                description=(
+                    "Spawn a fresh Claude Code session in a new tmux window "
+                    "and deliver an initial prompt to it. The new window "
+                    "appears on periscope's dashboard alongside this one. "
+                    "Use when: (1) the user explicitly asks to delegate, "
+                    "parallelize, or spin up another Claude session; "
+                    "(2) the current task decomposes into independent "
+                    "sub-tasks that benefit from focused, isolated "
+                    "contexts running concurrently. Returns target / "
+                    "session / index / pid / pane_id for the spawned pane "
+                    "— keep them so you can address it again later."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "Initial message to send to the spawned Claude session.",
+                        },
+                        "session": {
+                            "type": "string",
+                            "description": "tmux session to spawn into. Defaults to the caller's session. Created if it doesn't exist.",
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Working directory for the spawned window. Defaults to the caller's pane cwd.",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Optional name for the new tmux window.",
+                        },
+                    },
+                    "required": ["prompt"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -535,6 +834,8 @@ async def _run_mcp_for_pane(
             return _do_link_pr_tool(pane, arguments)
         if name == "link_linear":
             return _do_link_linear_tool(pane, arguments)
+        if name == "spawn_claude":
+            return await _do_spawn_claude_tool(pane, arguments)
         raise ValueError(f"unknown tool: {name}")
 
     # Bridge: asyncio socket → anyio object stream of SessionMessage.
@@ -1020,11 +1321,7 @@ def cached_pane_activity(target: str, path: str, branch: str | None) -> list[dic
             stale = cached is None or (now - cached[0] >= _ACTIVITY_TTL)
             if stale and key not in _activity_fetching:
                 _activity_fetching.add(key)
-                threading.Thread(
-                    target=_fetch_activity_into_cache,
-                    args=(path, branch),
-                    daemon=True,
-                ).start()
+                _bg("activity-fetch", _fetch_activity_into_cache, path, branch)
             shared = cached[1] if cached else []
         events.extend(shared)
 
@@ -1282,7 +1579,7 @@ def cached_scraped_usage() -> dict | None:
             return data
         if not _scrape_in_flight:
             _scrape_in_flight = True
-            threading.Thread(target=_refresh_scrape_into_cache, daemon=True).start()
+            _bg("usage-scrape", _refresh_scrape_into_cache)
         return data
 
 
@@ -1300,9 +1597,7 @@ def cached_pr_state(path: str, branch: str | None) -> dict | None:
             return cached[1]
         if key not in _pr_fetching:
             _pr_fetching.add(key)
-            threading.Thread(
-                target=_fetch_pr_into_cache, args=(path, branch), daemon=True
-            ).start()
+            _bg("pr-fetch", _fetch_pr_into_cache, path, branch)
         return cached[1] if cached else None
 
 
@@ -2193,12 +2488,22 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
         # only when actually missing; existing sessions pass through.
         code, _ = _run(["tmux", "has-session", "-t", session])
         if code != 0:
-            ok, msg = _tmux_mutate("new-session", "-d", "-s", session, "-c", cwd)
+            # `-P -F #{window_index}` is essential: with `base-index 1` in
+            # tmux.conf the first window isn't 0, and a hardcoded `:0` target
+            # makes the follow-up send-keys silently no-op (tmux() discards
+            # stderr) — the user sees the session appear but claude never
+            # launches.
+            ok, msg = _tmux_mutate(
+                "new-session", "-d", "-s", session, "-c", cwd,
+                "-P", "-F", "#{window_index}",
+            )
             if not ok:
                 return {"ok": False, "error": f"failed to create session '{session}': {msg}"}
-            # tmux new-session creates window 0; turn that into our resume
-            # window directly rather than spawning a second one.
-            target = f"{session}:0"
+            try:
+                index = int(msg)
+            except ValueError:
+                return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
+            target = f"{session}:{index}"
             time.sleep(0.1)
             tmux("send-keys", "-t", target, f"claude --resume {resume_id}", "Enter")
             _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
@@ -2207,7 +2512,7 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
             return {
                 "ok": True,
                 "session": session,
-                "index": 0,
+                "index": index,
                 "target": target,
                 "mode": mode,
                 "resumed_session_id": resume_id,
@@ -2249,6 +2554,43 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
     if mode == "resume":
         result["resumed_session_id"] = resume_id
     return result
+
+
+@app.post("/api/window/move")
+def window_move(session: str, index: int, dest: str):
+    """Move a window into another session via tmux move-window. The new
+    index is whatever slot dest had free; tmux's move-window doesn't print
+    it, so we capture the source's stable #{window_id} (e.g. `@42`) up
+    front and look up its post-move index by id."""
+    src = f"{session}:{index}"
+    if not dest or dest == session:
+        return {"ok": False, "error": "destination missing or same as source"}
+    win_id = tmux("display-message", "-t", src, "-p", "#{window_id}").strip()
+    if not win_id.startswith("@"):
+        return {"ok": False, "error": f"unknown source window: {src!r}"}
+    code, _ = _run(["tmux", "has-session", "-t", dest])
+    if code != 0:
+        return {"ok": False, "error": f"unknown destination session: {dest!r}"}
+    ok, msg = _tmux_mutate("move-window", "-d", "-s", src, "-t", f"{dest}:")
+    if not ok:
+        return {"ok": False, "error": msg}
+    out = tmux("list-windows", "-t", dest, "-F", "#{window_id} #{window_index}")
+    new_index = None
+    for line in out.splitlines():
+        wid, _, idx = line.partition(" ")
+        if wid == win_id and idx.isdigit():
+            new_index = int(idx)
+            break
+    if new_index is None:
+        return {"ok": False, "error": f"could not locate moved window {win_id}"}
+    new_target = f"{dest}:{new_index}"
+    # Carry focus / acted bookkeeping over to the new target so the moved
+    # window keeps its sort position instead of dropping to the bottom.
+    if src in _focused_at:
+        _focused_at[new_target] = _focused_at.pop(src)
+    if src in _acted_at:
+        _acted_at[new_target] = _acted_at.pop(src)
+    return {"ok": True, "src": src, "dest": dest, "index": new_index, "target": new_target}
 
 
 @app.delete("/api/window")
@@ -2800,7 +3142,7 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
                 chunk = await out_queue.get()
                 await websocket.send_bytes(chunk)
 
-        forward_task = asyncio.create_task(forward_out())
+        forward_task = _task(forward_out(), "ws-forward")
 
         # 4) Main loop: receive keystrokes from the client and push to tmux.
         #    xterm.js's onData sends raw input including escape sequences
@@ -2931,23 +3273,42 @@ app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
 if __name__ == "__main__":
     import uvicorn
 
+    # Reclaim any prior periscope before binding the port. Done here (not in
+    # lifespan) because uvicorn binds the socket before lifespan runs — by
+    # the time the worker starts up, a port collision has already failed.
+    _reclaim_existing_instance()
+    _write_pidfile()
+    atexit.register(_remove_pidfile)
+    # SIGTERM otherwise bypasses atexit; install a handler that logs and
+    # exits cleanly so atexit fires and the next start is idempotent.
+    def _on_sigterm(signum, _frame):
+        log.info("received signal %d; exiting", signum)
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     # loop="asyncio" forces the stdlib selector loop instead of uvloop. As of
     # uvloop 0.22.1 + CPython 3.14, uvloop captures `asyncio.iscoroutinefunction`
     # at import time and calls it from `run_in_executor`, which now emits a
     # DeprecationWarning per call (loud during WS resize traffic). Revert this
     # when uvloop ships a 3.14-compatible release.
     #
-    # reload=True watches server.py for changes and restarts the worker. Needs
-    # an import string (not the `app` object) so the reloader can re-import the
-    # module. reload_dirs is scoped to this file's parent so edits under
+    # reload=True watches server.py for changes and restarts the worker. It's
+    # gated on PERISCOPE_DEV=1 because the reload supervisor adds a second
+    # process to the tree (worker + supervisor + multiprocessing helpers),
+    # which makes the server hard to kill cleanly and produces orphans when
+    # signals don't propagate. dev.sh sets PERISCOPE_DEV=1; bare
+    # `uv run server.py` runs as a single process. Needs an import string
+    # (not the `app` object) when reload is on so the reloader can re-import
+    # the module. reload_dirs is scoped to this file's parent so edits under
     # static/ don't bounce the server — Vite handles frontend reloads in dev,
     # and direct browser hits pick up new static files without a restart.
+    dev_mode = os.environ.get("PERISCOPE_DEV") == "1"
     uvicorn.run(
         "server:app",
         host="127.0.0.1",
         port=8765,
-        log_level="warning",
+        log_level="info",
         loop="asyncio",
-        reload=True,
-        reload_dirs=[str(Path(__file__).parent)],
+        reload=dev_mode,
+        reload_dirs=[str(Path(__file__).parent)] if dev_mode else None,
     )
