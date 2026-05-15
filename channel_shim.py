@@ -26,18 +26,33 @@ import os
 import socket
 import sys
 import threading
+import time
 
 
 SOCKET_PATH = "/tmp/periscope-mcp.sock"
 TMUX_PANE = os.environ.get("TMUX_PANE", "")
 
+# When the socket is unreachable, sleep before exiting so Claude Code's
+# MCP transport doesn't immediately respawn us in a tight loop. Without
+# this, N stale shims spamming reconnects can fill periscope's accept
+# queue and wedge the actual /api/state polling. 2s is short enough that
+# a user-initiated reconnect feels responsive, long enough that an
+# automatic reconnect storm settles into a one-per-2s cadence per session.
+_UNREACHABLE_BACKOFF_S = 2.0
 
-def _quiet_exit(reason: str, code: int = 0) -> None:
+
+def _quiet_exit(reason: str, code: int = 0, backoff_s: float = 0.0) -> None:
     """Exit cleanly without tripping macOS's crash reporter.
 
     Reason goes to stderr (visible in Claude's MCP-server logs) but the
-    exit code stays 0 so the OS doesn't flag this as a Python crash."""
+    exit code stays 0 so the OS doesn't flag this as a Python crash.
+
+    `backoff_s` sleeps before exit to throttle reconnect storms — Claude
+    Code may respawn us immediately on stdout EOF, so a sleep here is
+    where the effective reconnect interval lives."""
     print(f"channel_shim: {reason}", file=sys.stderr)
+    if backoff_s > 0:
+        time.sleep(backoff_s)
     sys.exit(code)
 
 
@@ -56,7 +71,8 @@ def main() -> None:
     except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
         _quiet_exit(
             f"can't reach periscope at {SOCKET_PATH} ({e}); "
-            "is `uv run server.py` running?"
+            "is `uv run server.py` running?",
+            backoff_s=_UNREACHABLE_BACKOFF_S,
         )
 
     # Hello frame — periscope reads exactly one line on accept() to learn
