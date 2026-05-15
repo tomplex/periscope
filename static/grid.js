@@ -103,6 +103,18 @@ function renderCard(w) {
       `<a class="card-linear" href="https://linear.app/issue/${escapeHtml(w.linked_linear)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ticket ${escapeHtml(w.linked_linear)} (linked by claude)">${escapeHtml(w.linked_linear)}</a>`
     );
   }
+  if (w.lgtm) {
+    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
+    // LGTM session is registered for this pane's repo. Click opens the modal
+    // pre-switched to the Review tab; the existing card click handler keys
+    // off `data-lgtm-badge`.
+    const total = (w.lgtm.claude_comments || 0) + (w.lgtm.user_comments || 0);
+    const countLabel = total > 0 ? ` <span class="card-lgtm-n">${total}</span>` : "";
+    const tip = total > 0 ? `LGTM review · ${total} comment${total === 1 ? "" : "s"}` : "LGTM review (no comments)";
+    metaParts.push(
+      `<button type="button" class="card-lgtm" data-lgtm-badge data-target="${w.target}" title="${tip}">👁 review${countLabel}</button>`
+    );
+  }
   const metaRow = metaParts.length
     ? `<div class="card-meta">${metaParts.join(" ")}</div>`
     : "";
@@ -679,6 +691,13 @@ function wireGrid() {
     const card = e.target.closest(".card");
     if (!card) return;
     const target = card.dataset.target;
+    // LGTM badge: open the modal directly on the Review tab. Check before
+    // the .card-title branch so it takes precedence.
+    if (e.target.closest("[data-lgtm-badge]")) {
+      e.stopPropagation();
+      openModal(target, { tab: "review" });
+      return;
+    }
     const onName = !!e.target.closest(".card-title");
     if (!onName) {
       openModal(target);
