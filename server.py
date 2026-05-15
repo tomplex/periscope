@@ -2508,11 +2508,13 @@ def pane(session: str, index: int, lines: int = 200):
         pr["pr"] = str(linked_pr)
         pr["pr_linked"] = True
         pr.pop("ci", None)
+    lgtm = cached_lgtm_state(cwd)
     return {
         "content": content,
         "target": target,
         "name": window_name,
         "cwd": cwd_display,
+        "cwd_raw": cwd,
         "session": session,
         "pid": pid,
         "pane_id": pane_id,
@@ -2521,6 +2523,7 @@ def pane(session: str, index: int, lines: int = 200):
         "channel_unread": channel_unread,
         "channel_replies": channel_replies,
         "linked_linear": linked_linear,
+        "lgtm": lgtm,
         **parsed,
         **git,
         **pr,
@@ -3151,7 +3154,7 @@ class LgtmStartBody(BaseModel):
 @app.post("/api/lgtm/start")
 async def lgtm_start(body: LgtmStartBody):
     import httpx
-    cwd = (body.cwd or "").strip()
+    cwd = os.path.expanduser((body.cwd or "").strip())
     if not cwd or not Path(cwd).is_dir():
         return {"ok": False, "error": "cwd must be an existing directory"}
     try:

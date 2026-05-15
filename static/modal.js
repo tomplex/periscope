@@ -20,15 +20,26 @@ const modalClose = document.getElementById("modal-close");
 const modalSubtitle = document.getElementById("modal-subtitle");
 const modalAutoRename = document.getElementById("modal-auto-rename");
 const modalSide = document.getElementById("modal-side");
+const modalTabs = document.getElementById("modal-tabs");
+const modalReviewContent = document.getElementById("modal-review-content");
 
 const MODAL_POLL_MS = 1500;
 let modalPollHandle = null;
+// Slug of the LGTM session currently mounted in the iframe. Lets us skip
+// remounts when /api/pane reports the same session on subsequent polls,
+// which would otherwise reset scroll and any in-flight UI state.
+let mountedLgtmSlug = null;
 
-export function openModal(target) {
+export function openModal(target, opts = {}) {
   state.activeTarget = target;
   pushEscape(closeModal);
   modalTitle.textContent = target;
   modalSubtitle.innerHTML = "";
+  // Reset tab to terminal unless the caller asked otherwise (e.g. clicking
+  // an LGTM badge on the grid card). Clear any iframe from a previous pane.
+  setActiveTab(opts.tab === "review" ? "review" : "terminal");
+  modalReviewContent.innerHTML = "";
+  mountedLgtmSlug = null;
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
   startLiveTerminal(target);
@@ -47,9 +58,24 @@ export function closeModal() {
     modalPollHandle = null;
   }
   if (modalSide) modalSide.innerHTML = "";
+  // Drop the iframe so it stops holding the LGTM SSE connection open while
+  // the modal is closed. Next open re-mounts.
+  modalReviewContent.innerHTML = "";
+  mountedLgtmSlug = null;
   state.modalRenaming = false;
   state.activeTarget = null;
   popEscape(closeModal);
+}
+
+function setActiveTab(name) {
+  if (name !== "terminal" && name !== "review") name = "terminal";
+  modal.dataset.tab = name;
+  if (!modalTabs) return;
+  for (const btn of modalTabs.querySelectorAll(".modal-tab")) {
+    const active = btn.dataset.tab === name;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
 }
 
 async function refreshModalHeader() {
@@ -109,6 +135,99 @@ function updateModalHeader(data) {
   }
   modalSubtitle.innerHTML = parts.join(`<span class="sep">·</span> `);
   renderModalSidebar(data);
+  updateReviewTab(data);
+}
+
+// ── Review tab: LGTM badge + iframe / Start-review empty state. ───────
+// The Review tab is wired off /api/pane.lgtm (or null). When a session
+// exists we mount its URL in an iframe; otherwise we render a button
+// that POSTs /api/lgtm/start with the pane's cwd.
+function updateReviewTab(data) {
+  const reviewTabBtn = modalTabs?.querySelector('.modal-tab[data-tab="review"]');
+  const lgtm = data.lgtm;
+  // Badge on the tab: unresolved comment count (claude + user). 0 → no badge.
+  if (reviewTabBtn) {
+    const count = lgtm ? (lgtm.claude_comments || 0) + (lgtm.user_comments || 0) : 0;
+    const existing = reviewTabBtn.querySelector(".lgtm-tab-badge");
+    if (count > 0) {
+      if (existing) {
+        existing.textContent = String(count);
+      } else {
+        const b = document.createElement("span");
+        b.className = "lgtm-tab-badge";
+        b.textContent = String(count);
+        reviewTabBtn.appendChild(b);
+      }
+    } else if (existing) {
+      existing.remove();
+    }
+  }
+  // Only touch the review content while the user is actually viewing it,
+  // so we don't churn DOM on every poll for users who never open it.
+  if (modal.dataset.tab !== "review") return;
+  renderReviewPane(data);
+}
+
+function renderReviewPane(data) {
+  const lgtm = data.lgtm;
+  if (lgtm && lgtm.slug && lgtm.url) {
+    // Mount the iframe once per slug; skip if it's already mounted to
+    // preserve scroll position and the iframe's own state.
+    if (mountedLgtmSlug === lgtm.slug && modalReviewContent.querySelector("iframe")) {
+      return;
+    }
+    modalReviewContent.innerHTML = "";
+    const iframe = document.createElement("iframe");
+    iframe.src = lgtm.url;
+    iframe.title = "LGTM review";
+    iframe.setAttribute("loading", "lazy");
+    // Avoid sending periscope's referrer to LGTM; not a meaningful
+    // security boundary on localhost but a clean default.
+    iframe.referrerPolicy = "no-referrer";
+    modalReviewContent.appendChild(iframe);
+    mountedLgtmSlug = lgtm.slug;
+    return;
+  }
+  // No session yet — render the Start-review affordance. Skip if it's
+  // already there (poll runs every 1.5s; we don't want to rebuild the
+  // button mid-click).
+  if (modalReviewContent.querySelector(".modal-review-empty")) return;
+  mountedLgtmSlug = null;
+  const cwd = data.cwd_raw || "";
+  modalReviewContent.innerHTML = `
+    <div class="modal-review-empty">
+      <p>No LGTM review session for this pane's repository yet.</p>
+      <p style="font-size: 11.5px; color: var(--fg-4);">${escapeHtml(cwd || "(no cwd)")}</p>
+      <button type="button" id="lgtm-start-btn" ${cwd ? "" : "disabled"}>Start review</button>
+      <div class="modal-review-error" hidden></div>
+    </div>
+  `;
+  const btn = modalReviewContent.querySelector("#lgtm-start-btn");
+  const err = modalReviewContent.querySelector(".modal-review-error");
+  btn?.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "Starting…";
+    err.hidden = true;
+    try {
+      const res = await fetch("/api/lgtm/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
+      const payload = await res.json();
+      if (!payload.ok) throw new Error(payload.error || "unknown error");
+      // Don't mount the iframe inline — let the next poll tick pick up
+      // the lgtm field from /api/pane and render through renderReviewPane.
+      // That keeps a single mount path (avoids two slightly-different
+      // render branches drifting apart).
+      refreshModalHeader();
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = "Start review";
+      err.textContent = `Could not start review: ${e.message}`;
+      err.hidden = false;
+    }
+  });
 }
 
 // ── Sidebar: Linked (PR + Linear placeholder) + Activity timeline. ───
@@ -463,6 +582,18 @@ export function initModal() {
     e.stopPropagation();
     handleModalAutoRename();
   });
+
+  if (modalTabs) {
+    modalTabs.addEventListener("click", (e) => {
+      const btn = e.target.closest(".modal-tab");
+      if (!btn) return;
+      e.stopPropagation();
+      setActiveTab(btn.dataset.tab);
+      // Re-render the review pane in case the tab was just made visible
+      // without a fresh poll having arrived yet.
+      if (btn.dataset.tab === "review") refreshModalHeader();
+    });
+  }
 
   // Image paste: when the user pastes a screenshot (or any image) into the
   // modal, upload the bytes to the server, which writes a temp file and
