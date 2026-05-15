@@ -80,8 +80,9 @@ FastAPI (server.py, single process)
 
 ### Server (`server.py`)
 
-One file, intentionally. Sections marked with `# --- Title ---` banner
-comments — search those to navigate. The big ones:
+Currently one file, but it's outgrowing that — a split is on the table.
+Sections are marked with `# --- Title ---` banner comments; search those
+to navigate. The big ones:
 
 - **Logging** — rotating file at `~/.config/periscope/periscope.log` plus
   stderr. Set up before anything else.
@@ -227,9 +228,6 @@ blocks. The pinned `mcp==1.27.*` is checked at startup and exercised by
 
 ## Conventions
 
-- Single-file server; resist the urge to split it until it actually
-  hurts. The banner comments (`# --- Title ---`) are the navigation
-  aid.
 - No frontend framework; vanilla ES modules are part of the value prop.
   Vite is a dev-only HMR convenience — anything that requires the build
   step to run (npm-imported deps, JSX, TypeScript) breaks the "just
