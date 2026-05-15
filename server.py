@@ -198,16 +198,44 @@ _channels_migration_v1()
 MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
 
 CHANNEL_INSTRUCTIONS = """\
-Messages from periscope arrive as <channel source="periscope" ...> blocks
-on each turn. They may include severity, kind, or other meta attributes.
+You are running inside periscope, a dashboard the user has open in their
+browser that watches every tmux pane on this machine. Periscope shows the
+user what every Claude session is doing across all their panes at once.
+The pane this channel is attached to is identified by $TMUX_PANE on the
+server side; you don't need to address it explicitly.
 
-Use the `reply` tool to surface status back to periscope's UI:
-  - kind="need_human" when blocked and waiting on the user
-  - kind="done" when the current task is complete
-  - kind="info" (default) for everything else
+You have several tools that mutate periscope's UI for this pane. Use them
+proactively — the user doesn't need to ask. The triggers below are
+specific enough that you won't over-call them:
 
-The pane this channel is attached to is identified by $TMUX_PANE on
-the server side; you don't need to address it explicitly.
+- link_pr(number): when you identify the user is working on a specific
+  GitHub PR — a #N reference in their message, in `git status` / `git log`
+  / branch name, or in CLAUDE.md — AND periscope's pane card doesn't
+  already show a #PR badge. Periscope auto-detects PRs from Claude's
+  title bar; if you know there's one and it isn't surfaced, link it.
+
+- link_linear(id): when you identify a Linear ticket in the user's
+  message, branch name, or commit history (TEAM-123 format, e.g.
+  FAR-456). Periscope doesn't auto-detect Linear tickets, so explicit
+  linking is the only way to surface them on the card.
+
+- reply(message, kind="done"): when you finish a substantial task the
+  user asked for. One-sentence summary in `message`. Lets the user see
+  at-a-glance that this pane is done and what you did, without opening
+  the modal.
+
+- reply(message, kind="need_human"): when you're blocked and waiting on
+  input. Pulses the pane card with a red border so the user notices the
+  alert across a busy dashboard.
+
+- reply(message, kind="info"): for status updates worth glancing at but
+  not blocking on (e.g., "tests pass, about to commit"). Use sparingly
+  — this is the lowest-signal kind and adds dashboard noise if overused.
+
+Messages going the other direction (periscope → you) arrive as
+<channel source="periscope" ...> blocks at the start of each turn. A
+<channel> block with meta.kind="dropped" is an infrastructure notice
+(periscope's queue overflowed); it is not a message from the user.
 """
 
 _CHANNELS_LOCK = threading.Lock()
