@@ -2222,6 +2222,7 @@ def state():
 
         git = cached_git_state(w.get("cwd", "")) or {}
         pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
+        lgtm = cached_lgtm_state(w.get("cwd", ""))
 
         # Channel state (added by 2026-05-14-channels-design.md).
         pane_id = w.get("pane_id") or ""
@@ -2259,6 +2260,7 @@ def state():
                 "channel_unread": channel_unread,
                 "channel_replies": channel_replies,
                 "linked_linear": linked_linear,
+                "lgtm": lgtm,
             }
         )
     _channel_gc({w["pane_id"] for w in windows if w.get("pane_id")})
