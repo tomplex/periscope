@@ -9,14 +9,10 @@ restarts. Time-to-live is 30 days — older state.json entries get GC'd.
 import time
 import uuid
 
+from periscope.git_pr import cached_git_state
 from periscope.panes import list_windows
 from periscope.store import _STATE, _STATE_LOCK, _write_state
 from periscope.tmux import tmux
-
-# _attach_git_then_resolve_pids depends on cached_git_state. Peel 7 moves
-# git_pr to periscope.git_pr; in Peel 5 we use a function-local bridge
-# to server.cached_git_state. Documented with a `# BRIDGE: removed in
-# Peel 7` marker.
 
 _PID_TTL_S = 30 * 86400  # 30 days
 
@@ -162,9 +158,6 @@ def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
     """resolve_pids relies on `branch` for its secondary match. Populate it
     via cached_git_state before calling so the rebind heuristic has
     everything it needs."""
-    # BRIDGE: removed in Peel 7.
-    from server import cached_git_state
-
     for w in windows:
         git = cached_git_state(w.get("cwd", "")) or {}
         if "branch" in git:
