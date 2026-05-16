@@ -978,13 +978,7 @@ def send_bulk(body: SendBulkBody):
     return {"ok": True, "sent": ok_count, "total": len(results), "results": results}
 
 
-@app.post("/api/channel/clear-unread")
-def channel_clear_unread(pane: str = Query(...)):
-    if not pane.startswith("%"):
-        return {"ok": False, "error": "pane must be a %N tmux pane id"}
-    with _CHANNELS_LOCK:
-        _CHANNEL_UNREAD[pane] = 0
-    return {"ok": True}
+# /api/channel/clear-unread now lives in periscope/routes/channel.py.
 
 
 # --- LGTM integration: start a review from the dashboard -----------------
@@ -1053,9 +1047,11 @@ async def lgtm_start(body: LgtmStartBody):
 # Route modules (Peel 8): each one defines an APIRouter that's wired into
 # `app` here. Kept above `app.mount("/")` so route paths take precedence
 # over the static-files catch-all.
+from periscope.routes import channel as _channel_route
 from periscope.routes import history as _history_route
 from periscope.routes import paste_image as _paste_image_route
 from periscope.routes import ws as _ws_route
+app.include_router(_channel_route.router)
 app.include_router(_history_route.router)
 app.include_router(_paste_image_route.router)
 app.include_router(_ws_route.router)
