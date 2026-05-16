@@ -354,10 +354,10 @@ Expected: prints `OK`.
 - [ ] **Step 1: Delete the moved blocks**
 
 Using `Edit`, delete from `server.py`:
-- Lines 40–101 (Logging banner through `_task` function).
-- Lines 102–175 (Pidfile banner through `_remove_pidfile`).
-- Line 217 (`STATIC = Path(__file__).parent / "static"`).
-- Line 349 (`MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"` — currently inside the channels block but logically config).
+- Lines 41–100 (Logging banner through end of `_task` function).
+- Lines 103–176 (Pidfile banner through end of `_remove_pidfile`).
+- Line 218 (`STATIC = Path(__file__).parent / "static"`). Do NOT delete line 217 — that's `app = FastAPI(lifespan=lifespan)`.
+- Line 350 (`MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"` — currently inside the channels block but logically config).
 
 For STATIC and MCP_SOCKET_PATH, the cleanest move is to Edit out just those two lines and add them to the import list (see step 2).
 
@@ -375,7 +375,7 @@ from periscope.pidfile import (
 )
 ```
 
-The unused-import warning on `_reclaim_existing_instance`/`_write_pidfile`/`_remove_pidfile` is real — they're used only in `__main__`. The `# noqa: F401` is not needed because `__main__` is in this file. Leave the imports.
+`_reclaim_existing_instance`, `_write_pidfile`, `_remove_pidfile` are referenced inside the `if __name__ == "__main__":` block at the bottom of `server.py`, so the imports are live — keep them.
 
 - [ ] **Step 3: Remove the now-unused stdlib imports**
 
@@ -591,13 +591,13 @@ git commit -m "split: extract tmux + subprocess wrappers to periscope/tmux.py (P
 
 ## Peel 3: `channels.py` — MCP server + tools
 
-**Goal:** Move the entire channels subsystem (lines 336–894, ~560 lines of channels-proper code) into `periscope/channels.py`. Use function-local bridge imports for the three out-edges into not-yet-moved subsystems. `server.py` imports back what its lifespan and routes need.
+**Goal:** Move the entire channels subsystem (lines 336–896, ~560 lines of channels-proper code) into `periscope/channels.py`. Use function-local bridge imports for the three out-edges into not-yet-moved subsystems. `server.py` imports back what its lifespan and routes need.
 
 **Files:**
 - Create: `periscope/channels.py`
 - Modify: `server.py`
 
-**Note on banner range:** the `# --- Channels ---` banner at `server.py:336` visually contains lines 895–1085, which are NOT channels code (focus/smoothing globals, regex bank, `tmux()` — Peel 2 already moved `tmux()`). This peel touches ONLY lines 336–894 (channels-proper).
+**Note on banner range:** the `# --- Channels ---` banner at `server.py:336` visually contains lines 895–1085, which are NOT channels code (focus/smoothing globals, regex bank, `tmux()` — Peel 2 already moved `tmux()`). This peel touches ONLY lines 336–896 (channels-proper).
 
 **Naming note:** the spec mentions optionally renaming `_mcp_listener` → `mcp_listener` (drop the underscore now that it's cross-module). This plan keeps the underscore for Stage A to minimize churn — the rename is discretionary and can land any time post-Stage-A. Keep the original name throughout this peel.
 
@@ -646,7 +646,7 @@ from periscope.tmux import tmux
 # Peel 4 will flip these to `from periscope.store import ...`.
 # See `# BRIDGE: replace in Peel 4` comments inside the tool functions.
 
-# --- everything from server.py:336–894 goes here (verbatim) --------------
+# --- everything from server.py:336–896 goes here (verbatim) --------------
 # Copy these blocks in order:
 #   1. CHANNEL_INSTRUCTIONS         (~349)
 #   2. MCP_SOCKET_PATH constant     (~350) — SKIP, already in config.py
@@ -677,20 +677,27 @@ def _resolve_pid_for_pane(pane_id: str) -> str:
     # ... rest of original body, using the locally-imported names ...
 ```
 
-Inside `_do_spawn_claude_tool`, do the same for `list_windows`, `note_focus`, `note_action`:
+Inside `_do_spawn_claude_tool`, do the same for `list_windows`, `note_focus`, `note_action`, and `_attach_git_then_resolve_pids` (called at server.py:597):
 
 ```python
 def _do_spawn_claude_tool(pane: str, arguments: dict):
     # BRIDGE: removed in Peel 5.
-    from server import list_windows, note_focus, note_action
+    from server import (
+        list_windows, note_focus, note_action,
+        _attach_git_then_resolve_pids,
+    )
     # ... rest of original body ...
 ```
+
+**These two bridges are EXPECTED to survive Stage A.** Peel 5 in Stage B
+replaces them with module-top `from periscope.panes import ...` /
+`from periscope.pids import ...` once those modules exist.
 
 For `_STATE` / `_STATE_LOCK` / `_write_state` (used by `_do_link_pr_tool`, `_do_link_linear_tool`, and possibly elsewhere): use a function-local `from server import _STATE, _STATE_LOCK, _write_state` inside each function that needs them. Tag with `# BRIDGE: removed in Peel 4`. Local imports here serve double duty: they avoid module-top circular risk AND they make Peel 4's flip a trivial find-and-replace of two lines.
 
 ### Task 3.2: Strip the channels block from `server.py`
 
-- [ ] **Step 1: Delete lines 336–894**
+- [ ] **Step 1: Delete lines 336–896**
 
 Using `Edit`, remove the entire `# --- Channels ---` block content, EXCEPT for the banner comment itself (keep that as a "see periscope.channels" marker) and the `MCP_SOCKET_PATH` constant (already moved in Peel 1, should already be gone).
 
@@ -979,6 +986,8 @@ If neither shows up (other than the import line), drop them from the import.
 - [ ] **Step 1: Update `periscope/channels.py`**
 
 Find every `# BRIDGE: removed in Peel 4` marker inside `periscope/channels.py`. Each one wraps a `from server import _STATE, _STATE_LOCK, _write_state` (or subset). Replace each with `from periscope.store import _STATE, _STATE_LOCK, _write_state`. Delete the BRIDGE marker comment in the same edit.
+
+**Expected: exactly 2 markers** (one each in `_do_link_pr_tool` at original server.py lines 476–480 and `_do_link_linear_tool` at 500–504). If the count differs, something went wrong in Peel 3.
 
 The function-local-vs-module-top decision: now that `periscope.store` exists and doesn't import from `server`, the imports can move to `periscope/channels.py`'s module top. Pick one of:
   - (a) Leave them function-local for consistency with the panes/pids bridges that survive into Peel 5.
