@@ -69,7 +69,7 @@ def clean_state(tmp_xdg_home, monkeypatch):
     # Re-bind in every other module that did `from periscope.store import _STATE`.
     # Add modules here as Stage B peels expose more consumers.
     import importlib
-    for mod_name in ("periscope.channels",):
+    for mod_name in ("periscope.channels", "periscope.pids"):
         try:
             mod = importlib.import_module(mod_name)
         except ImportError:

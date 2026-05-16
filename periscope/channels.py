@@ -12,14 +12,10 @@ touched from both sync request handlers (FastAPI threadpool) and async
 MCP handlers; threading.Lock works correctly from both whereas
 asyncio.Lock only blocks coroutines.
 
-Bridges back to server.py (resolved in later refactor peels):
-
-- `list_windows`, `note_focus`, `note_action`, `_attach_git_then_resolve_pids`
-  are imported function-locally from `server` (Stage B Peel 5 will move the
-  panes layer into this package and drop those bridges).
-- `_STATE`, `_STATE_LOCK`, `_write_state` are imported function-locally from
-  `server` (Peel 4 moves persistent state into periscope.store and flips
-  those imports).
+Imports `_STATE`, `_STATE_LOCK`, `_write_state` from `periscope.store`
+and `list_windows`, `note_focus`, `note_action` from `periscope.panes` /
+`_attach_git_then_resolve_pids` from `periscope.pids` directly — no
+bridges to server.py remain in this module.
 
 Socket lifecycle: this module never `os.unlink`s `MCP_SOCKET_PATH` on
 shutdown. The FastAPI `lifespan` in `server.py` owns shutdown cleanup; the
@@ -36,6 +32,8 @@ from typing import Any
 
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
+from periscope.panes import list_windows, note_focus, note_action
+from periscope.pids import _attach_git_then_resolve_pids
 from periscope.store import _STATE, _STATE_LOCK, _write_state
 from periscope.tmux import tmux, _run, _tmux_mutate
 
@@ -139,9 +137,6 @@ def _resolve_pid_for_pane(pane_id: str) -> str:
     """Find the persistent @periscope_id (pid) for a tmux %N pane id.
     Mints a fresh pid if the window hasn't been seen before. Returns ""
     if the pane has vanished from tmux's list-windows."""
-    # BRIDGE: removed in Stage B Peel 5.
-    from server import list_windows, _attach_git_then_resolve_pids
-
     windows = list_windows()
     for w in windows:
         if w.get("pane_id") == pane_id:
@@ -206,11 +201,6 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     Async because Claude's TUI needs ~1.5s to mount before it can absorb a
     paste — using time.sleep here would block the event loop for every
     other pane's MCP connection sharing it."""
-    # BRIDGE: removed in Stage B Peel 5.
-    from server import (
-        list_windows, note_focus, note_action,
-        _attach_git_then_resolve_pids,
-    )
     from mcp import types
 
     prompt = str(arguments.get("prompt", "")).strip()

@@ -1,0 +1,172 @@
+"""Periscope window-ids (@periscope_id).
+
+Each tmux window gets a periscope-managed id stored as a tmux user
+option `@periscope_id`. The id survives renames + moves within a tmux
+server lifetime; the rebind heuristic recovers ids across tmux server
+restarts. Time-to-live is 30 days — older state.json entries get GC'd.
+"""
+
+import time
+import uuid
+
+from periscope.panes import list_windows
+from periscope.store import _STATE, _STATE_LOCK, _write_state
+from periscope.tmux import tmux
+
+# _attach_git_then_resolve_pids depends on cached_git_state. Peel 7 moves
+# git_pr to periscope.git_pr; in Peel 5 we use a function-local bridge
+# to server.cached_git_state. Documented with a `# BRIDGE: removed in
+# Peel 7` marker.
+
+_PID_TTL_S = 30 * 86400  # 30 days
+
+
+def _mint_pid() -> str:
+    return uuid.uuid4().hex[:8]
+
+
+def _stamp_pid(target: str, pid: str) -> None:
+    """Fire-and-forget set-option. If it fails (window gone, tmux racy),
+    the next poll repeats the attempt. Uses the project's read-style
+    `tmux()` helper because we don't need stderr-surfacing here."""
+    tmux("set-option", "-w", "-t", target, "@periscope_id", pid)
+
+
+def _rebind_pid(
+    windows_block: dict,
+    session: str,
+    name: str,
+    branch: str | None,
+    cwd: str | None,
+    taken_pids: set[str],
+) -> str | None:
+    """Look for an orphan id in state's `windows` block that matches the
+    sighted window on (session, name) — or as a softer fallback,
+    (branch, cwd). Returns the matched pid, or None if no candidate
+    matches."""
+    now = time.time()
+    # Pass 1: strong match on (session, name).
+    # Pass 2: secondary match on (branch, cwd) when both are set.
+    for pass_n in (1, 2):
+        for pid, entry in windows_block.items():
+            if pid in taken_pids:
+                continue
+            ls = entry.get("last_seen") or {}
+            ts = ls.get("ts")
+            if not ts or now - ts > _PID_TTL_S:
+                continue
+            if pass_n == 1:
+                if ls.get("session") == session and ls.get("name") == name:
+                    return pid
+            else:
+                if not branch or not cwd:
+                    continue
+                if ls.get("branch") == branch and ls.get("cwd") == cwd:
+                    return pid
+    return None
+
+
+def resolve_pids(windows: list[dict]) -> None:
+    """Mutates `windows` in place, adding a `pid` field to every entry.
+
+    For each window:
+      1. If @periscope_id is non-empty, use it.
+      2. Else attempt rebind from state.json's `windows` block.
+      3. Else mint a fresh id.
+    In cases 2 and 3, stamp the chosen id onto the tmux window (`set-option
+    -w @periscope_id`) so subsequent polls take the fast path.
+
+    Always updates the pid's `last_seen` block with (session, name, branch,
+    cwd, now) — but only flags `dirty` when something other than the `ts`
+    field changed, to avoid thrashing state.json on every 3s poll.
+
+    Callers MUST have populated each window's `branch` (from
+    cached_git_state) before calling, or rebind falls back to the
+    session/name-only path.
+    """
+    if not windows:
+        return
+    now_ts = int(time.time())
+    # Everything that reads/writes _STATE goes through _STATE_LOCK. We hold
+    # the lock for the full resolve pass — it's cheap (kilobyte-scale JSON
+    # write at the end) and gives us a single consistent snapshot of the
+    # windows block to score rebinds against.
+    with _STATE_LOCK:
+        wblock = _STATE.setdefault("windows", {})
+        taken: set[str] = set()
+        dirty = False
+        for w in windows:
+            target = f"{w['session']}:{w['index']}"
+            pid_raw = (w.get("pid_raw") or "").strip()
+            pid: str | None = None
+            if pid_raw and len(pid_raw) == 8 and all(c in "0123456789abcdef" for c in pid_raw):
+                pid = pid_raw
+            if pid is None:
+                pid = _rebind_pid(
+                    wblock,
+                    session=w["session"],
+                    name=w["name"],
+                    branch=w.get("branch"),
+                    cwd=w.get("cwd"),
+                    taken_pids=taken,
+                )
+            if pid is None:
+                pid = _mint_pid()
+            # Stamp tmux only when we synthesized the id (mint or rebind).
+            if pid != pid_raw:
+                _stamp_pid(target, pid)
+                dirty = True
+            taken.add(pid)
+            w["pid"] = pid
+            # `pid_raw` was internal — strip it before emit.
+            w.pop("pid_raw", None)
+            # Refresh last_seen. Only flag dirty if something *other than*
+            # `ts` changed — a pure ts bump every 3s would thrash state.json
+            # to disk thousands of times an hour for no semantic gain.
+            entry = wblock.setdefault(pid, {})
+            prev = entry.get("last_seen") or {}
+            new_seen = {
+                "session": w["session"],
+                "name": w["name"],
+                "branch": w.get("branch"),
+                "cwd": w.get("cwd"),
+                "ts": now_ts,
+            }
+            identity_changed = (
+                "last_seen" not in entry
+                or any(prev.get(k) != new_seen[k] for k in ("session", "name", "branch", "cwd"))
+            )
+            entry["last_seen"] = new_seen
+            if identity_changed:
+                dirty = True
+        # GC: drop windows entries that (a) carry no notes and no tags, AND
+        # (b) weren't refreshed this pass, AND (c) have a last_seen older
+        # than 30 days. Annotated entries are immune — losing one would
+        # lose notes.
+        cutoff = now_ts - _PID_TTL_S
+        for pid in list(wblock.keys()):
+            if pid in taken:
+                continue
+            entry = wblock[pid]
+            if entry.get("notes") or entry.get("tags"):
+                continue
+            ts = (entry.get("last_seen") or {}).get("ts") or 0
+            if ts < cutoff:
+                del wblock[pid]
+                dirty = True
+        if dirty:
+            _write_state(_STATE)
+
+
+def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
+    """resolve_pids relies on `branch` for its secondary match. Populate it
+    via cached_git_state before calling so the rebind heuristic has
+    everything it needs."""
+    # BRIDGE: removed in Peel 7.
+    from server import cached_git_state
+
+    for w in windows:
+        git = cached_git_state(w.get("cwd", "")) or {}
+        if "branch" in git:
+            w["branch"] = git["branch"]
+    resolve_pids(windows)

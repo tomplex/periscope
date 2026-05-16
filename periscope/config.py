@@ -12,3 +12,7 @@ STATIC = Path(__file__).parent.parent / "static"
 # here from each Claude pane. Lifespan unlinks this on shutdown; channels.py
 # must never unlink it (see spec §"MCP_SOCKET_PATH cleanup").
 MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
+
+# Tmux session prefix for periscope-spawned `claude /usage` scrape sessions.
+# panes.list_windows filters these out; usage.py creates them.
+USAGE_SESSION_PREFIX = "periscope-usage-"

@@ -1,27 +1,28 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["fastapi", "uvicorn[standard]", "anthropic", "python-dotenv"]
-# ///
-"""Regression tests for parse_pane() — primarily spinner / active-op detection.
+"""Pane introspection: regexes + parse_pane + smoothing + focus tracking
++ list_windows.
 
-Run: `uv run test_parse_pane.py`
-
-This file exists in a "no test suite" repo because spinner detection has needed
-five iterations and each new Claude TUI variation risked silently regressing
-prior ones. A flat case-matrix is the smallest thing that keeps the iteration
-count from climbing.
-
-When a new variation shows up:
-  - Real active marker that didn't match     → add to REGEX_CASES with True
-  - Prose / scrollback that false-positives  → add to REGEX_CASES with False
-  - End-to-end pane behavior                 → add to PARSE_CASES
+The four datasets (REGEX_CASES, PARSE_CASES, GHOST_CASES, LAST_LINE_CASES)
+were originally maintained in `test_parse_pane.py` at the repo root as a
+flat case matrix; Peel 5 folded them into pytest here. New variations
+should be appended to the matching dataset rather than dropped into a
+new test function — the failure-collection runners (one per dataset)
+preserve the "report every failing case in one go" property the original
+file had.
 """
-import sys
-import textwrap
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-import server
+import textwrap
+
+import pytest
+
+from periscope.panes import (
+    SPINNER_RE, ACTIVE_OP_RE, parse_pane,
+    smooth_spinner, smooth_is_claude,
+    note_focus, note_action, update_focus_from_windows,
+    _focused_at, _acted_at, _spinner_last_seen, _claude_last_seen,
+    _active_per_session,
+    SPINNER_GRACE_S, CLAUDE_STICKY_S,
+    list_windows,
+)
 
 
 # ── Regex-level cases ───────────────────────────────────────────────────
@@ -117,7 +118,7 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
 
         ❯
         {STATUS_LINE}
-    """), "waiting", None),
+    """), "idle", None),
 
     # No status line at all = shell pane.
     ("shell", textwrap.dedent("""\
@@ -139,7 +140,7 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
 
         ❯
         {STATUS_LINE}
-    """), "waiting", None),
+    """), "idle", None),
 
     # Old single-word ellipsis form (the original spinner case).
     ("old-ellipsis", textwrap.dedent(f"""\
@@ -177,7 +178,7 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
 
         ❯
         {STATUS_LINE}
-    """), "waiting", None),
+    """), "idle", None),
 
     # Past-tense lines in the bottom rows for each verb form we know about.
     ("idle-brewed", textwrap.dedent(f"""\
@@ -185,19 +186,19 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
         ✻ Brewed for 31s
         ❯
         {STATUS_LINE}
-    """), "waiting", None),
+    """), "idle", None),
     ("idle-thought", textwrap.dedent(f"""\
         ● Some prior response.
         ✻ Thought for 10s
         ❯
         {STATUS_LINE}
-    """), "waiting", None),
+    """), "idle", None),
     ("idle-pondered", textwrap.dedent(f"""\
         ● Some prior response.
         ✻ Pondered for 2m 15s
         ❯
         {STATUS_LINE}
-    """), "waiting", None),
+    """), "idle", None),
 
     # Active marker present BELOW an older past-tense line from a prior
     # turn — iteration hits the active marker first (it's closer to the
@@ -313,81 +314,169 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
 ]
 
 
-# ── Runner ──────────────────────────────────────────────────────────────
+# ── Folded runners (one test per dataset) ───────────────────────────────
 
-def run_regex_cases() -> int:
-    print("── regex cases ─────────────────────────────────────────────")
-    failures = 0
+
+def test_regex_cases():
+    failures = []
     for tag, line, want in REGEX_CASES:
-        s_m = server.SPINNER_RE.match(line)
-        a_m = server.ACTIVE_OP_RE.match(line)
+        s_m = SPINNER_RE.match(line)
+        a_m = ACTIVE_OP_RE.match(line)
         got = bool(s_m or a_m)
         via = "SPINNER" if s_m else "ACTIVE" if a_m else "-"
-        if got == want:
-            print(f"  OK   [{tag:>3}] match={got!s:5} via={via:7}  {line[:80]}")
-        else:
-            failures += 1
-            print(f"  FAIL [{tag:>3}] match={got!s:5} want={want!s:5} via={via:7}  {line[:80]}")
-    return failures
+        if got != want:
+            failures.append(
+                f"[{tag}] match={got} want={want} via={via}  {line[:80]}"
+            )
+    assert not failures, "\n".join(failures)
 
 
-def run_parse_cases() -> int:
-    print("\n── parse_pane end-to-end ───────────────────────────────────")
-    failures = 0
+def test_parse_cases():
+    failures = []
     for tag, content, want_state, want_spinner in PARSE_CASES:
-        result = server.parse_pane(content)
+        result = parse_pane(content)
         ok_state = result["state"] == want_state
         ok_spinner = result["spinner"] == want_spinner
-        if ok_state and ok_spinner:
-            print(f"  OK   [{tag:>27}] state={result['state']!r:11} spinner={result['spinner']!r}")
-        else:
-            failures += 1
-            print(
-                f"  FAIL [{tag:>27}] "
-                f"state={result['state']!r} (want {want_state!r})  "
+        if not (ok_state and ok_spinner):
+            failures.append(
+                f"[{tag}] state={result['state']!r} (want {want_state!r})  "
                 f"spinner={result['spinner']!r} (want {want_spinner!r})"
             )
-    return failures
+    assert not failures, "\n".join(failures)
 
 
-def run_ghost_cases() -> int:
-    print("\n── ghost-text filter ──────────────────────────────────────")
-    failures = 0
+def test_ghost_cases():
+    failures = []
     for tag, content, want_pending in GHOST_CASES:
-        result = server.parse_pane(content)
+        result = parse_pane(content)
         got = result.get("pending_input")
-        if got == want_pending:
-            print(f"  OK   [{tag:>22}] pending_input={got!r}")
-        else:
-            failures += 1
-            print(f"  FAIL [{tag:>22}] pending_input={got!r} (want {want_pending!r})")
-    return failures
+        if got != want_pending:
+            failures.append(
+                f"[{tag}] pending_input={got!r} (want {want_pending!r})"
+            )
+    assert not failures, "\n".join(failures)
 
 
-def run_last_line_cases() -> int:
-    print("\n── last_line filter ───────────────────────────────────────")
-    failures = 0
+def test_last_line_cases():
+    failures = []
     for tag, content, want in LAST_LINE_CASES:
-        result = server.parse_pane(content)
+        result = parse_pane(content)
         got = result.get("last_line")
-        if got == want:
-            print(f"  OK   [{tag:>25}] last_line={got!r}")
-        else:
-            failures += 1
-            print(f"  FAIL [{tag:>25}] last_line={got!r} (want {want!r})")
-    return failures
+        if got != want:
+            failures.append(f"[{tag}] last_line={got!r} (want {want!r})")
+    assert not failures, "\n".join(failures)
 
 
-def main() -> int:
-    fails = run_regex_cases() + run_parse_cases() + run_ghost_cases() + run_last_line_cases()
-    total = len(REGEX_CASES) + len(PARSE_CASES) + len(GHOST_CASES) + len(LAST_LINE_CASES)
-    print()
-    if fails:
-        print(f"=== {fails}/{total} FAIL ===")
-        return 1
-    print(f"=== all {total} cases pass ===")
-    return 0
+# ── Smoothing + focus tracking + list_windows ──────────────────────────
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+@pytest.fixture(autouse=True)
+def reset_panes_state():
+    """Clear in-memory pane state between tests."""
+    _focused_at.clear()
+    _acted_at.clear()
+    _spinner_last_seen.clear()
+    _claude_last_seen.clear()
+    _active_per_session.clear()
+    yield
+    _focused_at.clear()
+    _acted_at.clear()
+    _spinner_last_seen.clear()
+    _claude_last_seen.clear()
+    _active_per_session.clear()
+
+
+def test_smooth_spinner_returns_current_when_present():
+    out = smooth_spinner("foo:0", "Envisioning")
+    assert out == "Envisioning"
+    assert "foo:0" in _spinner_last_seen
+
+
+def test_smooth_spinner_returns_last_seen_within_grace_when_current_none():
+    smooth_spinner("foo:0", "Envisioning")
+    # Within grace window — should return the cached value.
+    out = smooth_spinner("foo:0", None)
+    assert out == "Envisioning"
+
+
+def test_smooth_spinner_returns_none_after_grace_expires(mocker):
+    mocker.patch(
+        "periscope.panes.time.time",
+        side_effect=[100.0, 100.0 + SPINNER_GRACE_S + 1.0],
+    )
+    smooth_spinner("foo:0", "Envisioning")
+    out = smooth_spinner("foo:0", None)
+    assert out is None
+
+
+def test_smooth_is_claude_true_passes_through():
+    assert smooth_is_claude("foo:0", True) is True
+    assert "foo:0" in _claude_last_seen
+
+
+def test_smooth_is_claude_false_after_stickiness_expires(mocker):
+    mocker.patch(
+        "periscope.panes.time.time",
+        side_effect=[100.0, 100.0 + CLAUDE_STICKY_S + 1.0],
+    )
+    smooth_is_claude("foo:0", True)
+    assert smooth_is_claude("foo:0", False) is False
+
+
+def test_smooth_is_claude_sticky_within_window(mocker):
+    """If we just saw is_claude=True, a momentary False should still
+    return True until the stickiness window expires."""
+    mocker.patch("periscope.panes.time.time", side_effect=[100.0, 100.5])
+    smooth_is_claude("foo:0", True)
+    assert smooth_is_claude("foo:0", False) is True
+
+
+def test_note_focus_stamps_now():
+    note_focus("foo:0")
+    assert _focused_at["foo:0"] > 0
+    assert "foo:0" not in _acted_at  # focus alone doesn't bump acted_at
+
+
+def test_note_action_stamps_acted_at():
+    note_action("foo:0")
+    assert _acted_at["foo:0"] > 0
+
+
+def test_update_focus_from_windows_stamps_active_window():
+    windows = [
+        {"session": "main", "index": 0, "active": True},
+        {"session": "main", "index": 1, "active": False},
+    ]
+    update_focus_from_windows(windows)
+    assert "main:0" in _focused_at
+    assert "main:1" not in _focused_at
+
+
+def test_list_windows_parses_tmux_list_output(mocker):
+    sample = (
+        "main\t0\tshell\t1\t/home/tom/dev/foo\t1234abcd\t%5\n"
+        "main\t1\tclaude\t0\t/home/tom/dev/bar\t1235abcd\t%6\n"
+    )
+    mocker.patch("periscope.panes.tmux", return_value=sample)
+    out = list_windows()
+    assert len(out) == 2
+    assert out[0]["session"] == "main"
+    assert out[0]["index"] == 0
+    assert out[0]["name"] == "shell"
+    assert out[0]["active"] is True
+    assert out[0]["cwd"] == "/home/tom/dev/foo"
+    assert out[0]["pid_raw"] == "1234abcd"
+    assert out[0]["pane_id"] == "%5"
+    assert out[1]["active"] is False
+
+
+def test_list_windows_filters_usage_scrape_sessions(mocker):
+    sample = (
+        "main\t0\tshell\t1\t/home/tom\t\t%5\n"
+        "periscope-usage-abc12345\t0\tclaude\t1\t/tmp\t\t%6\n"
+    )
+    mocker.patch("periscope.panes.tmux", return_value=sample)
+    out = list_windows()
+    # The periscope-usage-* session should be filtered out.
+    assert len(out) == 1
+    assert out[0]["session"] == "main"
