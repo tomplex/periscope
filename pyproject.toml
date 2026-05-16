@@ -21,6 +21,6 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["history/tests"]
+testpaths = ["tests", "history/tests"]
 python_files = ["test_*.py"]
 addopts = "-ra --strict-markers --strict-config"
