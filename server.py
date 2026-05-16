@@ -981,44 +981,7 @@ def send_bulk(body: SendBulkBody):
 # /api/channel/clear-unread now lives in periscope/routes/channel.py.
 
 
-# --- LGTM integration: start a review from the dashboard -----------------
-#
-# Lets the modal's Review tab register a project with LGTM without going
-# through Claude. We just POST to LGTM's /projects with the pane's cwd
-# and trigger an immediate cache refresh so the next /api/state poll
-# carries the new session info.
-
-class LgtmStartBody(BaseModel):
-    cwd: str
-
-
-@app.post("/api/lgtm/start")
-async def lgtm_start(body: LgtmStartBody):
-    import httpx
-    cwd = os.path.expanduser((body.cwd or "").strip())
-    if not cwd or not Path(cwd).is_dir():
-        return {"ok": False, "error": "cwd must be an existing directory"}
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.post(
-                f"{LGTM_BASE_URL}/projects",
-                json={"repoPath": cwd},
-            )
-            r.raise_for_status()
-            payload = r.json()
-    except (httpx.HTTPError, OSError) as e:
-        return {"ok": False, "error": f"lgtm unreachable: {e}"}
-
-    # Refresh the cache now so the response carries the freshly-registered
-    # session — the caller can use the URL immediately to mount the iframe
-    # rather than waiting for the next periodic refresh tick.
-    await _lgtm_refresh_all()
-    slug = payload.get("slug")
-    return {
-        "ok": True,
-        "slug": slug,
-        "url": f"{LGTM_BASE_URL}/project/{slug}/" if slug else None,
-    }
+# /api/lgtm/start now lives in periscope/routes/lgtm.py.
 
 
 # /api/paste-image now lives in periscope/routes/paste_image.py.
@@ -1049,10 +1012,12 @@ async def lgtm_start(body: LgtmStartBody):
 # over the static-files catch-all.
 from periscope.routes import channel as _channel_route
 from periscope.routes import history as _history_route
+from periscope.routes import lgtm as _lgtm_route
 from periscope.routes import paste_image as _paste_image_route
 from periscope.routes import ws as _ws_route
 app.include_router(_channel_route.router)
 app.include_router(_history_route.router)
+app.include_router(_lgtm_route.router)
 app.include_router(_paste_image_route.router)
 app.include_router(_ws_route.router)
 
