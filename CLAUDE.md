@@ -78,27 +78,57 @@ FastAPI (server.py, single process)
                           claude (per pane) → channel_shim.py
 ```
 
-### Server (`server.py`)
+### Server (`periscope/` package + `server.py` shim)
 
-Currently one file, but it's outgrowing that — a split is on the table.
-Sections are marked with `# --- Title ---` banner comments; search those
-to navigate. The big ones:
+`server.py` is an ~85-line entry-point shim: PEP-723 header + `__main__`
+block that does pidfile reclaim, signal install, and
+`uvicorn.run("periscope.app:app", ...)`. The FastAPI app, lifespan, and
+all routes live under `periscope/`. Nothing inside `periscope/` imports
+from `server` — that boundary prevents Python from double-loading the
+shim under both `__main__` and `server` module names.
 
-- **Logging** — rotating file at `~/.config/periscope/periscope.log` plus
-  stderr. Set up before anything else.
-- **Background-task error capture** — `_bg(name, fn, ...)` /
-  `_task(coro, name)` wrappers; every fire-and-forget MUST go through
-  one of these or crashes vanish silently.
-- **Pidfile / single-instance reclaim** — `~/.config/periscope/periscope.pid`,
-  reclaim-on-startup so a stuck old instance doesn't block a new one.
-- **Persistent state (`state.json`)** — the `/api/prefs` layer. UI
-  preferences, per-window annotations (alias, linear ticket, …),
-  command palette entries. Written through a lock + atomic-rename.
-- **Channels (in-process MCP)** — see "Channels" below.
-- **Pane introspection** — `parse_pane`, status-line regexes, spinner
-  smoothing, focus tracking, git/PR/CI cache.
-- **Routes** — `@app.get/post/...` blocks; mostly thin wrappers around
-  the helpers above plus tmux subprocess calls.
+One file per subsystem:
+
+| Module | Role |
+|---|---|
+| `periscope/app.py` | `FastAPI()` + lifespan + `include_router` loop + StaticFiles mount |
+| `periscope/config.py` | Cross-cutting paths + constants (STATIC, MCP_SOCKET_PATH, USAGE_SESSION_PREFIX) |
+| `periscope/log.py` | Logging setup + `_bg` / `_task` crash wrappers |
+| `periscope/pidfile.py` | Single-instance reclaim |
+| `periscope/tmux.py` | `tmux()` / `capture()` / `deliver_input()` / `_run()` / `_tmux_mutate()` subprocess wrappers |
+| `periscope/store.py` | `state.json` layer (`_STATE`, load/write, migrations) |
+| `periscope/channels.py` | In-process MCP server + tool implementations |
+| `periscope/panes.py` | `parse_pane` + smoothing + focus tracking + `list_windows` + `_resuming` |
+| `periscope/pids.py` | `@periscope_id` mint / stamp / rebind / resolve |
+| `periscope/git_pr.py` | Git state + GitHub PR cache + activity timeline + `prewarm_pr_cache` |
+| `periscope/lgtm.py` | LGTM mirror (poll + per-session SSE) |
+| `periscope/usage.py` | Claude plan usage (JSONL parse + `claude /usage` TUI scrape) |
+| `periscope/rename_ai.py` | Anthropic SDK plumbing for auto-rename |
+| `periscope/routes/*.py` | One APIRouter per file (11 modules: state, prefs, pane, send, sessions, paste_image, channel, history, auto_rename, lgtm, ws) |
+
+Tests live under `tests/` mirroring the package structure (one
+`tests/test_<module>.py` per `periscope/<module>.py`, plus
+`tests/routes/test_<route>.py` per route). 222 pytest tests on a
+clean run. Run with `uv run pytest -q`.
+
+`tests/test_channel_smoke.py` is a separate PEP-723 `# /// script`
+that exercises an older `channel_server.py` shape; it's excluded from
+pytest collection via `tests/conftest.py:collect_ignore`. Run it
+directly with `uv run tests/test_channel_smoke.py` if needed.
+
+### Key invariants the split preserved
+
+- **No `from server import …` in `periscope/`.** Double-import landmine
+  (shim runs as `__main__`; a separate import would re-execute it as
+  module `server` with two copies of every global). Enforced by
+  grep: `grep -rn "from server import\|^import server\b" periscope/ tests/`.
+- **Lifespan owns `MCP_SOCKET_PATH` cleanup.** `periscope/channels.py`
+  must never `os.unlink` the socket on shutdown — that's the lifespan's
+  job. Double-unlink is benign today but the ownership is the invariant.
+- **`_STATE` rebind across modules.** Multiple modules do
+  `from periscope.store import _STATE` (binding the dict by reference).
+  The `clean_state` fixture in `tests/conftest.py` must re-bind in every
+  consumer module so test mutations are seen consistently.
 
 ### Frontend (`static/`)
 
