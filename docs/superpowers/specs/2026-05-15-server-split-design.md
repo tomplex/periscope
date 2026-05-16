@@ -1,7 +1,7 @@
 # Server split — design
 
 **Date:** 2026-05-15
-**Status:** draft, post-review revision 2
+**Status:** draft, revision 3 (full-scope + test-first)
 **Author:** Tom + Claude
 
 ## Summary
@@ -15,21 +15,21 @@ PEP-723 inline metadata header, and all the pre-uvicorn startup work
 the existing `__main__` block does (pidfile reclaim, signal handler,
 loop selection, scoped reload-dirs).
 
-The split is structural only — no behavior change, no API change, no
-new tests. It's executed in **two stages of peels**:
+The split is structural — no behavior change, no API change. It DOES
+introduce a real pytest test suite, written test-first per move (see
+§"Testing strategy" below). Executed in **two stages of peels** across
+two plan documents:
 
-- **Stage A (Peels 0–4):** scaffold + the four cleanest subsystems
-  (config/log/pidfile, tmux, channels, store, LGTM). Lands a working
-  half-split. Stop here, run on it for a week.
-- **Stage B (Peels 5–8):** the trickier subsystems and the routes
-  split. Land if Stage A holds up.
+- **Stage A (Peels 0–4):** scaffold + pytest infra + the four cleanest
+  subsystems (config/log/pidfile, tmux, channels, store).
+- **Stage B (Peels 5–9):** panes/pids, LGTM, git_pr/usage/rename_ai,
+  routes split, final `app` move.
 
-Each peel is independently shippable and verified by `uv run server.py`
-boot + `uv run test_parse_pane.py`. Note: `tests/test_channel_smoke.py`
-exercises `channel_server.py`, not `server.py`, so it does NOT serve as
-a verification gate for the channels peel — that peel falls back to
-manual end-to-end (boot, attach a Claude pane, exercise `link_pr` /
-`reply` / `spawn_claude` from inside Claude, observe the dashboard).
+Both stages execute back-to-back; no pause between. Each peel is one
+commit on `main`. Each peel's verification gate is `uv run pytest -q`
+(the full suite, growing peel by peel) plus a targeted manual smoke
+for behaviors that pytest can't reasonably exercise (live MCP RPC,
+WebSocket terminal bridge, end-to-end paste flow).
 
 ## Motivation
 
@@ -77,6 +77,11 @@ Things that don't hurt and so don't drive the split:
 - Type-stubs / `__all__` / public-vs-private discipline. Defer.
 - Extracting `build_window_view(w)` from `/api/state`. Worth doing,
   but as a follow-up on top of the split.
+- 100% test coverage. Tests focus on what's moving each peel + the
+  cross-cutting invariants. WebSocket terminal forwarding, MCP wire
+  loop, and `prewarm_pr_cache`'s gh subprocess are still manual-smoke
+  territory after the split. Coverage grows incrementally; we don't
+  block a peel on retrofitting tests for unrelated behavior.
 - Fixing the test-time mutation of `~/.config/periscope/state.json`.
   Pre-existing; out of scope. Acknowledged in §Known sharp edges.
 
@@ -328,22 +333,140 @@ which contains `periscope/` as a subdirectory. Uvicorn's default
 reloader recurses into subdirectories, so edits to `periscope/app.py`
 and the rest of the package trigger reload without further config.
 
+## Testing strategy
+
+### Test-first per move
+
+Every symbol or cohesive group of symbols that moves out of `server.py`
+gets a pytest test BEFORE the move. The flow per symbol:
+
+1. Write a pytest module under `tests/` that exercises the symbol via
+   `from server import X` (or whatever import path is current).
+2. Run the test → must pass against the current code.
+3. Move the symbol to `periscope/<module>.py`.
+4. Update the test's import to `from periscope.<module> import X`.
+5. Run the test → must pass against the moved code.
+6. Commit (test + move + import update together).
+
+This is not aspirational. Each peel's plan enumerates the tests
+required up front; no peel ships without them.
+
+### Why pytest now
+
+Two reasons. (1) The existing `test_parse_pane.py` is a hand-rolled
+`# /// script` runner that only covers two regexes and `parse_pane`.
+It can't grow to cover `_do_link_pr_tool`, `_load_state`,
+`smooth_spinner`, or `/api/state` without becoming an ad-hoc framework
+— pytest already exists in `pyproject.toml`'s dev deps and the
+`history/tests/` directory uses it idiomatically. (2) A real test
+suite is exactly the artifact the move makes possible: pre-split,
+testing `parse_pane` required importing 3500 lines of server side
+effects. Post-split, each module is importable in isolation.
+
+### Layout: mirror the package
+
+```
+tests/                              # NEW — periscope-proper test suite
+├── conftest.py                     # shared fixtures (tmp_xdg_home, fake_tmux, ...)
+├── test_config.py                  # paths + constants resolve correctly
+├── test_log.py                     # _bg / _task crash capture
+├── test_pidfile.py                 # reclaim heuristics with monkeypatched os.kill
+├── test_tmux.py                    # subprocess wrappers, ANSI strip regexes
+├── test_channels.py                # _do_*_tool implementations against in-memory _STATE
+├── test_store.py                   # load/write atomicity, migration idempotency
+├── test_panes.py                   # parse_pane (folds in test_parse_pane.py), smoothing, focus
+├── test_pids.py                    # mint/stamp/rebind/resolve
+├── test_git_pr.py                  # git_state_for parsing, PR cache behavior with mocked gh
+├── test_lgtm.py                    # cached_lgtm_state + slug mapping (SSE loop is manual smoke)
+├── test_usage.py                   # parse_usage_screen + JSONL parsing
+├── test_rename_ai.py               # build_rename_prompt + Anthropic SDK plumbing (mocked)
+├── test_app.py                     # lifespan startup + shutdown, app construction
+└── routes/
+    ├── __init__.py
+    ├── test_state.py               # /api/state via TestClient
+    ├── test_prefs.py               # /api/prefs/* CRUD
+    ├── test_pane.py                # /api/pane + /api/rename
+    ├── test_send.py                # /api/send + /api/send-bulk with mocked tmux
+    ├── test_sessions.py            # /api/session/*, /api/window/* with mocked tmux
+    ├── test_paste_image.py         # /api/paste-image with tempdir
+    ├── test_channel.py             # /api/channel/clear-unread
+    ├── test_history.py             # /api/history/* with stub history.db
+    ├── test_auto_rename.py         # /api/auto-rename-* with mocked Anthropic
+    ├── test_lgtm.py                # /api/lgtm/start with mocked httpx
+    └── test_ws.py                  # /ws/pane smoke via TestClient.websocket_connect
+
+history/tests/                      # UNCHANGED — already pytest-shaped
+tests/test_channel_smoke.py         # UNCHANGED — exercises channel_server.py,
+                                    # not periscope/. Keep at this path; the new
+                                    # tests/ dir is a superset.
+test_parse_pane.py                  # DELETED in Peel 5 — folded into tests/test_panes.py
+```
+
+`pyproject.toml`'s `testpaths` extends to include `tests/`:
+
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests", "history/tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers --strict-config"
+```
+
+### Fixtures
+
+`tests/conftest.py` provides:
+
+- `tmp_xdg_home(monkeypatch, tmp_path)` — sets `$XDG_CONFIG_HOME` to a
+  per-test tempdir so `_state_path()`, `_pidfile_path()`,
+  `_log_path()` all land under it. Cleans up automatically.
+- `fake_tmux(mocker)` — monkeypatches `periscope.tmux.tmux` with a
+  recording mock. Returns the mock so tests can assert
+  `mock.assert_called_with("rename-window", "-t", "...", "new")`.
+- `client(app)` — `fastapi.testclient.TestClient` for the FastAPI
+  `app`. Used by `tests/routes/*`.
+- `clean_state(tmp_xdg_home)` — returns a fresh `_STATE`-shaped dict
+  and seeds it into `periscope.store._STATE` for the test, restoring
+  the original after. Used by tests that mutate `_STATE` (channels,
+  prefs routes).
+- `mcp_socket_path(tmp_path, monkeypatch)` — overrides
+  `periscope.config.MCP_SOCKET_PATH` to a tempdir socket path for
+  channels tests that need to bind.
+
+### What pytest doesn't cover
+
+- **WebSocket terminal forwarding** (`/ws/pane`). TestClient's
+  `websocket_connect` can do a smoke test (connect, receive size
+  frame, disconnect), but real tmux integration is out of scope.
+- **Live MCP RPC via channel_shim.** Already covered by
+  `tests/test_channel_smoke.py` for the wire format. End-to-end
+  attach-from-Claude is manual smoke per peel.
+- **`prewarm_pr_cache`'s `gh pr list` shellout.** Mock the
+  subprocess.
+- **`tmux()`'s actual subprocess.** Tests of code that calls `tmux()`
+  use the `fake_tmux` fixture; only `tests/test_tmux.py` itself
+  exercises real subprocess invocation (skipped if `tmux` not on
+  PATH).
+
 ## Migration plan: two stages, ten peels
 
 Each peel is a separate commit on `main`. Verification gate after
 every peel:
 
 ```sh
-uv run server.py                # boots cleanly, /api/state returns 200
-uv run test_parse_pane.py       # passes
-# After Peel 5 (panes), update test_parse_pane.py imports — see Peel 5.
+uv run pytest -q                # full suite (grows peel by peel)
+uv run server.py &              # boots cleanly to "Application startup complete"
+sleep 2 && curl -fsS http://127.0.0.1:8765/api/state >/dev/null && echo OK
+# (kill the background server before next peel)
 ```
+
+The `pytest` suite is the authoritative gate. Boot + curl is a
+smoke that exercises real lifespan + the static-mount + at least one
+route end-to-end (catches import-cycle errors that unit tests don't).
 
 #### What the gate doesn't catch
 
-Boot exercises imports, route registration, `_load_state`, and lifespan
-startup. `test_parse_pane.py` covers `parse_pane` and the spinner /
-active-op regexes. Everything else is uncovered:
+Pytest covers per-symbol logic + routes via TestClient. Boot + curl
+covers startup + one route. Still uncovered, and surfaced via manual
+smoke per peel:
 
 - **Channels:** `_resolve_pid_for_pane`, the four `_do_*_tool`
   implementations, and the live MCP RPC path. Manual end-to-end is
@@ -445,11 +568,11 @@ Move `_STATE`, `_STATE_LOCK`, `_load_state`, `_write_state`,
 `_channels_migration_v1`. ~115 lines. Re-resolve channels' bridge
 import to `periscope.store`.
 
-**Stage A pause point.** At the end of Peel 4, `server.py` drops by
-roughly a third (~1185 of 3543 lines moved). Channels (the largest
-single block) is out, store is out, infra and tmux helpers are out.
-Run on it for a week. If anything regresses, the diff to bisect is
-small. If it holds, proceed to Stage B.
+**End of Stage A.** `server.py` drops by roughly a third (~1185 of
+3543 lines moved). Channels (the largest single block) is out, store
+is out, infra and tmux helpers are out. A real pytest suite covers
+everything moved so far. Proceed immediately to Stage B (Tom's call:
+no pause, full split run-to-completion).
 
 ### Stage B — trickier subsystems and routes
 
