@@ -61,29 +61,19 @@ def test_channel_gc_drops_unknown_panes():
     assert "%99" not in _CHANNEL_UNREAD
 
 
-def test_link_pr_tool_writes_to_state(monkeypatch, mocker):
-    # Seed _STATE directly via monkeypatch (NOT the clean_state fixture).
-    # The fixture imports periscope.store which doesn't exist until Peel 4;
-    # in Peel 3 we test against server._STATE directly. Peel 4 Task 4.3
-    # updates this test to use the clean_state fixture.
-    import server
-    fresh = {"version": 1, "ui": {}, "windows": {}, "commands": []}
-    monkeypatch.setattr(server, "_STATE", fresh)
+def test_link_pr_tool_writes_to_state(clean_state, mocker):
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
-    mocker.patch("server._write_state")  # don't actually write disk
+    mocker.patch("periscope.store._write_state")  # don't actually write disk
 
     _do_link_pr_tool("%5", {"number": 1234})
 
-    assert fresh["windows"]["abc123"]["linked_pr"] == 1234
+    assert clean_state["windows"]["abc123"]["linked_pr"] == 1234
 
 
-def test_link_linear_tool_writes_to_state(monkeypatch, mocker):
-    import server
-    fresh = {"version": 1, "ui": {}, "windows": {}, "commands": []}
-    monkeypatch.setattr(server, "_STATE", fresh)
+def test_link_linear_tool_writes_to_state(clean_state, mocker):
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
-    mocker.patch("server._write_state")
+    mocker.patch("periscope.store._write_state")
 
     _do_link_linear_tool("%5", {"id": "FAR-456"})
 
-    assert fresh["windows"]["abc123"]["linked_linear"] == "FAR-456"
+    assert clean_state["windows"]["abc123"]["linked_linear"] == "FAR-456"

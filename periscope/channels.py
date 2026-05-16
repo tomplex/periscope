@@ -36,6 +36,7 @@ from typing import Any
 
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
+from periscope.store import _STATE, _STATE_LOCK, _write_state
 from periscope.tmux import tmux, _run, _tmux_mutate
 
 CHANNEL_INSTRUCTIONS = """\
@@ -152,8 +153,6 @@ def _resolve_pid_for_pane(pane_id: str) -> str:
 def _do_link_pr_tool(pane: str, arguments: dict):
     """Persist a linked PR number on the window's state.json entry.
     Overrides the auto-detected `pr` field when present."""
-    # BRIDGE: removed in Peel 4.
-    from server import _STATE, _STATE_LOCK, _write_state
     from mcp import types
 
     try:
@@ -179,8 +178,6 @@ def _do_link_pr_tool(pane: str, arguments: dict):
 
 def _do_link_linear_tool(pane: str, arguments: dict):
     """Persist a linked Linear ticket id on the window's state.json entry."""
-    # BRIDGE: removed in Peel 4.
-    from server import _STATE, _STATE_LOCK, _write_state
     from mcp import types
 
     ticket_id = str(arguments.get("id", "")).strip()

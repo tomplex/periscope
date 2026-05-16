@@ -43,6 +43,10 @@ from periscope.tmux import (
     tmux, capture, deliver_input, _run, _tmux_mutate,
     _ANSI_SGR_RE, _FG_COLOR_RE,
 )
+from periscope.store import (
+    _STATE, _STATE_LOCK, _write_state, _state_path,
+    _seed_commands_if_empty, _channels_migration_v1, _load_state,
+)
 from periscope.channels import (
     _CHANNELS_LOCK, _CHANNEL_REPLIES, _CHANNEL_UNREAD, _MCP_SESSIONS,
     _channel_gc, _mcp_listener,
@@ -98,120 +102,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# --- Persistent state (state.json) ----------------------------------------
-#
-# Single JSON file mutated only by the server, under a threading.Lock, with
-# atomic tempfile+rename writes. See
-# docs/superpowers/specs/2026-05-13-persistent-config-layer-design.md.
-#
-# Lock primitive choice: threading.Lock (not asyncio.Lock). FastAPI runs
-# sync `def` endpoints on anyio's threadpool, so two concurrent /api/state
-# polls execute in parallel threads. asyncio.Lock only blocks coroutines,
-# not threads — it would let sync handlers race past each other into the
-# critical section. threading.Lock works correctly from both sync handlers
-# and async ones (acquired synchronously; the file write is fast enough
-# that briefly blocking the event loop is fine).
-
-def _state_path() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "periscope" / "state.json"
-
-
-_STATE_LOCK = threading.Lock()
-_STATE_DEFAULTS: dict = {
-    "version": 1,
-    "ui": {},
-    "windows": {},
-    "commands": [],
-}
-
-
-def _load_state() -> dict:
-    """Read state.json. On parse failure rename to .corrupt-<ts> and return
-    defaults — the next save writes a fresh valid file, and the user can
-    recover from the renamed file if they care."""
-    path = _state_path()
-    if not path.exists():
-        return json.loads(json.dumps(_STATE_DEFAULTS))
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        # Missing keys default to their empty value — older files written by
-        # earlier phases never carry `windows` or `commands`.
-        for k, v in _STATE_DEFAULTS.items():
-            data.setdefault(k, json.loads(json.dumps(v)))
-        return data
-    except (json.JSONDecodeError, OSError) as e:
-        corrupt = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
-        try:
-            path.rename(corrupt)
-            log.warning("state.json unreadable (%s); renamed to %s", e, corrupt)
-        except OSError:
-            pass
-        return json.loads(json.dumps(_STATE_DEFAULTS))
-
-
-def _write_state(data: dict) -> None:
-    """Atomic write: tempfile + os.replace. Caller must hold _STATE_LOCK."""
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-
-
-# In-memory cache — every endpoint reads from this, writes go through
-# _write_state under the lock. Loaded once at startup.
-_STATE: dict = _load_state()
-
-_DEFAULT_COMMANDS = [
-    {"label": "claude", "exec": "claude"},
-    {"label": "shell", "exec": ""},
-    {"label": "vim", "exec": "vim"},
-]
-
-
-def _seed_commands_if_empty() -> None:
-    """If `commands` is empty (fresh install or pre-phase-4 state.json),
-    seed the three legacy defaults so the new-window tile keeps working
-    while phase 4 is in flight.
-
-    Side effect: if a user deliberately drains commands to zero, the next
-    server restart re-seeds the defaults. To keep zero commands, leave at
-    least one no-op entry around. This tradeoff is deliberate — making
-    "empty by accident" recoverable matters more than supporting a
-    zero-commands configuration nobody asks for."""
-    with _STATE_LOCK:
-        if not _STATE["commands"]:
-            _STATE["commands"] = [dict(c) for c in _DEFAULT_COMMANDS]
-            _write_state(_STATE)
-
-
-_seed_commands_if_empty()
-
-
-def _channels_migration_v1() -> None:
-    """One-shot: rewrite seeded `claude` exec entries to include the
-    dev-channels flag so spawned Claudes get a channel server attached.
-
-    Idempotent — gated by `channels_migration_v1_done`. Does not re-run on
-    later restarts even if the user re-adds an `{exec: "claude"}` entry
-    by hand. See docs/superpowers/specs/2026-05-14-channels-design.md
-    §"Migration for existing users" for the policy rationale.
-    """
-    with _STATE_LOCK:
-        if _STATE.get("channels_migration_v1_done"):
-            return
-        new_exec = (
-            "claude --dangerously-load-development-channels server:periscope"
-        )
-        for cmd in _STATE.get("commands", []):
-            if cmd.get("exec") == "claude":
-                cmd["exec"] = new_exec
-        _STATE["channels_migration_v1_done"] = True
-        _write_state(_STATE)
-
-
-_channels_migration_v1()
+# Persistent state (state.json) now lives in periscope/store.py.
 
 
 # Channels code now lives in periscope/channels.py.

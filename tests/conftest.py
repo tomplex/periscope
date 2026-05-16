@@ -45,9 +45,16 @@ def fake_tmux(mocker):
 
 @pytest.fixture
 def clean_state(tmp_xdg_home, monkeypatch):
-    """Reset periscope.store._STATE to a fresh defaults dict for the
-    test. Available after Peel 4. Returns the dict so the test can
-    prepopulate fields before exercising code-under-test."""
+    """Reset periscope.store._STATE to a fresh defaults dict for the test.
+    Available after Peel 4. Returns the dict so the test can prepopulate
+    fields before exercising code-under-test.
+
+    Consumers of `_STATE` typically do `from periscope.store import _STATE`
+    at module top, binding to the dict object — so monkeypatching only
+    `periscope.store._STATE` would leave those references pointing at the
+    original dict. We patch every module that's imported `_STATE` by name
+    so the test sees a consistent view.
+    """
     try:
         import periscope.store as store
     except ImportError:
@@ -59,4 +66,14 @@ def clean_state(tmp_xdg_home, monkeypatch):
         "commands": [],
     }
     monkeypatch.setattr(store, "_STATE", fresh)
+    # Re-bind in every other module that did `from periscope.store import _STATE`.
+    # Add modules here as Stage B peels expose more consumers.
+    import importlib
+    for mod_name in ("periscope.channels",):
+        try:
+            mod = importlib.import_module(mod_name)
+        except ImportError:
+            continue
+        if hasattr(mod, "_STATE"):
+            monkeypatch.setattr(mod, "_STATE", fresh)
     return fresh
