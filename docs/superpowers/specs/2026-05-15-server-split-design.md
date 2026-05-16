@@ -1,7 +1,7 @@
 # Server split — design
 
 **Date:** 2026-05-15
-**Status:** draft, post-review revision 1
+**Status:** draft, post-review revision 2
 **Author:** Tom + Claude
 
 ## Summary
@@ -138,12 +138,12 @@ grep -n "^def parse_pane\|^def list_windows\|..." server.py  # symbols of intere
 | `app.py` | `lifespan` (~187–215), `app = FastAPI(...)` (217), `app.mount(...)` (3500) |
 | `config.py` | `STATIC` (218), `MCP_SOCKET_PATH` (350), TTLs scattered through |
 | `store.py` | Persistent state (state.json) (220–335) |
-| `channels.py` | Channels (in-process MCP server) (336–1086) |
-| `lgtm.py` | LGTM integration (1087–1262) — helpers/state only; route in `routes/lgtm.py` |
-| `git_pr.py` | Git + PR state (1263–1391) + Activity timeline (1392–1521) + `prewarm_pr_cache` (~3470) |
-| `usage.py` | Claude Code plan usage (1522–1610) + Authoritative scrape (1611–1786) |
-| `panes.py` | Focus/smoothing globals (895–948), smooth/note/update_focus (949–985), pane regexes (~986–1078), `list_windows` (1788), `parse_pane` (2019–2172). `_resuming` (931) lives here too. |
-| `tmux.py` | `tmux()` (1080), `capture()` (1994), `deliver_input()` (2000), `_run()` (1280), `_tmux_mutate()` (2578) |
+| `channels.py` | Channels-proper, lines 336–894 (CHANNEL_INSTRUCTIONS, locks, `_channel_gc`, `_resolve_pid_for_pane`, the four `_do_*_tool` functions, `emit_channel_event`, the per-connection MCP listener loop ending at ~894). Note: the `# --- Channels ---` banner at 336 visually contains lines 895–1086, but those are NOT channels code — see `panes.py` and `tmux.py` rows below. |
+| `lgtm.py` | LGTM integration helpers/state, lines 1087–1262 (the next banner at 1263 marks the boundary). Route at 3168–3207 moves to `routes/lgtm.py`. |
+| `git_pr.py` | Git + PR state (1263–1391) + Activity timeline (1392–1521) + `prewarm_pr_cache` (~3470). `prewarm_pr_cache` calls `list_windows` from `panes.py` — an upward import, acceptable because it's lifespan-only. |
+| `usage.py` | Claude Code plan usage (1522–1610) + Authoritative scrape (1611–~1786). |
+| `panes.py` | Focus/smoothing globals (895–948 — physically inside the channels banner but logically panes state), `RESUME_EXPIRY_S` (932), `_resuming` (931), `smooth_spinner`/`smooth_is_claude`/`note_focus`/`note_action`/`update_focus_from_windows` (949–989), parse-pane regexes (~992–1078), `list_windows` (1788–1825), `parse_pane` (2019–2172). |
+| `tmux.py` | `tmux()` (1080 — also physically inside the channels banner), `capture()` (1994), `deliver_input()` (2000), `_run()` (1280, currently in the git_pr block but used by sessions routes too), `_tmux_mutate()` (2578, currently mid-routes). All five are subprocess wrappers; `capture` returns raw `capture-pane` output and `deliver_input` writes to a tmux paste buffer — neither calls `parse_pane` or anything panes-shaped. |
 | `pids.py` | Periscope window-ids (1827–1992) |
 | `rename_ai.py` | auto-rename via the Anthropic SDK helpers (~2878–2945) |
 | `routes/state.py` | `/api/state` (2173–2322) |
@@ -246,33 +246,50 @@ It does:
    string equality, NOT `bool(...)` (so `PERISCOPE_DEV=0` doesn't
    enable reload).
 
-After the split, `server.py` keeps all of this but the import string
-becomes `"periscope.app:app"`:
+#### Critical: don't trigger a double-import of `server.py`
+
+When `uv run server.py` runs, the module is loaded as `__main__`,
+NOT as `sys.modules["server"]`. If anything in the codebase does
+`from server import X`, Python re-executes `server.py` from scratch
+under the name `server`, producing two distinct module objects with
+their own copies of every global (`_STATE`, `_CHANNEL_REPLIES`, the
+`app` instance). Uvicorn then serves the wrong copy. Pidfile reclaim,
+state mutation, and channel sessions silently get the orphan.
+
+**The mitigation is structural, not a workaround:** never let any
+`periscope/` module do `from server import ...`. The migration plan
+maintains this by keeping the uvicorn import string as `"server:app"`
+through Peels 0–8 (so `app` lives in `server.py` throughout the move
+and `periscope/` modules never need to reach back), then in Peel 9
+moving `app = FastAPI(lifespan=lifespan)` and the lifespan + route
+mounts into `periscope/app.py` *and* changing the uvicorn target to
+`"periscope.app:app"` *in the same commit*. After that final peel,
+nothing imports `server`; the shim is pure entry-point.
+
+#### Final post-Peel-9 shim
 
 ```python
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "fastapi", "uvicorn[standard]", "anthropic",
+#     "fastapi", "uvicorn[standard]", "anthropic", "httpx",
 #     "python-dotenv", "mcp==1.27.*",
 # ]
 # ///
 """Periscope — live tmux dashboard. Run with: uv run server.py"""
 
-# Python adds the script's directory to sys.path[0] automatically when
-# running via `python script.py` / `uv run script.py`, so `periscope/`
-# is importable without further setup.
-
-from periscope.app import app  # noqa: F401  (kept for `uv run server.py` to import-init)
-from periscope.pidfile import (
-    _reclaim_existing_instance, _write_pidfile, _remove_pidfile,
-)
-from periscope.log import log
-
 if __name__ == "__main__":
     import atexit, os, signal, sys
     from pathlib import Path
     import uvicorn
+
+    # Imports are inside __main__ so a hypothetical `import server` from
+    # elsewhere (e.g. an REPL session) doesn't trigger pidfile reclaim or
+    # signal handler installation. Won't happen in practice; cheap to enforce.
+    from periscope.pidfile import (
+        _reclaim_existing_instance, _write_pidfile, _remove_pidfile,
+    )
+    from periscope.log import log
 
     _reclaim_existing_instance()
     _write_pidfile()
@@ -284,7 +301,7 @@ if __name__ == "__main__":
 
     dev_mode = os.environ.get("PERISCOPE_DEV") == "1"
     uvicorn.run(
-        "periscope.app:app",
+        "periscope.app:app",   # uvicorn loads this fresh in the worker process
         host="127.0.0.1",
         port=8765,
         log_level="info",
@@ -294,20 +311,24 @@ if __name__ == "__main__":
     )
 ```
 
-The comment on the second-line `sys.path` claim: tested with a
-throwaway script — Python and `uv run` both put the script's dir at
-`sys.path[0]` automatically, so no `sys.path.insert` is needed. The
-comment exists as a hedge for the next reader who wonders why this
-works.
+The shim never imports `app` at module top — uvicorn loads
+`periscope.app` from the import string in its worker process. That
+worker's import of `periscope/app.py` is the one and only time the
+package gets loaded; `server.py` never imports anything from
+`periscope/` at module level. Python and `uv run` put the script's
+directory on `sys.path[0]` automatically, so `periscope/` is
+discoverable without `sys.path.insert`.
 
-`reload_dirs` already points at `Path(__file__).parent` (= the repo
-root), which contains `periscope/` as a subdirectory. Uvicorn's
-default reloader (watchfiles) recurses into subdirectories, so edits
-to `periscope/app.py` and the rest of the package trigger reload
-without further config. (Tested: `Config(...).reload_dirs` resolves
-to the cwd as a tree.)
+`httpx` is in the dependency list because `lgtm.py` (post-Peel-6)
+imports it, even though no top-level code in the shim does — uv
+resolves PEP-723 deps once for the script's entire runtime.
 
-## Migration plan: two stages, nine peels
+`reload_dirs` points at `Path(__file__).parent` (= the repo root),
+which contains `periscope/` as a subdirectory. Uvicorn's default
+reloader recurses into subdirectories, so edits to `periscope/app.py`
+and the rest of the package trigger reload without further config.
+
+## Migration plan: two stages, ten peels
 
 Each peel is a separate commit on `main`. Verification gate after
 every peel:
@@ -318,14 +339,36 @@ uv run test_parse_pane.py       # passes
 # After Peel 5 (panes), update test_parse_pane.py imports — see Peel 5.
 ```
 
+#### What the gate doesn't catch
+
+Boot exercises imports, route registration, `_load_state`, and lifespan
+startup. `test_parse_pane.py` covers `parse_pane` and the spinner /
+active-op regexes. Everything else is uncovered:
+
+- **Channels:** `_resolve_pid_for_pane`, the four `_do_*_tool`
+  implementations, and the live MCP RPC path. Manual end-to-end is
+  the gate (see below).
+- **LGTM:** `cached_lgtm_state`, the SSE loop, the `/api/lgtm/start`
+  route. Surface in the UI by opening a project that has LGTM
+  running on :9900.
+- **Send / paste path:** `_send_to_target`, `/api/send`,
+  `/api/send-bulk`, `/api/paste-image`. Manual: send a phrase to a
+  pane through the dashboard and confirm Enter lands.
+- **Pids:** `_mint_pid`, `_stamp_pid`, `_rebind_pid`,
+  `resolve_pids`, `_attach_git_then_resolve_pids`. Surface by
+  watching a fresh pane get a `@periscope_id` stamped after the
+  first `/api/state` poll.
+- **WebSocket bridge:** `/ws/pane`. Manual: open a modal, type into
+  the terminal, resize the modal.
+
+For each peel, run a 30-second manual smoke targeted at whatever
+subsystem the peel touched. The plan document (separate artifact)
+spells these out per-peel.
+
 `tests/test_channel_smoke.py` does NOT exercise `server.py`'s channels
 block — it imports `channel_server.py` directly. Run it after Peel 3
 to confirm `channel_server.py` still works (likely unaffected), but
-don't treat it as coverage for the channels peel itself. Manual
-end-to-end is the gate there: boot the server, open a Claude session
-with `claude --dangerously-load-development-channels server:periscope`,
-issue `link_pr`, `link_linear`, `reply`, `spawn_claude`, observe
-periscope's dashboard surfaces them correctly.
+don't treat it as coverage for the channels peel itself.
 
 If any verification fails: revert the peel, diagnose, retry. Don't
 land peels stacked on a broken base.
@@ -334,14 +377,20 @@ land peels stacked on a broken base.
 
 #### Peel 0: scaffold
 
-Create `periscope/__init__.py`, `periscope/__main__.py`,
-`periscope/app.py` that re-exports the existing `app` from `server.py`
-(`from server import app` — temporary), `periscope/routes/__init__.py`.
-Update `server.py`'s import string in `uvicorn.run` to
-`"periscope.app:app"`. No content moves yet.
+Create empty `periscope/__init__.py`, `periscope/__main__.py`,
+`periscope/routes/__init__.py`. **Do not change `server.py` or its
+uvicorn import string** — `"server:app"` stays through Peel 8. No
+content moves, no re-exports, no `from server import …` anywhere.
 
-Verifies the import wiring + reload-dir behavior before any content
-moves.
+Why no `periscope/app.py` re-export trick: doing `from server import
+app` from inside `periscope/app.py` would re-execute `server.py` as
+the module `server` (separate from `__main__`), producing two `app`
+instances and two copies of every global. See §"Critical: don't
+trigger a double-import" above.
+
+Peel 0's only job is to make `periscope/` importable as a package, so
+later peels can `from periscope.tmux import tmux` etc. and `server.py`
+can `from periscope.X import Y` to pull moved symbols back.
 
 #### Peel 1: infra (`config.py`, `log.py`, `pidfile.py`)
 
@@ -355,27 +404,39 @@ Move `tmux()`, `capture()`, `deliver_input()`, `_run()`,
 
 #### Peel 3: `channels.py`
 
-Largest single block (~750 lines). Cohesive but with three concrete
-out-edges to other subsystems that the spec must own:
+Largest single block. Cohesive but with three concrete out-edges to
+other subsystems the spec must own:
 
 - `_resolve_pid_for_pane` (line 448) calls `list_windows()` and
   `_attach_git_then_resolve_pids()`. Both still live in `server.py`
-  at this point (Peel 5 moves them); `channels.py` imports them via
-  `from server import list_windows, _attach_git_then_resolve_pids`
-  as a temporary bridge. Updated to
-  `from periscope.panes import ...` / `from periscope.pids import ...`
-  in Peel 5.
+  at this point (Peel 5 moves them).
 - `_do_spawn_claude_tool` (~line 580) calls `note_focus`,
-  `note_action`, `list_windows`. Same bridge pattern.
-- `_do_link_pr_tool` and `_do_link_linear_tool` write to `_STATE`
-  and call `_write_state(_STATE)`. After Peel 4 these become
+  `note_action`, `list_windows`. Same.
+- `_do_link_pr_tool` and `_do_link_linear_tool` write to `_STATE` and
+  call `_write_state(_STATE)`. After Peel 4 these become
   `from periscope.store import _STATE, _STATE_LOCK, _write_state`.
 
-The bridge imports are a tolerated temporary — they go away by Peel 5.
-If you don't want bridges at all, swap Peel 3 with Peels 4–5 (do
-panes/pids/store first, then channels). Trade-off: channels is the
-biggest peel and shipping it earlier proves the split's value
-fastest.
+**Bridge strategy: function-local imports, never module-top.** The
+naive bridge `from server import list_windows, ...` at the top of
+`periscope/channels.py` would re-execute `server.py` under the
+module name `server` (separate from `__main__`), see §"Critical:
+don't trigger a double-import." Instead, `_resolve_pid_for_pane` and
+`_do_spawn_claude_tool` do their `from server import ...` inside the
+function body. By the time those functions actually run (during a
+live MCP request), `sys.modules["server"]` already exists because
+the worker process imported `server` to satisfy the `"server:app"`
+uvicorn target. The local import returns the cached module, no
+re-execution.
+
+In Peel 5 the local imports become module-top
+`from periscope.panes import list_windows, note_focus, note_action`
+and `from periscope.pids import _attach_git_then_resolve_pids` —
+safe at module-top because `periscope.panes` and `periscope.pids`
+don't import from `server`.
+
+The bridge code lives in two ~3-line helpers; document them in the
+plan with explicit `# BRIDGE: removed in Peel 5` comments so they
+don't ossify.
 
 #### Peel 4: `store.py`
 
@@ -384,10 +445,11 @@ Move `_STATE`, `_STATE_LOCK`, `_load_state`, `_write_state`,
 `_channels_migration_v1`. ~115 lines. Re-resolve channels' bridge
 import to `periscope.store`.
 
-**Stage A pause point.** At the end of Peel 4 (Stage A), `server.py`
-is roughly half its original size. Run on it for a week. If anything
-regresses, the diff to bisect is small. If it holds, proceed to
-Stage B.
+**Stage A pause point.** At the end of Peel 4, `server.py` drops by
+roughly a third (~1185 of 3543 lines moved). Channels (the largest
+single block) is out, store is out, infra and tmux helpers are out.
+Run on it for a week. If anything regresses, the diff to bisect is
+small. If it holds, proceed to Stage B.
 
 ### Stage B — trickier subsystems and routes
 
@@ -402,13 +464,19 @@ on git_pr (`cached_git_state`).
 **Update `test_parse_pane.py` in this peel.** Replace
 `sys.path.insert(0, str(Path(__file__).parent)); import server` with
 `from periscope.panes import SPINNER_RE, ACTIVE_OP_RE, parse_pane`,
-and rewrite the three references (`server.SPINNER_RE`,
-`server.ACTIVE_OP_RE`, `server.parse_pane`) to use bare names.
+and rewrite **five** references: `server.SPINNER_RE` (line 322),
+`server.ACTIVE_OP_RE` (line 323), and three `server.parse_pane(...)`
+calls at lines 338, 357, 371. A `replace_all` on the literal `server.`
+prefix is the cleanest move.
 
 This also changes the test's import-time side effects: `import server`
 runs `_load_state()` and the channels migration; importing
 `periscope.panes` does not (panes has no module-level state load).
 A modest pre-existing bug fix as a side-benefit.
+
+Also move `RESUME_EXPIRY_S` (line 932, currently adjacent to
+`_resuming`) to `panes.py` alongside `_resuming`. `routes/state.py`
+uses it at server.py:2312.
 
 #### Peel 6: `lgtm.py`
 
@@ -442,9 +510,33 @@ this peel, do the routes in dependency order (least to most coupled):
 10. `routes/prefs.py` — depends on `store`.
 11. `routes/state.py` — depends on essentially everything; do last.
 
-After all routes move, `server.py`'s body is the entry-point shim
-only (~50 lines of pidfile/signal/uvicorn boot, plus the
-`from periscope.app import app` line).
+After all routes move, `server.py` still owns `app = FastAPI()`,
+the lifespan, the `app.include_router` calls, and the StaticFiles
+mount. Routes register on this `app` via `from periscope.routes import
+…` followed by `app.include_router(...)`. The uvicorn import string
+remains `"server:app"`.
+
+#### Peel 9: final `app` move + uvicorn import string flip
+
+Single atomic commit:
+
+1. Move `app = FastAPI(lifespan=lifespan)`, the `lifespan` function,
+   the `app.include_router(...)` loop, and the `app.mount(...)` call
+   from `server.py` into `periscope/app.py`. `lifespan`'s forward
+   references become explicit imports as listed in §"Lifespan
+   dependencies must be explicit."
+2. Strip `server.py` down to the post-Peel-9 shim shown in
+   §"`server.py` entry point". No `app` definition, no route
+   imports, no `from periscope.app import …` at module top.
+3. Change the uvicorn target string from `"server:app"` to
+   `"periscope.app:app"`.
+
+Steps 1 and 3 must land together — uvicorn imports the target string
+in its worker process, so the moment the string changes, the file
+behind that string must exist. Verifying Peel 9: `uv run server.py`
+boots, `/api/state` returns 200, and `ps -ef | grep server.py` shows
+exactly one Python process under reload-off (one parent + one worker
+under reload-on, same as today).
 
 ## Risks and what will bite
 
@@ -483,6 +575,18 @@ automated coverage post-split, a follow-up issue can add a
 exercises `_do_link_pr_tool` / `_do_link_linear_tool` against an
 in-memory `_STATE`. Out of scope for this split.
 
+### `MCP_SOCKET_PATH` cleanup: lifespan owns it
+
+Today, lifespan's `finally` block does `os.unlink(MCP_SOCKET_PATH)`.
+After the split, `MCP_SOCKET_PATH` lives in `config.py` (Peel 1) and
+the listener lives in `channels.py` (Peel 3). It's tempting for
+`channels.py` to also try to clean up the socket; it must not.
+**Invariant: lifespan owns socket cleanup. `channels.py` never
+unlinks `MCP_SOCKET_PATH`.** Double-unlink is benign in the
+current FileNotFoundError-tolerant code, but the ownership is the
+real invariant: a second unlinker would mask the case where the
+first one didn't run.
+
 ### `_load_state()` runs on `import periscope.store`
 
 `_STATE = _load_state()` at module top means importing `store.py`
@@ -492,15 +596,19 @@ tests. The split doesn't make it worse, but `test_parse_pane.py`'s
 post-Peel-5 rewrite incidentally improves it (panes has no such
 import-time work).
 
-### `refactor-mcp` for the rename pass
+### Tooling: `refactor-mcp` is for renames, not moves
 
-Use the LSP-backed `refactor-mcp` rename tool when moving symbols
-between modules to update import sites atomically. Concretely worth
-it for: Peel 3 (channels — many internal references), Peel 5 (panes —
-`parse_pane`/`SPINNER_RE`/`ACTIVE_OP_RE` referenced from
-`test_parse_pane.py`), Peel 8 (routes — many routes import the same
-helpers). Hand-editing imports across 20+ files invites missed
-references that won't surface until the bad path runs.
+`refactor-mcp` exposes an LSP-backed rename tool — useful for
+renaming a symbol in place (e.g. `_mcp_listener` → `mcp_listener`,
+which the spec wants in §"Lifespan dependencies must be explicit").
+It does NOT move symbols between files. The actual cut-and-paste from
+`server.py` to `periscope/foo.py` is hand-edit + grep for callers.
+
+The plan should use grep + `Edit` for moves, and reach for
+`refactor-mcp` only for the explicit renames it lists (currently:
+just `_mcp_listener` → `mcp_listener`; possibly drop the leading
+underscore on more cross-module symbols once the modules exist, but
+that's discretionary).
 
 ## Known sharp edges (acknowledged, out of scope)
 
