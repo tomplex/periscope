@@ -14,8 +14,6 @@
 import asyncio
 import atexit
 import json
-import logging
-import logging.handlers
 import os
 import re
 import shutil
@@ -34,146 +32,22 @@ from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from periscope.config import STATIC, MCP_SOCKET_PATH
+from periscope.log import log, _bg, _task
+from periscope.pidfile import (
+    _reclaim_existing_instance,
+    _write_pidfile,
+    _remove_pidfile,
+)
+
 # Load .env from the script's directory (existing env vars take precedence).
 load_dotenv(Path(__file__).parent / ".env")
 
 
-# --- Logging --------------------------------------------------------------
-#
-# Real logger with a rotating file at ~/.config/periscope/periscope.log plus
-# stderr. Set up before anything else so module-init / lifespan / handlers
-# all land in the same sink. Without this, background-thread crashes go to
-# nowhere and "the server's flakey" is uninvestigable.
-
-def _log_path() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "periscope" / "periscope.log"
+# Logging + background-task wrappers now live in periscope/log.py.
 
 
-_LOG_PATH = _log_path()
-_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    handlers=[
-        logging.handlers.RotatingFileHandler(
-            _LOG_PATH, maxBytes=2_000_000, backupCount=3
-        ),
-        logging.StreamHandler(sys.stderr),
-    ],
-)
-log = logging.getLogger("periscope")
-
-
-# --- Background-task error capture ----------------------------------------
-#
-# threading.Thread(daemon=True) and asyncio.create_task() both swallow
-# exceptions silently — a daemon thread that crashes just disappears, and a
-# task with no awaiter leaves an unretrieved-exception warning at GC time
-# (or nothing at all if the loop exits first). Wrap every fire-and-forget
-# in one of these so crashes land in the log instead of the void.
-
-def _bg(name: str, fn, *args, **kwargs) -> threading.Thread:
-    """Start a daemon thread that logs any uncaught exception."""
-    def wrapped():
-        try:
-            fn(*args, **kwargs)
-        except Exception:
-            log.exception("background thread %s crashed", name)
-    t = threading.Thread(target=wrapped, daemon=True, name=name)
-    t.start()
-    return t
-
-
-def _task(coro, name: str) -> asyncio.Task:
-    """Schedule an asyncio task with a done-callback that logs crashes."""
-    t = asyncio.create_task(coro, name=name)
-
-    def _done(task: asyncio.Task) -> None:
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is not None:
-            log.error("task %s crashed", name, exc_info=exc)
-
-    t.add_done_callback(_done)
-    return t
-
-
-# --- Pidfile / single-instance reclaim ------------------------------------
-#
-# Periscope's uvicorn reload supervisor + worker dance plus the fact that
-# Claude-driven sessions sometimes spawn one-off `python -c "uvicorn.run(...)"`
-# instances mean orphan periscopes accumulate on adjacent ports. Pidfile
-# reclaim solves the common case: starting periscope kicks out the previous
-# periscope cleanly so `uv run server.py` is idempotent.
-#
-# Reclaim runs in __main__ before uvicorn binds the port. Writing happens
-# there too, recording the supervisor pid in dev mode (which is what you
-# want to kill — killing the worker alone just gets it respawned). atexit
-# handles cleanup for both normal exits and SIGTERM (via the handler below).
-
-def _pidfile_path() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "periscope" / "periscope.pid"
-
-
-def _pid_is_periscope(pid: int) -> bool:
-    """True if `pid` is alive and looks like a periscope process. We check
-    the command line for 'server.py' to avoid SIGTERMing some unrelated
-    process that happens to have inherited an old pid."""
-    try:
-        out = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
-            capture_output=True, text=True, timeout=2.0,
-        )
-    except (subprocess.SubprocessError, OSError):
-        return False
-    if out.returncode != 0:
-        return False
-    return "server.py" in out.stdout
-
-
-def _reclaim_existing_instance() -> None:
-    """If the pidfile points at a live periscope, SIGTERM it (escalate to
-    SIGKILL after 3s) so we can bind the port cleanly."""
-    path = _pidfile_path()
-    try:
-        prev = int(path.read_text().strip())
-    except (OSError, ValueError):
-        return
-    if prev == os.getpid() or not _pid_is_periscope(prev):
-        return
-    log.info("reclaiming previous periscope instance pid=%d", prev)
-    try:
-        os.kill(prev, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    deadline = time.time() + 3.0
-    while time.time() < deadline:
-        if not _pid_is_periscope(prev):
-            return
-        time.sleep(0.1)
-    log.warning("pid=%d ignored SIGTERM; sending SIGKILL", prev)
-    try:
-        os.kill(prev, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-
-def _write_pidfile() -> None:
-    path = _pidfile_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(os.getpid()))
-
-
-def _remove_pidfile() -> None:
-    path = _pidfile_path()
-    try:
-        if path.read_text().strip() == str(os.getpid()):
-            path.unlink()
-    except (OSError, ValueError):
-        pass
+# Pidfile / single-instance reclaim now lives in periscope/pidfile.py.
 
 
 @asynccontextmanager
@@ -215,7 +89,6 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-STATIC = Path(__file__).parent / "static"
 
 # --- Persistent state (state.json) ----------------------------------------
 #
@@ -346,8 +219,6 @@ _channels_migration_v1()
 # touched from both sync request handlers (FastAPI threadpool) and async
 # MCP handlers; threading.Lock works correctly from both whereas
 # asyncio.Lock only blocks coroutines.
-
-MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
 
 CHANNEL_INSTRUCTIONS = """\
 You are running inside periscope, a dashboard the user has open in their
