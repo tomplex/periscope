@@ -20,18 +20,21 @@
 # 1. Full pytest suite — authoritative gate.
 uv run pytest -q
 
-# 2. Smoke: server boots, /api/state returns 200.
+# 2. Smoke: server boots, /api/state returns 200 (with retry loop —
+#    cold start with gh prewarm + usage scrape can take 3–5s).
 uv run server.py &
 SERVER_PID=$!
-sleep 3
-curl -fsS http://127.0.0.1:8765/api/state > /dev/null && echo "API OK"
-kill $SERVER_PID
+for i in 1 2 3 4 5 6 7 8; do
+  sleep 1
+  curl -fsS http://127.0.0.1:8765/api/state > /dev/null 2>&1 && { echo "API OK"; break; }
+done
+kill $SERVER_PID 2>/dev/null
 wait $SERVER_PID 2>/dev/null
 
 # 3. Peel-specific manual smoke (see each peel below).
 ```
 
-If pytest or the curl fails: revert the working tree, diagnose, retry. Do NOT commit on red.
+If pytest or the curl fails (no `API OK` after 8s): revert the working tree, diagnose, retry. Do NOT commit on red.
 
 ---
 
@@ -153,6 +156,15 @@ from pathlib import Path
 import pytest
 
 
+# Exclude the standalone PEP-723 smoke script from pytest collection.
+# `tests/test_channel_smoke.py` is `uv run`-shaped (declares its own
+# deps in the script header) and predates pytest discovery here. Keep
+# it runnable via `uv run tests/test_channel_smoke.py` but don't let
+# pytest try to import it (its deps — mcp/anyio/websockets — are not
+# in the dev-deps group).
+collect_ignore = ["test_channel_smoke.py"]
+
+
 @pytest.fixture
 def tmp_xdg_home(monkeypatch, tmp_path: Path) -> Path:
     """Redirect XDG_CONFIG_HOME so state.json, pidfile, and the log
@@ -244,8 +256,7 @@ Expected: all green. `history/tests/` should still pass (no changes there).
 ```sh
 uv run server.py &
 SERVER_PID=$!
-sleep 3
-curl -fsS http://127.0.0.1:8765/api/state > /dev/null && echo "API OK"
+for i in 1 2 3 4 5 6 7 8; do sleep 1; curl -fsS http://127.0.0.1:8765/api/state > /dev/null 2>&1 && { echo "API OK"; break; }; done
 kill $SERVER_PID
 wait $SERVER_PID 2>/dev/null
 ```
@@ -749,8 +760,7 @@ Boot smoke:
 
 ```sh
 uv run server.py &
-sleep 3
-curl -fsS http://127.0.0.1:8765/api/state > /dev/null && echo "API OK"
+for i in 1 2 3 4 5 6 7 8; do sleep 1; curl -fsS http://127.0.0.1:8765/api/state > /dev/null 2>&1 && { echo "API OK"; break; }; done
 kill %1; wait 2>/dev/null
 ```
 
@@ -1046,8 +1056,7 @@ Boot smoke:
 
 ```sh
 uv run server.py &
-sleep 3
-curl -fsS http://127.0.0.1:8765/api/state > /dev/null && echo "API OK"
+for i in 1 2 3 4 5 6 7 8; do sleep 1; curl -fsS http://127.0.0.1:8765/api/state > /dev/null 2>&1 && { echo "API OK"; break; }; done
 kill %1; wait 2>/dev/null
 ```
 
@@ -1165,48 +1174,32 @@ def test_channel_gc_drops_unknown_panes():
     assert "%99" not in _CHANNEL_UNREAD
 
 
-def test_link_pr_tool_writes_to_state(clean_state, mocker):
-    # _do_link_pr_tool reads _STATE/_STATE_LOCK/_write_state from `server`
-    # in Stage A. After Peel 4 it imports from periscope.store.
-    # Mock _resolve_pid_for_pane to return a known pid; otherwise it tries
-    # to call list_windows which spawns a real tmux subprocess.
+def test_link_pr_tool_writes_to_state(monkeypatch, mocker):
+    # Seed _STATE directly via monkeypatch (NOT the clean_state fixture).
+    # The fixture imports periscope.store which doesn't exist until Peel 4;
+    # in Peel 3 we test against server._STATE directly. Peel 4 Task 4.3
+    # updates this test to use the fixture once periscope.store is live.
+    import server
+    fresh = {"version": 1, "ui": {}, "windows": {}, "commands": []}
+    monkeypatch.setattr(server, "_STATE", fresh)
     mocker.patch("server._resolve_pid_for_pane", return_value="abc123")
     mocker.patch("server._write_state")  # don't actually write disk
 
-    # Seed _STATE so the channels code can read/mutate it
-    import server
-    server._STATE.update(clean_state)
-
     _do_link_pr_tool("%5", {"number": 1234})
 
-    assert clean_state["windows"]["abc123"]["linked_pr"] == 1234
+    assert fresh["windows"]["abc123"]["linked_pr"] == 1234
 
 
-def test_link_linear_tool_writes_to_state(clean_state, mocker):
+def test_link_linear_tool_writes_to_state(monkeypatch, mocker):
+    import server
+    fresh = {"version": 1, "ui": {}, "windows": {}, "commands": []}
+    monkeypatch.setattr(server, "_STATE", fresh)
     mocker.patch("server._resolve_pid_for_pane", return_value="abc123")
     mocker.patch("server._write_state")
-    import server
-    server._STATE.update(clean_state)
 
     _do_link_linear_tool("%5", {"id": "FAR-456"})
 
-    assert clean_state["windows"]["abc123"]["linked_linear"] == "FAR-456"
-
-
-def test_link_pr_rejects_non_integer(clean_state, mocker):
-    """Loose: the tool MAY validate, or MAY accept and stringify. Just
-    verify it doesn't crash on a numeric string input — the MCP schema
-    is the source of truth for arg shape."""
-    mocker.patch("server._resolve_pid_for_pane", return_value="abc123")
-    mocker.patch("server._write_state")
-    import server
-    server._STATE.update(clean_state)
-
-    # If it accepts strings, fine; if it raises, also fine — but document.
-    try:
-        _do_link_pr_tool("%5", {"number": "1234"})
-    except (TypeError, ValueError):
-        pass  # acceptable: tool rejects non-int input
+    assert fresh["windows"]["abc123"]["linked_linear"] == "FAR-456"
 ```
 
 - [ ] **Step 2: Run against current `server`**
@@ -1352,8 +1345,7 @@ Boot smoke (look for `mcp-listener` task in the log):
 
 ```sh
 uv run server.py &
-sleep 3
-curl -fsS http://127.0.0.1:8765/api/state > /dev/null && echo "API OK"
+for i in 1 2 3 4 5 6 7 8; do sleep 1; curl -fsS http://127.0.0.1:8765/api/state > /dev/null 2>&1 && { echo "API OK"; break; }; done
 grep -i "listener" ~/.config/periscope/periscope.log | tail -3
 kill %1; wait 2>/dev/null
 ```
@@ -1425,28 +1417,15 @@ git commit -m "split: extract channels (in-process MCP) + tests (Peel 3)"
 """state.json: load/write atomicity + migration idempotency.
 
 Tests redirect XDG_CONFIG_HOME so they don't touch ~/.config/periscope.
+Symbol-level tests work via `from server import …` because `_state_path`
+reads `os.environ["XDG_CONFIG_HOME"]` at call-time (not import-time),
+so the tmp_xdg_home monkeypatch takes effect when the function runs.
 """
 
-import importlib
 import json
-import os
-import sys
 from pathlib import Path
 
 import pytest
-
-
-def _reimport_store(monkeypatch, tmp_xdg_home):
-    """Force a fresh import of the store module under the patched XDG.
-    Necessary because _STATE is loaded once at import time."""
-    # Remove cached `server` first — its module-level _load_state ran
-    # under the unpatched XDG and we want a clean slate.
-    sys.modules.pop("server", None)
-    # Re-import under the patched env.
-    import importlib
-    import server
-    importlib.reload(server)
-    return server
 
 
 def test_state_path_under_xdg(tmp_xdg_home: Path):
@@ -1748,14 +1727,24 @@ Drop the now-unused `_reimport_store` helper and the `importlib`/`sys` imports a
 
 - [ ] **Step 5: Also update `tests/test_channels.py`**
 
-The link-tool tests do `import server; server._STATE.update(clean_state)`. After Peel 4, `_STATE` lives in `periscope.store`. Change to:
+The link-tool tests in Peel 3 used `monkeypatch.setattr(server, "_STATE", ...)`. After Peel 4, `_STATE` lives in `periscope.store`. Rewrite the two tests to use the `clean_state` fixture (now functional):
 
 ```python
-import periscope.store as store
-store._STATE.update(clean_state)
+def test_link_pr_tool_writes_to_state(clean_state, mocker):
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    mocker.patch("periscope.store._write_state")
+    _do_link_pr_tool("%5", {"number": 1234})
+    assert clean_state["windows"]["abc123"]["linked_pr"] == 1234
+
+
+def test_link_linear_tool_writes_to_state(clean_state, mocker):
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    mocker.patch("periscope.store._write_state")
+    _do_link_linear_tool("%5", {"id": "FAR-456"})
+    assert clean_state["windows"]["abc123"]["linked_linear"] == "FAR-456"
 ```
 
-And the `mocker.patch("server._write_state", ...)` → `mocker.patch("periscope.store._write_state", ...)`. Also `mocker.patch("server._resolve_pid_for_pane", ...)` → `mocker.patch("periscope.channels._resolve_pid_for_pane", ...)` (this was changed in Peel 3 Task 3.3 Step 3 — verify it's already pointing at `periscope.channels`).
+(The `clean_state` fixture does `monkeypatch.setattr(periscope.store, "_STATE", fresh)`, replacing the dict that channels.py imports — so channels code reads the fresh dict.)
 
 - [ ] **Step 6: Run the verification gate**
 
@@ -1769,8 +1758,7 @@ Boot smoke:
 
 ```sh
 uv run server.py &
-sleep 3
-curl -fsS http://127.0.0.1:8765/api/state > /dev/null && echo "API OK"
+for i in 1 2 3 4 5 6 7 8; do sleep 1; curl -fsS http://127.0.0.1:8765/api/state > /dev/null 2>&1 && { echo "API OK"; break; }; done
 kill %1; wait 2>/dev/null
 ```
 
