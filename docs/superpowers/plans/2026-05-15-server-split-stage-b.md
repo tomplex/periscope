@@ -29,7 +29,7 @@ SERVER_PID=$!
 for i in 1 2 3 4 5 6 7 8; do sleep 1; curl -fsS http://127.0.0.1:8765/api/state > /dev/null 2>&1 && { echo "API OK"; break; }; done
 kill $SERVER_PID 2>/dev/null
 wait $SERVER_PID 2>/dev/null
-rm -f ~/.config/periscope/periscope.pid
+rm -f ~/.config/periscope/periscope.pid /tmp/periscope-mcp.sock
 ```
 
 Plus a per-peel manual smoke (see each peel).
@@ -122,12 +122,12 @@ tests/test_channel_smoke.py         # untouched (collect_ignore'd already)
 
 - [ ] **Step 1: Create `tests/test_panes.py`**
 
-Copy the body of `test_parse_pane.py` and convert from its `# /// script` shape into pytest:
+Copy the body of `test_parse_pane.py` and convert from its `# /// script` shape into pytest. The source has **four** datasets exercised by four runner functions (`run_regex_cases`, `run_parse_cases`, `run_ghost_cases`, `run_last_line_cases`); fold all four — do NOT lose any one.
 
 - Drop the PEP-723 header.
 - Drop the `sys.path.insert(0, str(Path(__file__).parent))` and `import server` lines at the top.
-- Change `server.SPINNER_RE`, `server.ACTIVE_OP_RE`, `server.parse_pane` → bare `SPINNER_RE`, `ACTIVE_OP_RE`, `parse_pane` after adding `from server import SPINNER_RE, ACTIVE_OP_RE, parse_pane` at module top (the test-pre-move import; flipped in Task 5.4).
-- Wrap the existing `for tag, line, expected in REGEX_CASES:` loops into pytest parametrize fixtures, OR keep them as `def test_regex_cases():` and `def test_parse_cases():` functions that loop internally and `assert` on each iteration. The existing structure is already test-shaped; just wrap with a `def test_*():` if not already.
+- Change `server.SPINNER_RE`, `server.ACTIVE_OP_RE`, `server.parse_pane` → bare names after adding `from server import SPINNER_RE, ACTIVE_OP_RE, parse_pane` at module top (the test-pre-move import; flipped in Task 5.4).
+- Wrap each of the four runner functions into a `def test_*():` (e.g. `test_regex_cases`, `test_parse_cases`, `test_ghost_cases`, `test_last_line_cases`) that loops internally and asserts. Each existing runner already collects failures and prints summary — preserve that structure but convert print+exit into `assert not failures, ...`. PARSE_CASES, GHOST_CASES, and LAST_LINE_CASES are the datasets that catch real parse_pane regressions; REGEX_CASES alone is not adequate coverage.
 
 Add these new tests (smoothing + focus tracking + list_windows, which `test_parse_pane.py` does not cover):
 
@@ -305,6 +305,22 @@ uv run pytest tests/test_pids.py -v
 
 ### Task 5.3: Create `periscope/panes.py` and `periscope/pids.py`
 
+**Pre-step: extend `periscope/config.py` with `USAGE_SESSION_PREFIX`.**
+
+`list_windows()` filters out periscope-spawned usage-scrape sessions by checking `s.startswith(USAGE_SESSION_PREFIX)`. That constant currently lives at `server.py:860` inside the usage block (which moves in Peel 7). If we leave it there, `panes.list_windows` will `NameError` immediately after the move. Fix: promote it to `config.py` now.
+
+Add to `periscope/config.py`:
+
+```python
+# Tmux session prefix for periscope-spawned `claude /usage` scrape sessions.
+# panes.list_windows filters these out; usage.py creates them.
+USAGE_SESSION_PREFIX = "periscope-usage-"
+```
+
+Delete the original at `server.py:860` (when stripping the usage block in Peel 7, verify it's already gone).
+
+In Peel 5: `panes.py` does `from periscope.config import USAGE_SESSION_PREFIX`. In Peel 7: `usage.py` does the same.
+
 - [ ] **Step 1: Write `periscope/panes.py`**
 
 Source ranges from current `server.py`:
@@ -333,6 +349,7 @@ the resume orchestration).
 import re
 import time
 
+from periscope.config import USAGE_SESSION_PREFIX
 from periscope.tmux import tmux
 ```
 
@@ -439,11 +456,14 @@ from periscope.panes import list_windows, note_focus, note_action
 from periscope.pids import _attach_git_then_resolve_pids
 ```
 
-Verify no `from server import` remains anywhere in `periscope/`:
+Verify what `from server import` remains in `periscope/`:
 ```sh
 grep -rn "from server import" /Users/tom/dev/periscope/periscope/
 ```
-Expected output: empty (zero lines).
+
+**Expected output for Peel 5: exactly ONE match** — the function-local bridge in `periscope/pids.py::_attach_git_then_resolve_pids` to `cached_git_state` (Peel 7 resolves it when `periscope/git_pr.py` ships). The two channels bridges (`list_windows`, `note_focus`, `note_action`, `_attach_git_then_resolve_pids`) MUST be gone after this peel.
+
+After Peel 7, the grep returns zero matches.
 
 - [ ] **Step 4: Re-point `tests/test_panes.py` and `tests/test_pids.py`**
 
@@ -954,7 +974,15 @@ Per-route specifics — write at least one happy-path test and one error/edge ca
 
 Execute as 11 sub-peels, each its own commit (so `git bisect` works on any route regression):
 
-1. **`routes/ws.py`** — depends on `tmux`, `panes.note_action`, `capture`, `deliver_input`. Move the WS handler + its helpers. Test: `tests/routes/test_ws.py` does a `TestClient.websocket_connect("/ws/pane?session=main&index=0")` smoke; mock tmux + the FIFO setup as needed (this one is the trickiest to test — a connect+size-frame+close smoke is enough).
+1. **`routes/ws.py`** — depends on `tmux`, `panes.note_action`, `capture`, `deliver_input`. Move the WS handler + its helpers.
+
+   **Test mocking surface for `tests/routes/test_ws.py`:** the handler creates a FIFO at `/tmp/periscope.{uuid}.fifo`, calls `tmux pipe-pane`, then `os.open(fifo_path, ...)` + `loop.add_reader(fd, ...)`. None of that works in a test process without a live tmux + writable /tmp. Mock aggressively:
+   - `mocker.patch("periscope.tmux.tmux", return_value="...")` — display-message + capture-pane
+   - `mocker.patch("os.mkfifo")` + `mocker.patch("os.open", return_value=42)`
+   - `mocker.patch("os.read", side_effect=BlockingIOError)`
+   - `mocker.patch("asyncio.AbstractEventLoop.add_reader")` (or `mocker.patch.object(loop_instance, ...)` inside the test)
+
+   With those, `TestClient.websocket_connect("/ws/pane?session=main&index=0")` should reach the initial size frame and the initial-paint blob. Asserting on either is enough; full bidirectional terminal forwarding is out of scope for pytest.
 2. **`routes/history.py`** — depends on `history.search.get_session` + `panes._resuming` + `config.STATIC`. Three GET endpoints + a static HTML response.
 3. **`routes/paste_image.py`** — depends on `tmux`, `panes.note_action`. Two helpers + one POST.
 4. **`routes/channel.py`** — depends on `channels._CHANNELS_LOCK`, `_CHANNEL_UNREAD`. One POST.
@@ -964,7 +992,7 @@ Execute as 11 sub-peels, each its own commit (so `git bisect` works on any route
 8. **`routes/sessions.py`** — depends on `tmux`, `store`, `pids`, `panes._resuming`, `panes.note_focus`, `panes.note_action`, `git_pr._run`. ~6 endpoints, biggest route module.
 9. **`routes/pane.py`** — depends on `tmux`, `panes`, `lgtm`. Two endpoints.
 10. **`routes/prefs.py`** — depends on `store`. Eight endpoints (CRUD on prefs/windows/commands).
-11. **`routes/state.py`** — depends on essentially everything (`panes`, `pids`, `channels`, `lgtm`, `git_pr`, `usage`, `store`). One endpoint, ~150 lines.
+11. **`routes/state.py`** — depends on essentially everything (`panes`, `pids`, `channels`, `lgtm`, `git_pr`, `usage`, `store`). One endpoint, ~150 lines. **Imports note:** the tail of `/api/state` does `for sid in list(_resuming): ...` plus uses `RESUME_EXPIRY_S` for the resume-GC pass. Include both in the `from periscope.panes import …` line or the route will `NameError` on the first poll.
 
 After each sub-peel, run the verification gate. Commit individually so a regression in (say) sub-peel 7 doesn't require reverting sub-peels 8–11.
 
@@ -1041,10 +1069,16 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     mocker.patch("periscope.git_pr.prewarm_pr_cache")
     mocker.patch("periscope.usage.cached_scraped_usage")
     mocker.patch("periscope.usage.kill_orphan_usage_sessions")
-    mocker.patch("periscope.lgtm._lgtm_periodic_refresh", return_value=None)
-    # MCP socket binding to a real path would race other periscope instances;
-    # mock the listener.
-    mocker.patch("periscope.channels._mcp_listener", return_value=None)
+
+    # _lgtm_periodic_refresh and _mcp_listener are async generators wrapped
+    # via _task(coro, name). Patching with `return_value=None` would make
+    # the call return None instead of a coroutine, and `_task(None, ...)`
+    # raises. Replace with coroutine factories.
+    async def _noop():
+        return None
+    mocker.patch("periscope.lgtm._lgtm_periodic_refresh", side_effect=_noop)
+    mocker.patch("periscope.channels._mcp_listener", side_effect=_noop)
+
     from periscope.app import app
     with TestClient(app) as client:
         r = client.get("/api/state")
