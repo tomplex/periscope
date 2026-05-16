@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client():
-    from server import app
+    from periscope.app import app
     return TestClient(app)
 
 
