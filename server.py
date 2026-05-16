@@ -39,6 +39,10 @@ from periscope.pidfile import (
     _write_pidfile,
     _remove_pidfile,
 )
+from periscope.tmux import (
+    tmux, capture, deliver_input, _run, _tmux_mutate,
+    _ANSI_SGR_RE, _FG_COLOR_RE,
+)
 
 # Load .env from the script's directory (existing env vars take precedence).
 load_dotenv(Path(__file__).parent / ".env")
@@ -948,13 +952,6 @@ RECAP_RE = re.compile(
 PROMPT_LINE_RE = re.compile(r"^❯\s*(?P<input>.*)$")
 
 
-def tmux(*args: str) -> str:
-    r = subprocess.run(
-        ["tmux", *args], capture_output=True, text=True, timeout=5
-    )
-    return r.stdout
-
-
 # --- LGTM integration ----------------------------------------------------
 #
 # Periscope mirrors LGTM's active review sessions onto pane cards. A
@@ -1146,16 +1143,6 @@ _pr_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 _pr_fetching: set[tuple[str, str]] = set()
 _pr_lock = threading.Lock()
 _GH_AVAILABLE = shutil.which("gh") is not None
-
-
-def _run(cmd: list[str], cwd: str | None = None, timeout: float = 3.0) -> tuple[int, str]:
-    try:
-        r = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
-        )
-        return r.returncode, r.stdout.strip()
-    except Exception:
-        return -1, ""
 
 
 def git_state_for(path: str) -> dict | None:
@@ -1854,39 +1841,6 @@ def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
             w["branch"] = git["branch"]
     resolve_pids(windows)
 
-# SGR (Select Graphic Rendition) escape codes from capture-pane -e. Stripped
-# for the bulk of parse_pane, but the prompt-line detection inspects the raw
-# colored line to distinguish real user input from Claude's ghost-text
-# suggestion — the two differ only in fg color.
-_ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
-_FG_COLOR_RE = re.compile(r"\x1b\[38(?:;\d+)+m")
-
-
-def capture(target: str, lines: int = 100) -> str:
-    # -e preserves SGR escapes; parse_pane strips them for content parsing
-    # but uses the raw prompt-line color info to filter ghost-text input.
-    return tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
-
-
-def deliver_input(target: str, text: str) -> None:
-    """Pipe raw bytes into a pane via tmux load-buffer + paste-buffer.
-
-    We use this rather than `send-keys -l` because tmux's argv parser treats a
-    standalone `;` argument as a command separator — when xterm.js forwards a
-    single semicolon keystroke as one WS message, send-keys silently drops it.
-    Stdin avoids that entire parsing path.
-    """
-    buf = f"wd-in-{uuid.uuid4().hex[:8]}"
-    subprocess.run(
-        ["tmux", "load-buffer", "-b", buf, "-"],
-        input=text, text=True, check=False, timeout=5,
-    )
-    subprocess.run(
-        ["tmux", "paste-buffer", "-d", "-b", buf, "-t", target],
-        check=False, timeout=5,
-    )
-
-
 def parse_pane(content: str) -> dict:
     # `content` from capture() includes SGR escape sequences (-e). Strip them
     # for the bulk of parsing; keep the raw rows for the prompt-line check
@@ -2444,17 +2398,6 @@ class RenameBody(BaseModel):
 class NewSessionBody(BaseModel):
     name: str
     cwd: str | None = None
-
-
-def _tmux_mutate(*args: str) -> tuple[bool, str]:
-    """Run a tmux command for its side effects. Surfaces stderr on failure
-    instead of swallowing it like the read-only `tmux()` helper does."""
-    r = subprocess.run(
-        ["tmux", *args], capture_output=True, text=True, timeout=5
-    )
-    if r.returncode != 0:
-        return False, (r.stderr.strip() or r.stdout.strip() or "tmux failed")
-    return True, r.stdout.strip()
 
 
 @app.post("/api/rename")
