@@ -369,13 +369,40 @@ def parse_pane(content: str) -> dict:
         last_line = s[:200]
         break
 
+    # Question-mark needs-input: when Claude's last visible reply ends with
+    # `?` we treat the pane as waiting on the user, even without a dialog.
+    # Walk from the bottom, skipping TUI chrome (status / prompt / hint /
+    # separator / title / active or past-tense indicators / blank); the
+    # first remaining line is the visible tail of the most recent reply.
+    # Only applies to Claude panes — shells use `?` in plenty of normal
+    # output (`man bash` examples, error messages, etc.).
+    asked_question = False
+    if is_claude and not needs_input:
+        for line in reversed(lines):
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith(("─", "❯", "⏵")):
+                continue
+            if STATUS_RE.match(line):
+                continue
+            if "github.com/" in line and line.count("|") >= 3:
+                continue
+            if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
+                continue
+            if IDLE_INDICATOR_RE.match(line):
+                continue
+            if s.rstrip().endswith("?"):
+                asked_question = True
+            break
+
     # State priority: needs-input wins over working (a spinner glyph can
     # linger in scrollback above the dialog), working wins over idle.
     # `idle` is the parse-level neutral state — /api/state may refine it to
     # `done` when there's an unacknowledged completion stamp.
     if not is_claude:
         state = "shell"
-    elif needs_input:
+    elif needs_input or asked_question:
         state = "needs-input"
     elif spinner:
         state = "working"
@@ -386,7 +413,8 @@ def parse_pane(content: str) -> dict:
         "is_claude": is_claude,
         "state": state,
         "spinner": spinner,
-        "needs_input": needs_input,
+        "needs_input": needs_input or asked_question,
+        "asked_question": asked_question,
         "pending_input": pending_input,
         "recap": recap,
         "last_line": last_line,

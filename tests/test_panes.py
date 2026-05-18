@@ -224,6 +224,66 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
         ❯
         {STATUS_LINE}
     """), "working", "working"),
+
+    # Question-mark needs-input: Claude's last reply ends with `?`, no dialog
+    # open, no active spinner. Should promote idle → needs-input so the card
+    # shows the pane is awaiting a human reply.
+    ("question-mark-trailing", textwrap.dedent(f"""\
+        ⏺ I checked the codebase. Should I delete the obsolete helper?
+
+        ✻ Brewed for 3s
+
+        ❯
+        {STATUS_LINE}
+    """), "needs-input", None),
+
+    # Question mark with the question on a wrapped continuation line, last
+    # visible line is the `?`-terminated sentence (not the leading prose).
+    ("question-mark-continuation", textwrap.dedent(f"""\
+        ⏺ Two paths here:
+          - keep it as-is
+          - rewrite the function
+          Which one do you prefer?
+
+        ✻ Thought for 8s
+
+        ❯
+        {STATUS_LINE}
+    """), "needs-input", None),
+
+    # Question mark NOT in the last line — `?` appears in the middle of the
+    # reply but the reply ends with a statement. Must NOT trip needs-input.
+    ("question-mark-not-trailing", textwrap.dedent(f"""\
+        ⏺ Did you know X? Anyway, here is the answer: foo.
+
+        ✻ Brewed for 2s
+
+        ❯
+        {STATUS_LINE}
+    """), "idle", None),
+
+    # Tool-call header below the question — Claude proceeded to act, so the
+    # question is no longer the most recent line above the prompt. The last
+    # content line (the tool-call header) doesn't end with `?`.
+    ("question-followed-by-tool-call", textwrap.dedent(f"""\
+        ⏺ Should I delete this file?
+
+        ⏺ Bash(rm file.py)
+          ⎿  removed file.py
+
+        ✻ Brewed for 1s
+
+        ❯
+        {STATUS_LINE}
+    """), "idle", None),
+
+    # Shell panes: a `?` in normal output (man page snippet, error text)
+    # must NOT promote to needs-input — only Claude panes get this treatment.
+    ("question-mark-shell", textwrap.dedent("""\
+        $ man bash | head -3
+        What are you looking for?
+        $
+    """), "shell", None),
 ]
 
 
