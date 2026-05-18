@@ -96,3 +96,128 @@ def test_window_delete(client, mocker):
     body = r.json()
     assert body["ok"] is True
     assert body["target"] == "main:0"
+
+
+# === phase 3 ==============================================================
+# /api/window/new defaults cwd to project.pinned_dir when the target session
+# is owned by a non-archived non-main project.
+
+def test_window_new_uses_project_pinned_dir(client, mocker):
+    # display-message would return /tmp; project pin should win.
+    pin = "/Users/foo/dev/myproj"
+    _patch(mocker, "resolve_project_for_window", return_value=pin)
+    _patch(mocker, "get_project", return_value={
+        "name": "myproj", "tmux_session": "myproj", "archived_at": None,
+    })
+    _patch(mocker, "tmux", return_value="/tmp")
+    new_window = _patch(mocker, "_tmux_mutate", return_value=(True, "7"))
+    r = client.post("/api/window/new?session=myproj&mode=shell")
+    assert r.status_code == 200
+    # Verify _tmux_mutate was called with -c <pin>, not -c /tmp.
+    call = next(c for c in new_window.call_args_list if c.args[0] == "new-window")
+    assert "-c" in call.args
+    cwd_idx = list(call.args).index("-c") + 1
+    assert call.args[cwd_idx] == pin
+
+
+def test_window_new_archived_project_falls_through_to_cwd(client, mocker):
+    # An archived project shouldn't override; legacy display-message wins.
+    _patch(mocker, "resolve_project_for_window", return_value="/Users/foo/dev/myproj")
+    _patch(mocker, "get_project", return_value={
+        "name": "myproj", "tmux_session": "myproj", "archived_at": 1234567890,
+    })
+    _patch(mocker, "tmux", return_value="/tmp")
+    new_window = _patch(mocker, "_tmux_mutate", return_value=(True, "1"))
+    r = client.post("/api/window/new?session=myproj&mode=shell")
+    assert r.status_code == 200
+    call = next(c for c in new_window.call_args_list if c.args[0] == "new-window")
+    cwd_idx = list(call.args).index("-c") + 1
+    assert call.args[cwd_idx] == "/tmp"
+
+
+# /api/window/new-worktree — the new endpoint.
+
+def test_new_worktree_success(client, mocker):
+    _patch(mocker, "_run", return_value=(0, ""))  # has-session
+    _patch(mocker, "resolve_project_for_window", return_value="/Users/foo/dev/myproj")
+    _patch(mocker, "get_project", return_value={
+        "name": "myproj",
+        "tmux_session": "myproj",
+        "repo": "/Users/foo/dev/myproj",
+        "base_branch": "tc/feat",
+        "archived_at": None,
+    })
+    _patch(mocker, "spawn_worktree", return_value={
+        "path": "/Users/foo/dev/worktrees/myproj/tc-sub",
+        "base_branch": "tc/feat",
+        "branch": "tc/sub",
+    })
+    _patch(mocker, "_tmux_mutate", return_value=(True, "5"))
+    _patch(mocker, "tmux", return_value="")
+    r = client.post("/api/window/new-worktree?session=myproj&branch=tc/sub&exec=")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["worktree_path"] == "/Users/foo/dev/worktrees/myproj/tc-sub"
+    assert body["base_branch"] == "tc/feat"
+    assert body["index"] == 5
+    assert body["target"] == "myproj:5"
+
+
+def test_new_worktree_rejects_main(client, mocker):
+    _patch(mocker, "_run", return_value=(0, ""))
+    _patch(mocker, "resolve_project_for_window", return_value="__main__")
+    r = client.post("/api/window/new-worktree?session=main&branch=tc/x")
+    assert r.status_code == 400
+    assert "main project" in r.json()["detail"]
+
+
+def test_new_worktree_rejects_unowned_session(client, mocker):
+    _patch(mocker, "_run", return_value=(0, ""))
+    _patch(mocker, "resolve_project_for_window", return_value=None)
+    r = client.post("/api/window/new-worktree?session=ghost&branch=tc/x")
+    assert r.status_code == 400
+    assert "not owned by a project" in r.json()["detail"]
+
+
+def test_new_worktree_rejects_missing_session(client, mocker):
+    # has-session returns non-zero.
+    _patch(mocker, "_run", return_value=(1, ""))
+    r = client.post("/api/window/new-worktree?session=ghost&branch=tc/x")
+    assert r.status_code == 404
+
+
+def test_new_worktree_rejects_bad_branch(client, mocker):
+    r = client.post("/api/window/new-worktree?session=any&branch=-bad")
+    assert r.status_code == 400
+    r = client.post("/api/window/new-worktree?session=any&branch=")
+    assert r.status_code == 400
+
+
+def test_new_worktree_409_on_existing_path(client, mocker):
+    _patch(mocker, "_run", return_value=(0, ""))
+    _patch(mocker, "resolve_project_for_window", return_value="/Users/foo/dev/myproj")
+    _patch(mocker, "get_project", return_value={
+        "name": "myproj", "tmux_session": "myproj",
+        "repo": "/Users/foo/dev/myproj", "base_branch": "tc/feat",
+        "archived_at": None,
+    })
+    _patch(
+        mocker, "spawn_worktree",
+        side_effect=ValueError("worktree path already exists: /x"),
+    )
+    r = client.post("/api/window/new-worktree?session=myproj&branch=tc/sub")
+    assert r.status_code == 409
+
+
+def test_new_worktree_400_on_other_spawn_error(client, mocker):
+    _patch(mocker, "_run", return_value=(0, ""))
+    _patch(mocker, "resolve_project_for_window", return_value="/Users/foo/dev/myproj")
+    _patch(mocker, "get_project", return_value={
+        "name": "myproj", "tmux_session": "myproj",
+        "repo": "/Users/foo/dev/myproj", "base_branch": "tc/feat",
+        "archived_at": None,
+    })
+    _patch(mocker, "spawn_worktree", side_effect=ValueError("not a git repo: /x"))
+    r = client.post("/api/window/new-worktree?session=myproj&branch=tc/sub")
+    assert r.status_code == 400
