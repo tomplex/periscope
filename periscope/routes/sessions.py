@@ -21,7 +21,7 @@ from periscope.panes import (
     _acted_at, _active_per_session, _focused_at, _resuming,
     note_action, note_focus,
 )
-from periscope.projects import resolve_project_for_window, get_project
+from periscope.projects import MAIN_KEY, get_project, resolve_project_for_window
 from periscope.tmux import _run, _tmux_mutate, tmux
 from periscope.worktree_spawn import spawn_worktree
 
@@ -151,8 +151,9 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
         # the user hasn't adopted, or __main__ which is unpinned).
         project_key = resolve_project_for_window({"session": session})
         project = get_project(project_key) if project_key else {}
-        if project_key and project_key != "__main__" and not project.get("archived_at"):
-            cwd = project_key  # pinned_dir IS the key
+        if project_key and project_key != MAIN_KEY and not project.get("archived_at"):
+            cwd = project_key  # the projects dict's key IS the pinned_dir path
+            # (see _lookup_key in periscope/projects.py for the realpath normalization).
         else:
             cwd = tmux(
                 "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
@@ -234,7 +235,7 @@ def window_new_worktree(
         raise HTTPException(
             400, f"session {session!r} is not owned by a project; adopt it first"
         )
-    if project_key == "__main__":
+    if project_key == MAIN_KEY:
         raise HTTPException(
             400, "worktree-tab is not supported in the main project"
         )
