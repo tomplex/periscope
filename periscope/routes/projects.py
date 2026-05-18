@@ -18,12 +18,13 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from periscope.log import log
 from periscope.panes import list_windows
 from periscope.projects import (
     all_projects, archive_project, create_project, get_project,
-    resolve_project_for_window, update_project, MAIN_KEY,
+    update_project, MAIN_KEY,
 )
-from periscope.tmux import _run
+from periscope.tmux import _run, _tmux_mutate
 
 
 router = APIRouter()
@@ -166,8 +167,6 @@ def projects_patch(body: PatchBody):
     # the rename, while the inverse drift is not.
     new_tmux = fields.get("tmux_session")
     if new_tmux and new_tmux != existing.get("tmux_session"):
-        from periscope.log import log
-        from periscope.tmux import _tmux_mutate
         ok, msg = _tmux_mutate(
             "rename-session", "-t", existing["tmux_session"], new_tmux
         )
