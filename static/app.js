@@ -7,6 +7,7 @@ import { apiCall } from './util.js';
 import { initModal, openModal } from './modal.js';
 import { initGrid, poll, render } from './grid.js';
 import { initCommandsModal, openCommandsModal } from './commands-modal.js';
+import { initNewProjectModal } from './new-project-modal.js';
 
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
 // the same shortcut focuses the search input — handled in history.js.)
@@ -132,6 +133,7 @@ async function bootstrap() {
   initModal();
   initGrid();
   initCommandsModal();
+  initNewProjectModal();
   document.getElementById("open-commands").addEventListener("click", openCommandsModal);
 
   // `?modal=<target>` is the handoff signal from /history resume (and any
