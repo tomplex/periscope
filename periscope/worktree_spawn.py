@@ -64,9 +64,16 @@ def spawn_worktree(
     repo: str,
     branch: str,
     base_branch: str | None = None,
+    fetch: bool = True,
 ) -> dict:
     """Create a worktree of `repo` at branch `branch`, forked from
     `origin/<base_branch>` (or the detected default branch).
+
+    When `fetch=True` (default), fetches origin/<base> first. When
+    `fetch=False`, skips the network call and forks from the local
+    <base_branch> ref directly, intended for new-worktree-tab callers
+    where `base_branch` is the project's own (typically unpushed)
+    feature branch.
 
     Returns:
       {
@@ -109,32 +116,35 @@ def spawn_worktree(
 
     warning: str | None = None
 
-    # Fetch runs OUTSIDE the per-repo lock. It's a long-running network op
-    # (up to 30s) and is idempotent vs. concurrent fetches — holding the
-    # lock would block every other spawn on this repo for the duration.
+    # Fetch runs OUTSIDE the per-repo lock (network op, idempotent vs.
+    # concurrent fetches). Skipped when `fetch=False` — callers spawning
+    # off a local-only ref (e.g. an unpushed project branch) don't want
+    # to fetch and don't need the remote to be up to date.
     # Phase-1's repo_locks.py:33-35 documents this: "Callers should hold
     # the lock only across the git mutation itself, not surrounding work."
-    fetch_code, fetch_out = _run(
-        ["git", "-C", repo, "fetch", "origin", base], timeout=30.0
-    )
-    if fetch_code != 0:
-        warning = f"fetch failed: origin/{base} may be stale ({fetch_out!r})"
-        log.warning("worktree_spawn: %s", warning)
+    if fetch:
+        fetch_code, fetch_out = _run(
+            ["git", "-C", repo, "fetch", "origin", base], timeout=30.0
+        )
+        if fetch_code != 0:
+            warning = f"fetch failed: origin/{base} may be stale ({fetch_out!r})"
+            log.warning("worktree_spawn: %s", warning)
 
     with repo_lock(repo):
         WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
         (WORKTREES_DIR / repo_name).mkdir(parents=True, exist_ok=True)
 
-        # Create the worktree from origin/<base>. -b creates the new
-        # branch; the base ref (origin/<base>) is what `git worktree add`
-        # forks from. The local <base> branch ref is not touched.
+        # With fetch=True the fresh remote ref is the source of truth.
+        # With fetch=False the local ref is what we want — typically
+        # the project's own feature branch with the user's unpushed work.
+        base_ref = f"origin/{base}" if fetch else base
         code, out = _run(
             [
                 "git", "-C", repo,
                 "worktree", "add",
                 "-b", branch,
                 wt_path_str,
-                f"origin/{base}",
+                base_ref,
             ],
             timeout=30.0,
         )
