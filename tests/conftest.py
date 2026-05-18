@@ -48,10 +48,12 @@ def clean_state(tmp_xdg_home, monkeypatch):
     """
     import periscope.store as store
     fresh = {
-        "version": 1,
+        "version": 2,
         "ui": {},
         "windows": {},
         "commands": [],
+        "projects": {},
+        "settings": {},
     }
     monkeypatch.setattr(store, "_STATE", fresh)
     return fresh
