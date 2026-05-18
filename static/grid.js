@@ -195,6 +195,15 @@ function renderCard(w) {
     ? `<div class="card-foot">${footParts.join(" ")}</div>`
     : "";
 
+  // Promote-to-project: only on tabs in the __main__ project, only
+  // when the cwd is inside a git repo (worktree_affiliation tells us).
+  const isMainTab = w.project_pinned_dir === "__main__";
+  const aff = w.worktree_affiliation || {};
+  const canPromote = isMainTab && aff.kind !== "no-repo";
+  const promoteBtn = canPromote
+    ? `<button class="card-promote" data-session="${escapeHtml(w.session)}" data-index="${w.index}" title="promote this tab to its own project">↗ promote</button>`
+    : "";
+
   return `
     <article class="${cardClass} ${stateClass}${ciBadCls}" data-target="${w.target}" data-kind="${kind}" draggable="true">
       <header class="card-head">
@@ -202,6 +211,7 @@ function renderCard(w) {
         ${channelDot}
         ${statusLabel}
         ${anno}
+        ${promoteBtn}
         <button class="card-kill" data-target="${w.target}" data-name="${escapeHtml(w.name)}" title="kill this window">✕</button>
       </header>
       ${metaRow}
@@ -593,6 +603,26 @@ function startRename(nameEl, target, currentName) {
   input.addEventListener("dblclick", (e) => e.stopPropagation());
 }
 
+async function handlePromote(btn) {
+  const session = btn.dataset.session;
+  const index = parseInt(btn.dataset.index, 10);
+  if (!session || !Number.isFinite(index)) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/projects/promote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, index }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`promote failed: ${err.detail || res.status}`);
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function handleAdopt(btn) {
   const session = btn.dataset.session;
   if (!session) return;
@@ -758,6 +788,12 @@ function wireGrid() {
     if (killSessionBtn) {
       e.stopPropagation();
       handleKillSession(killSessionBtn);
+      return;
+    }
+    const promoteBtn = e.target.closest(".card-promote");
+    if (promoteBtn) {
+      e.stopPropagation();
+      handlePromote(promoteBtn);
       return;
     }
     const killWindowBtn = e.target.closest(".card-kill");

@@ -1999,3 +1999,16 @@ body.disconnected .grid {
     opacity: 0.6;
     transition: opacity 0.2s;
 }
+
+.card-promote {
+  font-size: 0.7em;
+  padding: 0.1em 0.4em;
+  border-radius: 0.3em;
+  border: 1px dashed currentColor;
+  background: transparent;
+  opacity: 0.6;
+  cursor: pointer;
+  color: inherit;
+}
+.card-promote:hover { opacity: 1; }
+.card-promote:disabled { opacity: 0.3; cursor: not-allowed; }

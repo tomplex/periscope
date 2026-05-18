@@ -349,6 +349,112 @@ def projects_create(body: CreateBody):
     return result
 
 
+class PromoteBody(BaseModel):
+    # The window to promote (tmux addressing).
+    session: str
+    index: int
+    # Optional override of the auto-derived name.
+    name: str | None = None
+
+
+@router.post("/api/projects/promote")
+def projects_promote(body: PromoteBody):
+    """Promote a tab in the main project to its own project. Resolves
+    the tab's cwd to a git toplevel, creates a project pinned there
+    (409 if one exists), creates a tmux session named after the project,
+    and moves the window in via `tmux move-window`.
+    """
+    target = f"{body.session}:{body.index}"
+    # Look up the window's cwd via tmux. Use `_run` instead of `tmux()`
+    # so we can distinguish "window not found" (non-zero exit) from
+    # "legitimately empty cwd" (zero exit, empty stdout — rare but
+    # possible mid-tmux-startup).
+    code, cwd_out = _run(
+        ["tmux", "display-message", "-t", target, "-p", "#{pane_current_path}"]
+    )
+    if code != 0:
+        raise HTTPException(404, f"window not found: {target}")
+    cwd_out = cwd_out.strip()
+    if not cwd_out:
+        raise HTTPException(400, f"window {target} has empty cwd")
+
+    code, toplevel = _run(
+        ["git", "-C", cwd_out, "rev-parse", "--show-toplevel"]
+    )
+    if code != 0 or not toplevel:
+        raise HTTPException(
+            400, f"tab cwd is not inside a git repo: {cwd_out}"
+        )
+    pinned_dir = os.path.realpath(toplevel)
+
+    if pinned_dir in all_projects():
+        raise HTTPException(
+            409, f"project already exists at {pinned_dir!r}"
+        )
+
+    # Resolve repo via --git-common-dir (matches Task 1's migration +
+    # adopt endpoints).
+    code, common = _run(
+        ["git", "-C", pinned_dir, "rev-parse", "--git-common-dir"]
+    )
+    if code == 0 and common:
+        common_abs = (
+            common if os.path.isabs(common) else os.path.join(pinned_dir, common)
+        )
+        repo = os.path.realpath(os.path.dirname(common_abs))
+    else:
+        repo = pinned_dir
+
+    _, branch = _run(
+        ["git", "-C", pinned_dir, "rev-parse", "--abbrev-ref", "HEAD"]
+    )
+    if branch == "HEAD":
+        branch = ""
+
+    name = (body.name or os.path.basename(pinned_dir)).strip()
+    tmux_session = name
+
+    # Create the new tmux session and capture the auto-created window's
+    # id so we can kill it after the move (rather than guessing by index,
+    # which would break under `renumber-windows`). `-P -F '#{window_id}'`
+    # matches the existing pattern in routes/sessions.py:121-122.
+    ok, msg = _tmux_mutate(
+        "new-session", "-d", "-s", tmux_session, "-c", pinned_dir,
+        "-P", "-F", "#{window_id}",
+    )
+    if not ok:
+        raise HTTPException(500, f"tmux new-session failed: {msg}")
+    auto_window_id = msg.strip()  # e.g. "@42"
+
+    # Move the source window in. Without a -t index, tmux picks the next
+    # free slot.
+    ok, msg = _tmux_mutate(
+        "move-window", "-s", target, "-t", f"{tmux_session}:",
+    )
+    if not ok:
+        # Rollback the empty session.
+        _tmux_mutate("kill-session", "-t", tmux_session)
+        raise HTTPException(500, f"tmux move-window failed: {msg}")
+
+    # Kill the auto-created blank window by its window-id (NOT by index —
+    # safe against `renumber-windows`).
+    if auto_window_id:
+        _tmux_mutate("kill-window", "-t", auto_window_id)
+
+    try:
+        row = create_project(
+            pinned_dir,
+            name=name,
+            tmux_session=tmux_session,
+            repo=repo,
+            base_branch=branch or None,
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {"ok": True, "pinned_dir": pinned_dir, **row}
+
+
 @router.get("/api/projects/discoverable")
 def projects_discoverable():
     """Return the union of (a) currently-known project repos and (b) git
