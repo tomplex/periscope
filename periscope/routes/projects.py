@@ -213,7 +213,7 @@ class CreateBody(BaseModel):
     name: str | None = None  # auto-fills to branch if absent
 
 
-def _layout_two_window(tmux_session: str, pinned_dir: str) -> None:
+def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
     """Apply the trellis-style 2-window layout: window 1 'claude',
     window 2 'shell'. tmux session is created from scratch and ends with
     window 1 active. The user is NOT attached — periscope is a dashboard,
@@ -223,9 +223,14 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> None:
     its rc file before the command lands (see CLAUDE.md "Key invariants"
     note 5). Without it, `claude` can land mid-rc and either get echoed
     as text or fail silently.
+
+    Returns the claude window's stamped @periscope_id. Phase 4's PR-review
+    endpoint uses this to write state.windows[pid].linked_pr synchronously;
+    other callers can ignore the return.
     """
     import time
     from periscope.panes import note_focus, note_action
+    from periscope.pids import stamp_new_window
 
     # new-session creates window 0 (or whatever base-index is) with a bare
     # shell at cwd = pinned_dir.
@@ -263,10 +268,18 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> None:
         "display-message", "-t", f"{tmux_session}:claude",
         "-p", "#{window_index}",
     ).strip()
-    if idx_out.isdigit():
-        target = f"{tmux_session}:{idx_out}"
-        note_focus(target)
-        note_action(target)
+    if not idx_out.isdigit():
+        # If we can't resolve the claude window's index after creating it,
+        # something is very wrong with tmux state. Fail loudly — silently
+        # returning "" would let PR-review skip the linked_pr write and
+        # create a project with no #PR badge, which the user couldn't
+        # detect without inspecting state.json.
+        raise HTTPException(500, "could not resolve claude window index")
+    target = f"{tmux_session}:{idx_out}"
+    note_focus(target)
+    note_action(target)
+    pid = stamp_new_window(target)
+    return pid
 
 
 @router.post("/api/projects")
@@ -326,7 +339,7 @@ def projects_create(body: CreateBody):
             )
 
     try:
-        _layout_two_window(tmux_session, pinned_dir)
+        _layout_two_window(tmux_session, pinned_dir)  # returns pid; ignored here
     except HTTPException:
         # tmux failed mid-layout — leave the worktree on disk so the user
         # can retry adoption or clean up manually. Don't rollback git.

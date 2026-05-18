@@ -28,6 +28,22 @@ def _stamp_pid(target: str, pid: str) -> None:
     tmux("set-option", "-w", "-t", target, "@periscope_id", pid)
 
 
+def stamp_new_window(target: str) -> str:
+    """Mint a fresh periscope id, stamp it onto the tmux window at `target`,
+    and return it. Used by handlers that need to write `state.windows[pid]`
+    fields synchronously after creating a window — without this, the pid
+    wouldn't be assigned until the next /api/state poll runs resolve_pids.
+
+    Re-stamping a window that already has an `@periscope_id` is harmless
+    (this function unconditionally mints + stamps), but resolve_pids will
+    accept either id on the next poll. Callers should only invoke this on
+    freshly-created windows.
+    """
+    pid = _mint_pid()
+    _stamp_pid(target, pid)
+    return pid
+
+
 def _rebind_pid(
     windows_block: dict,
     session: str,
@@ -152,7 +168,7 @@ def resolve_pids(windows: list[dict]) -> None:
             "notes", "tags",
             "linked_pr", "linked_linear",
             "acked_at", "completed_at",
-            "alias",
+            "alias", "is_fork",
         )
         for pid in list(wblock.keys()):
             if pid in taken:

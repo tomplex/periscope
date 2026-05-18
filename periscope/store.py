@@ -61,6 +61,7 @@ class WindowAnnotation(TypedDict, total=False):
     completed_at: int
     acked_at: int
     alias: str
+    is_fork: bool  # phase 4: set on PR-review projects' claude window
 
 
 class Command(TypedDict):
