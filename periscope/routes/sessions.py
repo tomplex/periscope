@@ -143,9 +143,20 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
                 "resumed_session_id": resume_id,
             }
     else:
-        cwd = tmux(
-            "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
-        ).strip() or os.path.expanduser("~")
+        # Project pin always wins over active-pane cwd. If the target
+        # session is owned by a non-archived non-main project, new tabs
+        # land in the project's pinned_dir — even if the user has cd'd
+        # away in the active pane. Fall back to the pane's cwd only
+        # when no project owns the session (e.g. an unmanaged session
+        # the user hasn't adopted, or __main__ which is unpinned).
+        project_key = resolve_project_for_window({"session": session})
+        project = get_project(project_key) if project_key else {}
+        if project_key and project_key != "__main__" and not project.get("archived_at"):
+            cwd = project_key  # pinned_dir IS the key
+        else:
+            cwd = tmux(
+                "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
+            ).strip() or os.path.expanduser("~")
     ok, msg = _tmux_mutate(
         "new-window", "-t", f"{session}:", "-c", cwd,
         "-P", "-F", "#{window_index}",
