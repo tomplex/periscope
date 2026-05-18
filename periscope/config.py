@@ -1,6 +1,7 @@
 """Cross-cutting paths and constants. Imported widely; should never import
 from any other periscope.* module — keep this a leaf."""
 
+import os
 from pathlib import Path
 
 # Static asset root for FastAPI's app.mount("/", StaticFiles(...)) call.
@@ -16,3 +17,11 @@ MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
 # Tmux session prefix for periscope-spawned `claude /usage` scrape sessions.
 # panes.list_windows filters these out; usage.py creates them.
 USAGE_SESSION_PREFIX = "periscope-usage-"
+
+# Port the FastAPI server binds. Default 8765 = "prod" (launchd-managed).
+# Override via PERISCOPE_PORT=8766 for a dev instance running alongside
+# prod. Read once at module load — server.py invokes load_dotenv before
+# importing anything else, so .env is honored. Modules that need to react
+# to test-time monkeypatching access this as `config.PORT`, not via
+# `from periscope.config import PORT` (which would snapshot the value).
+PORT = int(os.environ.get("PERISCOPE_PORT", "8765"))
