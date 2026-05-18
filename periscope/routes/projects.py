@@ -14,6 +14,7 @@ Phase 1 does NOT include POST /api/projects (create-new); that's phase 2.
 """
 
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -24,7 +25,8 @@ from periscope.projects import (
     all_projects, archive_project, create_project, get_project,
     update_project, MAIN_KEY,
 )
-from periscope.tmux import _run, _tmux_mutate
+from periscope.tmux import _run, _tmux_mutate, tmux
+from periscope.worktree_spawn import spawn_worktree, _detect_default_branch
 
 
 router = APIRouter()
@@ -203,3 +205,188 @@ def projects_archive(body: ArchiveBody):
     if not archive_project(key):
         raise HTTPException(404, f"no project at {key!r}")
     return {"ok": True, "pinned_dir": key, **get_project(key)}
+
+
+class CreateBody(BaseModel):
+    repo: str
+    branch: str
+    name: str | None = None  # auto-fills to branch if absent
+
+
+def _layout_two_window(tmux_session: str, pinned_dir: str) -> None:
+    """Apply the trellis-style 2-window layout: window 1 'claude',
+    window 2 'shell'. tmux session is created from scratch and ends with
+    window 1 active. The user is NOT attached — periscope is a dashboard,
+    not a terminal client.
+
+    The 100ms sleep before each send-keys lets the shell finish loading
+    its rc file before the command lands (see CLAUDE.md "Key invariants"
+    note 5). Without it, `claude` can land mid-rc and either get echoed
+    as text or fail silently.
+    """
+    import time
+    from periscope.panes import note_focus, note_action
+
+    # new-session creates window 0 (or whatever base-index is) with a bare
+    # shell at cwd = pinned_dir.
+    ok, msg = _tmux_mutate(
+        "new-session", "-d", "-s", tmux_session, "-c", pinned_dir,
+        "-n", "claude",
+    )
+    if not ok:
+        raise HTTPException(500, f"tmux new-session failed: {msg}")
+
+    # Send `claude` into window 1.
+    time.sleep(0.1)
+    _tmux_mutate(
+        "send-keys", "-t", f"{tmux_session}:claude", "claude", "Enter",
+    )
+
+    # Window 2: shell.
+    ok, msg = _tmux_mutate(
+        "new-window", "-t", f"{tmux_session}:", "-c", pinned_dir,
+        "-n", "shell",
+    )
+    if not ok:
+        # Worktree + session + window 1 already exist; don't roll back.
+        log.warning("new-project: failed to create shell window: %s", msg)
+
+    # Park focus on window 1 (claude).
+    _tmux_mutate("select-window", "-t", f"{tmux_session}:claude")
+
+    # Stamp focus + action so the new project sorts to the top of the
+    # grid + stream views on the next poll. Match the pattern in
+    # routes/sessions.py:46-47 for `+ session`.
+    # The claude window is the first one created; its tmux window index
+    # depends on base-index. Resolve it by looking up the window-id.
+    idx_out = tmux(
+        "display-message", "-t", f"{tmux_session}:claude",
+        "-p", "#{window_index}",
+    ).strip()
+    if idx_out.isdigit():
+        target = f"{tmux_session}:{idx_out}"
+        note_focus(target)
+        note_action(target)
+
+
+@router.post("/api/projects")
+def projects_create(body: CreateBody):
+    """Create a new project: spawn worktree if branch != default,
+    create tmux session, apply 2-window layout, register project."""
+    repo = os.path.realpath(body.repo)
+    if not os.path.isdir(repo):
+        raise HTTPException(400, f"repo does not exist: {body.repo}")
+    code, toplevel = _run(["git", "-C", repo, "rev-parse", "--show-toplevel"])
+    if code != 0 or not toplevel:
+        raise HTTPException(400, f"not a git repo: {body.repo}")
+    repo = os.path.realpath(toplevel)
+
+    branch = body.branch.strip()
+    if not branch:
+        raise HTTPException(400, "branch is required")
+    if branch.startswith("-"):
+        raise HTTPException(400, f"branch name cannot start with '-': {branch!r}")
+
+    default = _detect_default_branch(repo)
+
+    # For the branch == default path the pinned_dir is the repo root.
+    # We can detect that collision UP FRONT and 409 before doing any
+    # tmux/git work, avoiding orphan state on failure.
+    if branch == default and repo in all_projects():
+        raise HTTPException(
+            409, f"project already exists at {repo!r}"
+        )
+
+    pinned_dir: str
+    warning: str | None = None
+    if branch == default:
+        # No worktree — project pins to repo root.
+        pinned_dir = repo
+    else:
+        try:
+            res = spawn_worktree(repo, branch)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        pinned_dir = res["path"]
+        warning = res.get("warning")
+
+        # Belt-and-suspenders: after spawn, re-check the pinned_dir isn't
+        # already adopted. spawn_worktree already rejected if the path
+        # exists on disk, so this is mostly defensive against a racy
+        # adoption during the fetch+add window.
+        if pinned_dir in all_projects():
+            raise HTTPException(
+                409, f"project already exists at {pinned_dir!r}"
+            )
+
+    name = (body.name or branch).strip()
+    # Tmux session name: same as `name` by default. Collisions surface as
+    # tmux errors below.
+    tmux_session = name
+
+    try:
+        _layout_two_window(tmux_session, pinned_dir)
+    except HTTPException:
+        # tmux failed — leave the worktree on disk so the user can retry
+        # adoption or clean up manually. Don't rollback the git side.
+        raise
+
+    try:
+        row = create_project(
+            pinned_dir,
+            name=name,
+            tmux_session=tmux_session,
+            repo=repo,
+            base_branch=branch,
+        )
+    except ValueError as e:
+        # Race: someone adopted between the 409-check and here. Rare.
+        raise HTTPException(409, str(e))
+
+    result = {"ok": True, "pinned_dir": pinned_dir, **row}
+    if warning:
+        result["warning"] = warning
+    return result
+
+
+@router.get("/api/projects/discoverable")
+def projects_discoverable():
+    """Return the union of (a) currently-known project repos and (b) git
+    repos discovered under ~/dev (one level deep). Plus the local branch
+    list per repo, capped at 100 each for sanity.
+
+    Frontend uses this to populate the new-project modal's repo/branch
+    pickers.
+    """
+    repos: set[str] = set()
+
+    for p in all_projects().values():
+        if p.get("repo"):
+            repos.add(os.path.realpath(p["repo"]))
+
+    dev = Path.home() / "dev"
+    if dev.is_dir():
+        for child in dev.iterdir():
+            if not child.is_dir():
+                continue
+            # Skip hidden and the worktrees container itself.
+            if child.name.startswith(".") or child.name == "worktrees":
+                continue
+            if (child / ".git").exists():
+                repos.add(str(child.resolve()))
+
+    branches_by_repo: dict[str, list[str]] = {}
+    for repo in sorted(repos):
+        code, out = _run(
+            ["git", "-C", repo, "branch", "--format=%(refname:short)"],
+            timeout=3.0,
+        )
+        if code == 0:
+            branches_by_repo[repo] = out.split("\n")[:100] if out else []
+        else:
+            branches_by_repo[repo] = []
+
+    return {
+        "repos": sorted(repos),
+        "branches_by_repo": branches_by_repo,
+    }
