@@ -164,6 +164,22 @@ def resolve_pids(windows: list[dict]) -> None:
             if ts < cutoff:
                 del wblock[pid]
                 dirty = True
+        # Project GC: drop archived projects whose archived_at is older
+        # than 30 days (spec §"GC" rule 2). Auto-archive itself is a
+        # phase-6 feature; this just collects what the user (or future
+        # phases) explicitly archived.
+        # __main__ is invariant — even if some future bug wrote
+        # archived_at on it, the GC must not delete it.
+        from periscope.projects import MAIN_KEY as _MAIN_KEY
+        projects = _store._STATE.setdefault("projects", {})
+        for key in list(projects.keys()):
+            if key == _MAIN_KEY:
+                continue
+            row = projects[key]
+            archived_at = row.get("archived_at")
+            if archived_at and now_ts - archived_at > _PID_TTL_S:
+                del projects[key]
+                dirty = True
         if dirty:
             _store._write_state(_store._STATE)
 
