@@ -1743,3 +1743,20 @@ body.modal-open { overflow: hidden; }
     opacity: 0.55;
     transition: opacity 200ms ease;
 }
+
+/* Connection-loss banner. Visible after /api/state has failed twice
+   in a row. Lives in normal document flow so when it shows, the
+   header beneath naturally shifts down without absolute positioning. */
+#connection-banner {
+    background: #5a4a10;
+    color: #f5e9c0;
+    padding: 6px 12px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+body.disconnected .grid {
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
