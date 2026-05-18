@@ -483,6 +483,20 @@ body[data-view="stream"] .stream-banner {
 }
 .kill-session:hover { color: var(--s-danger); border-color: var(--s-danger); }
 .auto-rename:disabled { cursor: progress; opacity: 0.7; }
+.session-pinned-dir {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75em;
+  opacity: 0.6;
+  margin-left: 0.5em;
+}
+.session-header .adopt {
+  font-size: 0.75em;
+  opacity: 0.8;
+  border: 1px dashed currentColor;
+  background: transparent;
+  padding: 0.1em 0.4em;
+  margin-left: 0.4em;
+}
 
 /* ─── Card grid ─────────────────────────────────────── */
 
@@ -699,6 +713,26 @@ body[data-view="stream"] .stream-banner {
 }
 .card-pr-fail .card-pr     { color: var(--s-danger); font-weight: 600; }
 .card-pr-fail .card-ci-bad { color: var(--s-danger); }
+
+/* Worktree affiliation chip — sibling: tab is in a sibling worktree of the
+   project's repo; off-repo: tab's cwd is outside the repo entirely.
+   "no-repo" and "primary" affiliations are silent (no chip rendered). */
+.card-worktree-chip {
+  display: inline-block;
+  font-size: 0.7em;
+  padding: 0.1em 0.4em;
+  border-radius: 0.4em;
+  margin-left: 0.3em;
+  background: var(--chip-bg, rgba(127, 127, 127, 0.15));
+  white-space: nowrap;
+}
+.card-worktree-chip-sibling {
+  color: var(--accent, #4a90e2);
+}
+.card-worktree-chip-off-repo {
+  color: var(--warn, #d97706);
+  background: var(--warn-bg, rgba(217, 119, 6, 0.12));
+}
 
 .card-activity {
   font-size: 12px;

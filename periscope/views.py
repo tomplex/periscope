@@ -24,8 +24,10 @@ from periscope.panes import (
     _acted_at, _completed_at, _focused_at, _prev_state,
     parse_pane, smooth_is_claude, smooth_spinner,
 )
+from periscope.projects import resolve_project_for_window, get_project
 from periscope.store import get_window
 from periscope.tmux import capture
+from periscope.worktrees import affiliation
 
 
 def build_window_view(
@@ -119,6 +121,15 @@ def build_window_view(
         # resolves it. Drop the stale glyph rather than mislead.
         pr.pop("ci", None)
 
+    project_key = resolve_project_for_window(w)
+    project = get_project(project_key) if project_key else {}
+    # `project_key` is already canonical (post-migration / post-create); pass
+    # it directly without re-realpath. `affiliation` realpaths the cwd as
+    # part of its classification, which is the only realpath this code
+    # path needs to pay per poll.
+    pinned_for_aff = project_key if project_key and project_key != "__main__" else None
+    aff = affiliation(w.get("cwd", ""), pinned_for_aff, project.get("repo"))
+
     view = {
         **w, **parsed, **git, **pr,
         "target": target,
@@ -133,5 +144,9 @@ def build_window_view(
         "channel_replies": channel_replies,
         "linked_linear": linked_linear,
         "lgtm": lgtm,
+        "project_pinned_dir": project_key,
+        "project_name": project.get("name"),
+        "project_archived": bool(project.get("archived_at")),
+        "worktree_affiliation": aff,
     }
     return view, stamp_update

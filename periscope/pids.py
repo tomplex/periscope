@@ -138,20 +138,47 @@ def resolve_pids(windows: list[dict]) -> None:
             entry["last_seen"] = new_seen
             if identity_changed:
                 dirty = True
-        # GC: drop windows entries that (a) carry no notes and no tags, AND
+        # GC: drop windows entries that (a) carry no immunity fields, AND
         # (b) weren't refreshed this pass, AND (c) have a last_seen older
         # than 30 days. Annotated entries are immune — losing one would
         # lose notes.
         cutoff = now_ts - _PID_TTL_S
+        # Immunity fields: any of these set means the row carries state the
+        # user expects to persist past archive (per the project-model spec
+        # §"GC extension"). `notes`/`tags` were the v1 list; phase 1 adds
+        # the channels-MCP fields so archiving a project doesn't silently
+        # erase its PR/Linear linkage.
+        _IMMUNITY_FIELDS = (
+            "notes", "tags",
+            "linked_pr", "linked_linear",
+            "acked_at", "completed_at",
+            "alias",
+        )
         for pid in list(wblock.keys()):
             if pid in taken:
                 continue
             entry = wblock[pid]
-            if entry.get("notes") or entry.get("tags"):
+            if any(entry.get(k) for k in _IMMUNITY_FIELDS):
                 continue
             ts = (entry.get("last_seen") or {}).get("ts") or 0
             if ts < cutoff:
                 del wblock[pid]
+                dirty = True
+        # Project GC: drop archived projects whose archived_at is older
+        # than 30 days (spec §"GC" rule 2). Auto-archive itself is a
+        # phase-6 feature; this just collects what the user (or future
+        # phases) explicitly archived.
+        # __main__ is invariant — even if some future bug wrote
+        # archived_at on it, the GC must not delete it.
+        from periscope.projects import MAIN_KEY as _MAIN_KEY
+        projects = _store._STATE.setdefault("projects", {})
+        for key in list(projects.keys()):
+            if key == _MAIN_KEY:
+                continue
+            row = projects[key]
+            archived_at = row.get("archived_at")
+            if archived_at and now_ts - archived_at > _PID_TTL_S:
+                del projects[key]
                 dirty = True
         if dirty:
             _store._write_state(_store._STATE)

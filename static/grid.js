@@ -51,6 +51,17 @@ function gitMetaSpan(git) {
   return `<span class="card-dirty">${escapeHtml(git)}</span>`;
 }
 
+// Build a tmux_session → project row lookup from the most recent /api/state
+// response. Lives on `state.projectsByTmux` so renderSession can consume it
+// without re-walking the array per group.
+function indexProjects(projects) {
+  const idx = {};
+  for (const p of projects || []) {
+    if (p.tmux_session) idx[p.tmux_session] = p;
+  }
+  return idx;
+}
+
 function renderCard(w) {
   const stateClass = `state-${w.state}`;
   const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
@@ -106,6 +117,18 @@ function renderCard(w) {
     // the workspace's canonical URL.
     metaParts.push(
       `<a class="card-linear" href="https://linear.app/issue/${escapeHtml(w.linked_linear)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ticket ${escapeHtml(w.linked_linear)} (linked by claude)">${escapeHtml(w.linked_linear)}</a>`
+    );
+  }
+  const aff = w.worktree_affiliation || { kind: "no-repo" };
+  if (aff.kind === "sibling") {
+    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
+    metaParts.push(
+      `<span class="card-worktree-chip card-worktree-chip-sibling" title="this tab is in a sibling worktree of the project's repo">↪ ${escapeHtml(aff.label || "")}</span>`
+    );
+  } else if (aff.kind === "off-repo") {
+    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
+    metaParts.push(
+      `<span class="card-worktree-chip card-worktree-chip-off-repo" title="this tab's cwd is outside the project's repo">⚠ ${escapeHtml(aff.label || "")}</span>`
     );
   }
   if (w.lgtm) {
@@ -291,16 +314,26 @@ function renderSession(session, ws, totalWindows) {
   const recent = Math.max(0, ...ws.map((w) => w.focused_at || 0));
   const recentLabel = recent ? relTime(recent) : "";
   const s = escapeHtml(session);
+  const project = state.projectsByTmux?.[session] || null;
+  const pinnedDirLabel = project && project.pinned_dir && project.pinned_dir !== "__main__"
+    ? project.pinned_dir.replace(/^\/Users\/[^/]+/, "~")
+    : null;
+  const adoptBtn = project
+    ? ""
+    : `<button class="adopt" data-session="${s}" title="register this tmux session as a project">+ adopt</button>`;
   const alert = sessionChannelAlert(ws);
   const alertClass = alert.kind ? ` session-has-channel session-has-channel-${alert.kind}` : "";
   return `
     <section class="session-group${collapsed}${alertClass}" data-session="${s}">
       <div class="session-header" draggable="true" data-session="${s}">
         <span class="chevron">▾</span>
-        <h2>${s}</h2>
+        <h2 class="session-name">${escapeHtml(project?.name || session)}</h2>
+        ${pinnedDirLabel ? `<span class="session-pinned-dir">${escapeHtml(pinnedDirLabel)}</span>` : ""}
         <span class="session-meta">${meta}${recentLabel ? ` · ${recentLabel}` : ""}</span>
         ${sessionPill(ws)}
         ${alert.html}
+        ${adoptBtn}
+        ${project && project.pinned_dir !== "__main__" ? `<button class="project-menu" data-pinned-dir="${escapeHtml(project.pinned_dir)}" title="project actions">⋯</button>` : ""}
         <button class="auto-rename" data-session="${s}" title="ask Claude to auto-rename windows in this session">✨ rename</button>
         <button class="kill-session" data-session="${s}" title="kill this tmux session">✕</button>
       </div>
@@ -472,6 +505,7 @@ function renderGrid(windows) {
 export function render(windows) {
   // Dispatch on the view attribute the user toggled via the view-switch.
   // Defaults to grid when unset (first paint, or no localStorage entry).
+  state.projectsByTmux = indexProjects(state.lastProjects || []);
   const view = document.body.dataset.view === "stream" ? "stream" : "grid";
   if (view === "stream") renderStream(windows);
   else renderGrid(windows);
@@ -557,6 +591,59 @@ function startRename(nameEl, target, currentName) {
   input.addEventListener("blur", () => finish(true));
   input.addEventListener("click", (e) => e.stopPropagation());
   input.addEventListener("dblclick", (e) => e.stopPropagation());
+}
+
+async function handleAdopt(btn) {
+  const session = btn.dataset.session;
+  if (!session) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/projects/adopt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tmux_session: session }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`adopt failed: ${err.detail || res.status}`);
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function handleProjectMenu(btn) {
+  const pinnedDir = btn.dataset.pinnedDir;
+  if (!pinnedDir) return;
+  const action = prompt(
+    "Project action — type one of: rename, archive\n(blank = cancel)",
+    ""
+  );
+  if (!action) return;
+  if (action === "rename") {
+    const name = prompt("New project name:");
+    if (!name) return;
+    const res = await fetch("/api/projects/patch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned_dir: pinnedDir, name, tmux_session: name }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`rename failed: ${err.detail || res.status}`);
+    }
+  } else if (action === "archive") {
+    if (!confirm(`Archive project at ${pinnedDir}?`)) return;
+    const res = await fetch("/api/projects/archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned_dir: pinnedDir }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`archive failed: ${err.detail || res.status}`);
+    }
+  }
 }
 
 async function handleAutoRename(autoBtn) {
@@ -649,10 +736,22 @@ function wireGrid() {
   grid.addEventListener("click", (e) => {
     // Mutation buttons inside the grid take priority over the more general
     // header-toggle / card-open handlers below.
+    const adoptBtn = e.target.closest(".adopt");
+    if (adoptBtn) {
+      e.stopPropagation();
+      handleAdopt(adoptBtn);
+      return;
+    }
     const autoBtn = e.target.closest(".auto-rename");
     if (autoBtn) {
       e.stopPropagation();
       handleAutoRename(autoBtn);
+      return;
+    }
+    const projectMenuBtn = e.target.closest(".project-menu");
+    if (projectMenuBtn) {
+      e.stopPropagation();
+      handleProjectMenu(projectMenuBtn);
       return;
     }
     const killSessionBtn = e.target.closest(".kill-session");
@@ -834,6 +933,7 @@ export async function poll() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.lastWindows = data.windows;
+    state.lastProjects = data.projects || [];
     render(state.lastWindows);
     updateUsagePill(data.usage_scrape, data.usage);
     lastUpdate.textContent = `updated ${new Date().toLocaleTimeString()}`;
