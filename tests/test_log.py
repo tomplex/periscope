@@ -53,3 +53,12 @@ def test_task_logs_uncaught_exception(mocker):
     spy.assert_called_once()
     # log.error("task %s crashed", name, exc_info=exc) — name in args[1].
     assert "async-crashy" in spy.call_args.args
+
+
+def test_log_path_includes_port(tmp_xdg_home, monkeypatch):
+    import periscope.config
+    import periscope.log
+    monkeypatch.setattr(periscope.config, "PORT", 8766)
+    # _log_path is the helper; the cached _LOG_PATH is set at module load
+    # before our monkeypatch and isn't checked here.
+    assert periscope.log._log_path().name == "periscope-8766.log"
