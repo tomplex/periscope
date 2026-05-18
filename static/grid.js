@@ -119,6 +119,18 @@ function renderCard(w) {
       `<a class="card-linear" href="https://linear.app/issue/${escapeHtml(w.linked_linear)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ticket ${escapeHtml(w.linked_linear)} (linked by claude)">${escapeHtml(w.linked_linear)}</a>`
     );
   }
+  const aff = w.worktree_affiliation || { kind: "no-repo" };
+  if (aff.kind === "sibling") {
+    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
+    metaParts.push(
+      `<span class="card-worktree-chip card-worktree-chip-sibling" title="this tab is in a sibling worktree of the project's repo">↪ ${escapeHtml(aff.label || "")}</span>`
+    );
+  } else if (aff.kind === "off-repo") {
+    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
+    metaParts.push(
+      `<span class="card-worktree-chip card-worktree-chip-off-repo" title="this tab's cwd is outside the project's repo">⚠ ${escapeHtml(aff.label || "")}</span>`
+    );
+  }
   if (w.lgtm) {
     if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
     // LGTM session is registered for this pane's repo. Click opens the modal
