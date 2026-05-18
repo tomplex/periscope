@@ -333,3 +333,41 @@ Practical rules:
   multiple commits before pushing.
 - Don't ask "should I commit?" after a self-contained change — just
   commit it.
+
+## Development workflow (prod + dev split)
+
+Periscope runs in two flavors:
+
+- **Prod** — launchd-managed (`com.tom.periscope`), port 8765, runs from
+  this repo's `main` branch. Never edit files in the prod working tree;
+  launchd respawns on crash and picks up changes on next restart whether
+  intended or not. Manage with `bin/periscope {start|stop|restart|status|tail}`.
+
+- **Dev** — manually started in a git worktree, port 8766. This is where
+  edits and iteration happen. Browse at http://localhost:8766/. Dev
+  periscope doesn't bind `/tmp/periscope-mcp.sock` — Claude's channels
+  always talk to prod on 8765.
+
+Standard loop for a periscope change:
+
+```sh
+# one-time per feature
+git worktree add ../periscope-feature -b feature/my-change
+cd ../periscope-feature
+PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py
+# edit, test at http://localhost:8766/
+
+# when done
+cd ~/dev/periscope
+git merge feature/my-change
+bin/periscope restart       # launchd respawns prod with new code
+git worktree remove ../periscope-feature
+```
+
+`PERISCOPE_NO_RECLAIM=1` skips the pidfile-reclaim step in `__main__`.
+Set it when intentionally running a second instance that must not kill
+the existing one — rare; debug only.
+
+The launchd plist (`com.tom.periscope.plist`) lives in the repo;
+`bin/periscope install` copies it to `~/Library/LaunchAgents/` and
+loads it.

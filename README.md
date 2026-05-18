@@ -26,6 +26,10 @@ uv run server.py
 Open <http://127.0.0.1:8765/>. Polls every 3s; the modal opens a live
 WebSocket bridge to the selected pane.
 
+For the always-on / launchd-managed setup and the prod/dev port split,
+see [CLAUDE.md → Development workflow](./CLAUDE.md#development-workflow-prod--dev-split)
+and `bin/periscope`.
+
 ### Frontend HMR (optional)
 
 For hot-reload while editing `static/app.js` or `static/styles.css`:
