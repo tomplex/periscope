@@ -48,7 +48,13 @@ if __name__ == "__main__":
     # in lifespan) because uvicorn binds the socket before lifespan runs —
     # by the time the worker starts up, a port collision has already
     # failed.
-    _reclaim_existing_instance()
+    # PERISCOPE_NO_RECLAIM=1 disables the SIGTERM-the-previous-instance
+    # step. Use this when intentionally running a second periscope (e.g.
+    # to inspect a launchd-managed prod from a debug session) where you
+    # don't want the new instance to kill the existing one. See spec
+    # §"Opt-out flag for reclaim."
+    if os.environ.get("PERISCOPE_NO_RECLAIM") != "1":
+        _reclaim_existing_instance()
     _write_pidfile()
     atexit.register(_remove_pidfile)
     # SIGTERM otherwise bypasses atexit; install a handler that logs and
