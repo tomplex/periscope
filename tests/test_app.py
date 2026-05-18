@@ -58,3 +58,56 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     with TestClient(app) as client:
         r = client.get("/api/state")
         assert r.status_code == 200
+
+
+def test_lifespan_skips_mcp_on_dev_port(mocker, monkeypatch, caplog):
+    """When PORT != 8765, lifespan must not call _mcp_listener and must
+    log that it's skipping."""
+    import periscope.config
+    monkeypatch.setattr(periscope.config, "PORT", 8766)
+
+    called = {"count": 0}
+    async def fake_listener():
+        called["count"] += 1
+    mocker.patch("periscope.app._mcp_listener", side_effect=fake_listener)
+
+    mocker.patch("periscope.app.prewarm_pr_cache")
+    mocker.patch("periscope.app.cached_scraped_usage")
+    mocker.patch("periscope.app.kill_orphan_usage_sessions")
+    async def _noop():
+        return None
+    mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)
+
+    from periscope.app import app
+    with caplog.at_level("INFO", logger="periscope"):
+        with TestClient(app):
+            pass
+
+    assert called["count"] == 0
+    assert any("skipping MCP listener" in r.message for r in caplog.records)
+
+
+def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
+    """When PORT == 8765, lifespan calls _mcp_listener exactly once."""
+    import periscope.config
+    monkeypatch.setattr(periscope.config, "PORT", 8765)
+
+    called = {"count": 0}
+    async def fake_listener():
+        called["count"] += 1
+    mocker.patch("periscope.app._mcp_listener", side_effect=fake_listener)
+
+    mocker.patch("periscope.app.prewarm_pr_cache")
+    mocker.patch("periscope.app.cached_scraped_usage")
+    mocker.patch("periscope.app.kill_orphan_usage_sessions")
+    async def _noop():
+        return None
+    mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)
+    # Teardown unlinks MCP_SOCKET_PATH — no-op so we don't touch /tmp.
+    mocker.patch("os.unlink")
+
+    from periscope.app import app
+    with TestClient(app):
+        pass
+
+    assert called["count"] == 1

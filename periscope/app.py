@@ -30,7 +30,8 @@ from periscope.routes import lgtm as lgtm_route
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    log.info("periscope starting (pid=%d)", os.getpid())
+    from periscope import config
+    log.info("periscope starting (pid=%d, port=%d)", os.getpid(), config.PORT)
     # Reap any periscope-usage-* tmux sessions left behind by a prior
     # crash before the new scrape thread spawns a fresh one.
     kill_orphan_usage_sessions()
@@ -38,9 +39,15 @@ async def lifespan(_app: FastAPI):
     # has PR badges and the usage bars populated.
     _bg("prewarm-pr", prewarm_pr_cache)
     _bg("prewarm-usage", cached_scraped_usage)
-    # MCP unix-socket listener: accepts connections from channel_shim.py
-    # (one per Claude pane), runs an MCP Server per connection in-process.
-    mcp_task = _task(_mcp_listener(), "mcp-listener")
+    # MCP unix-socket listener bound only by the :8765 (prod) instance.
+    # channel_shim.py hardcodes /tmp/periscope-mcp.sock, so Claude's
+    # channels always talk to prod. Dev periscopes on other ports leave
+    # the socket alone — see spec §"Dev never serves channels."
+    if config.PORT == 8765:
+        mcp_task = _task(_mcp_listener(), "mcp-listener")
+    else:
+        mcp_task = None
+        log.info("dev port %d: skipping MCP listener", config.PORT)
     # LGTM mirror: polls localhost:9900 + subscribes per-session SSE.
     # No-op while LGTM isn't running; surfaces on the dashboard the
     # moment it comes up.
@@ -49,20 +56,22 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         log.info("periscope shutting down (pid=%d)", os.getpid())
-        mcp_task.cancel()
+        if mcp_task is not None:
+            mcp_task.cancel()
         lgtm_task.cancel()
         for t in list(_LGTM_SSE_TASKS.values()):
             t.cancel()
-        try:
-            await mcp_task
-        except (asyncio.CancelledError, Exception):
-            pass
-        # Lifespan owns socket cleanup; periscope.channels never unlinks
-        # MCP_SOCKET_PATH (see spec §"MCP_SOCKET_PATH cleanup").
-        try:
-            os.unlink(MCP_SOCKET_PATH)
-        except FileNotFoundError:
-            pass
+        if mcp_task is not None:
+            try:
+                await mcp_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            # Lifespan owns socket cleanup; periscope.channels never
+            # unlinks MCP_SOCKET_PATH (see spec §"MCP_SOCKET_PATH cleanup").
+            try:
+                os.unlink(MCP_SOCKET_PATH)
+            except FileNotFoundError:
+                pass
 
 
 app = FastAPI(lifespan=lifespan)
