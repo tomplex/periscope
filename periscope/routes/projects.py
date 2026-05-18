@@ -627,7 +627,10 @@ def projects_pr_review(body: PRReviewBody):
     if os.path.exists(wt_path):
         raise HTTPException(409, f"worktree path already exists: {wt_path}")
 
-    # Create the worktree at `pr-<N>` under the per-repo lock.
+    # Create the worktree at `pr-<N>` under the per-repo lock. On failure,
+    # delete the orphan `pr-<N>` branch the fetch created — otherwise a
+    # retry hits the "non-fast-forward" path and 409s with a confusing
+    # error.
     with repo_lock(repo):
         WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
         (WORKTREES_DIR / repo_name).mkdir(parents=True, exist_ok=True)
@@ -636,6 +639,7 @@ def projects_pr_review(body: PRReviewBody):
             timeout=30.0,
         )
         if code != 0:
+            _run(["git", "-C", repo, "branch", "-D", local_branch])
             raise HTTPException(500, f"git worktree add failed: {out}")
     worktrees_invalidate(repo)
 
@@ -654,10 +658,14 @@ def projects_pr_review(body: PRReviewBody):
         )
 
     # Apply the 2-window layout and capture the claude window's pid for the
-    # synchronous linked_pr write.
+    # synchronous linked_pr write. On failure, roll back the worktree +
+    # branch — otherwise we leak orphan state with no way to detect it
+    # from the UI (no project row, no tmux session).
     try:
         claude_pid = _layout_two_window(tmux_session, pinned_dir)
     except HTTPException:
+        _run(["git", "-C", repo, "worktree", "remove", "--force", wt_path])
+        _run(["git", "-C", repo, "branch", "-D", local_branch])
         raise
 
     try:
