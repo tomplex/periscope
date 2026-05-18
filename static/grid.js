@@ -333,6 +333,7 @@ function renderSession(session, ws, totalWindows) {
         ${sessionPill(ws)}
         ${alert.html}
         ${adoptBtn}
+        ${project && project.pinned_dir !== "__main__" ? `<button class="project-menu" data-pinned-dir="${escapeHtml(project.pinned_dir)}" title="project actions">⋯</button>` : ""}
         <button class="auto-rename" data-session="${s}" title="ask Claude to auto-rename windows in this session">✨ rename</button>
         <button class="kill-session" data-session="${s}" title="kill this tmux session">✕</button>
       </div>
@@ -611,6 +612,40 @@ async function handleAdopt(btn) {
   }
 }
 
+async function handleProjectMenu(btn) {
+  const pinnedDir = btn.dataset.pinnedDir;
+  if (!pinnedDir) return;
+  const action = prompt(
+    "Project action — type one of: rename, archive\n(blank = cancel)",
+    ""
+  );
+  if (!action) return;
+  if (action === "rename") {
+    const name = prompt("New project name:");
+    if (!name) return;
+    const res = await fetch("/api/projects/patch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned_dir: pinnedDir, name, tmux_session: name }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`rename failed: ${err.detail || res.status}`);
+    }
+  } else if (action === "archive") {
+    if (!confirm(`Archive project at ${pinnedDir}?`)) return;
+    const res = await fetch("/api/projects/archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned_dir: pinnedDir }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`archive failed: ${err.detail || res.status}`);
+    }
+  }
+}
+
 async function handleAutoRename(autoBtn) {
   if (autoBtn.dataset.busy) return;
   const session = autoBtn.dataset.session;
@@ -711,6 +746,12 @@ function wireGrid() {
     if (autoBtn) {
       e.stopPropagation();
       handleAutoRename(autoBtn);
+      return;
+    }
+    const projectMenuBtn = e.target.closest(".project-menu");
+    if (projectMenuBtn) {
+      e.stopPropagation();
+      handleProjectMenu(projectMenuBtn);
       return;
     }
     const killSessionBtn = e.target.closest(".kill-session");
