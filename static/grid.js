@@ -646,7 +646,7 @@ async function handleProjectMenu(btn) {
   const pinnedDir = btn.dataset.pinnedDir;
   if (!pinnedDir) return;
   const action = prompt(
-    "Project action — type one of: rename, archive\n(blank = cancel)",
+    "Project action — type one of: rename, archive, worktree-tab\n(blank = cancel)",
     ""
   );
   if (!action) return;
@@ -673,6 +673,30 @@ async function handleProjectMenu(btn) {
       const err = await res.json().catch(() => ({}));
       alert(`archive failed: ${err.detail || res.status}`);
     }
+  } else if (action === "worktree-tab") {
+    // Look up the project's tmux_session from the most recent /api/state.
+    const project = (state.lastProjects || []).find((p) => p.pinned_dir === pinnedDir);
+    if (!project || !project.tmux_session) {
+      alert("project session not found — refresh and retry");
+      return;
+    }
+    const branch = prompt(
+      "New worktree branch name:\n(forked off this project's base_branch, locally)",
+    );
+    if (!branch) return;
+    const params = new URLSearchParams({
+      session: project.tmux_session,
+      branch,
+      exec: "claude",
+    });
+    const res = await fetch(`/api/window/new-worktree?${params}`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`new worktree tab failed: ${err.detail || res.status}`);
+      return;
+    }
+    const body = await res.json();
+    if (body.warning) console.warn("new-worktree warning:", body.warning);
   }
 }
 
