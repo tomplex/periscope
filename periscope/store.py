@@ -74,25 +74,38 @@ def _state_path() -> Path:
     return Path(base) / "periscope" / "state.json"
 
 
+MAIN_KEY_LITERAL = "__main__"
+_MIGRATION_RAN_THIS_LOAD = False
+
 _STATE_LOCK = threading.Lock()
 _STATE_DEFAULTS: dict = {
-    "version": 1,
+    "version": 2,
     "ui": {},
     "windows": {},
     "commands": [],
+    "projects": {},
+    "settings": {},
 }
 
 
 def _load_state() -> dict:
     """Read state.json. On parse failure rename to .corrupt-<ts> and return
     defaults — the next save writes a fresh valid file."""
+    global _MIGRATION_RAN_THIS_LOAD
     path = _state_path()
     if not path.exists():
-        return json.loads(json.dumps(_STATE_DEFAULTS))
+        data = json.loads(json.dumps(_STATE_DEFAULTS))
+        data, _migrated = _migrate_v1_to_v2(data)
+        _MIGRATION_RAN_THIS_LOAD = _MIGRATION_RAN_THIS_LOAD or _migrated
+        return data
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         for k, v in _STATE_DEFAULTS.items():
             data.setdefault(k, json.loads(json.dumps(v)))
+        data, _migrated = _migrate_v1_to_v2(data)
+        # _migrated bubbles up via a module-level flag — see post-load
+        # write in Step 5.
+        _MIGRATION_RAN_THIS_LOAD = _MIGRATION_RAN_THIS_LOAD or _migrated
         return data
     except (json.JSONDecodeError, OSError) as e:
         corrupt = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
@@ -102,6 +115,130 @@ def _load_state() -> dict:
         except OSError:
             pass
         return json.loads(json.dumps(_STATE_DEFAULTS))
+
+
+def _migrate_v1_to_v2(data: dict) -> tuple[dict, bool]:
+    """Bring a v1 state.json forward to v2.
+
+    v2 introduces `projects[pinned_dir]` and `settings`. The migration
+    walks live tmux sessions (via periscope.panes.list_windows) and
+    auto-adopts each as a project pinned to its first window's git
+    toplevel. Two import-time wrinkles:
+
+    1. We can't `from periscope.panes import list_windows` at module top
+       — panes.py imports from store.py for `get_window`. Lazy-import
+       inside this function avoids the cycle.
+    2. The migration runs ONCE per import. If state.json is already at
+       v2, this is a no-op.
+
+    Tmux sessions named literally `main` or `general` bind to the
+    `__main__` sentinel rather than a regular `projects[<dir>]` row,
+    preserving Tom's unpinned catch-all (see spec §"Main project").
+
+    Returns (data, True) iff the migration actually populated projects
+    (i.e. the input did not already have a populated projects block from
+    a prior run).
+    """
+    # Idempotency: if `projects` already has any non-sentinel rows,
+    # someone has already migrated. The `__main__` sentinel alone
+    # doesn't count — we always want to walk tmux on a fresh file
+    # to populate the regular projects.
+    existing = data.get("projects") or {}
+    if any(k != MAIN_KEY_LITERAL for k in existing.keys()):
+        return data, False
+
+    # Lazy imports — see docstring.
+    from periscope.panes import list_windows
+    from periscope.tmux import _run
+
+    projects: dict = data.get("projects") or {}
+
+    # Always ensure the main sentinel exists, even if no live `main`/`general`
+    # session is currently running.
+    projects.setdefault(MAIN_KEY_LITERAL, {
+        "name": "main",
+        "tmux_session": "main",
+        "repo": None,
+        "pinned_repo": None,
+        "created_at": 0,
+        "archived_at": None,
+        "base_branch": None,
+    })
+
+    try:
+        windows = list_windows()
+    except Exception as e:
+        log.warning("v2 migration: list_windows failed: %s; main-only state written", e)
+        windows = []
+
+    # Group by session, sort each by tmux window index ascending so the
+    # tiebreaker is deterministic (see spec §Migration step 1).
+    by_session: dict[str, list[dict]] = {}
+    for w in windows:
+        by_session.setdefault(w["session"], []).append(w)
+    for ws in by_session.values():
+        ws.sort(key=lambda w: w["index"])
+
+    for session_name in sorted(by_session.keys()):
+        # `main`/`general` always map to __main__; never created as a regular
+        # project even if their window 1 happens to be in a git repo.
+        if session_name in ("main", "general"):
+            projects[MAIN_KEY_LITERAL]["tmux_session"] = session_name
+            continue
+
+        pinned_dir = None
+        for w in by_session[session_name]:
+            cwd = w.get("cwd") or ""
+            if not cwd:
+                continue
+            code, toplevel = _run(["git", "-C", cwd, "rev-parse", "--show-toplevel"])
+            if code == 0 and toplevel:
+                pinned_dir = os.path.realpath(toplevel)
+                break
+        if pinned_dir is None:
+            # Unmigratable — no window has a git toplevel. Frontend will
+            # surface these as "unmanaged" and offer the adopt affordance.
+            continue
+
+        if pinned_dir in projects:
+            existing_row = projects[pinned_dir]
+            log.warning(
+                "v2 migration: %r and %r both resolve to %r; keeping existing project %r",
+                existing_row.get("tmux_session"), session_name, pinned_dir, existing_row.get("name"),
+            )
+            continue
+
+        # Resolve the project's repo. For a normal checkout, --git-common-dir
+        # returns <root>/.git, so the algorithm degenerates to "this cwd's
+        # toplevel = repo." For a worktree, --git-common-dir returns the
+        # shared .git dir of the main checkout, whose parent is the repo.
+        code, common = _run(["git", "-C", pinned_dir, "rev-parse", "--git-common-dir"])
+        if code == 0 and common:
+            common_abs = common if os.path.isabs(common) else os.path.join(pinned_dir, common)
+            repo = os.path.realpath(os.path.dirname(common_abs))
+        else:
+            repo = pinned_dir
+
+        # base_branch: the worktree's current branch when first observed.
+        # Empty if detached. Used by phase 3's worktree-tab spawn.
+        _, branch = _run(["git", "-C", pinned_dir, "rev-parse", "--abbrev-ref", "HEAD"])
+        if branch == "HEAD":
+            branch = ""
+
+        projects[pinned_dir] = {
+            "name": session_name,
+            "tmux_session": session_name,
+            "repo": repo,
+            "pinned_repo": None,
+            "created_at": int(time.time()),
+            "archived_at": None,
+            "base_branch": branch or None,
+        }
+
+    data["projects"] = projects
+    data["settings"] = data.get("settings") or {}
+    data["version"] = 2
+    return data, True
 
 
 def _write_state(data: dict) -> None:
@@ -114,6 +251,16 @@ def _write_state(data: dict) -> None:
 
 
 _STATE: dict = _load_state()
+
+# Persist the v2 migration result so subsequent imports skip the
+# tmux-walk fast-path. `_MIGRATION_RAN_THIS_LOAD` is set by
+# `_migrate_v1_to_v2` when it actually populated projects this
+# import. Subsequent imports against a populated file don't hit this
+# branch — the migration's "any non-sentinel project row?" check
+# bails before doing work.
+if _MIGRATION_RAN_THIS_LOAD:
+    with _STATE_LOCK:
+        _write_state(_STATE)
 
 _DEFAULT_COMMANDS = [
     {"label": "claude", "exec": "claude"},
