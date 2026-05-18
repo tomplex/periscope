@@ -201,6 +201,12 @@ RECAP_RE = re.compile(
 )
 PROMPT_LINE_RE = re.compile(r"^❯\s*(?P<input>.*)$")
 
+# Tool-call header in scrollback: `<glyph> Word(args)`. Used as one of
+# three "Claude started a new turn after this past-tense indicator" signals
+# in the question-mark needs-input detection. Distinguished from spinner /
+# active-op / prose by the no-space-before-`(` pattern.
+TOOL_CALL_RE = re.compile(r"^[^\x00-\x7f]\s+\w+\(")
+
 
 def list_windows() -> list[dict]:
     out = tmux(
@@ -376,10 +382,15 @@ def parse_pane(content: str) -> dict:
     # immediately after a finished assistant turn, and post-reply chrome
     # (TodoWrite list, separator, prompt) renders below it. The last visible
     # line of Claude's actual message is therefore the closest non-chrome
-    # line ABOVE the indicator. Without this anchor a TODO row like
-    # `◻ Spec refresh cadence (separate)` would be the first content line
-    # walking bottom-up and would never end with `?` even when the message
-    # above the indicator did.
+    # line ABOVE the indicator.
+    #
+    # Two gates before flagging:
+    #   1. The latest indicator must be followed by chrome only. A submitted
+    #      user reply (`❯ <text>`), tool call (`⏺ Word(...)`), or tool result
+    #      (`⎿ …`) below it means the conversation moved past the question
+    #      and the indicator is stale (Claude is mid-new-turn, no fresh
+    #      indicator rendered yet).
+    #   2. The line above the indicator must end with `?`.
     #
     # If no past-tense indicator is visible (rare — pane scrolled past the
     # last turn) we leave the flag off; better to miss the case than to
@@ -391,7 +402,29 @@ def parse_pane(content: str) -> dict:
             if IDLE_INDICATOR_RE.match(lines[i]):
                 idle_idx = i
                 break
+        # Gate 1: nothing meaningful between the indicator and the bottom.
+        # "Meaningful" is narrow on purpose — TodoWrite list rows render
+        # below the indicator as end-of-turn chrome and must NOT count. Only
+        # three patterns prove a NEW turn started after the indicator:
+        #   - `❯ <text>` — submitted user reply or pending typing.
+        #   - `<glyph> Word(...)` — tool-call header.
+        #   - `⎿ …` — tool-result indicator.
+        moved_past = False
         if idle_idx is not None:
+            for line in lines[idle_idx + 1:]:
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith("❯") and len(s) > 1 and s.lstrip("❯").strip():
+                    moved_past = True
+                    break
+                if s.startswith("⎿"):
+                    moved_past = True
+                    break
+                if TOOL_CALL_RE.match(s):
+                    moved_past = True
+                    break
+        if idle_idx is not None and not moved_past:
             for line in reversed(lines[:idle_idx]):
                 s = line.strip()
                 if not s:

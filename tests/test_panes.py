@@ -285,6 +285,26 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
         $
     """), "shell", None),
 
+    # Stale indicator: Claude asked a question, the user replied, Claude is
+    # now mid-new-turn (Bash tool call running). The OLD past-tense indicator
+    # is still the latest visible one — but a submitted `❯ <text>` reply and
+    # tool-call lines below it prove the conversation moved past the
+    # question. Must NOT flag needs-input.
+    ("question-stale-indicator-user-replied", textwrap.dedent(f"""\
+        ⏺ Ready to execute. Same subagent-driven flow?
+
+        ✻ Brewed for 11m 1s
+
+        ❯ execute it, subagent-driven
+
+        ⏺ Bash(git -C /Users/tom/dev/periscope status --short)
+          ⎿  ?? .private-journal/
+             … +3 lines (ctrl+o to expand)
+
+        ❯
+        {STATUS_LINE}
+    """), "idle", None),
+
     # TodoWrite list rendered below the past-tense indicator. The actual
     # question lives ABOVE the indicator; bottom-up scanning without anchor
     # would land on the last todo row (ends with `)`) and miss the `?`.
