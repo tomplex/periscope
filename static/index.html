@@ -38,6 +38,7 @@
       <button data-filter="ci-bad" class="filter-btn">CI ✗</button>
       <span class="filters-sep"></span>
       <button id="new-session" class="filter-btn is-action" title="create a new tmux session">+ session</button>
+      <button id="new-project-btn" class="filter-btn is-action" title="create a new project (new worktree + tmux session)">+ project</button>
       <button id="send-bulk" class="filter-btn is-action" hidden title="paste text + Enter into every visible pane (filter first to scope)"></button>
       <button id="toggle-all" class="filter-btn is-action" title="collapse or expand all sessions"></button>
       <button id="open-commands" class="filter-btn is-action" title="edit + claude / + shell / + ... commands">⚙</button>
@@ -57,6 +58,36 @@
       <p class="commands-modal-sub">First row is the primary button. Drag rows to reorder. Empty <code>exec</code> = bare shell.</p>
       <div id="commands-modal-list"></div>
       <button id="commands-modal-add" class="commands-modal-add">+ add command</button>
+    </div>
+  </div>
+  <div id="new-project-modal" class="hidden new-project-modal-overlay">
+    <div class="new-project-modal-card">
+      <header class="new-project-modal-head">
+        <h2>+ project</h2>
+        <button id="new-project-modal-close" title="close">×</button>
+      </header>
+      <p class="new-project-modal-sub">Creates a worktree off <code>origin/&lt;default&gt;</code>, a tmux session, and a 2-window claude+shell layout.</p>
+      <form id="new-project-form">
+        <label>
+          Repo
+          <input id="new-project-repo" list="new-project-repos" placeholder="/Users/tom/dev/foo" required>
+          <datalist id="new-project-repos"></datalist>
+        </label>
+        <label>
+          Branch
+          <input id="new-project-branch" list="new-project-branches" placeholder="tc/new-feature" required>
+          <datalist id="new-project-branches"></datalist>
+        </label>
+        <label>
+          Name <span class="new-project-modal-hint">(defaults to branch)</span>
+          <input id="new-project-name" placeholder="optional">
+        </label>
+        <div id="new-project-error" class="new-project-modal-error" hidden></div>
+        <div class="new-project-modal-actions">
+          <button type="button" id="new-project-cancel">cancel</button>
+          <button type="submit" id="new-project-submit">create</button>
+        </div>
+      </form>
     </div>
   </div>
   <main id="grid"></main>

@@ -1,0 +1,132 @@
+// New-project modal. Open/close + populate repo/branch pickers from
+// /api/projects/discoverable, submit to /api/projects, close on success.
+
+import { pushEscape, popEscape } from './overlay.js';
+import { escapeHtml } from './util.js';
+
+const modal = document.getElementById("new-project-modal");
+const closeBtn = document.getElementById("new-project-modal-close");
+const cancelBtn = document.getElementById("new-project-cancel");
+const form = document.getElementById("new-project-form");
+const repoInput = document.getElementById("new-project-repo");
+const branchInput = document.getElementById("new-project-branch");
+const nameInput = document.getElementById("new-project-name");
+const reposListEl = document.getElementById("new-project-repos");
+const branchesListEl = document.getElementById("new-project-branches");
+const errorEl = document.getElementById("new-project-error");
+const submitBtn = document.getElementById("new-project-submit");
+
+// In-memory cache of the last /api/projects/discoverable response.
+// Keyed lookups: when the user changes repo, we filter the branch
+// datalist to that repo's branches.
+let cached = { repos: [], branches_by_repo: {} };
+let isOpen = false;
+
+function showError(msg) {
+  errorEl.textContent = msg;
+  errorEl.hidden = false;
+}
+
+function clearError() {
+  errorEl.hidden = true;
+  errorEl.textContent = "";
+}
+
+function renderRepoOptions() {
+  reposListEl.innerHTML = cached.repos
+    .map((r) => `<option value="${escapeHtml(r)}">`)
+    .join("");
+}
+
+function renderBranchOptions() {
+  const repo = repoInput.value.trim();
+  const branches = cached.branches_by_repo[repo] || [];
+  branchesListEl.innerHTML = branches
+    .map((b) => `<option value="${escapeHtml(b)}">`)
+    .join("");
+}
+
+async function refresh() {
+  try {
+    const res = await fetch("/api/projects/discoverable");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    cached = await res.json();
+    renderRepoOptions();
+    renderBranchOptions();
+  } catch (e) {
+    showError(`failed to load repos: ${e.message}`);
+  }
+}
+
+export async function openNewProjectModal() {
+  if (isOpen) return;
+  isOpen = true;
+  clearError();
+  modal.classList.remove("hidden");
+  document.body.classList.add("new-project-modal-open");
+  pushEscape(closeNewProjectModal);
+  repoInput.value = "";
+  branchInput.value = "";
+  nameInput.value = "";
+  // Populate datalists.
+  await refresh();
+  // Focus the repo input so keyboard-only users can start typing.
+  repoInput.focus();
+}
+
+export function closeNewProjectModal() {
+  if (!isOpen) return;
+  isOpen = false;
+  modal.classList.add("hidden");
+  document.body.classList.remove("new-project-modal-open");
+  popEscape(closeNewProjectModal);
+}
+
+async function handleSubmit(e) {
+  e.preventDefault();
+  clearError();
+  const repo = repoInput.value.trim();
+  const branch = branchInput.value.trim();
+  const name = nameInput.value.trim();
+  if (!repo || !branch) {
+    showError("repo and branch are required");
+    return;
+  }
+  submitBtn.disabled = true;
+  try {
+    const res = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo, branch, name: name || undefined }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showError(err.detail || `HTTP ${res.status}`);
+      return;
+    }
+    const result = await res.json();
+    if (result.warning) {
+      // Non-fatal — still close, but log so the dev console shows it.
+      console.warn("new-project warning:", result.warning);
+    }
+    closeNewProjectModal();
+  } catch (e) {
+    showError(`request failed: ${e.message}`);
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+export function initNewProjectModal() {
+  const openBtn = document.getElementById("new-project-btn");
+  if (openBtn) openBtn.addEventListener("click", openNewProjectModal);
+  closeBtn.addEventListener("click", closeNewProjectModal);
+  cancelBtn.addEventListener("click", closeNewProjectModal);
+  modal.addEventListener("click", (e) => {
+    // Click on the overlay (not the card) closes.
+    if (e.target === modal) closeNewProjectModal();
+  });
+  repoInput.addEventListener("change", renderBranchOptions);
+  repoInput.addEventListener("input", renderBranchOptions);
+  form.addEventListener("submit", handleSubmit);
+}
