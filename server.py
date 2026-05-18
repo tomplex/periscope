@@ -75,10 +75,11 @@ if __name__ == "__main__":
     # don't bounce the server — Vite handles frontend reloads in dev,
     # and direct browser hits pick up new static files without a restart.
     dev_mode = os.environ.get("PERISCOPE_DEV") == "1"
+    from periscope.config import PORT
     uvicorn.run(
         "periscope.app:app",
         host="127.0.0.1",
-        port=8765,
+        port=PORT,
         log_level="info",
         loop="asyncio",
         reload=dev_mode,
