@@ -1116,9 +1116,15 @@ body.modal-open { overflow: hidden; }
 .modal-tab-dropdown-menu {
   position: absolute;
   top: calc(100% + 4px);
-  left: 0;
-  min-width: 220px;
-  max-width: 360px;
+  /* Anchor to the toggle's right edge and extend leftward. The modal
+     card uses overflow:hidden for its rounded corners, so a menu that
+     extended rightward from the toggle would get clipped at the card
+     edge (which it did before this change). Right-anchoring keeps the
+     menu inside the card regardless of how many tabs precede it. */
+  right: 0;
+  left: auto;
+  min-width: 240px;
+  max-width: 380px;
   max-height: 60vh;
   overflow-y: auto;
   padding: 4px;
