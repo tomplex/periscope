@@ -16,6 +16,11 @@ const counts = document.getElementById("counts");
 const lastUpdate = document.getElementById("last-update");
 const usageEl = document.getElementById("usage");
 const toggleAllBtn = document.getElementById("toggle-all");
+const bannerEl = document.getElementById("connection-banner");
+
+// Consecutive failed /api/state polls. Banner shows at ≥2 (≈6s of
+// detection) to avoid flicker on a single transient hiccup.
+let consecutivePollFails = 0;
 
 const nameClickTimers = new Map();  // target -> setTimeout handle (single-click defer for dblclick rename)
 
@@ -826,12 +831,25 @@ export async function poll() {
   if (state.editingTarget) return;  // user is mid-rename; don't blow away their input
   try {
     const res = await fetch("/api/state");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.lastWindows = data.windows;
     render(state.lastWindows);
     updateUsagePill(data.usage_scrape, data.usage);
     lastUpdate.textContent = `updated ${new Date().toLocaleTimeString()}`;
+    if (consecutivePollFails > 0) {
+      consecutivePollFails = 0;
+      if (bannerEl) bannerEl.hidden = true;
+      document.body.classList.remove("disconnected");
+    }
   } catch (e) {
+    consecutivePollFails += 1;
+    // Threshold of 2 (≈6s detection) avoids false-positive flicker on
+    // a single transient hiccup (laptop sleep, background-tab throttling).
+    if (consecutivePollFails >= 2) {
+      if (bannerEl) bannerEl.hidden = false;
+      document.body.classList.add("disconnected");
+    }
     lastUpdate.textContent = `poll failed: ${e.message}`;
   }
 }
