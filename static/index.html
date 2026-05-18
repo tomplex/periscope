@@ -40,6 +40,7 @@
       <button id="new-session" class="filter-btn is-action" title="create a new tmux session">+ session</button>
       <button id="new-project-btn" class="filter-btn is-action" title="create a new project (new worktree + tmux session)">+ project</button>
       <button id="review-pr-btn" class="filter-btn is-action" title="review a PR by number — creates a worktree at pr-<N> + claude session">📋 review PR</button>
+      <button id="cleanup-btn" class="filter-btn is-action" title="archive worktrees with merged PRs, deleted branches, or idle activity">🧹 cleanup</button>
       <button id="send-bulk" class="filter-btn is-action" hidden title="paste text + Enter into every visible pane (filter first to scope)"></button>
       <button id="toggle-all" class="filter-btn is-action" title="collapse or expand all sessions"></button>
       <button id="open-commands" class="filter-btn is-action" title="edit + claude / + shell / + ... commands">⚙</button>
@@ -118,6 +119,26 @@
           <button type="submit" id="review-pr-submit">review</button>
         </div>
       </form>
+    </div>
+  </div>
+  <div id="cleanup-modal" class="hidden cleanup-modal-overlay">
+    <div class="cleanup-modal-card">
+      <header class="cleanup-modal-head">
+        <h2>🧹 cleanup</h2>
+        <button id="cleanup-modal-close" title="close">×</button>
+      </header>
+      <p class="cleanup-modal-sub">Worktrees with merged/closed PRs, deleted remote branches, or idle activity. Dirty worktrees are NOT auto-selected.</p>
+      <div id="cleanup-modal-controls">
+        <label class="cleanup-delete-branches">
+          <input type="checkbox" id="cleanup-delete-branches"> also delete local branches
+        </label>
+      </div>
+      <div id="cleanup-modal-list"></div>
+      <div id="cleanup-modal-error" class="cleanup-modal-error" hidden></div>
+      <div class="cleanup-modal-actions">
+        <button type="button" id="cleanup-cancel">cancel</button>
+        <button type="button" id="cleanup-submit" disabled>archive selected (0)</button>
+      </div>
     </div>
   </div>
   <main id="grid"></main>
