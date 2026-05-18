@@ -369,13 +369,52 @@ def parse_pane(content: str) -> dict:
         last_line = s[:200]
         break
 
+    # Question-mark needs-input: when Claude's last visible reply ends with
+    # `?` we treat the pane as waiting on the user, even without a dialog.
+    #
+    # Anchor on the past-tense indicator (`✻ Brewed for Xs`). It always sits
+    # immediately after a finished assistant turn, and post-reply chrome
+    # (TodoWrite list, separator, prompt) renders below it. The last visible
+    # line of Claude's actual message is therefore the closest non-chrome
+    # line ABOVE the indicator. Without this anchor a TODO row like
+    # `◻ Spec refresh cadence (separate)` would be the first content line
+    # walking bottom-up and would never end with `?` even when the message
+    # above the indicator did.
+    #
+    # If no past-tense indicator is visible (rare — pane scrolled past the
+    # last turn) we leave the flag off; better to miss the case than to
+    # false-positive on something further up the buffer.
+    asked_question = False
+    if is_claude and not needs_input:
+        idle_idx = None
+        for i in range(len(lines) - 1, -1, -1):
+            if IDLE_INDICATOR_RE.match(lines[i]):
+                idle_idx = i
+                break
+        if idle_idx is not None:
+            for line in reversed(lines[:idle_idx]):
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith(("─", "❯", "⏵")):
+                    continue
+                if STATUS_RE.match(line):
+                    continue
+                if "github.com/" in line and line.count("|") >= 3:
+                    continue
+                if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
+                    continue
+                if s.rstrip().endswith("?"):
+                    asked_question = True
+                break
+
     # State priority: needs-input wins over working (a spinner glyph can
     # linger in scrollback above the dialog), working wins over idle.
     # `idle` is the parse-level neutral state — /api/state may refine it to
     # `done` when there's an unacknowledged completion stamp.
     if not is_claude:
         state = "shell"
-    elif needs_input:
+    elif needs_input or asked_question:
         state = "needs-input"
     elif spinner:
         state = "working"
@@ -386,7 +425,8 @@ def parse_pane(content: str) -> dict:
         "is_claude": is_claude,
         "state": state,
         "spinner": spinner,
-        "needs_input": needs_input,
+        "needs_input": needs_input or asked_question,
+        "asked_question": asked_question,
         "pending_input": pending_input,
         "recap": recap,
         "last_line": last_line,
