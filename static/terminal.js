@@ -68,11 +68,26 @@ export function startLiveTerminal(target) {
   fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
 
+  // Synchronous initial fit. Reading the container's layout (via fit())
+  // right after term.open() forces a sync layout flush, so we get real
+  // dims here — and we pass them to the WS as a connect-time hint so the
+  // server resizes tmux BEFORE capture-pane. Without that, the initial
+  // blob is at tmux's current pane width (often a real terminal also
+  // attached at 200+ cols) and xterm has to reflow it down, mangling
+  // box-drawing TUIs for the first frame. If fit can't measure for any
+  // reason, leave the hint at zero and the server uses tmux's view.
+  let initialCols = 0;
+  let initialRows = 0;
+  try {
+    fitAddon.fit();
+    initialCols = term.cols;
+    initialRows = term.rows;
+  } catch (_) {}
+
   // ResizeObserver: refit + tell tmux when the modal/window changes size.
   // Debounced so a window-drag doesn't spam tmux with subprocess calls.
   termResizeObserver = new ResizeObserver(scheduleFit);
   termResizeObserver.observe(modalXtermEl);
-  requestAnimationFrame(scheduleFit);
 
   // The browser intercepts Cmd+key combos before xterm sees them. Translate
   // the common ones into readline-style control sequences and forward them
@@ -129,12 +144,16 @@ export function startLiveTerminal(target) {
   termIntentionalClose = false;
   termReconnectAttempt = 0;
   termReconnectedNotified = false;
-  connectTerminalWs(target);
+  connectTerminalWs(target, initialCols, initialRows);
 }
 
-function connectTerminalWs(target) {
+function connectTerminalWs(target, hintCols = 0, hintRows = 0) {
   const wsProto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${wsProto}://${location.host}/ws/pane?${targetQuery(target)}`);
+  let url = `${wsProto}://${location.host}/ws/pane?${targetQuery(target)}`;
+  if (hintCols > 0 && hintRows > 0) {
+    url += `&cols=${hintCols}&rows=${hintRows}`;
+  }
+  const ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
   termWs = ws;
 
@@ -189,7 +208,9 @@ function connectTerminalWs(target) {
     termReconnectTimer = setTimeout(() => {
       termReconnectTimer = null;
       if (!term || termWsTarget !== target || termIntentionalClose) return;
-      connectTerminalWs(target);
+      // Re-send current xterm dims so the reconnected server resizes tmux
+      // before its initial paint — same reasoning as the first connect.
+      connectTerminalWs(target, term.cols, term.rows);
     }, delay);
   };
 }

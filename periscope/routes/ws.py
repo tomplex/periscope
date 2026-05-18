@@ -21,7 +21,13 @@ router = APIRouter()
 
 
 @router.websocket("/ws/pane")
-async def ws_pane(websocket: WebSocket, session: str, index: int):
+async def ws_pane(
+    websocket: WebSocket,
+    session: str,
+    index: int,
+    cols: int = 0,
+    rows: int = 0,
+):
     await websocket.accept()
     target = f"{session}:{index}"
     # Modal-open is the canonical "opened in periscope" event. The grid view's
@@ -33,14 +39,53 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
     loop = asyncio.get_running_loop()
     pipe_active = False
 
-    # On the first {type:"resize"} message we save the window's original size
-    # and window-size mode so we can restore them when the connection closes.
+    # On the first resize (whether the connect-time hint below or a later
+    # {type:"resize"} message) we save the window's original size and
+    # window-size mode so we can restore them when the connection closes.
     # Tmux refuses to honor resize-window unless window-size is "manual".
     saved_window_size: str | None = None
     saved_dims: tuple[int, int] | None = None
 
+    def snapshot_and_resize(c: int, r: int) -> None:
+        """Snapshot original window size+mode (once), switch to manual, resize.
+
+        Idempotent on the snapshot side — only the first call records the
+        original dims, so the restore on disconnect always reaches the
+        pre-periscope size regardless of how many resizes happened.
+        """
+        nonlocal saved_window_size, saved_dims
+        if saved_window_size is None:
+            try:
+                wsz = tmux(
+                    "show-option", "-t", target,
+                    "-w", "-v", "window-size",
+                ).strip() or "latest"
+                dims = tmux(
+                    "display-message", "-t", target,
+                    "-p", "#{window_width} #{window_height}",
+                ).strip().split()
+                saved_window_size = wsz
+                saved_dims = (int(dims[0]), int(dims[1]))
+                tmux("setw", "-t", target, "window-size", "manual")
+            except Exception:
+                pass
+        try:
+            tmux("resize-window", "-t", target, "-x", str(c), "-y", str(r))
+        except Exception:
+            pass
+
     try:
-        # 1) Get tmux's view of the pane: size, cursor position, alt-screen
+        # 1) If the client told us up front what cols/rows it can display,
+        #    resize tmux to match BEFORE capture-pane. Otherwise the initial
+        #    blob is rendered for tmux's current pane width (often a real
+        #    terminal also attached to this session at 200+ cols) and xterm
+        #    has to reflow it down to the modal's width — which mangles
+        #    box-drawing TUIs (Claude's tables, Ink frames) for the first
+        #    frame until the next full repaint.
+        if cols > 0 and rows > 0:
+            await loop.run_in_executor(None, lambda: snapshot_and_resize(cols, rows))
+
+        # 2) Get tmux's view of the pane: size, cursor position, alt-screen
         #    state. We need all three to render the initial blob into an xterm
         #    state that matches what tmux thinks the pane currently looks like.
         #    If we don't, incremental updates from the stream (e.g. "cursor to
@@ -143,32 +188,12 @@ async def ws_pane(websocket: WebSocket, session: str, index: int):
                     except Exception:
                         ctrl = None
                     if isinstance(ctrl, dict) and ctrl.get("type") == "resize":
-                        cols = int(ctrl.get("cols") or 0)
-                        rows = int(ctrl.get("rows") or 0)
-                        if cols > 0 and rows > 0:
-                            def do_resize(c=cols, r=rows):
-                                nonlocal saved_window_size, saved_dims
-                                if saved_window_size is None:
-                                    # First resize: snapshot the window's
-                                    # current size + mode so we can restore
-                                    # on disconnect, then switch to manual so
-                                    # resize-window actually takes effect.
-                                    try:
-                                        wsz = tmux(
-                                            "show-option", "-t", target,
-                                            "-w", "-v", "window-size",
-                                        ).strip() or "latest"
-                                        dims = tmux(
-                                            "display-message", "-t", target,
-                                            "-p", "#{window_width} #{window_height}",
-                                        ).strip().split()
-                                        saved_window_size = wsz
-                                        saved_dims = (int(dims[0]), int(dims[1]))
-                                        tmux("setw", "-t", target, "window-size", "manual")
-                                    except Exception:
-                                        pass
-                                tmux("resize-window", "-t", target, "-x", str(c), "-y", str(r))
-                            await loop.run_in_executor(None, do_resize)
+                        rc = int(ctrl.get("cols") or 0)
+                        rr = int(ctrl.get("rows") or 0)
+                        if rc > 0 and rr > 0:
+                            await loop.run_in_executor(
+                                None, lambda c=rc, r=rr: snapshot_and_resize(c, r)
+                            )
                         continue
                 await loop.run_in_executor(
                     None, lambda t=text: deliver_input(target, t)

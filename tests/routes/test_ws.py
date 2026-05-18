@@ -66,3 +66,61 @@ def test_ws_pane_initial_paint(client, mocker):
         # cursor-park escape sequences.
         assert b"hello" in blob
         assert b"\x1b[2J" in blob  # clear screen
+
+
+def test_ws_pane_resizes_tmux_before_capture(client, mocker):
+    """Connect-time cols/rows hint triggers resize-window before capture-pane.
+
+    This is the fix for the initial-paint width race: without it, tmux's
+    pane is captured at whatever width a real attached terminal set, then
+    xterm has to reflow the body down to the modal's width — which mangles
+    box-drawing TUIs for the first frame.
+    """
+    calls: list[tuple] = []
+
+    def fake_tmux(*args):
+        calls.append(args)
+        if args and args[0] == "display-message":
+            # Pretend tmux honored the resize: report back 100x30.
+            if "#{pane_width}|#{pane_height}|" in args[-1]:
+                return "100|30|0|0|0"
+            if "#{window_width}" in args[-1]:
+                return "200 60"
+            return ""
+        if args and args[0] == "capture-pane":
+            return "hello\n"
+        if args and args[0] == "show-option":
+            return "latest"
+        return ""
+
+    for path in ("periscope.routes.ws.tmux", "server.tmux"):
+        try:
+            mocker.patch(path, side_effect=fake_tmux)
+            break
+        except (AttributeError, ModuleNotFoundError):
+            continue
+
+    mocker.patch("os.mkfifo")
+    mocker.patch("os.open", return_value=42)
+    mocker.patch("os.read", side_effect=BlockingIOError)
+    mocker.patch("os.close")
+    mocker.patch("os.path.exists", return_value=False)
+    mocker.patch("asyncio.selector_events.BaseSelectorEventLoop.add_reader")
+    mocker.patch("asyncio.selector_events.BaseSelectorEventLoop.remove_reader")
+
+    with client.websocket_connect("/ws/pane?session=main&index=0&cols=100&rows=30") as ws:
+        _ = ws.receive_text()
+        _ = ws.receive_bytes()
+
+    # Verify ordering: the resize-window call must happen before capture-pane.
+    # If we capture first, the body is at the wrong width and the whole fix
+    # is moot.
+    op_seq = [c[0] for c in calls]
+    assert "resize-window" in op_seq, f"no resize-window in {op_seq}"
+    assert "capture-pane" in op_seq
+    assert op_seq.index("resize-window") < op_seq.index("capture-pane")
+
+    # And the resize was for the hinted dims.
+    resize = next(c for c in calls if c[0] == "resize-window")
+    assert "-x" in resize and "100" in resize
+    assert "-y" in resize and "30" in resize
