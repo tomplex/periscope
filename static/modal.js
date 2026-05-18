@@ -61,6 +61,9 @@ export function openModal(target, opts = {}) {
 
 export function closeModal() {
   stopLiveTerminal();
+  // Tear down the dropdown listener before nuking the tab DOM so we
+  // don't leave a document-level click handler dangling.
+  closeDropdownMenu();
   modal.classList.add("hidden");
   document.body.classList.remove("modal-open");
   if (modalPollHandle) {
@@ -83,81 +86,193 @@ export function closeModal() {
 
 // Tab id model:
 //   "terminal"            — live pane terminal (always present, first)
-//   "lgtm-start"          — bootstrap-a-review button (only when no session yet)
-//   "lgtm:<item-id>"      — one tab per LGTM item (diff or document)
+//   "lgtm-start"          — bootstrap-a-review button (only when no session)
+//   "lgtm:diff"           — the diff tab (gets its own button)
+//   "lgtm:<doc-id>"       — one of N documents (collapsed into a dropdown)
 // CSS treats "terminal" specially via `#modal[data-tab="terminal"]`;
 // everything else maps to the review pane.
 function setActiveTab(name) {
   modal.dataset.tab = name === "terminal" ? "terminal" : "review";
   modal.dataset.tabId = name;
-  if (!modalTabs) return;
-  for (const btn of modalTabs.querySelectorAll(".modal-tab")) {
-    const active = btn.dataset.tab === name;
-    btn.classList.toggle("is-active", active);
-    btn.setAttribute("aria-selected", active ? "true" : "false");
-  }
+  // Apply is-active immediately for snappiness; renderTabStrip will
+  // confirm on the next poll. Only valid if the strip is already built.
+  if (lastPaneData) applyActiveState(name, buildTabSpec(lastPaneData));
 }
 
 function buildTabSpec(data) {
   const items = data?.lgtm?.items || [];
   const slug = data?.lgtm?.slug;
-  const tabs = [{ id: "terminal", label: "Terminal" }];
-  if (slug && items.length > 0) {
-    for (const it of items) {
-      tabs.push({
-        id: `lgtm:${it.id}`,
-        label: it.id === "diff" ? "Diff" : (it.title || it.id),
-      });
-    }
-  } else if (data?.cwd_raw) {
-    // No LGTM session yet — single bootstrap tab kicks off /api/lgtm/start.
-    tabs.push({ id: "lgtm-start", label: "+ Start review" });
-  }
-  return tabs;
+  const hasSession = !!slug && items.length > 0;
+  return {
+    showDiff: hasSession && items.some(i => i.id === "diff"),
+    docs: hasSession
+      ? items
+          .filter(i => i.id !== "diff")
+          .map(d => ({ id: `lgtm:${d.id}`, label: d.title || d.id }))
+      : [],
+    showStart: !hasSession && !!data?.cwd_raw,
+  };
 }
 
 function renderTabStrip(data) {
   if (!modalTabs) return;
-  const tabs = buildTabSpec(data);
-  const signature = tabs.map(t => `${t.id}\x1f${t.label}`).join("\x1e");
-  // Only rebuild when the spec actually changed — every 1.5s poll runs
-  // through here and rebuilding always would interfere with hover/focus.
-  if (modalTabs.dataset.signature !== signature) {
-    modalTabs.dataset.signature = signature;
-    modalTabs.innerHTML = "";
-    for (const t of tabs) {
-      const btn = document.createElement("button");
-      btn.className = "modal-tab";
-      btn.dataset.tab = t.id;
-      btn.setAttribute("role", "tab");
-      btn.setAttribute("aria-selected", "false");
-      btn.textContent = t.label;
-      modalTabs.appendChild(btn);
+  const spec = buildTabSpec(data);
+  ensureStripStructure(spec);
+  applyActiveState(modal.dataset.tabId || "terminal", spec);
+  performAutoSwitch(spec);
+}
+
+function ensureStripStructure(spec) {
+  // Signature drives rebuild. Doesn't include comment counts or the
+  // active-tab id — those don't change DOM, just is-active flags.
+  const signature = JSON.stringify({
+    diff: spec.showDiff,
+    docs: spec.docs.map(d => [d.id, d.label]),
+    start: spec.showStart,
+  });
+  if (modalTabs.dataset.signature === signature) return;
+  // Rebuild closes any open dropdown menu by destroying its DOM.
+  closeDropdownMenu();
+  modalTabs.dataset.signature = signature;
+  modalTabs.innerHTML = "";
+
+  modalTabs.appendChild(makeTabBtn("terminal", "Terminal"));
+  if (spec.showDiff) modalTabs.appendChild(makeTabBtn("lgtm:diff", "Diff"));
+  if (spec.docs.length > 0) modalTabs.appendChild(makeDocsDropdown(spec.docs));
+  if (spec.showStart) modalTabs.appendChild(makeTabBtn("lgtm-start", "+ Start review"));
+}
+
+function makeTabBtn(tabId, label) {
+  const btn = document.createElement("button");
+  btn.className = "modal-tab";
+  btn.dataset.tab = tabId;
+  btn.type = "button";
+  btn.setAttribute("role", "tab");
+  btn.setAttribute("aria-selected", "false");
+  btn.textContent = label;
+  return btn;
+}
+
+function makeDocsDropdown(docs) {
+  const wrap = document.createElement("div");
+  wrap.className = "modal-tab-dropdown";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "modal-tab modal-tab-dropdown-toggle";
+  toggle.dataset.docDropdownToggle = "";
+  toggle.setAttribute("aria-haspopup", "menu");
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.innerHTML = `
+    <span class="modal-tab-dropdown-label">Documents</span>
+    <span class="modal-tab-dropdown-chevron" aria-hidden="true">▾</span>
+  `;
+  wrap.appendChild(toggle);
+
+  const menu = document.createElement("div");
+  menu.className = "modal-tab-dropdown-menu";
+  menu.setAttribute("role", "menu");
+  menu.hidden = true;
+  for (const d of docs) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "modal-tab-dropdown-item";
+    item.dataset.tab = d.id;
+    item.setAttribute("role", "menuitem");
+    item.textContent = d.label;
+    menu.appendChild(item);
+  }
+  wrap.appendChild(menu);
+  return wrap;
+}
+
+function applyActiveState(currentTabId, spec) {
+  // Plain tabs (Terminal, Diff, Start) — highlight if data-tab matches.
+  for (const btn of modalTabs.querySelectorAll(".modal-tab:not(.modal-tab-dropdown-toggle)")) {
+    const active = btn.dataset.tab === currentTabId;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  // Dropdown toggle is "active" whenever the current tab is one of the
+  // dropdown's items. Its label mirrors the active doc's title.
+  const toggle = modalTabs.querySelector(".modal-tab-dropdown-toggle");
+  if (toggle) {
+    const activeDoc = spec.docs.find(d => d.id === currentTabId);
+    toggle.classList.toggle("is-active", !!activeDoc);
+    toggle.setAttribute("aria-selected", activeDoc ? "true" : "false");
+    const labelEl = toggle.querySelector(".modal-tab-dropdown-label");
+    if (labelEl) labelEl.textContent = activeDoc ? activeDoc.label : "Documents";
+    // Highlight the active row in the menu too, so it's obvious when open.
+    for (const item of modalTabs.querySelectorAll(".modal-tab-dropdown-item")) {
+      item.classList.toggle("is-active", item.dataset.tab === currentTabId);
     }
   }
-  // Auto-switch logic. Three triggers:
-  //   1. Caller asked for review (clicked the grid badge) and a real
-  //      LGTM tab is now available — pick the first one.
-  //   2. The active tab disappeared (e.g. the document was removed
-  //      from LGTM) — fall back to terminal.
-  const validIds = new Set(tabs.map(t => t.id));
+}
+
+function performAutoSwitch(spec) {
+  // Two triggers:
+  //   1. openModal({tab: "review"}) — switch to the first LGTM tab as
+  //      soon as items arrive. Prefer Diff; fall back to first doc.
+  //   2. The active tab disappeared (deregister, doc removed) — fall
+  //      back to Terminal.
+  const validIds = new Set(["terminal"]);
+  if (spec.showDiff) validIds.add("lgtm:diff");
+  for (const d of spec.docs) validIds.add(d.id);
+  if (spec.showStart) validIds.add("lgtm-start");
+
   const current = modal.dataset.tabId || "terminal";
   let target = current;
   if (pendingReviewOpen) {
-    const firstLgtm = tabs.find(t => t.id.startsWith("lgtm"));
-    if (firstLgtm) {
-      target = firstLgtm.id;
+    const first = spec.showDiff ? "lgtm:diff" : (spec.docs[0]?.id ?? null);
+    if (first) {
+      target = first;
       pendingReviewOpen = false;
     }
   }
   if (!validIds.has(target)) target = "terminal";
-  if (target !== current) {
-    setActiveTab(target);
-  } else {
-    // Even when the active id is unchanged, the button DOM may have just
-    // been rebuilt — re-apply is-active so the right one is highlighted.
-    setActiveTab(target);
+  if (target !== current) setActiveTab(target);
+}
+
+// ── Dropdown menu open/close ────────────────────────────────────────
+// Tracks open state at module scope. ensureStripStructure calls
+// closeDropdownMenu before rebuilding so the listener doesn't leak.
+
+let docsDropdownOpen = false;
+
+function toggleDropdownMenu() {
+  if (docsDropdownOpen) closeDropdownMenu();
+  else openDropdownMenu();
+}
+
+function openDropdownMenu() {
+  const menu = modalTabs?.querySelector(".modal-tab-dropdown-menu");
+  const toggle = modalTabs?.querySelector(".modal-tab-dropdown-toggle");
+  if (!menu || !toggle) return;
+  menu.hidden = false;
+  toggle.setAttribute("aria-expanded", "true");
+  docsDropdownOpen = true;
+  // ESC closes the menu first (then a second ESC closes the modal).
+  pushEscape(closeDropdownMenu);
+  // Outside-click closes the menu. Use a microtask so the click that
+  // opened it doesn't immediately count as "outside."
+  setTimeout(() => document.addEventListener("click", onOutsideDropdownClick), 0);
+}
+
+function closeDropdownMenu() {
+  const menu = modalTabs?.querySelector(".modal-tab-dropdown-menu");
+  const toggle = modalTabs?.querySelector(".modal-tab-dropdown-toggle");
+  if (menu) menu.hidden = true;
+  if (toggle) toggle.setAttribute("aria-expanded", "false");
+  if (docsDropdownOpen) {
+    popEscape(closeDropdownMenu);
+    document.removeEventListener("click", onOutsideDropdownClick);
   }
+  docsDropdownOpen = false;
+}
+
+function onOutsideDropdownClick(e) {
+  if (e.target.closest(".modal-tab-dropdown")) return;
+  closeDropdownMenu();
 }
 
 async function refreshModalHeader() {
@@ -726,14 +841,29 @@ export function initModal() {
 
   if (modalTabs) {
     modalTabs.addEventListener("click", (e) => {
+      // Documents dropdown toggle: open/close menu, don't change tab.
+      const toggle = e.target.closest("[data-doc-dropdown-toggle]");
+      if (toggle) {
+        e.stopPropagation();
+        toggleDropdownMenu();
+        return;
+      }
+      // Documents dropdown menu item: switch to that doc, close menu.
+      const item = e.target.closest(".modal-tab-dropdown-item");
+      if (item) {
+        e.stopPropagation();
+        setActiveTab(item.dataset.tab);
+        closeDropdownMenu();
+        if (lastPaneData) renderReviewPane(lastPaneData);
+        refreshModalHeader();
+        return;
+      }
+      // Plain tab click (Terminal, Diff, + Start review).
       const btn = e.target.closest(".modal-tab");
       if (!btn) return;
       e.stopPropagation();
       setActiveTab(btn.dataset.tab);
       if (btn.dataset.tab !== "terminal") {
-        // Render immediately from cached pane data so the user sees the
-        // iframe (or the Start-review button) without waiting 1.5s for
-        // the next poll.
         if (lastPaneData) {
           renderReviewPane(lastPaneData);
         } else if (!modalReviewContent.firstChild) {
