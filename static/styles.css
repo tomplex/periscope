@@ -1781,7 +1781,8 @@ body.modal-open { overflow: hidden; }
 
 /* New-project modal + Review-PR modal (shared visual pattern) */
 .new-project-modal-overlay,
-.review-pr-modal-overlay {
+.review-pr-modal-overlay,
+.cleanup-modal-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
@@ -1791,9 +1792,11 @@ body.modal-open { overflow: hidden; }
   z-index: 200;
 }
 .new-project-modal-overlay.hidden,
-.review-pr-modal-overlay.hidden { display: none; }
+.review-pr-modal-overlay.hidden,
+.cleanup-modal-overlay.hidden { display: none; }
 .new-project-modal-card,
-.review-pr-modal-card {
+.review-pr-modal-card,
+.cleanup-modal-card {
   background: var(--bg-1);
   color: var(--fg-0);
   border-radius: 0.75em;
@@ -1804,16 +1807,19 @@ body.modal-open { overflow: hidden; }
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 .new-project-modal-head,
-.review-pr-modal-head {
+.review-pr-modal-head,
+.cleanup-modal-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.25em;
 }
 .new-project-modal-head h2,
-.review-pr-modal-head h2 { margin: 0; font-size: 1.1em; }
+.review-pr-modal-head h2,
+.cleanup-modal-head h2 { margin: 0; font-size: 1.1em; }
 .new-project-modal-head button,
-.review-pr-modal-head button {
+.review-pr-modal-head button,
+.cleanup-modal-head button {
   background: none;
   border: none;
   color: var(--fg-0);
@@ -1821,13 +1827,15 @@ body.modal-open { overflow: hidden; }
   cursor: pointer;
 }
 .new-project-modal-sub,
-.review-pr-modal-sub {
+.review-pr-modal-sub,
+.cleanup-modal-sub {
   font-size: 0.85em;
   opacity: 0.75;
   margin: 0 0 1em 0;
 }
 .new-project-modal-sub code,
-.review-pr-modal-sub code {
+.review-pr-modal-sub code,
+.cleanup-modal-sub code {
   font-family: var(--font-mono, ui-monospace, monospace);
   background: color-mix(in oklch, var(--fg-0) 8%, transparent);
   padding: 0.1em 0.3em;
@@ -1859,7 +1867,8 @@ body.modal-open { overflow: hidden; }
   opacity: 0.6;
 }
 .new-project-modal-error,
-.review-pr-modal-error {
+.review-pr-modal-error,
+.cleanup-modal-error {
   background: color-mix(in oklch, var(--warn, #d97706) 15%, transparent);
   color: var(--warn, #d97706);
   border-radius: 0.4em;
@@ -1868,14 +1877,16 @@ body.modal-open { overflow: hidden; }
   font-size: 0.85em;
 }
 .new-project-modal-actions,
-.review-pr-modal-actions {
+.review-pr-modal-actions,
+.cleanup-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5em;
   margin-top: 1em;
 }
 .new-project-modal-actions button,
-.review-pr-modal-actions button {
+.review-pr-modal-actions button,
+.cleanup-modal-actions button {
   padding: 0.5em 1em;
   border: 1px solid color-mix(in oklch, var(--fg-0) 20%, transparent);
   border-radius: 0.4em;
@@ -1892,6 +1903,69 @@ body.modal-open { overflow: hidden; }
 }
 #new-project-submit:disabled,
 #review-pr-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Cleanup modal — wider card + candidate list + signal badges */
+.cleanup-modal-card {
+  width: min(720px, 90vw);
+}
+.cleanup-loading,
+.cleanup-empty {
+  padding: 1em;
+  opacity: 0.7;
+  font-size: 0.9em;
+}
+#cleanup-modal-controls {
+  margin: 0.5em 0;
+}
+.cleanup-delete-branches {
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.cleanup-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5em;
+  padding: 0.5em;
+  border-bottom: 1px solid color-mix(in oklch, var(--fg-0) 12%, transparent);
+  cursor: pointer;
+}
+.cleanup-row:hover { background: color-mix(in oklch, var(--fg-0) 4%, transparent); }
+.cleanup-row-dirty {
+  background: color-mix(in oklch, var(--warn, #d97706) 8%, transparent);
+}
+.cleanup-row-title { font-weight: 600; }
+.cleanup-row-meta {
+  font-size: 0.85em;
+  opacity: 0.7;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.cleanup-row-signals { margin-top: 0.25em; }
+.cleanup-badge {
+  display: inline-block;
+  font-size: 0.75em;
+  padding: 0.1em 0.4em;
+  border-radius: 0.4em;
+  margin-right: 0.25em;
+  background: color-mix(in oklch, var(--fg-0) 10%, transparent);
+}
+.cleanup-badge-pr_merged,
+.cleanup-badge-pr_closed { color: var(--accent, #4a90e2); }
+.cleanup-badge-remote_gone { color: var(--warn, #d97706); }
+.cleanup-badge-idle { opacity: 0.7; }
+.cleanup-dirty {
+  font-size: 0.8em;
+  color: var(--warn, #d97706);
+  margin-left: 0.5em;
+}
+#cleanup-submit {
+  background: var(--accent, #4a90e2);
+  color: white;
+  border-color: var(--accent, #4a90e2);
+}
+#cleanup-submit:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
