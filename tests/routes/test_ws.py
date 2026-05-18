@@ -124,3 +124,11 @@ def test_ws_pane_resizes_tmux_before_capture(client, mocker):
     resize = next(c for c in calls if c[0] == "resize-window")
     assert "-x" in resize and "100" in resize
     assert "-y" in resize and "30" in resize
+
+    # Periscope holds the pane size after disconnect — no restore.
+    # If we ever start save+restoring again, the resize-window count would
+    # be 2 (forward + restore) and the second one would carry different dims.
+    resizes = [c for c in calls if c[0] == "resize-window"]
+    assert len(resizes) == 1, (
+        f"expected exactly one resize-window (no restore), got {resizes}"
+    )

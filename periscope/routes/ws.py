@@ -39,37 +39,18 @@ async def ws_pane(
     loop = asyncio.get_running_loop()
     pipe_active = False
 
-    # On the first resize (whether the connect-time hint below or a later
-    # {type:"resize"} message) we save the window's original size and
-    # window-size mode so we can restore them when the connection closes.
-    # Tmux refuses to honor resize-window unless window-size is "manual".
-    saved_window_size: str | None = None
-    saved_dims: tuple[int, int] | None = None
-
-    def snapshot_and_resize(c: int, r: int) -> None:
-        """Snapshot original window size+mode (once), switch to manual, resize.
-
-        Idempotent on the snapshot side — only the first call records the
-        original dims, so the restore on disconnect always reaches the
-        pre-periscope size regardless of how many resizes happened.
-        """
-        nonlocal saved_window_size, saved_dims
-        if saved_window_size is None:
-            try:
-                wsz = tmux(
-                    "show-option", "-t", target,
-                    "-w", "-v", "window-size",
-                ).strip() or "latest"
-                dims = tmux(
-                    "display-message", "-t", target,
-                    "-p", "#{window_width} #{window_height}",
-                ).strip().split()
-                saved_window_size = wsz
-                saved_dims = (int(dims[0]), int(dims[1]))
-                tmux("setw", "-t", target, "window-size", "manual")
-            except Exception:
-                pass
+    # Periscope owns the pane width. Once we resize a window to the modal's
+    # dims, we LEAVE IT THERE — no restore on disconnect. Rationale: the
+    # save/restore dance only matters if a real terminal is also attached
+    # at a different size, but in periscope-primary workflows the restore
+    # just causes churn — each modal open/close pair would reflow the
+    # buffer twice (down to modal, back up to "original"), and reflows
+    # during streaming are what produce duplicated table fragments in
+    # Claude's scrollback. Holding the pane at periscope's size means
+    # subsequent opens at the same width are no-ops on tmux's side.
+    def set_pane_size(c: int, r: int) -> None:
         try:
+            tmux("setw", "-t", target, "window-size", "manual")
             tmux("resize-window", "-t", target, "-x", str(c), "-y", str(r))
         except Exception:
             pass
@@ -83,7 +64,7 @@ async def ws_pane(
         #    box-drawing TUIs (Claude's tables, Ink frames) for the first
         #    frame until the next full repaint.
         if cols > 0 and rows > 0:
-            await loop.run_in_executor(None, lambda: snapshot_and_resize(cols, rows))
+            await loop.run_in_executor(None, lambda: set_pane_size(cols, rows))
 
         # 2) Get tmux's view of the pane: size, cursor position, alt-screen
         #    state. We need all three to render the initial blob into an xterm
@@ -192,7 +173,7 @@ async def ws_pane(
                         rr = int(ctrl.get("rows") or 0)
                         if rc > 0 and rr > 0:
                             await loop.run_in_executor(
-                                None, lambda c=rc, r=rr: snapshot_and_resize(c, r)
+                                None, lambda c=rc, r=rr: set_pane_size(c, r)
                             )
                         continue
                 await loop.run_in_executor(
@@ -205,16 +186,8 @@ async def ws_pane(
     finally:
         # Cleanup in reverse setup order. Each step is best-effort because
         # any of them could fail mid-teardown if the pane already died.
-        # Restore the original window size + mode if we ever resized.
-        if saved_window_size is not None and saved_dims is not None:
-            try:
-                tmux(
-                    "resize-window", "-t", target,
-                    "-x", str(saved_dims[0]), "-y", str(saved_dims[1]),
-                )
-                tmux("setw", "-t", target, "window-size", saved_window_size)
-            except Exception:
-                pass
+        # We intentionally do NOT restore the window size here — see
+        # set_pane_size above for why periscope holds the pane.
         if pipe_active:
             try:
                 tmux("pipe-pane", "-t", target)  # no command = stop piping
