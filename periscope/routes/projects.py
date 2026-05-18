@@ -289,12 +289,18 @@ def projects_create(body: CreateBody):
 
     default = _detect_default_branch(repo)
 
-    # For the branch == default path the pinned_dir is the repo root.
-    # We can detect that collision UP FRONT and 409 before doing any
-    # tmux/git work, avoiding orphan state on failure.
+    # Pre-flight collision checks before ANY filesystem/tmux mutation.
+    # Pre-checking up here means a 409 leaves the user's state untouched —
+    # no orphan worktree on disk, no half-created tmux session.
+    name = (body.name or branch).strip()
+    tmux_session = name
+
     if branch == default and repo in all_projects():
+        raise HTTPException(409, f"project already exists at {repo!r}")
+    has_session_code, _ = _run(["tmux", "has-session", "-t", tmux_session])
+    if has_session_code == 0:
         raise HTTPException(
-            409, f"project already exists at {repo!r}"
+            409, f"tmux session {tmux_session!r} already exists; pick a different name",
         )
 
     pinned_dir: str
@@ -319,16 +325,11 @@ def projects_create(body: CreateBody):
                 409, f"project already exists at {pinned_dir!r}"
             )
 
-    name = (body.name or branch).strip()
-    # Tmux session name: same as `name` by default. Collisions surface as
-    # tmux errors below.
-    tmux_session = name
-
     try:
         _layout_two_window(tmux_session, pinned_dir)
     except HTTPException:
-        # tmux failed — leave the worktree on disk so the user can retry
-        # adoption or clean up manually. Don't rollback the git side.
+        # tmux failed mid-layout — leave the worktree on disk so the user
+        # can retry adoption or clean up manually. Don't rollback git.
         raise
 
     try:
@@ -340,7 +341,10 @@ def projects_create(body: CreateBody):
             base_branch=branch,
         )
     except ValueError as e:
-        # Race: someone adopted between the 409-check and here. Rare.
+        # Race: someone adopted the same pinned_dir between our 409-check
+        # and here. Roll back tmux so the orphan session doesn't shadow
+        # the existing project on next poll.
+        _run(["tmux", "kill-session", "-t", tmux_session])
         raise HTTPException(409, str(e))
 
     result = {"ok": True, "pinned_dir": pinned_dir, **row}
