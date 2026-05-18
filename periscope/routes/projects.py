@@ -676,8 +676,10 @@ def projects_pr_review(body: PRReviewBody):
     # will see @periscope_id=<claude_pid> on the tmux window, recognize it
     # as a valid stamp, and refresh last_seen — the linked_pr field stays
     # because phase-1 added it to the GC immunity list.
-    if claude_pid:
-        set_window_fields(claude_pid, linked_pr=pr, is_fork=is_fork)
+    # No guard: _layout_two_window raises HTTPException(500) if the claude
+    # window's index can't be resolved, so claude_pid is always a real
+    # 8-char hex id by the time we get here.
+    set_window_fields(claude_pid, linked_pr=pr, is_fork=is_fork)
 
     result = {
         "ok": True,
