@@ -39,6 +39,7 @@
       <span class="filters-sep"></span>
       <button id="new-session" class="filter-btn is-action" title="create a new tmux session">+ session</button>
       <button id="new-project-btn" class="filter-btn is-action" title="create a new project (new worktree + tmux session)">+ project</button>
+      <button id="review-pr-btn" class="filter-btn is-action" title="review a PR by number — creates a worktree at pr-<N> + claude session">📋 review PR</button>
       <button id="send-bulk" class="filter-btn is-action" hidden title="paste text + Enter into every visible pane (filter first to scope)"></button>
       <button id="toggle-all" class="filter-btn is-action" title="collapse or expand all sessions"></button>
       <button id="open-commands" class="filter-btn is-action" title="edit + claude / + shell / + ... commands">⚙</button>
@@ -86,6 +87,35 @@
         <div class="new-project-modal-actions">
           <button type="button" id="new-project-cancel">cancel</button>
           <button type="submit" id="new-project-submit">create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div id="review-pr-modal" class="hidden review-pr-modal-overlay">
+    <div class="review-pr-modal-card">
+      <header class="review-pr-modal-head">
+        <h2>review PR</h2>
+        <button id="review-pr-modal-close" title="close">×</button>
+      </header>
+      <p class="review-pr-modal-sub">Fetches <code>pull/&lt;N&gt;/head:pr-&lt;N&gt;</code>, creates a worktree, opens a tmux session with claude.</p>
+      <form id="review-pr-form">
+        <label>
+          Repo
+          <input id="review-pr-repo" list="review-pr-repos" placeholder="/Users/tom/dev/foo" required>
+          <datalist id="review-pr-repos"></datalist>
+        </label>
+        <label>
+          PR number
+          <input id="review-pr-number" type="number" min="1" placeholder="1234" required>
+        </label>
+        <label>
+          Name <span class="review-pr-modal-hint">(defaults to pr-&lt;N&gt;)</span>
+          <input id="review-pr-name" placeholder="optional">
+        </label>
+        <div id="review-pr-error" class="review-pr-modal-error" hidden></div>
+        <div class="review-pr-modal-actions">
+          <button type="button" id="review-pr-cancel">cancel</button>
+          <button type="submit" id="review-pr-submit">review</button>
         </div>
       </form>
     </div>

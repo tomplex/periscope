@@ -13,6 +13,7 @@ identifiers sidestep the issue entirely.
 Phase 1 does NOT include POST /api/projects (create-new); that's phase 2.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -25,8 +26,11 @@ from periscope.projects import (
     all_projects, archive_project, create_project, get_project,
     update_project, MAIN_KEY,
 )
+from periscope.repo_locks import repo_lock
+from periscope.store import set_window_fields
 from periscope.tmux import _run, _tmux_mutate, tmux
 from periscope.worktree_spawn import spawn_worktree, _detect_default_branch
+from periscope.worktrees import invalidate as worktrees_invalidate
 
 
 router = APIRouter()
@@ -213,7 +217,13 @@ class CreateBody(BaseModel):
     name: str | None = None  # auto-fills to branch if absent
 
 
-def _layout_two_window(tmux_session: str, pinned_dir: str) -> None:
+class PRReviewBody(BaseModel):
+    repo: str
+    pr_number: int
+    name: str | None = None  # defaults to pr-<N> if absent
+
+
+def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
     """Apply the trellis-style 2-window layout: window 1 'claude',
     window 2 'shell'. tmux session is created from scratch and ends with
     window 1 active. The user is NOT attached — periscope is a dashboard,
@@ -223,9 +233,14 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> None:
     its rc file before the command lands (see CLAUDE.md "Key invariants"
     note 5). Without it, `claude` can land mid-rc and either get echoed
     as text or fail silently.
+
+    Returns the claude window's stamped @periscope_id. Phase 4's PR-review
+    endpoint uses this to write state.windows[pid].linked_pr synchronously;
+    other callers can ignore the return.
     """
     import time
     from periscope.panes import note_focus, note_action
+    from periscope.pids import stamp_new_window
 
     # new-session creates window 0 (or whatever base-index is) with a bare
     # shell at cwd = pinned_dir.
@@ -263,10 +278,18 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> None:
         "display-message", "-t", f"{tmux_session}:claude",
         "-p", "#{window_index}",
     ).strip()
-    if idx_out.isdigit():
-        target = f"{tmux_session}:{idx_out}"
-        note_focus(target)
-        note_action(target)
+    if not idx_out.isdigit():
+        # If we can't resolve the claude window's index after creating it,
+        # something is very wrong with tmux state. Fail loudly — silently
+        # returning "" would let PR-review skip the linked_pr write and
+        # create a project with no #PR badge, which the user couldn't
+        # detect without inspecting state.json.
+        raise HTTPException(500, "could not resolve claude window index")
+    target = f"{tmux_session}:{idx_out}"
+    note_focus(target)
+    note_action(target)
+    pid = stamp_new_window(target)
+    return pid
 
 
 @router.post("/api/projects")
@@ -326,7 +349,7 @@ def projects_create(body: CreateBody):
             )
 
     try:
-        _layout_two_window(tmux_session, pinned_dir)
+        _layout_two_window(tmux_session, pinned_dir)  # returns pid; ignored here
     except HTTPException:
         # tmux failed mid-layout — leave the worktree on disk so the user
         # can retry adoption or clean up manually. Don't rollback git.
@@ -500,3 +523,178 @@ def projects_discoverable():
         "repos": sorted(repos),
         "branches_by_repo": branches_by_repo,
     }
+
+
+@router.post("/api/projects/pr-review")
+def projects_pr_review(body: PRReviewBody):
+    """Spawn a project for reviewing PR #<N> on `repo`. Fetches via
+    `pull/<N>/head:pr-<N>` (uniform for same-repo + fork PRs), creates a
+    worktree at branch `pr-<N>`, applies the standard claude+shell layout,
+    and writes `linked_pr` on the claude window so the card-meta `#PR`
+    badge appears on the next poll.
+
+    Errors:
+      400 — repo not git, pr_number invalid, gh call failed, fetch failed,
+            project name collides
+      404 — PR not found
+      409 — worktree path already exists OR tmux session name collides OR
+            project already exists at pinned_dir
+      500 — git/tmux mutation failed for any other reason
+    """
+    repo = os.path.realpath(body.repo)
+    if not os.path.isdir(repo):
+        raise HTTPException(400, f"repo does not exist: {body.repo}")
+    code, toplevel = _run(["git", "-C", repo, "rev-parse", "--show-toplevel"])
+    if code != 0 or not toplevel:
+        raise HTTPException(400, f"not a git repo: {body.repo}")
+    repo = os.path.realpath(toplevel)
+
+    pr = body.pr_number
+    if pr <= 0:
+        raise HTTPException(400, f"pr_number must be positive: {pr}")
+
+    # Resolve target name + tmux session up front so we can do a cheap
+    # collision pre-check BEFORE the 15-second gh call. Wastes nothing on
+    # a known-collision retry.
+    local_branch = f"pr-{pr}"
+    name_preview = (body.name or local_branch).strip()
+    has_session_code, _ = _run(["tmux", "has-session", "-t", name_preview])
+    if has_session_code == 0:
+        raise HTTPException(
+            409, f"tmux session {name_preview!r} already exists; pick a different name",
+        )
+
+    # gh pr view → metadata.
+    code, out = _run(
+        [
+            "gh", "pr", "view", str(pr),
+            "--json", "headRefName,isCrossRepository,headRepository,baseRefName,state",
+        ],
+        cwd=repo,
+        timeout=15.0,
+    )
+    if code != 0:
+        # gh's stderr is in `out` since _run merges them; map "not found"
+        # variants to 404, anything else to 400.
+        if "no pull requests found" in out.lower() or "could not resolve" in out.lower():
+            raise HTTPException(404, f"PR #{pr} not found in {body.repo}: {out}")
+        raise HTTPException(400, f"gh pr view failed: {out}")
+    try:
+        meta = json.loads(out)
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"gh pr view returned invalid JSON: {e}")
+
+    is_fork = bool(meta.get("isCrossRepository"))
+    pr_state = (meta.get("state") or "").upper()  # OPEN / CLOSED / MERGED
+    # NOTE: base_branch here is the PR's target branch (e.g. `main`), per
+    # spec §Verb 3 step 5. This means future worktree-tabs spawned from
+    # THIS project (Verb 2) will fork off `main`, not off `pr-<N>`. That
+    # IS the spec's intent — sub-feature work off a PR-review should
+    # rebase against the PR's target, not the PR itself. Don't "fix" this.
+    base_branch = meta.get("baseRefName") or None
+    name = name_preview
+    tmux_session = name
+
+    # Fetch the PR's head commits into a local branch `pr-<N>`. The
+    # `pull/<N>/head:<localname>` refspec works for both same-repo and
+    # fork PRs — the refs/pull namespace is what GitHub exposes for
+    # PR review. Fetch runs OUTSIDE the per-repo lock (network op,
+    # idempotent vs. concurrent fetches).
+    fetch_code, fetch_out = _run(
+        ["git", "-C", repo, "fetch", "origin", f"pull/{pr}/head:{local_branch}"],
+        timeout=60.0,
+    )
+    if fetch_code != 0:
+        # Git's actual error vocabulary for fetch-into-existing-branch:
+        #   "non-fast-forward"            — local branch has divergent commits
+        #   "refusing to fetch into branch ... checked out at" — branch is a
+        #                                    current worktree HEAD elsewhere
+        # Both indicate a previous review of this PR is still around; surface
+        # 409 with a hint to clean up first. Everything else (network, auth)
+        # is a 400 with the raw stderr.
+        if "non-fast-forward" in fetch_out or "refusing to fetch" in fetch_out:
+            raise HTTPException(
+                409,
+                f"local branch {local_branch!r} already in use — "
+                f"remove the existing worktree/branch first: {fetch_out}",
+            )
+        raise HTTPException(400, f"git fetch failed: {fetch_out}")
+
+    # Resolve the worktree path. Sibling layout, matches spawn_worktree.
+    from periscope.worktree_spawn import WORKTREES_DIR, _slug_for_path
+    repo_name = os.path.basename(repo.rstrip("/"))
+    wt_path = str(WORKTREES_DIR / repo_name / _slug_for_path(local_branch))
+    if os.path.exists(wt_path):
+        raise HTTPException(409, f"worktree path already exists: {wt_path}")
+
+    # Create the worktree at `pr-<N>` under the per-repo lock. On failure,
+    # delete the orphan `pr-<N>` branch the fetch created — otherwise a
+    # retry hits the "non-fast-forward" path and 409s with a confusing
+    # error.
+    with repo_lock(repo):
+        WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
+        (WORKTREES_DIR / repo_name).mkdir(parents=True, exist_ok=True)
+        code, out = _run(
+            ["git", "-C", repo, "worktree", "add", wt_path, local_branch],
+            timeout=30.0,
+        )
+        if code != 0:
+            _run(["git", "-C", repo, "branch", "-D", local_branch])
+            raise HTTPException(500, f"git worktree add failed: {out}")
+    worktrees_invalidate(repo)
+
+    pinned_dir = wt_path
+
+    if pinned_dir in all_projects():
+        # Race condition: someone adopted this path between our checks.
+        # Rare; clean up the just-created worktree AND the orphaned local
+        # branch to avoid leaving phase-6 cleanup-view bait. `--force` is
+        # safe here because the worktree was just created with no user
+        # content.
+        _run(["git", "-C", repo, "worktree", "remove", "--force", wt_path])
+        _run(["git", "-C", repo, "branch", "-D", local_branch])
+        raise HTTPException(
+            409, f"project already exists at {pinned_dir!r}"
+        )
+
+    # Apply the 2-window layout and capture the claude window's pid for the
+    # synchronous linked_pr write. On failure, roll back the worktree +
+    # branch — otherwise we leak orphan state with no way to detect it
+    # from the UI (no project row, no tmux session).
+    try:
+        claude_pid = _layout_two_window(tmux_session, pinned_dir)
+    except HTTPException:
+        _run(["git", "-C", repo, "worktree", "remove", "--force", wt_path])
+        _run(["git", "-C", repo, "branch", "-D", local_branch])
+        raise
+
+    try:
+        row = create_project(
+            pinned_dir,
+            name=name,
+            tmux_session=tmux_session,
+            repo=repo,
+            base_branch=base_branch,
+        )
+    except ValueError as e:
+        _run(["tmux", "kill-session", "-t", tmux_session])
+        raise HTTPException(409, str(e))
+
+    # Write the PR link on the claude window. Future polls' resolve_pids
+    # will see @periscope_id=<claude_pid> on the tmux window, recognize it
+    # as a valid stamp, and refresh last_seen — the linked_pr field stays
+    # because phase-1 added it to the GC immunity list.
+    # No guard: _layout_two_window raises HTTPException(500) if the claude
+    # window's index can't be resolved, so claude_pid is always a real
+    # 8-char hex id by the time we get here.
+    set_window_fields(claude_pid, linked_pr=pr, is_fork=is_fork)
+
+    result = {
+        "ok": True,
+        "pinned_dir": pinned_dir,
+        "pr_number": pr,
+        "is_fork": is_fork,
+        "pr_state": pr_state,
+        **row,
+    }
+    return result
