@@ -35,6 +35,9 @@ let lastPaneData = null;
 // Set by openModal({tab: "review"}) — switches to the first LGTM tab as
 // soon as data arrives. Cleared after the switch or on modal close.
 let pendingReviewOpen = false;
+// Set by addLgtmDocFromTerminal — switches to a freshly-added item
+// once it appears in the cache. Cleared after the switch or on close.
+let pendingTabIdAfterAdd = null;
 
 export function openModal(target, opts = {}) {
   state.activeTarget = target;
@@ -79,6 +82,7 @@ export function closeModal() {
   mountedTabId = null;
   lastPaneData = null;
   pendingReviewOpen = false;
+  pendingTabIdAfterAdd = null;
   state.modalRenaming = false;
   state.activeTarget = null;
   popEscape(closeModal);
@@ -233,7 +237,12 @@ function performAutoSwitch(spec) {
 
   const current = modal.dataset.tabId || "terminal";
   let target = current;
-  if (pendingReviewOpen) {
+  // Highest-priority auto-switch: a doc the user just added via
+  // Cmd+click. Lands as soon as it shows up in the items list.
+  if (pendingTabIdAfterAdd && validIds.has(pendingTabIdAfterAdd)) {
+    target = pendingTabIdAfterAdd;
+    pendingTabIdAfterAdd = null;
+  } else if (pendingReviewOpen) {
     const first = spec.showDiff ? "lgtm:diff" : (spec.docs[0]?.id ?? null);
     if (first) {
       target = first;
@@ -288,6 +297,40 @@ function closeDropdownMenu() {
 function onOutsideDropdownClick(e) {
   if (e.target.closest(".modal-tab-dropdown")) return;
   closeDropdownMenu();
+}
+
+// Called from terminal.js when the user Cmd+clicks a .md path in the
+// xterm view. We POST the path to /api/lgtm/add-doc with the pane's
+// cwd; on success we stash the returned tab_id so the next poll's
+// auto-switch lands on the new tab.
+export async function addLgtmDocFromTerminal(rawPath) {
+  if (!rawPath) return;
+  const cwd = lastPaneData?.cwd_raw;
+  if (!cwd) {
+    console.warn("add doc: no cwd for current pane");
+    return;
+  }
+  // Strip a trailing :line suffix that path links sometimes carry —
+  // LGTM doesn't anchor docs to line numbers, and the file path alone
+  // is what /api/lgtm/add-doc validates.
+  const path = rawPath.replace(/:\d+$/, "");
+  try {
+    const res = await fetch("/api/lgtm/add-doc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd, path }),
+    });
+    const payload = await res.json();
+    if (!payload.ok) {
+      console.warn(`add doc: ${payload.error}`);
+      writeTerminalLine(`\r\n\x1b[31m[periscope: add doc failed — ${payload.error}]\x1b[0m`);
+      return;
+    }
+    pendingTabIdAfterAdd = payload.tab_id;
+    refreshModalHeader();
+  } catch (e) {
+    console.warn("add doc error:", e);
+  }
 }
 
 async function refreshModalHeader() {

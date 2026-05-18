@@ -10,6 +10,7 @@
 // to it through the exported functions.
 
 import { targetQuery } from './util.js';
+import { addLgtmDocFromTerminal } from './modal.js';
 
 const modalXtermEl = document.getElementById("modal-xterm");
 
@@ -23,6 +24,46 @@ let termReconnectedNotified = false; // only print "reconnecting…" once per ou
 let fitAddon = null;
 let termResizeObserver = null;
 let fitDebounce = null;
+
+// Matches a .md path inside a terminal row. Anchored by negative
+// look-around so `data.md_archive` doesn't fool it into matching
+// `data.md`, and a leading word/`/`/`.`/`-` doesn't claim more than
+// the path's first char. Trailing `:42` line numbers are captured
+// so Cmd+click in compiler-style output works.
+const MD_PATH_RE = /(?<![\w./-])[\w./~-]*[\w-]+\.md(?::\d+)?(?!\w)/g;
+
+function registerMarkdownLinkProvider(t) {
+  t.registerLinkProvider({
+    provideLinks(rowNumber, callback) {
+      const line = t.buffer.active.getLine(rowNumber - 1)?.translateToString(true);
+      if (!line) return callback(undefined);
+      const links = [];
+      let m;
+      MD_PATH_RE.lastIndex = 0;
+      while ((m = MD_PATH_RE.exec(line)) !== null) {
+        const text = m[0];
+        const start = m.index + 1;       // xterm columns are 1-indexed
+        const end = start + text.length - 1;
+        links.push({
+          text,
+          range: {
+            start: { x: start, y: rowNumber },
+            end:   { x: end,   y: rowNumber },
+          },
+          activate(event, linkText) {
+            // Require a modifier so reading scrollback doesn't accidentally
+            // trigger adds. Cmd on Mac, Ctrl elsewhere.
+            if (!event.metaKey && !event.ctrlKey) return;
+            addLgtmDocFromTerminal(linkText);
+          },
+          hover() {},
+          leave() {},
+        });
+      }
+      callback(links);
+    },
+  });
+}
 
 export function startLiveTerminal(target) {
   // Fresh xterm.js instance per modal-open. Dispose any leftover from a prior
@@ -60,6 +101,16 @@ export function startLiveTerminal(target) {
   });
   term.open(modalXtermEl);
   term.focus();
+
+  // Cmd+click on a `.md` path → add it as a document to the LGTM
+  // session for this pane's repo. Path is resolved against the pane's
+  // cwd server-side. Plain click on the underlined path does nothing
+  // (no modifier = no action) — the Cmd requirement keeps incidental
+  // clicks during scrollback reading from triggering adds.
+  //
+  // The link provider runs per-rendered-row on demand. Underline-on-
+  // hover comes for free from xterm's default link styling.
+  registerMarkdownLinkProvider(term);
 
   // Fit xterm to the modal container's actual pixel size (so we never clip
   // the bottom rows) and ask tmux to resize the underlying pane to match.
