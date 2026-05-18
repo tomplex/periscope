@@ -315,7 +315,7 @@ function renderSession(session, ws, totalWindows) {
     <section class="session-group${collapsed}${alertClass}" data-session="${s}">
       <div class="session-header" draggable="true" data-session="${s}">
         <span class="chevron">▾</span>
-        <span class="session-name">${escapeHtml(project?.name || session)}</span>
+        <h2 class="session-name">${escapeHtml(project?.name || session)}</h2>
         ${pinnedDirLabel ? `<span class="session-pinned-dir">${escapeHtml(pinnedDirLabel)}</span>` : ""}
         <span class="session-meta">${meta}${recentLabel ? ` · ${recentLabel}` : ""}</span>
         ${sessionPill(ws)}
