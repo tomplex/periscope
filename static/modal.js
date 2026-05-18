@@ -864,26 +864,23 @@ function startModalRename() {
   input.addEventListener("blur", () => finish(true));
 }
 
-async function handleModalAutoRename() {
-  if (!state.activeTarget || modalAutoRename.dataset.busy) return;
-  modalAutoRename.dataset.busy = "1";
-  const orig = modalAutoRename.textContent;
-  modalAutoRename.textContent = "✨ thinking…";
-  modalAutoRename.disabled = true;
+async function handleModalAutoRename(btn) {
+  if (!state.activeTarget || state.modalAutoRenaming) return;
+  state.modalAutoRenaming = true;
+  // The header poll is paused while this flag is set (see refreshModalHeader),
+  // so the button keeps its busy class until we restore.
+  btn.classList.add("busy");
+  btn.disabled = true;
   try {
     const data = await apiCall(
       "auto-rename window",
       `/api/auto-rename-window?${targetQuery(state.activeTarget)}`,
       { method: "POST" }
     );
-    if (data) {
-      refreshModalHeader();
-      poll();
-    }
+    if (data) poll();  // refresh cards; modal header refreshes in the finally
   } finally {
-    modalAutoRename.textContent = orig;
-    modalAutoRename.disabled = false;
-    delete modalAutoRename.dataset.busy;
+    state.modalAutoRenaming = false;
+    refreshModalHeader();  // rebuilds the title; new button is fresh
   }
 }
 
@@ -895,16 +892,18 @@ export function initModal() {
 
   // Double-click the window name in the modal header to rename it. The
   // `.modal-name` span is rebuilt every poll by updateModalHeader, so delegate
-  // from the persistent <h2> instead of attaching per-render.
+  // from the persistent <h2> instead of attaching per-render. Same logic
+  // applies to the ✨ auto-rename button rendered into the title innerHTML.
   modalTitle.addEventListener("dblclick", (e) => {
     if (!e.target.closest(".modal-name")) return;
     e.stopPropagation();
     startModalRename();
   });
-
-  modalAutoRename.addEventListener("click", (e) => {
+  modalTitle.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action='auto-rename']");
+    if (!btn) return;
     e.stopPropagation();
-    handleModalAutoRename();
+    handleModalAutoRename(btn);
   });
 
   if (modalTabs) {

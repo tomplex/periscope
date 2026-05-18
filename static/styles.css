@@ -1044,6 +1044,36 @@ body.modal-open { overflow: hidden; }
   min-width: 0;
 }
 
+/* Auto-rename button rendered inline with the title, immediately right of
+   `.modal-name`. Click triggers `/api/auto-rename-window` via delegation
+   from the persistent <h2>. While the request is in flight the button gets
+   .busy and the header poll is paused so the state survives. */
+.modal-head .modal-title-rename {
+  align-self: center;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s, background 0.12s;
+}
+.modal-head .modal-title-rename:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--bg-1);
+}
+.modal-head .modal-title-rename:disabled,
+.modal-head .modal-title-rename.busy {
+  cursor: progress;
+  animation: modal-rename-pulse 1.1s ease-in-out infinite;
+}
+@keyframes modal-rename-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+
 .modal-subtitle {
   margin-top: 4px;
   font-size: 11.5px;
