@@ -178,3 +178,42 @@ def test_resolve_pids_handles_empty_windows_list(clean_state):
     """No-op on an empty input list; doesn't touch state."""
     resolve_pids([])
     # Did not raise; nothing else to assert.
+
+
+def test_resolve_pids_re_mints_when_two_windows_share_periscope_id(
+    clean_state, mocker
+):
+    """Real-world failure: tmux can end up with the same @periscope_id
+    stamped on multiple windows (e.g. after session-copy or set-option
+    races). resolve_pids must keep that id for the first window only and
+    re-mint a fresh id for the duplicate, then re-stamp tmux so future
+    polls take the fast path with the corrected id.
+
+    Without this gate, all duplicates resolve to the same state.windows
+    entry — collapsing acted_at / linked_pr / notes onto a single record
+    and breaking grid sort (the bug Tom hit with the `lgtm` session, where
+    `shell` kept appearing leftmost because every window shared one pid).
+    """
+    mock_stamp = mocker.patch("periscope.pids._stamp_pid")
+    mocker.patch(
+        "periscope.pids._mint_pid",
+        side_effect=[f"minted{i:02x}" for i in range(10)],
+    )
+    windows = [
+        {"session": "lgtm", "index": 1, "name": "shell",
+         "cwd": "/x", "pid_raw": "deadbeef"},
+        {"session": "lgtm", "index": 2, "name": "walkthrough-pr-review",
+         "cwd": "/x", "pid_raw": "deadbeef"},
+        {"session": "lgtm", "index": 3, "name": "walkthrough-design",
+         "cwd": "/x", "pid_raw": "deadbeef"},
+    ]
+    resolve_pids(windows)
+    pids = [w["pid"] for w in windows]
+    assert len(set(pids)) == 3, f"expected 3 distinct pids, got {pids}"
+    assert pids[0] == "deadbeef"  # first window keeps the id
+    assert "deadbeef" not in pids[1:]  # duplicates re-minted
+    # Re-stamped the corrected pid on the duplicate windows so the next
+    # poll sees the right @periscope_id directly.
+    stamped_targets = {call.args[0] for call in mock_stamp.call_args_list}
+    assert "lgtm:2" in stamped_targets
+    assert "lgtm:3" in stamped_targets

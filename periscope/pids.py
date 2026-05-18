@@ -115,7 +115,16 @@ def resolve_pids(windows: list[dict]) -> None:
             pid_raw = (w.get("pid_raw") or "").strip()
             pid: str | None = None
             if pid_raw and len(pid_raw) == 8 and all(c in "0123456789abcdef" for c in pid_raw):
-                pid = pid_raw
+                # Reject a pid_raw already claimed earlier in this pass —
+                # tmux occasionally ends up with the same @periscope_id on
+                # multiple windows (session-copy, swap-window, set-option
+                # racing with new-window, etc.). Without this check, every
+                # duplicate window resolves to the same persisted state
+                # entry, so acted_at / completed_at / linked_pr / notes all
+                # collapse onto a single record and the grid sort can't
+                # distinguish the windows.
+                if pid_raw not in taken:
+                    pid = pid_raw
             if pid is None:
                 pid = _rebind_pid(
                     wblock,
