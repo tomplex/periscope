@@ -18,6 +18,14 @@ MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
 # panes.list_windows filters these out; usage.py creates them.
 USAGE_SESSION_PREFIX = "periscope-usage-"
 
+# Command line periscope sends into tmux when spawning a Claude window.
+# The dev-channels flag is what makes Claude connect to periscope's MCP
+# socket via channel_shim.py — without it, `link_pr` / `reply` / `+ link
+# pull request` etc. all silently no-op for that pane. Every code path that
+# spawns Claude must use this constant; new hardcoded `"claude"` strings
+# reintroduce the channel-less-spawn bug.
+CLAUDE_EXEC = "claude --dangerously-load-development-channels server:periscope"
+
 # Port the FastAPI server binds. Default 8765 = "prod" (launchd-managed).
 # Override via PERISCOPE_PORT=8766 for a dev instance running alongside
 # prod. Read once at module load — server.py invokes load_dotenv before

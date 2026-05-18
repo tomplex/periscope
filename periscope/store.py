@@ -51,6 +51,7 @@ import time
 from pathlib import Path
 from typing import TypedDict
 
+from periscope.config import CLAUDE_EXEC
 from periscope.log import log
 
 
@@ -269,7 +270,11 @@ if _MIGRATION_RAN_THIS_LOAD:
         _write_state(_STATE)
 
 _DEFAULT_COMMANDS = [
-    {"label": "claude", "exec": "claude"},
+    # Seeded entry. The `_channels_migration_v1` rewriter below upgrades
+    # any pre-existing user state's `"exec": "claude"` to the channels-
+    # enabled form; this default matches that post-migration value so a
+    # fresh state.json doesn't need a no-op migration pass on first load.
+    {"label": "claude", "exec": CLAUDE_EXEC},
     {"label": "shell", "exec": ""},
     {"label": "vim", "exec": "vim"},
 ]
@@ -293,12 +298,9 @@ def _channels_migration_v1() -> None:
     with _STATE_LOCK:
         if _STATE.get("channels_migration_v1_done"):
             return
-        new_exec = (
-            "claude --dangerously-load-development-channels server:periscope"
-        )
         for cmd in _STATE.get("commands", []):
             if cmd.get("exec") == "claude":
-                cmd["exec"] = new_exec
+                cmd["exec"] = CLAUDE_EXEC
         _STATE["channels_migration_v1_done"] = True
         _write_state(_STATE)
 

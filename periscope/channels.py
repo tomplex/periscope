@@ -240,9 +240,12 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     target = f"{session}:{index}"
 
     # Let the shell rc finish before the `claude` command line arrives, so
-    # it runs as a real prompt entry rather than mid-rc echoed text.
+    # it runs as a real prompt entry rather than mid-rc echoed text. The
+    # dev-channels flag is what makes the spawned Claude connect back to
+    # periscope's MCP socket.
+    from periscope.config import CLAUDE_EXEC
     await asyncio.sleep(0.1)
-    tmux("send-keys", "-t", target, "claude", "Enter")
+    tmux("send-keys", "-t", target, CLAUDE_EXEC, "Enter")
 
     # Claude Code's React TUI takes a moment to mount; pasting before it's
     # ready leaves the prompt stranded in shell history instead of the

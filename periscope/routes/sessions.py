@@ -17,6 +17,7 @@ import time
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from periscope.config import CLAUDE_EXEC
 from periscope.panes import (
     _acted_at, _active_per_session, _focused_at, _resuming,
     note_action, note_focus,
@@ -77,9 +78,9 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
     # session fall-through path doesn't lose either side-effect.
     if not exec_cmd:
         if mode in ("claude", "vim", "shell"):
-            exec_cmd = {"claude": "claude", "vim": "vim", "shell": ""}.get(mode, "")
+            exec_cmd = {"claude": CLAUDE_EXEC, "vim": "vim", "shell": ""}.get(mode, "")
         elif mode == "resume" and resume_id:
-            exec_cmd = f"claude --resume {resume_id}"
+            exec_cmd = f"{CLAUDE_EXEC} --resume {resume_id}"
 
     # mode=resume looks up the original project_path and runs claude --resume
     # there; we resolve cwd up front so the rest of the spawn path is shared.
@@ -130,7 +131,7 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
                 return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
             target = f"{session}:{index}"
             time.sleep(0.1)
-            tmux("send-keys", "-t", target, f"claude --resume {resume_id}", "Enter")
+            tmux("send-keys", "-t", target, f"{CLAUDE_EXEC} --resume {resume_id}", "Enter")
             _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
             note_focus(target)
             note_action(target)
@@ -197,7 +198,7 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
 def window_new_worktree(
     session: str,
     branch: str,
-    exec_cmd: str = Query("claude", alias="exec"),
+    exec_cmd: str = Query(CLAUDE_EXEC, alias="exec"),
 ):
     """Spawn a new worktree-tab in `session`'s owning project.
 

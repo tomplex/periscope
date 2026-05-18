@@ -684,10 +684,11 @@ async function handleProjectMenu(btn) {
       "New worktree branch name:\n(forked off this project's base_branch, locally)",
     );
     if (!branch) return;
+    // Omit `exec`; the backend's default already includes the dev-channels
+    // flag, so passing a bare `claude` here would spawn without channels.
     const params = new URLSearchParams({
       session: project.tmux_session,
       branch,
-      exec: "claude",
     });
     const res = await fetch(`/api/window/new-worktree?${params}`, { method: "POST" });
     if (!res.ok) {

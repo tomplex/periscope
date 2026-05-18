@@ -251,10 +251,12 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
     if not ok:
         raise HTTPException(500, f"tmux new-session failed: {msg}")
 
-    # Send `claude` into window 1.
+    # Send `claude` into window 1, with the periscope channels flag so the
+    # spawned Claude connects to periscope's MCP socket.
+    from periscope.config import CLAUDE_EXEC
     time.sleep(0.1)
     _tmux_mutate(
-        "send-keys", "-t", f"{tmux_session}:claude", "claude", "Enter",
+        "send-keys", "-t", f"{tmux_session}:claude", CLAUDE_EXEC, "Enter",
     )
 
     # Window 2: shell.
