@@ -19,7 +19,7 @@ from periscope.panes import (
     list_windows, note_action, parse_pane, smooth_is_claude, smooth_spinner,
 )
 from periscope.pids import _attach_git_then_resolve_pids
-from periscope.store import _STATE
+from periscope.store import get_window
 from periscope.tmux import tmux
 
 router = APIRouter()
@@ -79,7 +79,7 @@ def pane(session: str, index: int, lines: int = 200):
         channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
         channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
     # Persisted links — same override semantics as /api/state.
-    persisted = _STATE.get("windows", {}).get(pid or "", {})
+    persisted = get_window(str(pid) if pid else "")
     linked_pr = persisted.get("linked_pr")
     linked_linear = persisted.get("linked_linear")
     if linked_pr:

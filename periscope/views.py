@@ -24,7 +24,7 @@ from periscope.panes import (
     _acted_at, _completed_at, _focused_at, _prev_state,
     parse_pane, smooth_is_claude, smooth_spinner,
 )
-from periscope.store import _STATE
+from periscope.store import get_window
 from periscope.tmux import capture
 
 
@@ -80,8 +80,7 @@ def build_window_view(
 
     # Pull persisted stamps; in-memory may be ahead (just bumped) or
     # behind (fresh process, never observed a transition this run).
-    wblock = _STATE.get("windows", {})
-    persisted = wblock.get(pid, {}) if pid else {}
+    persisted = get_window(pid) if pid else {}
     completed = max(_completed_at.get(target, 0), int(persisted.get("completed_at") or 0))
     acked = max(_acted_at.get(target, 0), int(persisted.get("acked_at") or 0))
 

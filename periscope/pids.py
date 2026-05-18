@@ -11,7 +11,7 @@ import uuid
 
 from periscope.git_pr import cached_git_state
 from periscope.panes import list_windows
-from periscope.store import _STATE, _STATE_LOCK, _write_state
+from periscope import store as _store
 from periscope.tmux import tmux
 
 _PID_TTL_S = 30 * 86400  # 30 days
@@ -87,8 +87,11 @@ def resolve_pids(windows: list[dict]) -> None:
     # the lock for the full resolve pass — it's cheap (kilobyte-scale JSON
     # write at the end) and gives us a single consistent snapshot of the
     # windows block to score rebinds against.
-    with _STATE_LOCK:
-        wblock = _STATE.setdefault("windows", {})
+    #
+    # Module-qualified `_store._STATE` access (instead of `from … import _STATE`)
+    # so test-time monkeypatching of `periscope.store._STATE` propagates here.
+    with _store._STATE_LOCK:
+        wblock = _store._STATE.setdefault("windows", {})
         taken: set[str] = set()
         dirty = False
         for w in windows:
@@ -151,7 +154,7 @@ def resolve_pids(windows: list[dict]) -> None:
                 del wblock[pid]
                 dirty = True
         if dirty:
-            _write_state(_STATE)
+            _store._write_state(_store._STATE)
 
 
 def _attach_git_then_resolve_pids(windows: list[dict]) -> None:

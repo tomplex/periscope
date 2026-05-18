@@ -17,7 +17,7 @@ from periscope.panes import (
     list_windows, update_focus_from_windows,
 )
 from periscope.pids import _attach_git_then_resolve_pids
-from periscope.store import _STATE, _STATE_LOCK, _write_state
+from periscope.store import set_window_fields_bulk
 from periscope.usage import cached_claude_usage, cached_scraped_usage
 from periscope.views import build_window_view
 
@@ -41,21 +41,13 @@ def state():
 
     _channel_gc({w["pane_id"] for w in windows if w.get("pane_id")})
 
-    # Single lock acquisition + single write covers every pane in this poll.
-    if stamp_updates:
-        with _STATE_LOCK:
-            wblock = _STATE.setdefault("windows", {})
-            dirty = False
-            for pid, completed, acked in stamp_updates:
-                entry = wblock.setdefault(pid, {})
-                if int(entry.get("completed_at") or 0) != completed:
-                    entry["completed_at"] = completed
-                    dirty = True
-                if int(entry.get("acked_at") or 0) != acked:
-                    entry["acked_at"] = acked
-                    dirty = True
-            if dirty:
-                _write_state(_STATE)
+    # Batched stamp persistence: single lock + single write across every
+    # pane in this poll. set_window_fields_bulk skips the write when no
+    # field actually changed.
+    set_window_fields_bulk({
+        pid: {"completed_at": completed, "acked_at": acked}
+        for pid, completed, acked in stamp_updates
+    })
 
     # Garbage-collect stale resumes: targets that are no longer in tmux's
     # list-windows output, or older than 30 min.

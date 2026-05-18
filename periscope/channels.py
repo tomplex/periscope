@@ -12,10 +12,10 @@ touched from both sync request handlers (FastAPI threadpool) and async
 MCP handlers; threading.Lock works correctly from both whereas
 asyncio.Lock only blocks coroutines.
 
-Imports `_STATE`, `_STATE_LOCK`, `_write_state` from `periscope.store`
-and `list_windows`, `note_focus`, `note_action` from `periscope.panes` /
-`_attach_git_then_resolve_pids` from `periscope.pids` directly — no
-bridges to server.py remain in this module.
+State.json writes go through `periscope.store.set_window_fields`; this
+module never touches `_STATE` directly. `list_windows`/`note_focus`/
+`note_action` come from `periscope.panes`, `_attach_git_then_resolve_pids`
+from `periscope.pids` — no bridges to server.py remain in this module.
 
 Socket lifecycle: this module never `os.unlink`s `MCP_SOCKET_PATH` on
 shutdown. The FastAPI `lifespan` in `server.py` owns shutdown cleanup; the
@@ -34,7 +34,7 @@ from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
 from periscope.panes import list_windows, note_focus, note_action
 from periscope.pids import _attach_git_then_resolve_pids
-from periscope.store import _STATE, _STATE_LOCK, _write_state
+from periscope.store import set_window_fields
 from periscope.tmux import tmux, _run, _tmux_mutate
 
 CHANNEL_INSTRUCTIONS = """\
@@ -161,12 +161,7 @@ def _do_link_pr_tool(pane: str, arguments: dict):
         body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
         return [types.TextContent(type="text", text=json.dumps(body))]
 
-    with _STATE_LOCK:
-        wblock = _STATE.setdefault("windows", {})
-        entry = wblock.setdefault(pid, {})
-        entry["linked_pr"] = number
-        _write_state(_STATE)
-
+    set_window_fields(pid, linked_pr=number)
     body = {"ok": True, "linked_pr": number, "pid": pid}
     return [types.TextContent(type="text", text=json.dumps(body))]
 
@@ -185,12 +180,7 @@ def _do_link_linear_tool(pane: str, arguments: dict):
         body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
         return [types.TextContent(type="text", text=json.dumps(body))]
 
-    with _STATE_LOCK:
-        wblock = _STATE.setdefault("windows", {})
-        entry = wblock.setdefault(pid, {})
-        entry["linked_linear"] = ticket_id
-        _write_state(_STATE)
-
+    set_window_fields(pid, linked_linear=ticket_id)
     body = {"ok": True, "linked_linear": ticket_id, "pid": pid}
     return [types.TextContent(type="text", text=json.dumps(body))]
 
