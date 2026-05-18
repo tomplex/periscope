@@ -1779,8 +1779,9 @@ body.modal-open { overflow: hidden; }
 }
 .commands-modal-add:hover { color: var(--fg-0); border-color: var(--accent); }
 
-/* New-project modal */
-.new-project-modal-overlay {
+/* New-project modal + Review-PR modal (shared visual pattern) */
+.new-project-modal-overlay,
+.review-pr-modal-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
@@ -1789,8 +1790,10 @@ body.modal-open { overflow: hidden; }
   justify-content: center;
   z-index: 200;
 }
-.new-project-modal-overlay.hidden { display: none; }
-.new-project-modal-card {
+.new-project-modal-overlay.hidden,
+.review-pr-modal-overlay.hidden { display: none; }
+.new-project-modal-card,
+.review-pr-modal-card {
   background: var(--bg-1);
   color: var(--fg-0);
   border-radius: 0.75em;
@@ -1800,38 +1803,45 @@ body.modal-open { overflow: hidden; }
   overflow-y: auto;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
-.new-project-modal-head {
+.new-project-modal-head,
+.review-pr-modal-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.25em;
 }
-.new-project-modal-head h2 { margin: 0; font-size: 1.1em; }
-.new-project-modal-head button {
+.new-project-modal-head h2,
+.review-pr-modal-head h2 { margin: 0; font-size: 1.1em; }
+.new-project-modal-head button,
+.review-pr-modal-head button {
   background: none;
   border: none;
   color: var(--fg-0);
   font-size: 1.5em;
   cursor: pointer;
 }
-.new-project-modal-sub {
+.new-project-modal-sub,
+.review-pr-modal-sub {
   font-size: 0.85em;
   opacity: 0.75;
   margin: 0 0 1em 0;
 }
-.new-project-modal-sub code {
+.new-project-modal-sub code,
+.review-pr-modal-sub code {
   font-family: var(--font-mono, ui-monospace, monospace);
   background: color-mix(in oklch, var(--fg-0) 8%, transparent);
   padding: 0.1em 0.3em;
   border-radius: 0.3em;
 }
-#new-project-form label {
+#new-project-form label,
+#review-pr-form label {
   display: block;
   margin-bottom: 0.75em;
   font-size: 0.85em;
   opacity: 0.9;
 }
-#new-project-form input {
+#new-project-form input,
+#review-pr-form input {
   display: block;
   width: 100%;
   margin-top: 0.25em;
@@ -1843,11 +1853,13 @@ body.modal-open { overflow: hidden; }
   font-family: inherit;
   font-size: 0.95em;
 }
-.new-project-modal-hint {
+.new-project-modal-hint,
+.review-pr-modal-hint {
   font-size: 0.8em;
   opacity: 0.6;
 }
-.new-project-modal-error {
+.new-project-modal-error,
+.review-pr-modal-error {
   background: color-mix(in oklch, var(--warn, #d97706) 15%, transparent);
   color: var(--warn, #d97706);
   border-radius: 0.4em;
@@ -1855,13 +1867,15 @@ body.modal-open { overflow: hidden; }
   margin-bottom: 0.75em;
   font-size: 0.85em;
 }
-.new-project-modal-actions {
+.new-project-modal-actions,
+.review-pr-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5em;
   margin-top: 1em;
 }
-.new-project-modal-actions button {
+.new-project-modal-actions button,
+.review-pr-modal-actions button {
   padding: 0.5em 1em;
   border: 1px solid color-mix(in oklch, var(--fg-0) 20%, transparent);
   border-radius: 0.4em;
@@ -1870,12 +1884,14 @@ body.modal-open { overflow: hidden; }
   cursor: pointer;
   font-size: 0.9em;
 }
-#new-project-submit {
+#new-project-submit,
+#review-pr-submit {
   background: var(--accent, #4a90e2);
   color: white;
   border-color: var(--accent, #4a90e2);
 }
-#new-project-submit:disabled {
+#new-project-submit:disabled,
+#review-pr-submit:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
