@@ -371,30 +371,42 @@ def parse_pane(content: str) -> dict:
 
     # Question-mark needs-input: when Claude's last visible reply ends with
     # `?` we treat the pane as waiting on the user, even without a dialog.
-    # Walk from the bottom, skipping TUI chrome (status / prompt / hint /
-    # separator / title / active or past-tense indicators / blank); the
-    # first remaining line is the visible tail of the most recent reply.
-    # Only applies to Claude panes — shells use `?` in plenty of normal
-    # output (`man bash` examples, error messages, etc.).
+    #
+    # Anchor on the past-tense indicator (`✻ Brewed for Xs`). It always sits
+    # immediately after a finished assistant turn, and post-reply chrome
+    # (TodoWrite list, separator, prompt) renders below it. The last visible
+    # line of Claude's actual message is therefore the closest non-chrome
+    # line ABOVE the indicator. Without this anchor a TODO row like
+    # `◻ Spec refresh cadence (separate)` would be the first content line
+    # walking bottom-up and would never end with `?` even when the message
+    # above the indicator did.
+    #
+    # If no past-tense indicator is visible (rare — pane scrolled past the
+    # last turn) we leave the flag off; better to miss the case than to
+    # false-positive on something further up the buffer.
     asked_question = False
     if is_claude and not needs_input:
-        for line in reversed(lines):
-            s = line.strip()
-            if not s:
-                continue
-            if s.startswith(("─", "❯", "⏵")):
-                continue
-            if STATUS_RE.match(line):
-                continue
-            if "github.com/" in line and line.count("|") >= 3:
-                continue
-            if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
-                continue
-            if IDLE_INDICATOR_RE.match(line):
-                continue
-            if s.rstrip().endswith("?"):
-                asked_question = True
-            break
+        idle_idx = None
+        for i in range(len(lines) - 1, -1, -1):
+            if IDLE_INDICATOR_RE.match(lines[i]):
+                idle_idx = i
+                break
+        if idle_idx is not None:
+            for line in reversed(lines[:idle_idx]):
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith(("─", "❯", "⏵")):
+                    continue
+                if STATUS_RE.match(line):
+                    continue
+                if "github.com/" in line and line.count("|") >= 3:
+                    continue
+                if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
+                    continue
+                if s.rstrip().endswith("?"):
+                    asked_question = True
+                break
 
     # State priority: needs-input wins over working (a spinner glyph can
     # linger in scrollback above the dialog), working wins over idle.

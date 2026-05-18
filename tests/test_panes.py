@@ -284,6 +284,32 @@ PARSE_CASES: list[tuple[str, str, str, str | None]] = [
         What are you looking for?
         $
     """), "shell", None),
+
+    # TodoWrite list rendered below the past-tense indicator. The actual
+    # question lives ABOVE the indicator; bottom-up scanning without anchor
+    # would land on the last todo row (ends with `)`) and miss the `?`.
+    # This is the real-world failure case from `lookup-undermatch-audit`.
+    ("question-with-todo-below-indicator", textwrap.dedent(f"""\
+        ⏺ I have enough to present the design. Walking through it in sections.
+
+          1. Scope & architecture
+          - In scope: cache write path, read path, version bump
+          - Out of scope: refresh cadence (separate spec)
+
+          Reaction to the scope before I move to the next section?
+
+        ✻ Crunched for 8m 51s
+
+          5 tasks (1 done, 1 in progress, 3 open)
+          ✔ Create worktree for lookup-substrate redesign
+          ◼ Brainstorm lookup layer redesign
+          ◻ Write spec for lookup layer redesign
+          ◻ Run spec-reviewer + share via LGTM
+          ◻ Spec lookup cache refresh cadence (separate)
+
+        ❯
+        {STATUS_LINE}
+    """), "needs-input", None),
 ]
 
 
