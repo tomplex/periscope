@@ -197,9 +197,9 @@ function renderCard(w) {
 
   // Promote-to-project: only on tabs in the __main__ project, only
   // when the cwd is inside a git repo (worktree_affiliation tells us).
+  // `aff` is already in scope from the worktree-chip block above.
   const isMainTab = w.project_pinned_dir === "__main__";
-  const aff = w.worktree_affiliation || {};
-  const canPromote = isMainTab && aff.kind !== "no-repo";
+  const canPromote = isMainTab && aff.kind && aff.kind !== "no-repo";
   const promoteBtn = canPromote
     ? `<button class="card-promote" data-session="${escapeHtml(w.session)}" data-index="${w.index}" title="promote this tab to its own project">↗ promote</button>`
     : "";

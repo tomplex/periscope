@@ -18,7 +18,8 @@ const modalTitle = document.getElementById("modal-title");
 const modalXtermEl = document.getElementById("modal-xterm");
 const modalClose = document.getElementById("modal-close");
 const modalSubtitle = document.getElementById("modal-subtitle");
-const modalAutoRename = document.getElementById("modal-auto-rename");
+// Auto-rename is no longer a standalone DOM element; it's rendered into the
+// title's innerHTML each poll and bound via event delegation on modalTitle.
 const modalSide = document.getElementById("modal-side");
 const modalTabs = document.getElementById("modal-tabs");
 const modalReviewContent = document.getElementById("modal-review-content");
@@ -340,6 +341,7 @@ async function refreshModalHeader() {
   // the status block and most recent recap.
   if (!state.activeTarget) return;
   if (state.modalRenaming) return;  // don't clobber the in-flight rename input
+  if (state.modalAutoRenaming) return;  // keep the ✨ button in its busy state
   try {
     const res = await fetch(`/api/pane?${targetQuery(state.activeTarget)}&lines=80`);
     if (!res.ok) return;
@@ -354,8 +356,16 @@ function updateModalHeader(data) {
   lastPaneData = data;
   // Title: window name (prominent), then session and cwd in dim text.
   // tmux window index is intentionally omitted — not useful for orientation.
+  // The auto-rename ✨ button sits immediately right of the name — the
+  // operation it triggers (ask Claude to rename) is name-specific, so the
+  // affordance lives next to its target. Click is delegated from modalTitle
+  // so we don't have to re-bind it after every poll rebuilds this innerHTML.
   const name = data.name || data.target;
-  const titleParts = [`<span class="modal-name">${escapeHtml(name)}</span>`];
+  const busy = state.modalAutoRenaming ? " busy" : "";
+  const titleParts = [
+    `<span class="modal-name">${escapeHtml(name)}</span>`,
+    `<button type="button" class="modal-title-rename${busy}" data-action="auto-rename" title="ask Claude to rename this window">✨</button>`,
+  ];
   if (data.session) {
     titleParts.push(`<span class="modal-session">${escapeHtml(data.session)}</span>`);
   }
