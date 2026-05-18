@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tom.periscope</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/tom/dev/periscope</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/tom/.local/bin/uv</string>
+    <string>run</string>
+    <string>server.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/tom/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/tom</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/tom/.config/periscope/launchd-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/tom/.config/periscope/launchd-stderr.log</string>
+</dict>
+</plist>

@@ -1,0 +1,39 @@
+#!/bin/sh
+# Helper for managing the launchd-managed periscope service. See
+# docs/superpowers/specs/2026-05-15-periscope-stability-design.md.
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PLIST_SRC="$REPO/com.tom.periscope.plist"
+PLIST_DST="$HOME/Library/LaunchAgents/com.tom.periscope.plist"
+LABEL="gui/$(id -u)/com.tom.periscope"
+LOG="$HOME/.config/periscope/periscope-8765.log"
+
+case "$1" in
+  install)
+    cp "$PLIST_SRC" "$PLIST_DST"
+    launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
+    ;;
+  uninstall)
+    launchctl bootout "$LABEL" 2>/dev/null
+    rm -f "$PLIST_DST"
+    ;;
+  start)
+    launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
+    ;;
+  stop)
+    launchctl bootout "$LABEL"
+    ;;
+  restart)
+    launchctl kickstart -k "$LABEL"
+    ;;
+  status)
+    launchctl print "$LABEL" 2>/dev/null | grep -E 'state|pid' || echo "not loaded"
+    ;;
+  tail)
+    tail -F "$LOG"
+    ;;
+  *)
+    echo "usage: $0 {install|uninstall|start|stop|restart|status|tail}"
+    exit 1
+    ;;
+esac
