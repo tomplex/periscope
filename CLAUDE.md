@@ -254,7 +254,29 @@ Tools exposed to Claude:
 Notifications go the other way as `notifications/claude/channel`
 messages, surfacing in Claude's prompt as `<channel source="periscope">`
 blocks. The pinned `mcp==1.27.*` is checked at startup and exercised by
-`tests/test_channel_smoke.py`; bump both together.
+`tests/test_channel_shim.py`; bump both together.
+
+### Shim survives periscope restarts
+
+`channel_shim.py` is not a dumb bytes proxy. When the unix socket drops
+mid-session (periscope restart, dev cycle, lifespan teardown), the shim:
+
+- Synthesizes JSON-RPC error responses for any tool calls in flight so
+  Claude doesn't hang.
+- Reconnects at `PERISCOPE_MCP_RECONNECT_BACKOFF_S` (default 1s) until
+  the socket comes back or stdin EOFs (Claude exited).
+- On the fresh socket, re-sends the hello frame, replays the captured
+  `initialize` request, replays `notifications/initialized`, and synths
+  a `tools/list` so periscope's `_list_tools` handler re-registers
+  `_MCP_SESSIONS[pane]` — required for push notifications and tool
+  routing.
+- Swallows the duplicate `initialize` response from the new periscope
+  and the synthetic `tools/list` response; Claude only sees them once.
+
+Net effect: Claude's MCP connection survives `bin/periscope restart`
+and most lifespan-cycle blips without needing `/clear`. The non-zero-
+exit invariant (item 10 below) still holds — the shim only exits 0,
+just rarely now.
 
 ## LGTM integration
 
