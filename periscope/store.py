@@ -114,7 +114,10 @@ def _load_state() -> dict:
             log.warning("state.json unreadable (%s); renamed to %s", e, corrupt)
         except OSError:
             pass
-        return json.loads(json.dumps(_STATE_DEFAULTS))
+        data = json.loads(json.dumps(_STATE_DEFAULTS))
+        data, _migrated = _migrate_v1_to_v2(data)
+        _MIGRATION_RAN_THIS_LOAD = _MIGRATION_RAN_THIS_LOAD or _migrated
+        return data
 
 
 def _migrate_v1_to_v2(data: dict) -> tuple[dict, bool]:
@@ -125,9 +128,11 @@ def _migrate_v1_to_v2(data: dict) -> tuple[dict, bool]:
     auto-adopts each as a project pinned to its first window's git
     toplevel. Two import-time wrinkles:
 
-    1. We can't `from periscope.panes import list_windows` at module top
-       — panes.py imports from store.py for `get_window`. Lazy-import
-       inside this function avoids the cycle.
+    1. `_load_state()` runs at module import time (see `_STATE = _load_state()`
+       at module bottom). Importing `periscope.panes` at module top would
+       force the panes module to fully load before this module's namespace
+       is published — fragile if panes ever grows a transitive dependency
+       on this module. Lazy import keeps the side-effect chain shallow.
     2. The migration runs ONCE per import. If state.json is already at
        v2, this is a no-op.
 
