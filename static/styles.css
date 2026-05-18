@@ -483,6 +483,20 @@ body[data-view="stream"] .stream-banner {
 }
 .kill-session:hover { color: var(--s-danger); border-color: var(--s-danger); }
 .auto-rename:disabled { cursor: progress; opacity: 0.7; }
+.session-pinned-dir {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75em;
+  opacity: 0.6;
+  margin-left: 0.5em;
+}
+.session-header .adopt {
+  font-size: 0.75em;
+  opacity: 0.8;
+  border: 1px dashed currentColor;
+  background: transparent;
+  padding: 0.1em 0.4em;
+  margin-left: 0.4em;
+}
 
 /* ─── Card grid ─────────────────────────────────────── */
 
