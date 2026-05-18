@@ -384,6 +384,7 @@ function renderModalSidebar(data) {
   `;
   wireNotesEditor(data);
   wireMessageComposer(data);
+  wireLinkAskButtons(data);
 
   // Clear unread when the modal is showing replies. Fire-and-forget.
   if (data.pane_id && (data.channel_unread || 0) > 0) {
@@ -403,7 +404,13 @@ function avatarChars(handle) {
 
 function renderPRCard(data) {
   if (!data.pr) {
-    return `<button class="modal-side-link-btn" type="button" disabled title="link a PR — coming soon">+ link pull request</button>`;
+    // No add-from-UI flow; clicking pings Claude (via the MCP channel) to call
+    // its `link_pr` tool. Disabled when no Claude is attached on this pane.
+    const attached = !!data.channel_attached;
+    const title = attached
+      ? "Ask Claude to link the PR for this pane (via link_pr MCP tool)"
+      : "Channel not attached. Respawn Claude via + claude.";
+    return `<button class="modal-side-link-btn" type="button" data-link-ask="pr"${attached ? "" : " disabled"} title="${title}">+ link pull request</button>`;
   }
   const ciState = data.ci === "✓" ? "passing"
     : data.ci === "✗" ? "failing"
@@ -443,8 +450,9 @@ function renderLinearCard(data) {
   // Linear linking is always Claude-declared (via the link_linear MCP tool);
   // periscope doesn't auto-detect. When set, render the same inset shape as
   // the PR card so the two linked resources read as a visual pair. When
-  // unset, fall back to a disabled placeholder — a manual-link affordance is
-  // deferred to a future UI pass.
+  // unset, fall back to a "+ link" button that pings Claude to call its
+  // `link_linear` tool — there's no UI flow for the user to search/add a
+  // ticket directly.
   if (data.linked_linear) {
     const id = escapeHtml(data.linked_linear);
     const url = `https://linear.app/issue/${id}`;
@@ -457,7 +465,11 @@ function renderLinearCard(data) {
       </div>
     `;
   }
-  return `<button class="modal-side-link-btn" type="button" disabled title="Linear integration coming soon">+ link Linear ticket</button>`;
+  const attached = !!data.channel_attached;
+  const title = attached
+    ? "Ask Claude to link a Linear ticket for this pane (via link_linear MCP tool)"
+    : "Channel not attached. Respawn Claude via + claude.";
+  return `<button class="modal-side-link-btn" type="button" data-link-ask="linear"${attached ? "" : " disabled"} title="${title}">+ link Linear ticket</button>`;
 }
 
 function timelineColor(kind, evState) {
@@ -572,6 +584,42 @@ function wireNotesEditor(data) {
     const nextTags = ann.tags.filter((_, idx) => idx !== i);
     prefs.setAnnotation(pid, { notes: ta.value, tags: nextTags });
     refreshModalHeader();
+  });
+}
+
+// Canned prompts sent to Claude when the user clicks the sidebar's "+ link …"
+// buttons. The pane has no add-from-UI flow for PR or Linear — instead, the
+// click pings the attached Claude and asks it to call the relevant MCP tool.
+const LINK_ASK_PROMPTS = {
+  pr: "Please link the PR you're working on for this pane using the `link_pr` MCP tool. If there isn't one, ignore this.",
+  linear: "Please link the relevant Linear ticket for this pane using the `link_linear` MCP tool. If there isn't one, ignore this.",
+};
+
+function wireLinkAskButtons(data) {
+  if (!modalSide) return;
+  const btns = modalSide.querySelectorAll("button[data-link-ask]");
+  btns.forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const kind = btn.dataset.linkAsk;
+      const content = LINK_ASK_PROMPTS[kind];
+      if (!content || !data.pane_id) return;
+      // Visual ack — next poll re-renders the sidebar wholesale, which will
+      // either show the new card (Claude linked it) or restore the button.
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = "asked Claude…";
+      try {
+        await fetch(`/api/channel/push?pane=${encodeURIComponent(data.pane_id)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ content }),
+        });
+      } catch {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    });
   });
 }
 

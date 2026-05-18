@@ -1,4 +1,6 @@
-"""Tests for /api/channel/clear-unread."""
+"""Tests for /api/channel/{clear-unread,push}."""
+
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,3 +29,52 @@ def test_clear_unread_rejects_non_pane_id(client):
     body = r.json()
     assert body["ok"] is False
     assert "pane" in body["error"]
+
+
+def test_push_forwards_to_emit_channel_event(client):
+    with patch(
+        "periscope.routes.channel.emit_channel_event",
+        new=AsyncMock(return_value=True),
+    ) as emit:
+        r = client.post(
+            "/api/channel/push?pane=%2542",
+            json={"content": "hello claude"},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+        emit.assert_awaited_once_with("%42", "hello claude")
+
+
+def test_push_returns_ok_false_when_no_session(client):
+    with patch(
+        "periscope.routes.channel.emit_channel_event",
+        new=AsyncMock(return_value=False),
+    ):
+        r = client.post(
+            "/api/channel/push?pane=%2542",
+            json={"content": "hi"},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"ok": False}
+
+
+def test_push_rejects_non_pane_id(client):
+    r = client.post(
+        "/api/channel/push?pane=not-a-pane",
+        json={"content": "hi"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "pane" in body["error"]
+
+
+def test_push_rejects_empty_content(client):
+    r = client.post(
+        "/api/channel/push?pane=%2542",
+        json={"content": "   "},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "content" in body["error"]
