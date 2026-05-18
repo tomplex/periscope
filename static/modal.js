@@ -174,13 +174,24 @@ function makeDocsDropdown(docs) {
   menu.setAttribute("role", "menu");
   menu.hidden = true;
   for (const d of docs) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "modal-tab-dropdown-item";
-    item.dataset.tab = d.id;
-    item.setAttribute("role", "menuitem");
-    item.textContent = d.label;
-    menu.appendChild(item);
+    // Row is a div, not a button — buttons can't reliably nest other
+    // buttons, and we want both "click to switch" and a separate "× to
+    // remove" affordance inside the same row.
+    const row = document.createElement("div");
+    row.className = "modal-tab-dropdown-item";
+    row.dataset.tab = d.id;
+    row.setAttribute("role", "menuitem");
+    // Strip the "lgtm:" prefix when handing the raw item id to the
+    // remove button — the API takes LGTM's id, not periscope's tab id.
+    const rawItemId = d.id.startsWith("lgtm:") ? d.id.slice(5) : d.id;
+    row.innerHTML = `
+      <span class="modal-tab-dropdown-item-label">${escapeHtml(d.label)}</span>
+      <button type="button" class="modal-tab-dropdown-item-remove"
+              data-remove-item="${escapeHtml(rawItemId)}"
+              title="Remove from review (${escapeHtml(d.label)})"
+              aria-label="Remove ${escapeHtml(d.label)}">×</button>
+    `;
+    menu.appendChild(row);
   }
   wrap.appendChild(menu);
   return wrap;
@@ -229,7 +240,11 @@ function performAutoSwitch(spec) {
       pendingReviewOpen = false;
     }
   }
-  if (!validIds.has(target)) target = "terminal";
+  if (!validIds.has(target)) {
+    // If the active tab disappeared (e.g. a doc was just removed),
+    // prefer Diff over Terminal so the user stays in review context.
+    target = spec.showDiff ? "lgtm:diff" : "terminal";
+  }
   if (target !== current) setActiveTab(target);
 }
 
@@ -846,6 +861,33 @@ export function initModal() {
       if (toggle) {
         e.stopPropagation();
         toggleDropdownMenu();
+        return;
+      }
+      // Remove (×) button inside a dropdown row — strip the item from
+      // LGTM via the periscope proxy. Stop here so the row's tab-switch
+      // doesn't also fire.
+      const remove = e.target.closest("[data-remove-item]");
+      if (remove) {
+        e.stopPropagation();
+        const slug = lastPaneData?.lgtm?.slug;
+        const itemId = remove.dataset.removeItem;
+        if (!slug || !itemId) return;
+        remove.disabled = true;
+        fetch(
+          `/api/lgtm/items?slug=${encodeURIComponent(slug)}&item=${encodeURIComponent(itemId)}`,
+          { method: "DELETE" },
+        )
+          .then(r => r.json())
+          .then(p => {
+            if (!p.ok) console.warn("lgtm remove failed:", p.error);
+            // The next /api/pane poll will pick up the new items list
+            // via the SSE-driven cache refresh and rebuild the strip.
+            refreshModalHeader();
+          })
+          .catch(err => {
+            console.warn("lgtm remove failed:", err);
+            remove.disabled = false;
+          });
         return;
       }
       // Documents dropdown menu item: switch to that doc, close menu.
