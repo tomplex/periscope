@@ -66,6 +66,7 @@ def clean_state(tmp_xdg_home, monkeypatch):
         "periscope.routes.pane",
         "periscope.routes.prefs",
         "periscope.routes.state",
+        "periscope.views",
         "server",
     ):
         try:
