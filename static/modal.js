@@ -288,16 +288,21 @@ function applyActiveState(currentTabId, spec) {
     btn.classList.toggle("is-active", active);
     btn.setAttribute("aria-selected", active ? "true" : "false");
   }
-  // Dropdown toggle is "active" whenever the current tab is one of the
-  // dropdown's items. Its label mirrors the active doc's title.
+  // Dropdown toggle's active state and label only kick in when the
+  // current doc is reachable ONLY through the dropdown. When the active
+  // doc is pinned as a mounted tab, that tab carries the active state
+  // and the dropdown stays neutral ("Documents").
   const toggle = modalTabs.querySelector(".modal-tab-dropdown-toggle");
   if (toggle) {
     const activeDoc = spec.docs.find(d => d.id === currentTabId);
-    toggle.classList.toggle("is-active", !!activeDoc);
-    toggle.setAttribute("aria-selected", activeDoc ? "true" : "false");
+    const activeIsMounted = !!spec.mounted.find(d => d.id === currentTabId);
+    const showActive = !!activeDoc && !activeIsMounted;
+    toggle.classList.toggle("is-active", showActive);
+    toggle.setAttribute("aria-selected", showActive ? "true" : "false");
     const labelEl = toggle.querySelector(".modal-tab-dropdown-label");
-    if (labelEl) labelEl.textContent = activeDoc ? activeDoc.label : "Documents";
-    // Highlight the active row in the menu too, so it's obvious when open.
+    if (labelEl) labelEl.textContent = showActive ? activeDoc.label : "Documents";
+    // Menu still highlights the active row regardless of pinning, so
+    // when the user opens the dropdown they can see what's current.
     for (const item of modalTabs.querySelectorAll(".modal-tab-dropdown-item")) {
       item.classList.toggle("is-active", item.dataset.tab === currentTabId);
     }
@@ -983,6 +988,16 @@ export function initModal() {
     if (!btn) return;
     e.stopPropagation();
     handleModalAutoRename(btn);
+  });
+
+  // Forwarded Escape from the LGTM iframe. When focus is inside the
+  // iframe the keystroke never bubbles to us — LGTM's embedded shim
+  // postMessages on Escape (excluding text-input focus) so the modal
+  // close binding still works while reviewing.
+  window.addEventListener("message", (e) => {
+    if (e.data?.type === "lgtm-embedded-escape" && !modal.classList.contains("hidden")) {
+      closeModal();
+    }
   });
 
   if (modalTabs) {
