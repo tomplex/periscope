@@ -53,6 +53,11 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
         return None
     mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)
     mocker.patch("periscope.app._mcp_listener", side_effect=_noop)
+    # Lifespan teardown still calls os.unlink(MCP_SOCKET_PATH) regardless
+    # of whether the listener was real; without this patch, running pytest
+    # while prod periscope is up deletes its live /tmp/periscope-mcp.sock
+    # and kills every connected Claude's MCP channel.
+    mocker.patch("periscope.app.os.unlink")
 
     from periscope.app import app
     with TestClient(app) as client:
