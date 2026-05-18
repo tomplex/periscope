@@ -17,27 +17,49 @@ from periscope.pidfile import (
 )
 
 
-def test_pidfile_path_under_xdg(tmp_xdg_home: Path):
-    assert _pidfile_path() == tmp_xdg_home / "periscope" / "periscope.pid"
+def test_pidfile_path_under_xdg(tmp_xdg_home: Path, monkeypatch):
+    import periscope.config
+    monkeypatch.setattr(periscope.config, "PORT", 8765)
+    assert _pidfile_path() == tmp_xdg_home / "periscope" / "periscope-8765.pid"
 
 
-def test_write_then_remove_pidfile(tmp_xdg_home: Path):
+def test_pidfile_path_uses_dev_port(tmp_xdg_home: Path, monkeypatch):
+    import periscope.config
+    monkeypatch.setattr(periscope.config, "PORT", 8766)
+    assert _pidfile_path() == tmp_xdg_home / "periscope" / "periscope-8766.pid"
+
+
+def test_write_then_remove_pidfile(tmp_xdg_home: Path, monkeypatch):
+    import periscope.config
+    monkeypatch.setattr(periscope.config, "PORT", 8765)
     _write_pidfile()
     path = _pidfile_path()
     assert path.is_file()
-    assert path.read_text() == str(os.getpid())
+    pid_line, port_line = path.read_text().strip().split("\n")
+    assert pid_line == str(os.getpid())
+    assert port_line == "8765"
     _remove_pidfile()
     assert not path.exists()
 
 
-def test_remove_pidfile_ignores_other_owners(tmp_xdg_home: Path):
+def test_pidfile_stores_pid_and_port(tmp_xdg_home: Path, monkeypatch):
+    import periscope.config
+    monkeypatch.setattr(periscope.config, "PORT", 8765)
+    _write_pidfile()
+    contents = _pidfile_path().read_text()
+    assert contents.strip().split("\n") == [str(os.getpid()), "8765"]
+
+
+def test_remove_pidfile_ignores_other_owners(tmp_xdg_home: Path, monkeypatch):
     """If the file holds someone else's pid, don't delete it."""
+    import periscope.config
+    monkeypatch.setattr(periscope.config, "PORT", 8765)
     path = _pidfile_path()
     path.parent.mkdir(parents=True)
-    path.write_text("99999")
+    path.write_text("99999\n8765\n")
     _remove_pidfile()
     assert path.exists(), "must not delete a pidfile we don't own"
-    assert path.read_text() == "99999"
+    assert path.read_text().startswith("99999")
 
 
 def test_pid_is_periscope_true_when_command_matches(mocker):
@@ -116,3 +138,24 @@ def test_reclaim_escalates_to_sigkill_after_3s(tmp_xdg_home: Path, mocker):
     import signal as _signal
     killed.assert_any_call(99999, _signal.SIGTERM)
     killed.assert_any_call(99999, _signal.SIGKILL)
+
+
+def test_reclaim_refuses_when_recorded_port_mismatches(
+    tmp_xdg_home: Path, monkeypatch, mocker, caplog
+):
+    """A pidfile that records a port different from current PORT must not
+    trigger SIGTERM — the recorded pid belongs to a different periscope."""
+    import periscope.config
+    monkeypatch.setattr(periscope.config, "PORT", 8766)
+    path = _pidfile_path()
+    path.parent.mkdir(parents=True)
+    path.write_text("99999\n8765\n")  # foreign port
+
+    mocker.patch("periscope.pidfile._pid_is_periscope", return_value=True)
+    killed = mocker.patch("os.kill")
+
+    with caplog.at_level("WARNING", logger="periscope"):
+        _reclaim_existing_instance()
+
+    killed.assert_not_called()
+    assert any("port" in r.message.lower() for r in caplog.records)

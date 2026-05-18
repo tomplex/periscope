@@ -11,12 +11,15 @@ import subprocess
 import time
 from pathlib import Path
 
+from periscope import config
 from periscope.log import log
 
 
 def _pidfile_path() -> Path:
+    # config.PORT accessed via module attribute (not snapshot import) so
+    # tests can monkeypatch periscope.config.PORT and observe new paths.
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "periscope" / "periscope.pid"
+    return Path(base) / "periscope" / f"periscope-{config.PORT}.pid"
 
 
 def _pid_is_periscope(pid: int) -> bool:
@@ -36,13 +39,37 @@ def _pid_is_periscope(pid: int) -> bool:
 
 
 def _reclaim_existing_instance() -> None:
-    """If the pidfile points at a live periscope, SIGTERM it (escalate to
-    SIGKILL after 3s) so we can bind the port cleanly."""
+    """If the pidfile points at a live periscope on the same port, SIGTERM
+    it (escalate to SIGKILL after 3s) so we can bind the port cleanly.
+
+    Refuses to act when the pidfile's recorded port differs from the
+    current PORT — that means the pidfile belongs to a different
+    periscope (theoretically impossible given per-port pidfile paths,
+    but the safety net against a stale pidfile from a recycled pid).
+    Pidfiles without a port line are treated as legacy and reclaimed.
+    """
     path = _pidfile_path()
     try:
-        prev = int(path.read_text().strip())
-    except (OSError, ValueError):
+        text = path.read_text().strip()
+    except OSError:
         return
+    lines = text.split("\n")
+    try:
+        prev = int(lines[0])
+    except (ValueError, IndexError):
+        return
+    if len(lines) >= 2:
+        try:
+            recorded_port = int(lines[1])
+        except ValueError:
+            recorded_port = None
+        if recorded_port is not None and recorded_port != config.PORT:
+            log.warning(
+                "pidfile %s has port %d, expected %d — refusing reclaim",
+                path, recorded_port, config.PORT,
+            )
+            return
+    # Legacy pidfile (no port line) — fall through to reclaim.
     if prev == os.getpid() or not _pid_is_periscope(prev):
         return
     log.info("reclaiming previous periscope instance pid=%d", prev)
@@ -63,15 +90,19 @@ def _reclaim_existing_instance() -> None:
 
 
 def _write_pidfile() -> None:
+    """Pidfile format: '{pid}\\n{port}\\n'. Two lines so reclaim can verify
+    it's about to SIGTERM the right port's prior instance."""
     path = _pidfile_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(os.getpid()))
+    path.write_text(f"{os.getpid()}\n{config.PORT}\n")
 
 
 def _remove_pidfile() -> None:
+    """Only remove if the file's first line matches our pid."""
     path = _pidfile_path()
     try:
-        if path.read_text().strip() == str(os.getpid()):
+        first_line = path.read_text().split("\n", 1)[0].strip()
+        if first_line == str(os.getpid()):
             path.unlink()
     except (OSError, ValueError):
         pass
