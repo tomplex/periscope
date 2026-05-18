@@ -15,33 +15,63 @@ def test_state_path_under_xdg(tmp_xdg_home: Path):
     assert _state_path() == tmp_xdg_home / "periscope" / "state.json"
 
 
-def test_load_state_returns_defaults_when_file_missing(tmp_xdg_home: Path):
+# The three load_state tests below all mock list_windows to [] so the
+# v1→v2 migration produces a predictable empty result (just the __main__
+# sentinel project). Without the mock, the migration walks the real
+# tmux on the test host and pollutes the assertions with live sessions.
+_MAIN_PROJECT = {
+    "name": "main",
+    "tmux_session": "main",
+    "repo": None,
+    "pinned_repo": None,
+    "created_at": 0,
+    "archived_at": None,
+    "base_branch": None,
+}
+_V2_EMPTY_DEFAULTS = {
+    "version": 2,
+    "ui": {},
+    "windows": {},
+    "commands": [],
+    "projects": {"__main__": _MAIN_PROJECT},
+    "settings": {},
+}
+
+
+def test_load_state_returns_defaults_when_file_missing(tmp_xdg_home: Path, mocker):
+    mocker.patch("periscope.panes.list_windows", return_value=[])
     from periscope.store import _load_state
     data = _load_state()
-    assert data == {"version": 1, "ui": {}, "windows": {}, "commands": []}
+    assert data == _V2_EMPTY_DEFAULTS
 
 
-def test_load_state_fills_missing_defaults(tmp_xdg_home: Path):
+def test_load_state_fills_missing_defaults(tmp_xdg_home: Path, mocker):
     """An older state.json missing newer keys should get the defaults
-    merged in without losing existing data."""
+    merged in (and the v1→v2 migration applied) without losing
+    existing data."""
+    mocker.patch("periscope.panes.list_windows", return_value=[])
     from periscope.store import _load_state, _state_path
     path = _state_path()
     path.parent.mkdir(parents=True)
     path.write_text('{"version": 1, "ui": {"theme": "dark"}}')
     data = _load_state()
-    assert data["version"] == 1
+    # v2 migration bumps version and adds projects/__main__ + settings.
+    assert data["version"] == 2
     assert data["ui"] == {"theme": "dark"}
     assert data["windows"] == {}
     assert data["commands"] == []
+    assert data["projects"] == {"__main__": _MAIN_PROJECT}
+    assert data["settings"] == {}
 
 
-def test_load_state_renames_corrupt_file(tmp_xdg_home: Path):
+def test_load_state_renames_corrupt_file(tmp_xdg_home: Path, mocker):
+    mocker.patch("periscope.panes.list_windows", return_value=[])
     from periscope.store import _load_state, _state_path
     path = _state_path()
     path.parent.mkdir(parents=True)
     path.write_text("{not valid json")
     data = _load_state()
-    assert data == {"version": 1, "ui": {}, "windows": {}, "commands": []}
+    assert data == _V2_EMPTY_DEFAULTS
     corrupts = list(path.parent.glob("state.json.corrupt-*"))
     assert len(corrupts) == 1
 
