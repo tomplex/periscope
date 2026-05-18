@@ -9,15 +9,6 @@ from pathlib import Path
 import pytest
 
 
-# Exclude the standalone PEP-723 smoke script from pytest collection.
-# `tests/test_channel_smoke.py` is `uv run`-shaped (declares its own
-# deps in the script header) and predates pytest discovery here. Keep
-# it runnable via `uv run tests/test_channel_smoke.py` but don't let
-# pytest try to import it (its deps — mcp/anyio/websockets — are not
-# in the dev-deps group).
-collect_ignore = ["test_channel_smoke.py"]
-
-
 @pytest.fixture
 def tmp_xdg_home(monkeypatch, tmp_path: Path) -> Path:
     """Redirect XDG_CONFIG_HOME so state.json, pidfile, and the log
