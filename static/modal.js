@@ -39,6 +39,12 @@ let pendingReviewOpen = false;
 // Set by addLgtmDocFromTerminal — switches to a freshly-added item
 // once it appears in the cache. Cleared after the switch or on close.
 let pendingTabIdAfterAdd = null;
+// Docs pinned as top-level tabs (between Diff and the Documents dropdown).
+// Persisted per LGTM slug in localStorage so pinning survives modal close
+// and page refresh. Mutated by mountDoc / unmountDoc.
+let mountedDocIds = new Set();
+let mountedDocsSlug = null;  // slug that mountedDocIds is loaded for
+const MOUNTED_DOCS_KEY_PREFIX = "periscope-lgtm-mounted:";
 
 export function openModal(target, opts = {}) {
   state.activeTarget = target;
@@ -54,6 +60,11 @@ export function openModal(target, opts = {}) {
   modalTabs.innerHTML = "";
   modalTabs.dataset.signature = "";
   mountedTabId = null;
+  // Clear stale data from any previous pane so a poll-in-flight doesn't
+  // momentarily render the previous repo's mounted tabs.
+  lastPaneData = null;
+  mountedDocsSlug = null;
+  mountedDocIds = new Set();
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
   startLiveTerminal(target);
@@ -108,15 +119,61 @@ function buildTabSpec(data) {
   const items = data?.lgtm?.items || [];
   const slug = data?.lgtm?.slug;
   const hasSession = !!slug && items.length > 0;
+  // Ensure the mounted set is loaded for the current slug. We do this
+  // lazily here (rather than on every refresh) so the load runs once
+  // per modal open, not per poll.
+  if (slug && mountedDocsSlug !== slug) loadMountedDocs(slug);
+  const allDocs = hasSession
+    ? items
+        .filter(i => i.id !== "diff")
+        .map(d => ({ id: `lgtm:${d.id}`, label: d.title || d.id }))
+    : [];
+  // Keep mounted order stable across renders by walking allDocs; drop
+  // any pinned ids that no longer exist as items.
+  const mounted = allDocs.filter(d => mountedDocIds.has(d.id));
   return {
+    slug,
     showDiff: hasSession && items.some(i => i.id === "diff"),
-    docs: hasSession
-      ? items
-          .filter(i => i.id !== "diff")
-          .map(d => ({ id: `lgtm:${d.id}`, label: d.title || d.id }))
-      : [],
+    mounted,
+    docs: allDocs,
     showStart: !hasSession && !!data?.cwd_raw,
   };
+}
+
+function loadMountedDocs(slug) {
+  mountedDocsSlug = slug;
+  try {
+    const raw = localStorage.getItem(MOUNTED_DOCS_KEY_PREFIX + slug);
+    mountedDocIds = new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    mountedDocIds = new Set();
+  }
+}
+
+function saveMountedDocs() {
+  if (!mountedDocsSlug) return;
+  try {
+    localStorage.setItem(
+      MOUNTED_DOCS_KEY_PREFIX + mountedDocsSlug,
+      JSON.stringify([...mountedDocIds]),
+    );
+  } catch (_) {
+    // Quota / disabled storage — pinning falls back to in-memory only.
+  }
+}
+
+function mountDoc(tabId) {
+  if (mountedDocIds.has(tabId)) return false;
+  mountedDocIds.add(tabId);
+  saveMountedDocs();
+  return true;
+}
+
+function unmountDoc(tabId) {
+  if (!mountedDocIds.has(tabId)) return false;
+  mountedDocIds.delete(tabId);
+  saveMountedDocs();
+  return true;
 }
 
 function renderTabStrip(data) {
@@ -128,10 +185,12 @@ function renderTabStrip(data) {
 }
 
 function ensureStripStructure(spec) {
-  // Signature drives rebuild. Doesn't include comment counts or the
-  // active-tab id — those don't change DOM, just is-active flags.
+  // Signature drives rebuild. Includes mounted docs so pinning/unpinning
+  // triggers a strip rebuild, but not comment counts or active-tab id —
+  // those just toggle is-active flags.
   const signature = JSON.stringify({
     diff: spec.showDiff,
+    mounted: spec.mounted.map(d => [d.id, d.label]),
     docs: spec.docs.map(d => [d.id, d.label]),
     start: spec.showStart,
   });
@@ -143,8 +202,28 @@ function ensureStripStructure(spec) {
 
   modalTabs.appendChild(makeTabBtn("terminal", "Terminal"));
   if (spec.showDiff) modalTabs.appendChild(makeTabBtn("lgtm:diff", "Diff"));
+  for (const m of spec.mounted) modalTabs.appendChild(makeMountedTab(m.id, m.label));
   if (spec.docs.length > 0) modalTabs.appendChild(makeDocsDropdown(spec.docs));
   if (spec.showStart) modalTabs.appendChild(makeTabBtn("lgtm-start", "+ Start review"));
+}
+
+function makeMountedTab(tabId, label) {
+  // A mounted tab is a regular .modal-tab (so applyActiveState picks
+  // it up via data-tab) with an inline × subbutton for unpinning.
+  // Click on the label area switches; click on × unmounts only.
+  const wrap = document.createElement("div");
+  wrap.className = "modal-tab modal-tab-mounted";
+  wrap.dataset.tab = tabId;
+  wrap.setAttribute("role", "tab");
+  wrap.setAttribute("aria-selected", "false");
+  wrap.innerHTML = `
+    <span class="modal-tab-mounted-label">${escapeHtml(label)}</span>
+    <button type="button" class="modal-tab-mounted-unmount"
+            data-unmount-doc="${escapeHtml(tabId)}"
+            title="Unpin ${escapeHtml(label)} from tabs"
+            aria-label="Unpin ${escapeHtml(label)}">×</button>
+  `;
+  return wrap;
 }
 
 function makeTabBtn(tabId, label) {
@@ -915,6 +994,16 @@ export function initModal() {
         toggleDropdownMenu();
         return;
       }
+      // Unpin (×) on a mounted tab — drops the doc from the top-level
+      // strip but stays on it (still reachable via dropdown).
+      const unmount = e.target.closest("[data-unmount-doc]");
+      if (unmount) {
+        e.stopPropagation();
+        if (unmountDoc(unmount.dataset.unmountDoc) && lastPaneData) {
+          renderTabStrip(lastPaneData);
+        }
+        return;
+      }
       // Remove (×) button inside a dropdown row — strip the item from
       // LGTM via the periscope proxy. Stop here so the row's tab-switch
       // doesn't also fire.
@@ -942,13 +1031,18 @@ export function initModal() {
           });
         return;
       }
-      // Documents dropdown menu item: switch to that doc, close menu.
+      // Documents dropdown menu item: switch to that doc + auto-pin
+      // it as a top-level tab for quick re-access, close menu.
       const item = e.target.closest(".modal-tab-dropdown-item");
       if (item) {
         e.stopPropagation();
+        mountDoc(item.dataset.tab);
         setActiveTab(item.dataset.tab);
         closeDropdownMenu();
-        if (lastPaneData) renderReviewPane(lastPaneData);
+        if (lastPaneData) {
+          renderTabStrip(lastPaneData);
+          renderReviewPane(lastPaneData);
+        }
         refreshModalHeader();
         return;
       }
