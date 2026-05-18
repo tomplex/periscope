@@ -17,6 +17,7 @@ from periscope.panes import (
     list_windows, update_focus_from_windows,
 )
 from periscope.pids import _attach_git_then_resolve_pids
+from periscope.projects import all_projects
 from periscope.store import set_window_fields_bulk
 from periscope.usage import cached_claude_usage, cached_scraped_usage
 from periscope.views import build_window_view
@@ -58,8 +59,19 @@ def state():
         if entry["target"] not in live_targets or now - entry["started_at"] > RESUME_EXPIRY_S:
             del _resuming[sid]
 
+    # Map session→pinned_dir for the frontend's "unmanaged tmux session"
+    # detection: any session that appears in `windows` but isn't owned by
+    # any non-archived project gets the adopt affordance.
+    projects = all_projects()
+    projects_view = [
+        {"pinned_dir": k, **v}
+        for k, v in projects.items()
+        if not v.get("archived_at")
+    ]
+
     return {
         "windows": result,
+        "projects": projects_view,
         "ts": int(time.time()),
         "usage": cached_claude_usage(),
         "usage_scrape": cached_scraped_usage(),
