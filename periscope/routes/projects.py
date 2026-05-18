@@ -58,7 +58,15 @@ def projects_adopt(body: AdoptBody):
         # Adopt a worktree on disk as a project.
         if not os.path.isdir(body.pinned_dir):
             raise HTTPException(400, f"pinned_dir does not exist: {body.pinned_dir}")
-        pinned_dir = os.path.realpath(body.pinned_dir)
+        # Require a git toplevel so we don't accidentally pin a project to
+        # something like /etc. Mirrors the tmux_session branch's invariant.
+        code, toplevel = _run(["git", "-C", body.pinned_dir, "rev-parse", "--show-toplevel"])
+        if code != 0 or not toplevel:
+            raise HTTPException(
+                400,
+                f"pinned_dir is not inside a git repo: {body.pinned_dir}",
+            )
+        pinned_dir = os.path.realpath(toplevel)
         # Find matching tmux session, if any (the user may have a session
         # already attached to this directory).
         windows = list_windows()

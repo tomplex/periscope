@@ -5,6 +5,8 @@ export const state = {
   // grid
   currentFilter: "all",
   lastWindows: [],
+  lastProjects: [],              // from /api/state — non-archived rows only
+  projectsByTmux: {},             // indexProjects(lastProjects), rebuilt each render
   editingTarget: null,           // pauses polling while a card rename input is open
   collapsedSessions: new Set(),  // hydrated from prefs.getCollapsed() at boot
 
