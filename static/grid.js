@@ -222,27 +222,41 @@ function renderCard(w) {
 }
 
 function renderNewTile(session) {
-  // Read commands from prefs. First entry is the primary (top, larger hit
-  // area); the rest stack below. Falls back to an empty tile if prefs hasn't
-  // loaded yet — render() runs again on every poll, so the buttons appear
-  // within the polling interval after bootstrap.
+  // Read commands from prefs. First entry is the primary (top, larger
+  // hit area). Each command renders as a pair: a main button (plain
+  // tab) + a ⌥ button (worktree variant — opens an inline branch-name
+  // input).
   const s = escapeHtml(session);
   const commands = prefs.getCommands();
   if (!commands.length) {
     return `<div class="card card-new" data-session="${s}"></div>`;
   }
+
+  // Whether this session has a non-main project (worktree-eligible).
+  // Worktree tab requires a project with a repo; for unmanaged sessions
+  // the ⌥ button is hidden.
+  const project = state.projectsByTmux?.[session];
+  const worktreeEligible = project
+    && project.pinned_dir !== "__main__"
+    && !project.archived_at
+    && (project.repo || null);  // require resolved repo
+
   const [primary, ...rest] = commands;
-  const btn = (cmd, cls) => {
+  const pair = (cmd, cls) => {
     const label = escapeHtml(cmd.label);
     const execAttr = escapeHtml(cmd.exec || "");
-    return `<button class="new-window${cls}" data-session="${s}" data-exec="${execAttr}">+ ${label}</button>`;
+    const mainBtn = `<button class="new-window${cls}" data-session="${s}" data-exec="${execAttr}">+ ${label}</button>`;
+    const variantBtn = worktreeEligible
+      ? `<button class="new-window-worktree${cls}" data-session="${s}" data-exec="${execAttr}" data-label="${label}" title="new worktree tab + ${label}">⌥</button>`
+      : "";
+    return `<span class="new-window-pair">${mainBtn}${variantBtn}</span>`;
   };
   const stack = rest.length
-    ? `<div class="new-window-stack">${rest.map((c) => btn(c, "")).join("")}</div>`
+    ? `<div class="new-window-stack">${rest.map((c) => pair(c, "")).join("")}</div>`
     : "";
   return `
     <div class="card card-new" data-session="${s}">
-      ${btn(primary, " is-primary")}
+      ${pair(primary, " is-primary")}
       ${stack}
     </div>
   `;
@@ -1032,6 +1046,78 @@ async function handleNewWindow(btn) {
   poll();
 }
 
+async function handleWorktreeVariant(btn) {
+  const session = btn.dataset.session;
+  const exec = btn.dataset.exec || "";
+  const label = btn.dataset.label || "command";
+  if (!session) return;
+
+  // Swap the new-tile's contents for an inline branch-name form.
+  // Closing/cancelling restores the tile via the next /api/state poll's
+  // re-render (3s max). Storing a flag on the tile so other handlers
+  // don't fight us mid-flow.
+  const tile = btn.closest(".card-new");
+  if (!tile) return;
+  if (tile.dataset.worktreeForm === "1") return;  // already open
+  tile.dataset.worktreeForm = "1";
+  const prevHtml = tile.innerHTML;
+
+  tile.innerHTML = `
+    <div class="new-window-worktree-form">
+      <div class="new-window-worktree-label">+ ${escapeHtml(label)} (worktree)</div>
+      <input type="text" class="new-window-worktree-input" placeholder="branch name (e.g. tc/sub-feat)" autofocus>
+      <div class="new-window-worktree-actions">
+        <button class="new-window-worktree-cancel" type="button">cancel</button>
+        <button class="new-window-worktree-submit" type="button">create</button>
+      </div>
+    </div>
+  `;
+  const input = tile.querySelector(".new-window-worktree-input");
+  input.focus();
+
+  const restore = () => {
+    tile.removeAttribute("data-worktree-form");
+    tile.innerHTML = prevHtml;
+  };
+
+  const submit = async () => {
+    const branch = input.value.trim();
+    if (!branch) {
+      input.focus();
+      return;
+    }
+    const params = new URLSearchParams({ session, branch });
+    if (exec) params.set("exec", exec);
+    try {
+      const res = await fetch(`/api/window/new-worktree?${params}`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`new worktree tab failed: ${err.detail || res.status}`);
+        restore();
+        return;
+      }
+      const body = await res.json();
+      if (body.warning) console.warn("new-worktree warning:", body.warning);
+      restore();
+    } catch (e) {
+      alert(`request failed: ${e.message}`);
+      restore();
+    }
+  };
+
+  tile.querySelector(".new-window-worktree-cancel").addEventListener("click", restore);
+  tile.querySelector(".new-window-worktree-submit").addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      restore();
+    }
+  });
+}
+
 function reorderSessions(src, dst, before) {
   // Build the order from current DOM (so we capture auto-sorted positions of new sessions too)
   const all = [...grid.querySelectorAll(".session-group")].map(
@@ -1085,6 +1171,12 @@ function wireGrid() {
     if (killWindowBtn) {
       e.stopPropagation();
       handleKillWindow(killWindowBtn);
+      return;
+    }
+    const newWorktreeBtn = e.target.closest(".new-window-worktree");
+    if (newWorktreeBtn) {
+      e.stopPropagation();
+      handleWorktreeVariant(newWorktreeBtn);
       return;
     }
     const newWindowBtn = e.target.closest(".new-window");

@@ -2305,3 +2305,69 @@ body.disconnected .grid {
   padding: 0.1em 0.3em;
   min-width: 8em;
 }
+
+/* ── Split-button new-tile ────────────────────────────────────────────── */
+.new-window-pair {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;  /* buttons share an edge */
+  border-radius: 0.4em;
+  overflow: hidden;
+}
+.new-window-pair .new-window {
+  border-radius: 0;
+  border-right: 1px solid color-mix(in oklch, var(--fg-0) 15%, transparent);
+}
+.new-window-pair .new-window-worktree {
+  padding: 0 0.5em;
+  background: color-mix(in oklch, var(--accent, #4a90e2) 12%, transparent);
+  color: var(--fg-0);
+  border: none;
+  border-radius: 0;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+.new-window-pair .new-window-worktree:hover {
+  background: color-mix(in oklch, var(--accent, #4a90e2) 25%, transparent);
+}
+.new-window-pair .new-window-worktree.is-primary {
+  font-size: 1em;
+}
+.new-window-worktree-form {
+  padding: 0.5em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+.new-window-worktree-label {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.new-window-worktree-input {
+  font: inherit;
+  padding: 0.3em 0.5em;
+  border: 1px solid var(--accent, #4a90e2);
+  border-radius: 0.3em;
+  background: var(--bg-0);
+  color: var(--fg-0);
+}
+.new-window-worktree-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4em;
+}
+.new-window-worktree-actions button {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.3em 0.6em;
+  border: 1px solid color-mix(in oklch, var(--fg-0) 20%, transparent);
+  border-radius: 0.3em;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  cursor: pointer;
+}
+.new-window-worktree-submit {
+  background: var(--accent, #4a90e2) !important;
+  color: white !important;
+  border-color: var(--accent, #4a90e2) !important;
+}
