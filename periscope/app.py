@@ -28,6 +28,7 @@ from periscope.routes import (
 from periscope.routes import lgtm as lgtm_route
 from periscope.routes import projects as projects_routes
 from periscope.routes import cleanup as cleanup_routes
+from periscope.routes import settings as settings_routes
 
 
 @asynccontextmanager
@@ -83,7 +84,7 @@ app = FastAPI(lifespan=lifespan)
 # `/api/*` and `/ws/*` paths take precedence over `StaticFiles`.
 for r in (
     auto_rename, channel, cleanup_routes, healthz, history, lgtm_route, pane,
-    paste_image, prefs, projects_routes, send, sessions, state, ws,
+    paste_image, prefs, projects_routes, send, sessions, settings_routes, state, ws,
 ):
     app.include_router(r.router)
 
