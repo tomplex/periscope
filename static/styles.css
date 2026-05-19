@@ -1021,8 +1021,52 @@ body[data-view="stream"] .stream-banner {
   color: var(--fg-3);
   text-align: right;
   font-family: var(--mono);
+  /* Becomes button-like on row hover/focus — same affordance whether
+     reached by mouse or keyboard. Click still fires from the row, so
+     this is decoration + Enter-hint, not its own hit target. */
+  display: inline-block;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.stream-row:hover .stream-action,
+.stream-row.is-focused .stream-action {
+  color: var(--fg-0);
+  background: var(--bg-1);
+  border-color: var(--line);
 }
 .stream-action-respond { color: var(--s-needs); font-weight: 500; }
+.stream-row:hover .stream-action-respond,
+.stream-row.is-focused .stream-action-respond {
+  background: color-mix(in oklch, var(--s-needs) 12%, transparent);
+  border-color: color-mix(in oklch, var(--s-needs) 45%, transparent);
+}
+
+/* Keyboard-focused row (↑/↓ nav). Subtle row-level lift so the focused
+   row reads as "next Enter will open this" without competing with the
+   needs-input / has-need-human accents. */
+.stream-row.is-focused {
+  background: var(--bg-1);
+}
+.stream-row.is-focused::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+/* Channel `need_human` rows pin to the top; mark them with a distinct
+   left-accent treatment so the pin is visible. */
+.stream-row.has-need-human {
+  --card-accent: var(--s-needs);
+}
+.stream-row.has-need-human .stream-time {
+  color: var(--s-needs);
+  font-weight: 500;
+}
 
 /* ─── Modal ─────────────────────────────────────── */
 

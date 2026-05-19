@@ -12,6 +12,8 @@ export const state = {
 
   // stream view
   streamQuery: "",               // type-to-filter substring (matches name + session)
+  streamFocusedTarget: null,     // target ("sess:N") of the keyboard-focused row
+  streamVisible: [],             // last rendered order of {target, session} for ↑/↓ nav
 
   // modal
   activeTarget: null,

@@ -406,6 +406,8 @@ function streamAction(s) {
 function renderStreamRow(w) {
   const stateClass = `state-${w.state}`;
   const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
+  const focusedCls = w.target === state.streamFocusedTarget ? " is-focused" : "";
+  const needHumanCls = hasUnreadNeedHuman(w) ? " has-need-human" : "";
   const sessionLabel = escapeHtml(w.session);
   const branchPart = w.branch
     ? `${sessionLabel} · ${escapeHtml(w.branch)}`
@@ -427,7 +429,7 @@ function renderStreamRow(w) {
   const when = relTime(w.acted_at) || "now";
 
   return `
-    <div class="stream-row ${stateClass}${ciBadCls}" data-target="${w.target}">
+    <div class="stream-row ${stateClass}${ciBadCls}${focusedCls}${needHumanCls}" data-target="${w.target}">
       <span class="stream-time">${when}</span>
       <span class="stream-icon">${streamIcon(w.state)}</span>
       <div class="stream-body">
@@ -453,16 +455,48 @@ function passesStreamQuery(w, q) {
   );
 }
 
+// Channel `need_human` notification with unread = pane is paging the user.
+// Same gate as the dashboard-wide attention fade in render(); kept in sync
+// so what gets pinned at the top of the stream matches what's lit up
+// elsewhere.
+function hasUnreadNeedHuman(w) {
+  if (!(w.channel_unread > 0)) return false;
+  return (w.channel_replies || []).some((r) => r.kind === "need_human");
+}
+
+const STREAM_QUERY_KEY = "periscope-stream-query";
+
+function loadStreamQuery() {
+  try {
+    return localStorage.getItem(STREAM_QUERY_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveStreamQuery(q) {
+  try {
+    if (q) localStorage.setItem(STREAM_QUERY_KEY, q);
+    else localStorage.removeItem(STREAM_QUERY_KEY);
+  } catch {
+    // Quota or disabled storage — query falls back to in-memory only.
+  }
+}
+
 function ensureStreamScaffold() {
   // Stream toolbar (filter + new-tab) is built once and re-used across
   // polls. Rebuilding the input every 1.5s would yank focus and clobber
   // the user's typing mid-keystroke; we only refresh the dynamic parts
   // (banner text, row list, new-tab session label).
   if (document.getElementById("stream-toolbar")) return;
+  // Hydrate the query from localStorage on first build. State already
+  // holds it across re-renders within a single page load; this picks up
+  // a value from the previous load.
+  if (!state.streamQuery) state.streamQuery = loadStreamQuery();
   grid.innerHTML = `
     <div class="stream-toolbar" id="stream-toolbar">
       <input id="stream-filter" class="stream-filter" type="text"
-             placeholder="filter by name or session…" autocomplete="off"
+             placeholder="filter by name or session… (press / to focus)" autocomplete="off"
              value="${escapeHtml(state.streamQuery || "")}">
       <button id="stream-new-tab" class="stream-new-tab" type="button" hidden></button>
     </div>
@@ -472,6 +506,7 @@ function ensureStreamScaffold() {
   const input = document.getElementById("stream-filter");
   input.addEventListener("input", () => {
     state.streamQuery = input.value;
+    saveStreamQuery(input.value);
     renderStream(state.lastWindows);
   });
   // Esc clears the query and re-renders. Doesn't blur — Esc is more useful
@@ -482,6 +517,7 @@ function ensureStreamScaffold() {
       e.stopPropagation();
       input.value = "";
       state.streamQuery = "";
+      saveStreamQuery("");
       renderStream(state.lastWindows);
     }
   });
@@ -536,10 +572,34 @@ function renderStream(windows) {
   const list = document.getElementById("stream-list");
 
   const opened = windows.filter((w) => w.acted_at > 0);
+  // Two-key sort:
+  //   1. needs-human-and-unread group first (Claude is paging the user via
+  //      the channel — this outranks anything else, including a tab opened
+  //      30s ago, because the alert IS the reason to look at the stream).
+  //   2. acted_at desc within each group.
   const visible = opened
     .filter(passesFilter)
     .filter((w) => passesStreamQuery(w, state.streamQuery))
-    .sort((a, b) => (b.acted_at || 0) - (a.acted_at || 0));
+    .sort((a, b) => {
+      const ah = hasUnreadNeedHuman(a) ? 0 : 1;
+      const bh = hasUnreadNeedHuman(b) ? 0 : 1;
+      if (ah !== bh) return ah - bh;
+      return (b.acted_at || 0) - (a.acted_at || 0);
+    });
+
+  // Track the rendered order so ↑/↓ key handlers can step through it
+  // without recomputing the sort.
+  state.streamVisible = visible.map((w) => w.target);
+
+  // Reconcile focused target with what's actually visible. If the focused
+  // row got filtered out (or it's still null on first paint), snap to the
+  // top of the list.
+  if (
+    !state.streamFocusedTarget ||
+    !state.streamVisible.includes(state.streamFocusedTarget)
+  ) {
+    state.streamFocusedTarget = state.streamVisible[0] || null;
+  }
 
   // Topmost row's session powers the "+ new tab" button — keep this
   // before the empty-state early returns so the button updates even when
@@ -939,9 +999,11 @@ function wireGrid() {
     }
     // Stream-row click: open modal. Stream rows don't carry a renameable
     // title surface, so no dblclick-defer needed — checked before .card so
-    // the next branch's renameable-title logic doesn't apply.
+    // the next branch's renameable-title logic doesn't apply. Also moves
+    // the keyboard-focus marker so ↑/↓ picks up from the clicked row.
     const streamRow = e.target.closest(".stream-row");
     if (streamRow) {
+      state.streamFocusedTarget = streamRow.dataset.target;
       openModal(streamRow.dataset.target);
       return;
     }

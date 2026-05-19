@@ -14,26 +14,72 @@ import { initCleanupModal } from './cleanup-modal.js';
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
 // the same shortcut focuses the search input — handled in history.js.)
 //
-// Plain `/` in stream view → focus the stream filter input. Skip when an
-// input/textarea already has focus (the slash should land in there) and
-// when the modal is open (its keybindings own the surface).
+// Stream-view shortcuts (gated on body[data-view="stream"] and modal-closed):
+//   /           focus the filter input
+//   ↑ / ↓       step the focused row (works while the filter has focus too —
+//               single-line inputs swallow nothing useful from vertical arrows)
+//   Enter       open the modal for the focused row
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "/") {
     e.preventDefault();
     window.location.href = "/history";
     return;
   }
+  if (document.body.dataset.view !== "stream") return;
+  const modalEl = document.getElementById("modal");
+  if (modalEl && !modalEl.classList.contains("hidden")) return;
+
+  const activeTag = (document.activeElement?.tagName || "").toLowerCase();
+  const activeId = document.activeElement?.id || "";
+  const inFilter = activeId === "stream-filter";
+  const inOtherInput =
+    (activeTag === "input" || activeTag === "textarea") && !inFilter;
+  if (inOtherInput) return;
+
   if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-    if (document.body.dataset.view !== "stream") return;
-    const tag = (document.activeElement?.tagName || "").toLowerCase();
-    if (tag === "input" || tag === "textarea") return;
-    const modalEl = document.getElementById("modal");
-    if (modalEl && !modalEl.classList.contains("hidden")) return;
+    if (inFilter) return;
     const filterEl = document.getElementById("stream-filter");
     if (!filterEl) return;
     e.preventDefault();
     filterEl.focus();
     filterEl.select();
+    return;
+  }
+
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    const visible = state.streamVisible;
+    if (!visible.length) return;
+    e.preventDefault();
+    const cur = state.streamFocusedTarget;
+    const idx = visible.indexOf(cur);
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    const next =
+      idx === -1
+        ? visible[0]
+        : visible[Math.max(0, Math.min(visible.length - 1, idx + step))];
+    if (next === cur) return;
+    state.streamFocusedTarget = next;
+    // Update the focused class in place — cheaper and less jumpy than
+    // re-rendering the whole stream every keystroke.
+    document
+      .querySelectorAll(".stream-row.is-focused")
+      .forEach((el) => el.classList.remove("is-focused"));
+    const row = document.querySelector(
+      `.stream-row[data-target="${CSS.escape(next)}"]`,
+    );
+    if (row) {
+      row.classList.add("is-focused");
+      row.scrollIntoView({ block: "nearest" });
+    }
+    return;
+  }
+
+  if (e.key === "Enter" && state.streamFocusedTarget) {
+    // Enter on the filter input with no rows visible just does nothing;
+    // we won't try to "submit search" or similar.
+    if (!state.streamVisible.includes(state.streamFocusedTarget)) return;
+    e.preventDefault();
+    openModal(state.streamFocusedTarget);
   }
 });
 
