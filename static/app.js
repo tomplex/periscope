@@ -11,6 +11,7 @@ import { initNewProjectModal } from './new-project-modal.js';
 import { initReviewPRModal } from './review-pr-modal.js';
 import { initCleanupModal } from './cleanup-modal.js';
 import { initSettingsModal } from './settings-modal.js';
+import { pushEscape, popEscape } from './overlay.js';
 
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
 // the same shortcut focuses the search input — handled in history.js.)
@@ -26,6 +27,34 @@ document.addEventListener("keydown", (e) => {
     window.location.href = "/history";
     return;
   }
+
+  // Tab cycles between grid and stream views. Suppressed when any input/
+  // textarea is focused (so the user's Tab through form fields keeps
+  // working) and when the modal is open (its own keybindings own that
+  // surface). Shift+Tab also flips — with only two views the direction
+  // doesn't matter.
+  const activeTagGlobal = (document.activeElement?.tagName || "").toLowerCase();
+  const editableActive =
+    activeTagGlobal === "input" ||
+    activeTagGlobal === "textarea" ||
+    document.activeElement?.isContentEditable;
+  const modalElGlobal = document.getElementById("modal");
+  const modalOpen = modalElGlobal && !modalElGlobal.classList.contains("hidden");
+  if (
+    e.key === "Tab" &&
+    !e.metaKey &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    !editableActive &&
+    !modalOpen
+  ) {
+    e.preventDefault();
+    const next = document.body.dataset.view === "stream" ? "grid" : "stream";
+    const btn = document.querySelector(`[data-view="${next}"]`);
+    if (btn) btn.click();
+    return;
+  }
+
   if (document.body.dataset.view !== "stream") return;
   const modalEl = document.getElementById("modal");
   if (modalEl && !modalEl.classList.contains("hidden")) return;
@@ -85,14 +114,91 @@ document.addEventListener("keydown", (e) => {
 });
 
 // `[data-filter]` scope excludes the action chips (+ session, collapse all)
-// that share the .filters parent — those have their own handlers.
+// that share the .filters parent — those have their own handlers. The
+// filter buttons live inside the `state ▾` dropdown menu now; we keep the
+// querySelector scope to `#filters` so the wiring works whether the
+// buttons are surfaced as chips or as menu items.
 const filterButtons = document.querySelectorAll("#filters button[data-filter]");
+const filterLabel = document.getElementById("filter-dd-label");
 filterButtons.forEach((b) => {
   b.addEventListener("click", () => {
     filterButtons.forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
     state.currentFilter = b.dataset.filter;
+    if (filterLabel) filterLabel.textContent = b.textContent.trim();
+    closeAllDropdowns();
     render(state.lastWindows);
+  });
+});
+
+// ─── Toolbar dropdowns (state filter / + new / ⋯) ────────────────────
+// One open at a time. Outside click + Escape close. Each toggle button
+// has `aria-expanded`; CSS rotates the chevron off of it.
+let _openDropdown = null;
+
+function openDropdown(dd) {
+  if (_openDropdown && _openDropdown !== dd) closeDropdown(_openDropdown);
+  if (_openDropdown === dd) return;
+  const toggle = dd.querySelector(".tb-dd-toggle");
+  const menu = dd.querySelector(".tb-dd-menu");
+  if (!toggle || !menu) return;
+  menu.hidden = false;
+  toggle.setAttribute("aria-expanded", "true");
+  _openDropdown = dd;
+  pushEscape(_escapeDropdown);
+  // Defer the outside-click listener so the click that opened the menu
+  // doesn't immediately count as "outside" (same pattern modal.js uses
+  // for the LGTM docs dropdown).
+  setTimeout(() => document.addEventListener("click", _outsideDropdownClick), 0);
+}
+
+function closeDropdown(dd) {
+  if (!dd) return;
+  const toggle = dd.querySelector(".tb-dd-toggle");
+  const menu = dd.querySelector(".tb-dd-menu");
+  if (menu) menu.hidden = true;
+  if (toggle) toggle.setAttribute("aria-expanded", "false");
+  if (_openDropdown === dd) {
+    popEscape(_escapeDropdown);
+    document.removeEventListener("click", _outsideDropdownClick);
+    _openDropdown = null;
+  }
+}
+
+function closeAllDropdowns() {
+  if (_openDropdown) closeDropdown(_openDropdown);
+}
+
+function _escapeDropdown() {
+  if (_openDropdown) closeDropdown(_openDropdown);
+}
+
+function _outsideDropdownClick(e) {
+  if (!_openDropdown) return;
+  if (e.target.closest(".tb-dd") === _openDropdown) return;
+  closeDropdown(_openDropdown);
+}
+
+document.querySelectorAll(".tb-dd").forEach((dd) => {
+  const toggle = dd.querySelector(".tb-dd-toggle");
+  if (!toggle) return;
+  toggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (_openDropdown === dd) closeDropdown(dd);
+    else openDropdown(dd);
+  });
+});
+
+// Menu items that don't have their own click handler still need to close
+// the menu after firing. Action buttons inside (#new-session, #cleanup-btn,
+// etc.) have their own listeners further down/elsewhere; we just close
+// the dropdown on any item click that bubbles up here. The handlers run
+// first (capture order: handler bound to button, then this delegated
+// listener on the .tb-dd-menu container).
+document.querySelectorAll(".tb-dd-menu").forEach((menu) => {
+  menu.addEventListener("click", (e) => {
+    if (!e.target.closest(".tb-dd-item")) return;
+    closeAllDropdowns();
   });
 });
 

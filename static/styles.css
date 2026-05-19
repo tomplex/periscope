@@ -233,6 +233,63 @@ html, body {
 
 .filters-spacer { flex: 1; }
 
+/* ─── Toolbar dropdowns (filter / + new / ⋯) ─────────────────────────── */
+/* Three top-bar dropdowns share this pattern: a `.filter-btn` toggle with
+   a chevron, and an absolute-positioned menu of `.tb-dd-item` rows.
+   One menu open at a time; outside click / Esc closes; clicking an item
+   triggers the item's own handler (existing ID-bound listeners). */
+.tb-dd {
+  position: relative;
+  display: inline-flex;
+}
+.tb-dd-toggle .tb-dd-chev {
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--fg-4);
+  transition: transform 0.12s;
+}
+.tb-dd-toggle[aria-expanded="true"] .tb-dd-chev {
+  transform: rotate(180deg);
+  color: var(--fg-2);
+}
+.tb-dd-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px oklch(0 0 0 / 0.35);
+}
+.tb-dd-menu[hidden] { display: none; }
+.tb-dd-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: color 0.1s, background 0.1s;
+}
+.tb-dd-item:hover { color: var(--fg-0); background: var(--bg-2); }
+.tb-dd-item.active {
+  color: var(--fg-0);
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
+}
+
 /* ─── View switch (grid ↔ stream) ─────────────────────────────────────── */
 
 .view-switch {

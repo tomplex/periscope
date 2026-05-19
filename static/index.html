@@ -28,27 +28,60 @@
     <nav class="filters" id="filters">
       <a href="/history" class="filter-btn is-action" id="history-link" title="search conversation history (⌘/)">🔍 history <span class="ps-kbd" style="margin-left:4px">⌘</span><span class="ps-kbd">/</span></a>
       <span class="filters-sep"></span>
-      <button data-filter="all" class="filter-btn active">all</button>
-      <button data-filter="needs-input" class="filter-btn">needs input</button>
-      <button data-filter="working" class="filter-btn">working</button>
-      <button data-filter="done" class="filter-btn">done</button>
-      <button data-filter="idle" class="filter-btn">idle</button>
-      <button data-filter="claude" class="filter-btn">claude</button>
-      <button data-filter="shell" class="filter-btn">shells</button>
-      <button data-filter="ci-bad" class="filter-btn">CI ✗</button>
+
+      <!-- State filter consolidated into one dropdown. The label tracks
+           the active filter; clicking the toggle reveals the eight options. -->
+      <div class="tb-dd" data-dd="filter">
+        <button type="button" class="filter-btn tb-dd-toggle" id="filter-dd-toggle" aria-haspopup="menu" aria-expanded="false" title="filter by state">
+          <span id="filter-dd-label">all</span><span class="tb-dd-chev" aria-hidden="true">▾</span>
+        </button>
+        <div class="tb-dd-menu" id="filter-dd-menu" role="menu" hidden>
+          <button data-filter="all" class="tb-dd-item active" role="menuitem">all</button>
+          <button data-filter="needs-input" class="tb-dd-item" role="menuitem">needs input</button>
+          <button data-filter="working" class="tb-dd-item" role="menuitem">working</button>
+          <button data-filter="done" class="tb-dd-item" role="menuitem">done</button>
+          <button data-filter="idle" class="tb-dd-item" role="menuitem">idle</button>
+          <button data-filter="claude" class="tb-dd-item" role="menuitem">claude</button>
+          <button data-filter="shell" class="tb-dd-item" role="menuitem">shells</button>
+          <button data-filter="ci-bad" class="tb-dd-item" role="menuitem">CI ✗</button>
+        </div>
+      </div>
+
       <span class="filters-sep"></span>
-      <button id="new-session" class="filter-btn is-action" title="create a new tmux session">+ session</button>
-      <button id="new-project-btn" class="filter-btn is-action" title="create a new project (new worktree + tmux session)">+ project</button>
-      <button id="review-pr-btn" class="filter-btn is-action" title="review a PR by number — creates a worktree at pr-<N> + claude session">📋 review PR</button>
-      <button id="cleanup-btn" class="filter-btn is-action" title="archive worktrees with merged PRs, deleted branches, or idle activity">🧹 cleanup</button>
-      <button id="settings-btn" class="filter-btn is-action" title="settings">🛠 settings</button>
+
+      <!-- + new dropdown: session / project / review PR. Items retain
+           their original IDs so the existing click handlers fire. -->
+      <div class="tb-dd" data-dd="new">
+        <button type="button" class="filter-btn is-action tb-dd-toggle" id="new-dd-toggle" aria-haspopup="menu" aria-expanded="false" title="create new">
+          + new <span class="tb-dd-chev" aria-hidden="true">▾</span>
+        </button>
+        <div class="tb-dd-menu" id="new-dd-menu" role="menu" hidden>
+          <button id="new-session" class="tb-dd-item" role="menuitem" title="create a new tmux session">+ session</button>
+          <button id="new-project-btn" class="tb-dd-item" role="menuitem" title="create a new project (new worktree + tmux session)">+ project</button>
+          <button id="review-pr-btn" class="tb-dd-item" role="menuitem" title="review a PR by number — creates a worktree at pr-<N> + claude session">📋 review PR</button>
+        </div>
+      </div>
+
+      <!-- Conditional buttons: visibility is managed by render() — they
+           show only when there's something to do. Keep them inline so the
+           affordance is one-click instead of buried in a menu. -->
       <button id="send-bulk" class="filter-btn is-action" hidden title="paste text + Enter into every visible pane (filter first to scope)"></button>
       <button id="toggle-all" class="filter-btn is-action" title="collapse or expand all sessions"></button>
-      <button id="open-commands" class="filter-btn is-action" title="edit + claude / + shell / + ... commands">⚙</button>
+
+      <!-- ⋯ overflow: low-frequency actions. -->
+      <div class="tb-dd" data-dd="more">
+        <button type="button" class="filter-btn is-action tb-dd-toggle" id="more-dd-toggle" aria-haspopup="menu" aria-expanded="false" title="more actions">⋯</button>
+        <div class="tb-dd-menu" id="more-dd-menu" role="menu" hidden>
+          <button id="cleanup-btn" class="tb-dd-item" role="menuitem" title="archive worktrees with merged PRs, deleted branches, or idle activity">🧹 cleanup</button>
+          <button id="settings-btn" class="tb-dd-item" role="menuitem" title="settings">🛠 settings</button>
+          <button id="open-commands" class="tb-dd-item" role="menuitem" title="edit + claude / + shell / + ... commands">⚙ commands</button>
+        </div>
+      </div>
+
       <span class="filters-spacer"></span>
       <div class="view-switch" id="view-switch" role="tablist" aria-label="view">
-        <button class="view-switch-btn" data-view="grid" role="tab" aria-selected="true" title="grid view">▦ grid</button>
-        <button class="view-switch-btn" data-view="stream" role="tab" aria-selected="false" title="stream view — tabs you've opened, by priority">≡ stream</button>
+        <button class="view-switch-btn" data-view="grid" role="tab" aria-selected="true" title="grid view (Tab to toggle)">▦ grid</button>
+        <button class="view-switch-btn" data-view="stream" role="tab" aria-selected="false" title="stream view — tabs you've opened, by recency (Tab to toggle)">≡ stream</button>
       </div>
     </nav>
   </header>
