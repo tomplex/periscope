@@ -1872,7 +1872,8 @@ body.modal-open { overflow: hidden; }
 /* New-project modal + Review-PR modal (shared visual pattern) */
 .new-project-modal-overlay,
 .review-pr-modal-overlay,
-.cleanup-modal-overlay {
+.cleanup-modal-overlay,
+.settings-modal-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
@@ -1883,10 +1884,12 @@ body.modal-open { overflow: hidden; }
 }
 .new-project-modal-overlay.hidden,
 .review-pr-modal-overlay.hidden,
-.cleanup-modal-overlay.hidden { display: none; }
+.cleanup-modal-overlay.hidden,
+.settings-modal-overlay.hidden { display: none; }
 .new-project-modal-card,
 .review-pr-modal-card,
-.cleanup-modal-card {
+.cleanup-modal-card,
+.settings-modal-card {
   background: var(--bg-1);
   color: var(--fg-0);
   border-radius: 0.75em;
@@ -1898,7 +1901,8 @@ body.modal-open { overflow: hidden; }
 }
 .new-project-modal-head,
 .review-pr-modal-head,
-.cleanup-modal-head {
+.cleanup-modal-head,
+.settings-modal-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1906,10 +1910,12 @@ body.modal-open { overflow: hidden; }
 }
 .new-project-modal-head h2,
 .review-pr-modal-head h2,
-.cleanup-modal-head h2 { margin: 0; font-size: 1.1em; }
+.cleanup-modal-head h2,
+.settings-modal-head h2 { margin: 0; font-size: 1.1em; }
 .new-project-modal-head button,
 .review-pr-modal-head button,
-.cleanup-modal-head button {
+.cleanup-modal-head button,
+.settings-modal-head button {
   background: none;
   border: none;
   color: var(--fg-0);
@@ -1958,7 +1964,8 @@ body.modal-open { overflow: hidden; }
 }
 .new-project-modal-error,
 .review-pr-modal-error,
-.cleanup-modal-error {
+.cleanup-modal-error,
+.settings-modal-error {
   background: color-mix(in oklch, var(--warn, #d97706) 15%, transparent);
   color: var(--warn, #d97706);
   border-radius: 0.4em;
@@ -1968,7 +1975,8 @@ body.modal-open { overflow: hidden; }
 }
 .new-project-modal-actions,
 .review-pr-modal-actions,
-.cleanup-modal-actions {
+.cleanup-modal-actions,
+.settings-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5em;
@@ -1976,7 +1984,8 @@ body.modal-open { overflow: hidden; }
 }
 .new-project-modal-actions button,
 .review-pr-modal-actions button,
-.cleanup-modal-actions button {
+.cleanup-modal-actions button,
+.settings-modal-actions button {
   padding: 0.5em 1em;
   border: 1px solid color-mix(in oklch, var(--fg-0) 20%, transparent);
   border-radius: 0.4em;
@@ -2370,4 +2379,78 @@ body.disconnected .grid {
   background: var(--accent, #4a90e2) !important;
   color: white !important;
   border-color: var(--accent, #4a90e2) !important;
+}
+
+/* ── Settings modal ──────────────────────────────────────────────────── */
+.settings-modal-card {
+  width: min(640px, 90vw);
+}
+#settings-form label {
+  display: block;
+  margin-bottom: 0.75em;
+  font-size: 0.9em;
+}
+#settings-form input,
+#settings-form select {
+  display: block;
+  width: 100%;
+  margin-top: 0.25em;
+  padding: 0.4em 0.6em;
+  border: 1px solid color-mix(in oklch, var(--fg-0) 20%, transparent);
+  border-radius: 0.4em;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font: inherit;
+}
+#settings-form fieldset {
+  border: 1px solid color-mix(in oklch, var(--fg-0) 15%, transparent);
+  border-radius: 0.4em;
+  padding: 0.5em 0.75em;
+  margin-bottom: 0.75em;
+}
+.settings-overrides-empty {
+  font-size: 0.85em;
+  opacity: 0.6;
+  padding: 0.5em 0;
+}
+.settings-overrides-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5em;
+  align-items: center;
+  margin-bottom: 0.4em;
+}
+.settings-overrides-repo {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-overrides-layout {
+  width: auto !important;
+  padding: 0.2em 0.4em !important;
+}
+.settings-overrides-remove {
+  background: none;
+  border: none;
+  color: var(--fg-0);
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 1.2em;
+}
+.settings-overrides-remove:hover { opacity: 1; }
+.settings-overrides-hint {
+  font-size: 0.8em;
+  opacity: 0.6;
+  margin: 0.25em 0 0 0;
+}
+#settings-submit {
+  background: var(--accent, #4a90e2);
+  color: white;
+  border-color: var(--accent, #4a90e2);
+}
+#settings-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
