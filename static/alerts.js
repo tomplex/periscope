@@ -1,0 +1,118 @@
+// Right-rail alerts feed: cross-pane reverse-chronological view of every
+// reply() the panes have sent through the channel. Polls /api/alerts/recent
+// on the same 3s cadence as the main /api/state poll, but on its own
+// interval so the rail can refresh while the user is anywhere in the UI.
+//
+// Open/closed state is persisted via prefs (alerts_open). The button in
+// the header shows a count badge for unread need_human alerts only —
+// info/done alerts are lower-signal and don't earn the badge.
+
+import * as prefs from './prefs.js';
+import { apiCall, escapeHtml, relTime } from './util.js';
+import { openModal } from './modal.js';
+
+const POLL_MS = 3000;
+
+let rail = null;
+let body = null;
+let toggleBtn = null;
+let badge = null;
+let pollTimer = null;
+let lastItems = [];
+
+export function initAlerts() {
+  rail = document.getElementById("alerts-rail");
+  body = document.getElementById("alerts-rail-body");
+  toggleBtn = document.getElementById("alerts-toggle");
+  badge = document.getElementById("alerts-badge");
+  if (!rail || !toggleBtn) return;
+
+  // Restore persisted open state.
+  applyOpen(prefs.getAlertsOpen());
+
+  toggleBtn.addEventListener("click", () => {
+    const next = !isOpen();
+    applyOpen(next);
+    prefs.setAlertsOpen(next);
+  });
+
+  const closeBtn = document.getElementById("alerts-rail-close");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => {
+      applyOpen(false);
+      prefs.setAlertsOpen(false);
+    });
+  }
+
+  // Click delegation on row → open the pane modal. Empty-state and header
+  // clicks fall through harmlessly.
+  body.addEventListener("click", (e) => {
+    const row = e.target.closest(".alerts-row");
+    if (!row) return;
+    const target = row.dataset.target;
+    if (target) openModal(target);
+  });
+
+  // Poll always, regardless of open state — keeps the badge fresh so a
+  // need_human firing while the panel is closed still alerts the user.
+  // The interval is cheap (one in-memory walk + json serialize).
+  poll();
+  pollTimer = setInterval(poll, POLL_MS);
+}
+
+function isOpen() {
+  return document.body.dataset.alerts === "open";
+}
+
+function applyOpen(open) {
+  document.body.dataset.alerts = open ? "open" : "closed";
+  if (toggleBtn) toggleBtn.setAttribute("aria-pressed", open ? "true" : "false");
+}
+
+async function poll() {
+  const data = await apiCall("alerts", "/api/alerts/recent?limit=100");
+  if (!data) return;
+  lastItems = data.items || [];
+  render();
+}
+
+function render() {
+  if (!body) return;
+  updateBadge();
+  if (!lastItems.length) {
+    body.innerHTML = `<div class="alerts-empty">No alerts yet. Panes call <code>reply()</code> through the channel to show up here.</div>`;
+    return;
+  }
+  body.innerHTML = lastItems.map(renderRow).join("");
+}
+
+function renderRow(r) {
+  const kind = r.kind || "info";
+  const icon = kind === "need_human" ? "⚠" : kind === "done" ? "✓" : "•";
+  const time = r.ts ? relTime(r.ts) : "";
+  const paneLabel = `${r.session} · ${r.name || `:${r.index}`}`;
+  return `
+    <div class="alerts-row alerts-row-${kind}" data-target="${escapeHtml(r.target)}">
+      <div class="alerts-row-head">
+        <span class="alerts-row-icon">${icon}</span>
+        <span class="alerts-row-pane" title="${escapeHtml(r.target)}">${escapeHtml(paneLabel)}</span>
+        <span class="alerts-row-time">${escapeHtml(time)}</span>
+      </div>
+      <div class="alerts-row-body">${escapeHtml(r.message)}</div>
+    </div>
+  `;
+}
+
+function updateBadge() {
+  if (!badge) return;
+  // Only need_human gets a badge — info/done are noise at the dashboard
+  // level. The whole panel still shows them, but the user doesn't need
+  // to be summoned for "✓ tests pass."
+  const count = lastItems.filter((r) => r.kind === "need_human").length;
+  if (count > 0) {
+    badge.hidden = false;
+    badge.textContent = String(count);
+  } else {
+    badge.hidden = true;
+  }
+}

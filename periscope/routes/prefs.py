@@ -33,6 +33,7 @@ class UIPatch(BaseModel):
     session_order: list[str] | None = None
     collapsed_sessions: list[str] | None = None
     view: str | None = None  # "grid" or "stream"
+    alerts_open: bool | None = None  # right-rail alerts feed visibility
 
 
 @router.patch("/api/prefs/ui")

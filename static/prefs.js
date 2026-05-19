@@ -57,6 +57,10 @@ export function getView() {
   return cache.ui.view === "stream" ? "stream" : "grid";
 }
 
+export function getAlertsOpen() {
+  return !!cache.ui.alerts_open;
+}
+
 export function getCommands() {
   return cache.commands || [];
 }
@@ -139,6 +143,10 @@ export function setCollapsed(set) {
 
 export function setView(view) {
   return patchUI({ view });
+}
+
+export function setAlertsOpen(open) {
+  return patchUI({ alerts_open: !!open });
 }
 
 // ── Window annotations ──────────────────────────────────────────────────
