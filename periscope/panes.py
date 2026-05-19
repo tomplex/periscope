@@ -209,9 +209,12 @@ TOOL_CALL_RE = re.compile(r"^[^\x00-\x7f]\s+\w+\(")
 
 # Tool-result lines start with `⎿`. Claude Code renders rate-limit and
 # transport failures as a normal tool result whose body begins with
-# "API Error:" — when that's the most recent tool result visible in the
-# pane, the pane is currently stuck on retries. A later non-error `⎿`
-# means Claude got through and the flag should clear.
+# "API Error:" and then STOPS — it does not auto-retry; the turn just
+# ends with the error sitting there until the user types something
+# (`keep going`, etc.) to restart. When the most recent `⎿` line is an
+# API Error the pane is silently blocked waiting on a human nudge. A
+# later non-error `⎿` means a subsequent turn succeeded and the flag
+# should clear.
 TOOL_RESULT_RE = re.compile(r"^\s*⎿\s+")
 API_ERROR_RE = re.compile(r"^\s*⎿\s+API Error:")
 
@@ -450,9 +453,12 @@ def parse_pane(content: str) -> dict:
                 break
 
     # API-error flag: walk tool-result lines bottom-up and flip on iff the
-    # most recent `⎿` line is an API Error. A subsequent successful tool
-    # result clears it. Only meaningful on Claude panes — prose mentioning
-    # "API Error" in a shell pane (logs, grep output) must not trip it.
+    # most recent `⎿` line is an API Error. The turn aborts when Claude
+    # hits one — no auto-retry — so the flag tracks "pane is silently
+    # blocked waiting for the user to say `keep going`". A successful
+    # tool result below it (after the user nudged) clears it. Only
+    # meaningful on Claude panes — prose mentioning "API Error" in a
+    # shell pane (logs, grep output) must not trip it.
     api_error = False
     if is_claude:
         for line in reversed(lines):

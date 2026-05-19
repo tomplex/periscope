@@ -772,10 +772,12 @@ body[data-view="stream"] .stream-banner {
 .card-pr-fail .card-ci-bad { color: var(--s-danger); }
 
 /* API-error chip: lit when the pane's most recent tool result was an
-   `⎿ API Error:` line — typically a transport rate limit. Surfaces stuck-
-   on-retry panes from across the dashboard. Same danger color family as
-   ci-bad but rendered as its own pill in the card header next to the
-   state label (it's a transient overlay, not a permanent state). */
+   `⎿ API Error:` line — typically a rate limit. Claude's turn aborts
+   on these and the pane silently waits for a user nudge (it doesn't
+   auto-retry). Same danger color family as ci-bad but rendered as its
+   own pill in the card header next to the state label, since the
+   underlying tmux state stays idle/working depending on what the user
+   has typed. */
 .card-api-error,
 .stream-api-error {
   display: inline-flex;

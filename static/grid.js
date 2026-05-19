@@ -181,10 +181,11 @@ function renderCard(w) {
     : "";
 
   // API-error chip: the pane's most recent tool result was an `⎿ API Error:`
-  // — typically a transport rate limit. Loud so a stuck-on-retries pane is
-  // visible at a glance; clears on the next poll once Claude gets through.
+  // — typically a rate limit. Claude doesn't auto-retry; the turn aborts and
+  // the pane silently waits for the user to nudge it (`keep going`). Loud
+  // so this blocked-waiting state is visible from across the dashboard.
   const apiErrChip = w.api_error
-    ? `<span class="card-api-error" title="most recent tool result was an API error (rate limit / transport)">⚠ API error</span>`
+    ? `<span class="card-api-error" title="last tool result was an API error — pane is waiting for a nudge (e.g. 'keep going')">⚠ API error</span>`
     : "";
 
   // Footer: progress bar + ctx% + model + viewed-age. Progress bar only when
@@ -461,7 +462,7 @@ function renderStreamRow(w) {
           <b>${escapeHtml(w.name)}</b>
           <em>${branchPart}</em>
           ${prefs.hasAnnotation(w.pid) ? `<span class="stream-anno" title="has notes">📝</span>` : ""}
-          ${w.api_error ? `<span class="stream-api-error" title="most recent tool result was an API error">⚠ API error</span>` : ""}
+          ${w.api_error ? `<span class="stream-api-error" title="last tool result was an API error — pane is waiting for a nudge">⚠ API error</span>` : ""}
           <span class="stream-extra">${ctxPart}</span>
         </div>
         <div class="stream-msg">${msg}</div>
