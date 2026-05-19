@@ -88,7 +88,12 @@ async def ws_pane(
             json.dumps({"type": "size", "cols": cols, "rows": rows})
         )
 
-        initial = tmux("capture-pane", "-t", target, "-p", "-e", "-S", "-200")
+        # `-S -N` asks for N lines of scrollback above the visible region;
+        # tmux clamps to the pane's own history-limit (default 2000, Tom's
+        # tmux is 50k). A few thousand makes the modal genuinely useful for
+        # scrolling back through long Claude turns — the prior 200 lines
+        # only covered the most recent screen-ful or two.
+        initial = tmux("capture-pane", "-t", target, "-p", "-e", "-S", "-10000")
         # capture-pane separates lines with \n AND appends one more \n after
         # the final line. We strip exactly that final terminator (not any
         # blank-line content above it) and convert internal \n to \r\n so

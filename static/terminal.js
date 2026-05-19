@@ -78,7 +78,11 @@ export function startLiveTerminal(target) {
     fontFamily: '"SF Mono", "JetBrains Mono", "Menlo", monospace',
     fontSize: 12,
     cursorBlink: true,
-    scrollback: 5000,
+    // Holds the initial paint (up to 10k lines from capture-pane in ws.py)
+    // plus everything that streams in afterwards. 20k gives modals room to
+    // grow during a long open session without dropping the most-recent
+    // pre-modal scrollback off the top.
+    scrollback: 20000,
     convertEol: false,
     // Option key → Meta escape prefix, so Option+Backspace becomes the
     // readline word-back-delete sequence (ESC + DEL), Option+Left becomes
