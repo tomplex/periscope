@@ -8,8 +8,9 @@
 // info/done alerts are lower-signal and don't earn the badge.
 
 import * as prefs from './prefs.js';
-import { apiCall, escapeHtml, relTime } from './util.js';
+import { escapeHtml, relTime } from './util.js';
 import { openModal } from './modal.js';
+import { showToast } from './toast.js';
 
 const POLL_MS = 3000;
 
@@ -19,6 +20,10 @@ let toggleBtn = null;
 let badge = null;
 let pollTimer = null;
 let lastItems = [];
+// Edge-triggered toast state: emit a "feed unavailable" toast on the
+// first failure of a healthy run and a "reconnected" toast when the
+// next poll succeeds. Repeated failures stay silent.
+let pollFailed = false;
 
 export function initAlerts() {
   rail = document.getElementById("alerts-rail");
@@ -92,10 +97,25 @@ function applyOpen(open) {
 }
 
 async function poll() {
-  const data = await apiCall("alerts", "/api/alerts/recent?limit=100");
-  if (!data) return;
-  lastItems = data.items || [];
-  render();
+  // Direct fetch (not apiCall) so a transient failure doesn't pop a
+  // modal alert every 3s. Same pattern as grid.js's /api/state poll.
+  try {
+    const res = await fetch("/api/alerts/recent?limit=100");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (pollFailed) {
+      pollFailed = false;
+      showToast("alerts feed reconnected", "good");
+    }
+    lastItems = data.items || [];
+    render();
+  } catch (e) {
+    if (!pollFailed) {
+      pollFailed = true;
+      showToast(`alerts feed unavailable: ${e.message}`, "bad");
+    }
+    // Keep the stale list visible — better than blanking the panel.
+  }
 }
 
 function render() {

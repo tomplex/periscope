@@ -2495,6 +2495,48 @@ body[data-alerts="open"][data-view="stream"] main {
   line-height: 1.4;
 }
 
+/* ─── Toast surface ─────────────────────────────────────────────── */
+
+#toast-container {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  min-width: 200px;
+  max-width: 360px;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 8px 20px oklch(0 0 0 / 0.4);
+  font-size: 12px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.toast.toast-show {
+  opacity: 1;
+  transform: translateY(0);
+}
+.toast-good {
+  border-left: 3px solid var(--s-done);
+}
+.toast-bad {
+  border-left: 3px solid var(--s-danger);
+}
+.toast-info {
+  border-left: 3px solid var(--accent);
+}
+
 .project-menu-panel {
   background: var(--bg-1);
   border: 1px solid color-mix(in oklch, var(--fg-0) 15%, transparent);
