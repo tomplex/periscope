@@ -771,6 +771,31 @@ body[data-view="stream"] .stream-banner {
 .card-pr-fail .card-pr     { color: var(--s-danger); font-weight: 600; }
 .card-pr-fail .card-ci-bad { color: var(--s-danger); }
 
+/* API-error chip: lit when the pane's most recent tool result was an
+   `⎿ API Error:` line — typically a transport rate limit. Surfaces stuck-
+   on-retry panes from across the dashboard. Same danger color family as
+   ci-bad but rendered as its own pill in the card header next to the
+   state label (it's a transient overlay, not a permanent state). */
+.card-api-error,
+.stream-api-error {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--s-danger);
+  background: color-mix(in oklch, var(--s-danger) 18%, transparent);
+  border: 1px solid color-mix(in oklch, var(--s-danger) 45%, transparent);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.stream-api-error { margin-left: 6px; }
+/* Card-level accent: override the state-based leftbar so a working/idle
+   pane stuck on retries is obvious at a glance. Pairs with the chip. */
+.card.api-error      { --card-accent: var(--s-danger); }
+.stream-row.api-error { --card-accent: var(--s-danger); }
+
 /* Worktree affiliation chip — sibling: tab is in a sibling worktree of the
    project's repo; off-repo: tab's cwd is outside the repo entirely.
    "no-repo" and "primary" affiliations are silent (no chip rendered). */

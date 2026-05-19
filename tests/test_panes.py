@@ -420,6 +420,94 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
 ]
 
 
+# ── API error cases ─────────────────────────────────────────────────────
+# Each row: (tag, content, expected_api_error).
+# Claude Code renders rate-limit / transport failures as a normal `⎿` tool
+# result whose body starts with "API Error:". We flag panes whose MOST
+# RECENT tool result is an error so the dashboard can show a stuck-on-
+# retry pane at a glance. A subsequent successful tool result clears it.
+
+API_ERROR_CASES: list[tuple[str, str, bool]] = [
+    # The screenshot Tom hit: three consecutive rate-limit hits, the user
+    # repeatedly typed `keep going`, and the bottom shows Claude resuming.
+    # The latest tool result above the resumed turn is still the API
+    # error → flag should be on so the card surfaces the stuck retry.
+    ("rate-limited-stuck", textwrap.dedent(f"""\
+        Reshaping the query — payload columns are huge.
+
+          Called fdy 5 times (ctrl+o to expand)
+          ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+        ✻ Worked for 7m 22s
+
+        ❯ keep going
+
+          Called fdy 10 times (ctrl+o to expand)
+          ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+        ✻ Crunched for 1m 56s
+
+        ❯ keep going
+          ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+        ✻ Brewed for 0s
+
+        ❯ keep going
+
+          Called fdy (ctrl+o to expand)
+
+        ⏺ Skipping reminder. One last lookup — there's a closest_store_by_address variant I haven't traced yet.
+        {STATUS_LINE}
+    """), True),
+
+    # API Error appeared, but Claude retried and a fresh tool result
+    # succeeded after it. Bottom-up scan hits the success first → flag off.
+    ("recovered-after-error", textwrap.dedent(f"""\
+        ⏺ Bash(curl https://api.example.com/data)
+          ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+        ⏺ Bash(curl https://api.example.com/data)
+          ⎿  {{"ok": true}}
+
+        ✻ Brewed for 3s
+
+        ❯
+        {STATUS_LINE}
+    """), False),
+
+    # Vanilla idle pane, no error anywhere → flag off (regression guard).
+    ("no-error", textwrap.dedent(f"""\
+        ⏺ Some normal response.
+
+        ✻ Brewed for 5s
+
+        ❯
+        {STATUS_LINE}
+    """), False),
+
+    # Shell pane that happens to mention "API Error" in prose must NOT
+    # trip the flag — only Claude panes get the treatment.
+    ("shell-mentions-api-error", textwrap.dedent("""\
+        $ grep -r "API Error" .
+        ./logs/yesterday.log: ⎿  API Error: foo
+        $
+    """), False),
+
+    # API error mid-buffer with no later `⎿` tool results — Claude is
+    # presumably retrying / waiting. Flag on.
+    ("error-then-only-text", textwrap.dedent(f"""\
+          ⎿  API Error: Server is temporarily limiting requests · Rate limited
+
+        ⏺ Retrying that lookup…
+
+        ✻ Brewed for 1s
+
+        ❯
+        {STATUS_LINE}
+    """), True),
+]
+
+
 # ── Folded runners (one test per dataset) ───────────────────────────────
 
 
@@ -470,6 +558,16 @@ def test_last_line_cases():
         got = result.get("last_line")
         if got != want:
             failures.append(f"[{tag}] last_line={got!r} (want {want!r})")
+    assert not failures, "\n".join(failures)
+
+
+def test_api_error_cases():
+    failures = []
+    for tag, content, want in API_ERROR_CASES:
+        result = parse_pane(content)
+        got = result.get("api_error")
+        if got != want:
+            failures.append(f"[{tag}] api_error={got!r} (want {want!r})")
     assert not failures, "\n".join(failures)
 
 

@@ -65,6 +65,7 @@ function indexProjects(projects) {
 function renderCard(w) {
   const stateClass = `state-${w.state}`;
   const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
+  const apiErrCls = w.api_error ? " api-error" : "";
   const kind = w.is_claude ? "claude" : "shell";
 
   // Claude reply override: while there are unread replies, the most recent
@@ -179,6 +180,13 @@ function renderCard(w) {
     ? `<span class="channel-dot" title="channel attached"></span>`
     : "";
 
+  // API-error chip: the pane's most recent tool result was an `⎿ API Error:`
+  // — typically a transport rate limit. Loud so a stuck-on-retries pane is
+  // visible at a glance; clears on the next poll once Claude gets through.
+  const apiErrChip = w.api_error
+    ? `<span class="card-api-error" title="most recent tool result was an API error (rate limit / transport)">⚠ API error</span>`
+    : "";
+
   // Footer: progress bar + ctx% + model + viewed-age. Progress bar only when
   // we have a context % to fill; otherwise the row reads "model · viewed Xm".
   const footParts = [];
@@ -205,10 +213,11 @@ function renderCard(w) {
     : "";
 
   return `
-    <article class="${cardClass} ${stateClass}${ciBadCls}" data-target="${w.target}" data-kind="${kind}" draggable="true">
+    <article class="${cardClass} ${stateClass}${ciBadCls}${apiErrCls}" data-target="${w.target}" data-kind="${kind}" draggable="true">
       <header class="card-head">
         <span class="card-title">${escapeHtml(w.name)}</span>
         ${channelDot}
+        ${apiErrChip}
         ${statusLabel}
         ${anno}
         ${promoteBtn}
@@ -420,6 +429,7 @@ function streamAction(s) {
 function renderStreamRow(w) {
   const stateClass = `state-${w.state}`;
   const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
+  const apiErrCls = w.api_error ? " api-error" : "";
   const focusedCls = w.target === state.streamFocusedTarget ? " is-focused" : "";
   const needHumanCls = hasUnreadNeedHuman(w) ? " has-need-human" : "";
   const sessionLabel = escapeHtml(w.session);
@@ -443,7 +453,7 @@ function renderStreamRow(w) {
   const when = relTime(w.acted_at) || "now";
 
   return `
-    <div class="stream-row ${stateClass}${ciBadCls}${focusedCls}${needHumanCls}" data-target="${w.target}">
+    <div class="stream-row ${stateClass}${ciBadCls}${apiErrCls}${focusedCls}${needHumanCls}" data-target="${w.target}">
       <span class="stream-time">${when}</span>
       <span class="stream-icon">${streamIcon(w.state)}</span>
       <div class="stream-body">
@@ -451,6 +461,7 @@ function renderStreamRow(w) {
           <b>${escapeHtml(w.name)}</b>
           <em>${branchPart}</em>
           ${prefs.hasAnnotation(w.pid) ? `<span class="stream-anno" title="has notes">📝</span>` : ""}
+          ${w.api_error ? `<span class="stream-api-error" title="most recent tool result was an API error">⚠ API error</span>` : ""}
           <span class="stream-extra">${ctxPart}</span>
         </div>
         <div class="stream-msg">${msg}</div>

@@ -207,6 +207,14 @@ PROMPT_LINE_RE = re.compile(r"^❯\s*(?P<input>.*)$")
 # active-op / prose by the no-space-before-`(` pattern.
 TOOL_CALL_RE = re.compile(r"^[^\x00-\x7f]\s+\w+\(")
 
+# Tool-result lines start with `⎿`. Claude Code renders rate-limit and
+# transport failures as a normal tool result whose body begins with
+# "API Error:" — when that's the most recent tool result visible in the
+# pane, the pane is currently stuck on retries. A later non-error `⎿`
+# means Claude got through and the flag should clear.
+TOOL_RESULT_RE = re.compile(r"^\s*⎿\s+")
+API_ERROR_RE = re.compile(r"^\s*⎿\s+API Error:")
+
 
 def list_windows() -> list[dict]:
     out = tmux(
@@ -441,6 +449,19 @@ def parse_pane(content: str) -> dict:
                     asked_question = True
                 break
 
+    # API-error flag: walk tool-result lines bottom-up and flip on iff the
+    # most recent `⎿` line is an API Error. A subsequent successful tool
+    # result clears it. Only meaningful on Claude panes — prose mentioning
+    # "API Error" in a shell pane (logs, grep output) must not trip it.
+    api_error = False
+    if is_claude:
+        for line in reversed(lines):
+            if API_ERROR_RE.match(line):
+                api_error = True
+                break
+            if TOOL_RESULT_RE.match(line):
+                break
+
     # State priority: needs-input wins over working (a spinner glyph can
     # linger in scrollback above the dialog), working wins over idle.
     # `idle` is the parse-level neutral state — /api/state may refine it to
@@ -463,6 +484,7 @@ def parse_pane(content: str) -> dict:
         "pending_input": pending_input,
         "recap": recap,
         "last_line": last_line,
+        "api_error": api_error,
         "context_pct": int(status["context"]) if status else None,
         "model": status["model"].strip() if status else None,
     }
