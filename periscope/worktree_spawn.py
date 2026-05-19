@@ -40,6 +40,52 @@ def _slug_for_path(branch: str) -> str:
     return s or "branch"
 
 
+def _resolve_layout(repo: str) -> str:
+    """Return the worktree-layout string for `repo`. Order:
+      1. settings.worktree_layout_overrides[repo] (sticky once set)
+      2. Auto-detect from existing worktrees: if all non-main worktrees
+         match the sibling pattern → 'sibling'; if all match inline →
+         'inline'; mixed or zero → fall back to default.
+      3. settings.worktree_layout_default (= 'sibling' if unset).
+
+    Auto-detect runs ONCE per repo per process — once a layout is
+    written to overrides, we never re-detect (Tom's design call: the
+    first spawn determines the convention).
+
+    Always-writes to `settings.worktree_layout_overrides[realpath(repo)]`
+    after deciding, so subsequent spawns are O(1) settings lookups.
+    """
+    from periscope.store import get_settings, update_settings
+
+    repo_real = os.path.realpath(repo)
+    s = get_settings()
+    overrides = s.get("worktree_layout_overrides") or {}
+    if repo_real in overrides:
+        return overrides[repo_real]
+
+    default = s.get("worktree_layout_default") or "sibling"
+
+    # Auto-detect.
+    detected: set[str] = set()
+    for wt_path, _branch in worktrees._cached_worktrees(repo_real):
+        wt_real = os.path.realpath(wt_path)
+        if wt_real == repo_real:
+            continue  # skip main checkout
+        if wt_real.startswith(str(WORKTREES_DIR) + "/"):
+            detected.add("sibling")
+        elif wt_real.startswith(os.path.join(repo_real, ".worktrees") + "/"):
+            detected.add("inline")
+    if len(detected) == 1:
+        layout = next(iter(detected))
+    else:
+        layout = default
+
+    # Record + persist.
+    new_overrides = {**overrides, repo_real: layout}
+    update_settings({"worktree_layout_overrides": new_overrides})
+    return layout
+
+
 def _detect_default_branch(repo: str) -> str:
     """Returns 'main' / 'master' / similar. Falls back to 'main' if
     nothing matches — caller's fetch will then fail loudly."""
@@ -101,7 +147,15 @@ def spawn_worktree(
     base = base_branch or _detect_default_branch(repo)
 
     repo_name = os.path.basename(repo.rstrip("/"))
-    wt_path = WORKTREES_DIR / repo_name / _slug_for_path(branch)
+
+    # Resolve layout + worktree path.
+    layout = _resolve_layout(repo)
+    if layout == "inline":
+        # `<repo>/.worktrees/<branch-slugged>` — splash convention.
+        wt_path = Path(repo) / ".worktrees" / _slug_for_path(branch)
+    else:
+        # Default: sibling layout.
+        wt_path = WORKTREES_DIR / repo_name / _slug_for_path(branch)
     wt_path_str = str(wt_path)
 
     if wt_path.exists():
@@ -131,8 +185,9 @@ def spawn_worktree(
             log.warning("worktree_spawn: %s", warning)
 
     with repo_lock(repo):
-        WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
-        (WORKTREES_DIR / repo_name).mkdir(parents=True, exist_ok=True)
+        # Ensure parent dir exists for both layouts. mkdir(parents=True)
+        # handles arbitrary depth.
+        wt_path.parent.mkdir(parents=True, exist_ok=True)
 
         # With fetch=True the fresh remote ref is the source of truth.
         # With fetch=False the local ref is what we want — typically
