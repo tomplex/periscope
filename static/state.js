@@ -10,6 +10,9 @@ export const state = {
   editingTarget: null,           // pauses polling while a card rename input is open
   collapsedSessions: new Set(),  // hydrated from prefs.getCollapsed() at boot
 
+  // stream view
+  streamQuery: "",               // type-to-filter substring (matches name + session)
+
   // modal
   activeTarget: null,
   modalRenaming: false,          // pauses modal header refresh during inline rename

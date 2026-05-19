@@ -13,10 +13,27 @@ import { initCleanupModal } from './cleanup-modal.js';
 
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
 // the same shortcut focuses the search input — handled in history.js.)
+//
+// Plain `/` in stream view → focus the stream filter input. Skip when an
+// input/textarea already has focus (the slash should land in there) and
+// when the modal is open (its keybindings own the surface).
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "/") {
     e.preventDefault();
     window.location.href = "/history";
+    return;
+  }
+  if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (document.body.dataset.view !== "stream") return;
+    const tag = (document.activeElement?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea") return;
+    const modalEl = document.getElementById("modal");
+    if (modalEl && !modalEl.classList.contains("hidden")) return;
+    const filterEl = document.getElementById("stream-filter");
+    if (!filterEl) return;
+    e.preventDefault();
+    filterEl.focus();
+    filterEl.select();
   }
 });
 

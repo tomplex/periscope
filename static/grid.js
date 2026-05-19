@@ -382,11 +382,10 @@ function handleToggleAll() {
   render(state.lastWindows);
 }
 
-// Stream-view priority — needs > done > working > idle > shell. Anything
-// else (e.g., a transient "error" state) sorts last. `done` outranks
-// `working`: a pane Claude already finished and hasn't been ack'd is more
-// likely to need your eyes than one still chewing.
-const STREAM_STATE_PRIORITY = { "needs-input": 0, done: 1, working: 2, idle: 3, shell: 4 };
+// Stream view sorts strictly by acted_at desc — most-recently-engaged at
+// top, regardless of state. State color/icon still convey urgency; we don't
+// also force state-priority into the sort key (doing so kept hours-old
+// needs-input rows pinned above tabs you just opened).
 
 function streamIcon(s) {
   if (s === "needs-input") return "!";
@@ -445,34 +444,129 @@ function renderStreamRow(w) {
   `;
 }
 
+function passesStreamQuery(w, q) {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  return (
+    (w.name || "").toLowerCase().includes(needle) ||
+    (w.session || "").toLowerCase().includes(needle)
+  );
+}
+
+function ensureStreamScaffold() {
+  // Stream toolbar (filter + new-tab) is built once and re-used across
+  // polls. Rebuilding the input every 1.5s would yank focus and clobber
+  // the user's typing mid-keystroke; we only refresh the dynamic parts
+  // (banner text, row list, new-tab session label).
+  if (document.getElementById("stream-toolbar")) return;
+  grid.innerHTML = `
+    <div class="stream-toolbar" id="stream-toolbar">
+      <input id="stream-filter" class="stream-filter" type="text"
+             placeholder="filter by name or session…" autocomplete="off"
+             value="${escapeHtml(state.streamQuery || "")}">
+      <button id="stream-new-tab" class="stream-new-tab" type="button" hidden></button>
+    </div>
+    <div class="stream-banner" id="stream-banner"></div>
+    <div class="stream" id="stream-list"></div>
+  `;
+  const input = document.getElementById("stream-filter");
+  input.addEventListener("input", () => {
+    state.streamQuery = input.value;
+    renderStream(state.lastWindows);
+  });
+  // Esc clears the query and re-renders. Doesn't blur — Esc is more useful
+  // as "abort current filter" than "leave the search," especially since
+  // there's no other Esc handler bound to the stream view.
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && input.value) {
+      e.stopPropagation();
+      input.value = "";
+      state.streamQuery = "";
+      renderStream(state.lastWindows);
+    }
+  });
+  document.getElementById("stream-new-tab").addEventListener(
+    "click", handleStreamNewTab,
+  );
+}
+
+async function handleStreamNewTab(e) {
+  const btn = e.currentTarget;
+  const session = btn.dataset.session;
+  const exec = btn.dataset.exec || "";
+  if (!session) return;
+  btn.disabled = true;
+  try {
+    await apiCall(
+      "new window",
+      `/api/window/new?session=${encodeURIComponent(session)}&exec=${encodeURIComponent(exec)}`,
+      { method: "POST" },
+    );
+  } finally {
+    btn.disabled = false;
+  }
+  poll();
+}
+
+function updateStreamNewTab(topRow) {
+  const btn = document.getElementById("stream-new-tab");
+  if (!btn) return;
+  const commands = prefs.getCommands();
+  const primary = commands[0];
+  // Need both: a session to spawn into (from the topmost row) AND a
+  // primary command (so we know what to launch). Without either, hide
+  // the button — header buttons handle the "from-scratch" cases.
+  if (!topRow || !primary) {
+    btn.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  btn.dataset.session = topRow.session;
+  btn.dataset.exec = primary.exec || "";
+  btn.textContent = `+ ${primary.label} in ${topRow.session}`;
+  btn.title = `spawn \`${primary.exec || "shell"}\` as a new window in tmux session '${topRow.session}'`;
+}
+
 function renderStream(windows) {
   // Stream considers *only* windows Tom has actually engaged with in
   // periscope (acted_at > 0). Sessions Tom has switched to in tmux but
   // never opened in the dashboard don't show here.
-  const opened = windows.filter((w) => w.acted_at > 0);
-  if (!opened.length) {
-    grid.innerHTML = `<div class="empty-state">no tabs opened yet — click a card in grid view to start tracking activity</div>`;
-    updateToggleAll([]);
-    return;
-  }
-  const visible = opened.filter(passesFilter);
-  if (!visible.length) {
-    grid.innerHTML = `<div class="empty-state">no opened tabs match the current filter</div>`;
-    updateToggleAll([]);
-    return;
-  }
+  ensureStreamScaffold();
+  const banner = document.getElementById("stream-banner");
+  const list = document.getElementById("stream-list");
 
-  visible.sort((a, b) => {
-    const da = (STREAM_STATE_PRIORITY[a.state] ?? 99) - (STREAM_STATE_PRIORITY[b.state] ?? 99);
-    if (da !== 0) return da;
-    return (b.acted_at || 0) - (a.acted_at || 0);
-  });
+  const opened = windows.filter((w) => w.acted_at > 0);
+  const visible = opened
+    .filter(passesFilter)
+    .filter((w) => passesStreamQuery(w, state.streamQuery))
+    .sort((a, b) => (b.acted_at || 0) - (a.acted_at || 0));
+
+  // Topmost row's session powers the "+ new tab" button — keep this
+  // before the empty-state early returns so the button updates even when
+  // the filtered list is empty (it stays usable while you're searching).
+  updateStreamNewTab(visible[0] || opened.sort((a, b) => b.acted_at - a.acted_at)[0]);
+
+  if (!opened.length) {
+    banner.textContent = "";
+    list.innerHTML = `<div class="empty-state">no tabs opened yet — click a card in grid view to start tracking activity</div>`;
+    updateToggleAll([]);
+    return;
+  }
+  if (!visible.length) {
+    const reason = state.streamQuery
+      ? `no opened tabs match "${state.streamQuery}"`
+      : "no opened tabs match the current filter";
+    banner.textContent = "";
+    list.innerHTML = `<div class="empty-state">${escapeHtml(reason)}</div>`;
+    updateToggleAll([]);
+    return;
+  }
 
   const attention = visible.filter(
     (w) => w.state === "needs-input" || w.state === "working"
   ).length;
-  const banner = `<div class="stream-banner">Now · ${attention} ${attention === 1 ? "needs" : "need"} attention</div>`;
-  grid.innerHTML = banner + `<div class="stream">${visible.map(renderStreamRow).join("")}</div>`;
+  banner.textContent = `Now · ${attention} ${attention === 1 ? "needs" : "need"} attention`;
+  list.innerHTML = visible.map(renderStreamRow).join("");
   updateToggleAll([]);  // toggle-all is grid-only; hide while in stream
 }
 
