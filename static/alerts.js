@@ -11,6 +11,7 @@ import * as prefs from './prefs.js';
 import { escapeHtml, relTime } from './util.js';
 import { openModal } from './modal.js';
 import { showToast } from './toast.js';
+import { setBadgeCount, notify, inTauri } from './tauri.js';
 
 const POLL_MS = 3000;
 
@@ -24,6 +25,14 @@ let lastItems = [];
 // first failure of a healthy run and a "reconnected" toast when the
 // next poll succeeds. Repeated failures stay silent.
 let pollFailed = false;
+// Native-notification dedupe (Tauri only). The first poll snapshots the
+// existing need_human alerts so we don't fire a banner for every backlog
+// item on app open. Subsequent polls diff against this Set and notify
+// only on entries new to us.
+let seenAlertKeys = null;
+function alertKey(r) {
+  return `${r.target}|${r.ts}|${(r.message || "").slice(0, 60)}`;
+}
 
 export function initAlerts() {
   rail = document.getElementById("alerts-rail");
@@ -108,6 +117,7 @@ async function poll() {
       showToast("alerts feed reconnected", "good");
     }
     lastItems = data.items || [];
+    maybeNativeNotify();
     render();
   } catch (e) {
     if (!pollFailed) {
@@ -146,15 +156,44 @@ function renderRow(r) {
 }
 
 function updateBadge() {
-  if (!badge) return;
   // Only need_human gets a badge — info/done are noise at the dashboard
   // level. The whole panel still shows them, but the user doesn't need
   // to be summoned for "✓ tests pass."
   const count = lastItems.filter((r) => r.kind === "need_human").length;
-  if (count > 0) {
-    badge.hidden = false;
-    badge.textContent = String(count);
-  } else {
-    badge.hidden = true;
+  if (badge) {
+    if (count > 0) {
+      badge.hidden = false;
+      badge.textContent = String(count);
+    } else {
+      badge.hidden = true;
+    }
+  }
+  // Mirror the count to the macOS dock badge when running in the Tauri
+  // shell. No-ops in a regular browser tab.
+  setBadgeCount(count);
+}
+
+function maybeNativeNotify() {
+  if (!inTauri()) return;
+  const needHuman = lastItems.filter((r) => r.kind === "need_human");
+  // First successful poll: snapshot current state, don't notify. The
+  // backlog of alerts that existed before the app launched isn't news.
+  if (seenAlertKeys === null) {
+    seenAlertKeys = new Set(needHuman.map(alertKey));
+    return;
+  }
+  for (const r of needHuman) {
+    const k = alertKey(r);
+    if (seenAlertKeys.has(k)) continue;
+    seenAlertKeys.add(k);
+    const paneLabel = `${r.session} · ${r.name || `:${r.index}`}`;
+    notify({ title: `⚠ ${paneLabel}`, body: r.message || "" });
+  }
+  // Keep the set bounded — drop entries that aren't in the current
+  // feed anymore so the Set doesn't grow unboundedly across a long
+  // session.
+  const current = new Set(needHuman.map(alertKey));
+  for (const k of seenAlertKeys) {
+    if (!current.has(k)) seenAlertKeys.delete(k);
   }
 }
