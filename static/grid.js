@@ -796,28 +796,157 @@ async function handleAdopt(btn) {
   }
 }
 
-async function handleProjectMenu(btn) {
+let openProjectMenu = null;  // module-level: {pinnedDir, panelEl, anchorEl}
+
+function closeProjectMenu() {
+  if (!openProjectMenu) return;
+  openProjectMenu.panelEl.remove();
+  document.removeEventListener("click", onDocumentClickForMenu);
+  document.removeEventListener("keydown", onKeydownForMenu);
+  openProjectMenu = null;
+}
+
+function onDocumentClickForMenu(e) {
+  if (!openProjectMenu) return;
+  if (openProjectMenu.panelEl.contains(e.target)) return;
+  if (openProjectMenu.anchorEl.contains(e.target)) return;
+  closeProjectMenu();
+}
+
+function onKeydownForMenu(e) {
+  if (e.key === "Escape") closeProjectMenu();
+}
+
+function handleProjectMenu(btn) {
+  // If another menu is open, close it first.
+  if (openProjectMenu && openProjectMenu.anchorEl !== btn) {
+    closeProjectMenu();
+  } else if (openProjectMenu) {
+    closeProjectMenu();
+    return;
+  }
+
   const pinnedDir = btn.dataset.pinnedDir;
   if (!pinnedDir) return;
-  const action = prompt(
-    "Project action — type one of: rename, archive, worktree-tab\n(blank = cancel)",
-    ""
-  );
-  if (!action) return;
-  if (action === "rename") {
-    const name = prompt("New project name:");
-    if (!name) return;
-    const res = await fetch("/api/projects/patch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pinned_dir: pinnedDir, name, tmux_session: name }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      alert(`rename failed: ${err.detail || res.status}`);
+
+  // Build the panel. Position absolutely under the anchor.
+  const panel = document.createElement("div");
+  panel.className = "project-menu-panel";
+  panel.innerHTML = `
+    <button class="project-menu-item" data-action="rename">Rename</button>
+    <button class="project-menu-item" data-action="archive">Archive</button>
+  `;
+
+  // Anchor the panel under the ⋯ button. Positioned via fixed + getBoundingClientRect
+  // so it works even when the parent is overflow-hidden.
+  const rect = btn.getBoundingClientRect();
+  panel.style.position = "fixed";
+  panel.style.top = `${rect.bottom + 2}px`;
+  panel.style.right = `${window.innerWidth - rect.right}px`;
+  document.body.appendChild(panel);
+
+  openProjectMenu = { pinnedDir, panelEl: panel, anchorEl: btn };
+  // Defer document listeners by one tick so the originating click doesn't
+  // immediately fire close.
+  setTimeout(() => {
+    document.addEventListener("click", onDocumentClickForMenu);
+    document.addEventListener("keydown", onKeydownForMenu);
+  }, 0);
+
+  panel.addEventListener("click", (e) => {
+    const item = e.target.closest(".project-menu-item");
+    if (!item) return;
+    const action = item.dataset.action;
+    if (action === "rename") {
+      closeProjectMenu();
+      startProjectRename(pinnedDir);
+    } else if (action === "archive") {
+      // Inline two-click confirm: first click changes the button label.
+      if (item.dataset.confirming) {
+        closeProjectMenu();
+        archiveProject(pinnedDir);
+      } else {
+        item.dataset.confirming = "1";
+        item.textContent = "Click again to confirm";
+        item.classList.add("project-menu-item-confirming");
+      }
     }
-  } else if (action === "archive") {
-    if (!confirm(`Archive project at ${pinnedDir}?`)) return;
+  });
+}
+
+function startProjectRename(pinnedDir) {
+  // Find the project's session header by walking projectsByTmux back to
+  // the data-session attribute. Then make the .session-name h2 editable
+  // in place.
+  const project = (state.lastProjects || []).find((p) => p.pinned_dir === pinnedDir);
+  if (!project) return;
+  const session = project.tmux_session;
+  const header = grid.querySelector(`.session-header[data-session="${session}"]`);
+  if (!header) return;
+  const nameEl = header.querySelector(".session-name");
+  if (!nameEl) return;
+
+  const currentName = project.name || session;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = currentName;
+  input.className = "session-name-input";
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const commit = async () => {
+    // Guard against double-fire: `Enter` calls commit synchronously, which
+    // removes the input from the DOM. Browser then fires `blur` on the
+    // detached input, which our listener would re-invoke. Idempotency flag
+    // makes the second invocation a no-op.
+    if (input.dataset.committed) return;
+    input.dataset.committed = "1";
+    const newName = input.value.trim();
+    // Restore the heading regardless (re-rendered on poll if rename succeeded).
+    const restored = document.createElement("h2");
+    restored.className = "session-name";
+    restored.textContent = currentName;
+    input.replaceWith(restored);
+    if (!newName || newName === currentName) return;
+    try {
+      const res = await fetch("/api/projects/patch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pinned_dir: pinnedDir,
+          name: newName,
+          tmux_session: newName,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`rename failed: ${err.detail || res.status}`);
+      }
+    } catch (e) {
+      alert(`rename request failed: ${e.message}`);
+    }
+  };
+  const cancel = () => {
+    const restored = document.createElement("h2");
+    restored.className = "session-name";
+    restored.textContent = currentName;
+    input.replaceWith(restored);
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    }
+  });
+  input.addEventListener("blur", commit);
+}
+
+async function archiveProject(pinnedDir) {
+  try {
     const res = await fetch("/api/projects/archive", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -827,31 +956,8 @@ async function handleProjectMenu(btn) {
       const err = await res.json().catch(() => ({}));
       alert(`archive failed: ${err.detail || res.status}`);
     }
-  } else if (action === "worktree-tab") {
-    // Look up the project's tmux_session from the most recent /api/state.
-    const project = (state.lastProjects || []).find((p) => p.pinned_dir === pinnedDir);
-    if (!project || !project.tmux_session) {
-      alert("project session not found — refresh and retry");
-      return;
-    }
-    const branch = prompt(
-      "New worktree branch name:\n(forked off this project's base_branch, locally)",
-    );
-    if (!branch) return;
-    // Omit `exec`; the backend's default already includes the dev-channels
-    // flag, so passing a bare `claude` here would spawn without channels.
-    const params = new URLSearchParams({
-      session: project.tmux_session,
-      branch,
-    });
-    const res = await fetch(`/api/window/new-worktree?${params}`, { method: "POST" });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      alert(`new worktree tab failed: ${err.detail || res.status}`);
-      return;
-    }
-    const body = await res.json();
-    if (body.warning) console.warn("new-worktree warning:", body.warning);
+  } catch (e) {
+    alert(`archive request failed: ${e.message}`);
   }
 }
 

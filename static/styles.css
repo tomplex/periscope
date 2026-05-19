@@ -2266,3 +2266,42 @@ body.disconnected .grid {
 }
 .card-promote:hover { opacity: 1; }
 .card-promote:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.project-menu-panel {
+  background: var(--bg-1);
+  border: 1px solid color-mix(in oklch, var(--fg-0) 15%, transparent);
+  border-radius: 0.5em;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 0.25em 0;
+  z-index: 100;
+  min-width: 160px;
+}
+.project-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg-0);
+  padding: 0.4em 0.75em;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+.project-menu-item:hover {
+  background: color-mix(in oklch, var(--fg-0) 8%, transparent);
+}
+.project-menu-item-confirming {
+  background: color-mix(in oklch, var(--warn, #d97706) 18%, transparent);
+  color: var(--warn, #d97706);
+}
+.session-name-input {
+  font: inherit;
+  font-weight: inherit;
+  font-size: inherit;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  border: 1px solid var(--accent, #4a90e2);
+  border-radius: 0.3em;
+  padding: 0.1em 0.3em;
+  min-width: 8em;
+}
