@@ -65,6 +65,13 @@ class WindowAnnotation(TypedDict, total=False):
     is_fork: bool  # phase 4: set on PR-review projects' claude window
 
 
+class Settings(TypedDict, total=False):
+    """Per-host preferences. Persisted under state['settings']."""
+    worktree_layout_default: str  # "sibling" | "inline"
+    worktree_layout_overrides: dict[str, str]  # realpath -> "sibling" | "inline"
+    cleanup_idle_days: int
+
+
 class Command(TypedDict):
     """A command-palette entry."""
     label: str
@@ -395,6 +402,36 @@ def update_ui(patch: dict) -> None:
                 ui.pop(k, None)
             else:
                 ui[k] = v
+        _write_state(_STATE)
+
+
+def get_settings() -> Settings:
+    """Snapshot of the settings block."""
+    with _STATE_LOCK:
+        # Deep-ish copy: shallow-copy the top-level + deep-copy the
+        # worktree_layout_overrides dict so callers can't mutate state
+        # by reference.
+        raw = _STATE.get("settings", {})
+        return {
+            **raw,
+            "worktree_layout_overrides": dict(
+                raw.get("worktree_layout_overrides", {}) or {}
+            ),
+        }  # type: ignore[return-value]
+
+
+def update_settings(patch: dict) -> None:
+    """Merge `patch` into settings and persist. `worktree_layout_overrides`
+    is replaced wholesale rather than merged (consumers always send the
+    full override map). Keys with None value at the top level are removed.
+    """
+    with _STATE_LOCK:
+        cur = _STATE.setdefault("settings", {})
+        for k, v in patch.items():
+            if v is None:
+                cur.pop(k, None)
+            else:
+                cur[k] = v
         _write_state(_STATE)
 
 

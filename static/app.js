@@ -11,6 +11,7 @@ import { initNewProjectModal } from './new-project-modal.js';
 import { initReviewPRModal } from './review-pr-modal.js';
 import { initCleanupModal } from './cleanup-modal.js';
 import { initAlerts } from './alerts.js';
+import { initSettingsModal } from './settings-modal.js';
 import { pushEscape, popEscape } from './overlay.js';
 
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
@@ -309,6 +310,7 @@ async function bootstrap() {
   initReviewPRModal();
   initCleanupModal();
   initAlerts();
+  initSettingsModal();
   document.getElementById("open-commands").addEventListener("click", openCommandsModal);
 
   // `?modal=<target>` is the handoff signal from /history resume (and any

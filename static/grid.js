@@ -222,27 +222,41 @@ function renderCard(w) {
 }
 
 function renderNewTile(session) {
-  // Read commands from prefs. First entry is the primary (top, larger hit
-  // area); the rest stack below. Falls back to an empty tile if prefs hasn't
-  // loaded yet — render() runs again on every poll, so the buttons appear
-  // within the polling interval after bootstrap.
+  // Read commands from prefs. First entry is the primary (top, larger
+  // hit area). Each command renders as a pair: a main button (plain
+  // tab) + a ⌥ button (worktree variant — opens an inline branch-name
+  // input).
   const s = escapeHtml(session);
   const commands = prefs.getCommands();
   if (!commands.length) {
     return `<div class="card card-new" data-session="${s}"></div>`;
   }
+
+  // Whether this session has a non-main project (worktree-eligible).
+  // Worktree tab requires a project with a repo; for unmanaged sessions
+  // the ⌥ button is hidden.
+  const project = state.projectsByTmux?.[session];
+  const worktreeEligible = project
+    && project.pinned_dir !== "__main__"
+    && !project.archived_at
+    && (project.repo || null);  // require resolved repo
+
   const [primary, ...rest] = commands;
-  const btn = (cmd, cls) => {
+  const pair = (cmd, cls) => {
     const label = escapeHtml(cmd.label);
     const execAttr = escapeHtml(cmd.exec || "");
-    return `<button class="new-window${cls}" data-session="${s}" data-exec="${execAttr}">+ ${label}</button>`;
+    const mainBtn = `<button class="new-window${cls}" data-session="${s}" data-exec="${execAttr}">+ ${label}</button>`;
+    const variantBtn = worktreeEligible
+      ? `<button class="new-window-worktree${cls}" data-session="${s}" data-exec="${execAttr}" data-label="${label}" title="new worktree tab + ${label}">⌥</button>`
+      : "";
+    return `<span class="new-window-pair">${mainBtn}${variantBtn}</span>`;
   };
   const stack = rest.length
-    ? `<div class="new-window-stack">${rest.map((c) => btn(c, "")).join("")}</div>`
+    ? `<div class="new-window-stack">${rest.map((c) => pair(c, "")).join("")}</div>`
     : "";
   return `
     <div class="card card-new" data-session="${s}">
-      ${btn(primary, " is-primary")}
+      ${pair(primary, " is-primary")}
       ${stack}
     </div>
   `;
@@ -796,28 +810,157 @@ async function handleAdopt(btn) {
   }
 }
 
-async function handleProjectMenu(btn) {
+let openProjectMenu = null;  // module-level: {pinnedDir, panelEl, anchorEl}
+
+function closeProjectMenu() {
+  if (!openProjectMenu) return;
+  openProjectMenu.panelEl.remove();
+  document.removeEventListener("click", onDocumentClickForMenu);
+  document.removeEventListener("keydown", onKeydownForMenu);
+  openProjectMenu = null;
+}
+
+function onDocumentClickForMenu(e) {
+  if (!openProjectMenu) return;
+  if (openProjectMenu.panelEl.contains(e.target)) return;
+  if (openProjectMenu.anchorEl.contains(e.target)) return;
+  closeProjectMenu();
+}
+
+function onKeydownForMenu(e) {
+  if (e.key === "Escape") closeProjectMenu();
+}
+
+function handleProjectMenu(btn) {
+  // If another menu is open, close it first.
+  if (openProjectMenu && openProjectMenu.anchorEl !== btn) {
+    closeProjectMenu();
+  } else if (openProjectMenu) {
+    closeProjectMenu();
+    return;
+  }
+
   const pinnedDir = btn.dataset.pinnedDir;
   if (!pinnedDir) return;
-  const action = prompt(
-    "Project action — type one of: rename, archive, worktree-tab\n(blank = cancel)",
-    ""
-  );
-  if (!action) return;
-  if (action === "rename") {
-    const name = prompt("New project name:");
-    if (!name) return;
-    const res = await fetch("/api/projects/patch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pinned_dir: pinnedDir, name, tmux_session: name }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      alert(`rename failed: ${err.detail || res.status}`);
+
+  // Build the panel. Position absolutely under the anchor.
+  const panel = document.createElement("div");
+  panel.className = "project-menu-panel";
+  panel.innerHTML = `
+    <button class="project-menu-item" data-action="rename">Rename</button>
+    <button class="project-menu-item" data-action="archive">Archive</button>
+  `;
+
+  // Anchor the panel under the ⋯ button. Positioned via fixed + getBoundingClientRect
+  // so it works even when the parent is overflow-hidden.
+  const rect = btn.getBoundingClientRect();
+  panel.style.position = "fixed";
+  panel.style.top = `${rect.bottom + 2}px`;
+  panel.style.right = `${window.innerWidth - rect.right}px`;
+  document.body.appendChild(panel);
+
+  openProjectMenu = { pinnedDir, panelEl: panel, anchorEl: btn };
+  // Defer document listeners by one tick so the originating click doesn't
+  // immediately fire close.
+  setTimeout(() => {
+    document.addEventListener("click", onDocumentClickForMenu);
+    document.addEventListener("keydown", onKeydownForMenu);
+  }, 0);
+
+  panel.addEventListener("click", (e) => {
+    const item = e.target.closest(".project-menu-item");
+    if (!item) return;
+    const action = item.dataset.action;
+    if (action === "rename") {
+      closeProjectMenu();
+      startProjectRename(pinnedDir);
+    } else if (action === "archive") {
+      // Inline two-click confirm: first click changes the button label.
+      if (item.dataset.confirming) {
+        closeProjectMenu();
+        archiveProject(pinnedDir);
+      } else {
+        item.dataset.confirming = "1";
+        item.textContent = "Click again to confirm";
+        item.classList.add("project-menu-item-confirming");
+      }
     }
-  } else if (action === "archive") {
-    if (!confirm(`Archive project at ${pinnedDir}?`)) return;
+  });
+}
+
+function startProjectRename(pinnedDir) {
+  // Find the project's session header by walking projectsByTmux back to
+  // the data-session attribute. Then make the .session-name h2 editable
+  // in place.
+  const project = (state.lastProjects || []).find((p) => p.pinned_dir === pinnedDir);
+  if (!project) return;
+  const session = project.tmux_session;
+  const header = grid.querySelector(`.session-header[data-session="${session}"]`);
+  if (!header) return;
+  const nameEl = header.querySelector(".session-name");
+  if (!nameEl) return;
+
+  const currentName = project.name || session;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = currentName;
+  input.className = "session-name-input";
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const commit = async () => {
+    // Guard against double-fire: `Enter` calls commit synchronously, which
+    // removes the input from the DOM. Browser then fires `blur` on the
+    // detached input, which our listener would re-invoke. Idempotency flag
+    // makes the second invocation a no-op.
+    if (input.dataset.committed) return;
+    input.dataset.committed = "1";
+    const newName = input.value.trim();
+    // Restore the heading regardless (re-rendered on poll if rename succeeded).
+    const restored = document.createElement("h2");
+    restored.className = "session-name";
+    restored.textContent = currentName;
+    input.replaceWith(restored);
+    if (!newName || newName === currentName) return;
+    try {
+      const res = await fetch("/api/projects/patch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pinned_dir: pinnedDir,
+          name: newName,
+          tmux_session: newName,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`rename failed: ${err.detail || res.status}`);
+      }
+    } catch (e) {
+      alert(`rename request failed: ${e.message}`);
+    }
+  };
+  const cancel = () => {
+    const restored = document.createElement("h2");
+    restored.className = "session-name";
+    restored.textContent = currentName;
+    input.replaceWith(restored);
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    }
+  });
+  input.addEventListener("blur", commit);
+}
+
+async function archiveProject(pinnedDir) {
+  try {
     const res = await fetch("/api/projects/archive", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -827,31 +970,8 @@ async function handleProjectMenu(btn) {
       const err = await res.json().catch(() => ({}));
       alert(`archive failed: ${err.detail || res.status}`);
     }
-  } else if (action === "worktree-tab") {
-    // Look up the project's tmux_session from the most recent /api/state.
-    const project = (state.lastProjects || []).find((p) => p.pinned_dir === pinnedDir);
-    if (!project || !project.tmux_session) {
-      alert("project session not found — refresh and retry");
-      return;
-    }
-    const branch = prompt(
-      "New worktree branch name:\n(forked off this project's base_branch, locally)",
-    );
-    if (!branch) return;
-    // Omit `exec`; the backend's default already includes the dev-channels
-    // flag, so passing a bare `claude` here would spawn without channels.
-    const params = new URLSearchParams({
-      session: project.tmux_session,
-      branch,
-    });
-    const res = await fetch(`/api/window/new-worktree?${params}`, { method: "POST" });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      alert(`new worktree tab failed: ${err.detail || res.status}`);
-      return;
-    }
-    const body = await res.json();
-    if (body.warning) console.warn("new-worktree warning:", body.warning);
+  } catch (e) {
+    alert(`archive request failed: ${e.message}`);
   }
 }
 
@@ -926,6 +1046,78 @@ async function handleNewWindow(btn) {
   poll();
 }
 
+async function handleWorktreeVariant(btn) {
+  const session = btn.dataset.session;
+  const exec = btn.dataset.exec || "";
+  const label = btn.dataset.label || "command";
+  if (!session) return;
+
+  // Swap the new-tile's contents for an inline branch-name form.
+  // Closing/cancelling restores the tile via the next /api/state poll's
+  // re-render (3s max). Storing a flag on the tile so other handlers
+  // don't fight us mid-flow.
+  const tile = btn.closest(".card-new");
+  if (!tile) return;
+  if (tile.dataset.worktreeForm === "1") return;  // already open
+  tile.dataset.worktreeForm = "1";
+  const prevHtml = tile.innerHTML;
+
+  tile.innerHTML = `
+    <div class="new-window-worktree-form">
+      <div class="new-window-worktree-label">+ ${escapeHtml(label)} (worktree)</div>
+      <input type="text" class="new-window-worktree-input" placeholder="branch name (e.g. tc/sub-feat)" autofocus>
+      <div class="new-window-worktree-actions">
+        <button class="new-window-worktree-cancel" type="button">cancel</button>
+        <button class="new-window-worktree-submit" type="button">create</button>
+      </div>
+    </div>
+  `;
+  const input = tile.querySelector(".new-window-worktree-input");
+  input.focus();
+
+  const restore = () => {
+    tile.removeAttribute("data-worktree-form");
+    tile.innerHTML = prevHtml;
+  };
+
+  const submit = async () => {
+    const branch = input.value.trim();
+    if (!branch) {
+      input.focus();
+      return;
+    }
+    const params = new URLSearchParams({ session, branch });
+    if (exec) params.set("exec", exec);
+    try {
+      const res = await fetch(`/api/window/new-worktree?${params}`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`new worktree tab failed: ${err.detail || res.status}`);
+        restore();
+        return;
+      }
+      const body = await res.json();
+      if (body.warning) console.warn("new-worktree warning:", body.warning);
+      restore();
+    } catch (e) {
+      alert(`request failed: ${e.message}`);
+      restore();
+    }
+  };
+
+  tile.querySelector(".new-window-worktree-cancel").addEventListener("click", restore);
+  tile.querySelector(".new-window-worktree-submit").addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      restore();
+    }
+  });
+}
+
 function reorderSessions(src, dst, before) {
   // Build the order from current DOM (so we capture auto-sorted positions of new sessions too)
   const all = [...grid.querySelectorAll(".session-group")].map(
@@ -979,6 +1171,12 @@ function wireGrid() {
     if (killWindowBtn) {
       e.stopPropagation();
       handleKillWindow(killWindowBtn);
+      return;
+    }
+    const newWorktreeBtn = e.target.closest(".new-window-worktree");
+    if (newWorktreeBtn) {
+      e.stopPropagation();
+      handleWorktreeVariant(newWorktreeBtn);
       return;
     }
     const newWindowBtn = e.target.closest(".new-window");

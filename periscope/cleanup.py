@@ -26,7 +26,7 @@ from typing import TypedDict, Optional
 
 from periscope.log import log
 from periscope.projects import all_projects, MAIN_KEY
-from periscope.store import get_window
+from periscope.store import get_window, get_settings
 from periscope.tmux import _run
 from periscope import worktrees
 
@@ -224,6 +224,7 @@ def compute_candidates(repo_filter: Optional[str] = None) -> list[Candidate]:
         set(sessions_out.strip().split("\n")) if code == 0 and sessions_out.strip()
         else set()
     )
+    idle_threshold = int(get_settings().get("cleanup_idle_days") or IDLE_THRESHOLD_DAYS)
 
     candidates: list[Candidate] = []
     for repo in sorted(repos):
@@ -287,11 +288,11 @@ def compute_candidates(repo_filter: Optional[str] = None) -> list[Candidate]:
 
             # Signal 4: idle. Days since last commit on the worktree's
             # HEAD; only flagged when no active tmux session AND
-            # > 14 days. Session-alive check uses the hoisted
+            # > threshold. Session-alive check uses the hoisted
             # `alive_sessions` set — no per-candidate tmux call.
             idle_days = _last_commit_age_days(wt_path)
             session_alive = bool(tmux_session and tmux_session in alive_sessions)
-            if not session_alive and idle_days > IDLE_THRESHOLD_DAYS:
+            if not session_alive and idle_days > idle_threshold:
                 signals.append({"kind": "idle", "label": f"idle {idle_days}d"})
 
             if not signals:

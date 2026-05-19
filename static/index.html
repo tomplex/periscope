@@ -73,6 +73,7 @@
         <button type="button" class="filter-btn is-action tb-dd-toggle" id="more-dd-toggle" aria-haspopup="menu" aria-expanded="false" title="more actions">⋯</button>
         <div class="tb-dd-menu" id="more-dd-menu" role="menu" hidden>
           <button id="cleanup-btn" class="tb-dd-item" role="menuitem" title="archive worktrees with merged PRs, deleted branches, or idle activity">🧹 cleanup</button>
+          <button id="settings-btn" class="tb-dd-item" role="menuitem" title="settings">🛠 settings</button>
           <button id="open-commands" class="tb-dd-item" role="menuitem" title="edit + claude / + shell / + ... commands">⚙ commands</button>
         </div>
       </div>
@@ -186,6 +187,37 @@
         <button type="button" id="cleanup-cancel">cancel</button>
         <button type="button" id="cleanup-submit" disabled>archive selected (0)</button>
       </div>
+    </div>
+  </div>
+  <div id="settings-modal" class="hidden settings-modal-overlay">
+    <div class="settings-modal-card">
+      <header class="settings-modal-head">
+        <h2>🛠 settings</h2>
+        <button id="settings-modal-close" title="close">×</button>
+      </header>
+      <form id="settings-form">
+        <label>
+          Cleanup idle threshold (days)
+          <input id="settings-cleanup-idle-days" type="number" min="1" value="14">
+        </label>
+        <label>
+          Default worktree layout
+          <select id="settings-worktree-default">
+            <option value="sibling">sibling — ~/dev/worktrees/&lt;repo&gt;/&lt;branch&gt;</option>
+            <option value="inline">inline — &lt;repo&gt;/.worktrees/&lt;branch&gt;</option>
+          </select>
+        </label>
+        <fieldset>
+          <legend>Per-repo overrides</legend>
+          <div id="settings-overrides-list"></div>
+          <p class="settings-overrides-hint">Auto-detected on first <code>+ project</code> per repo. Edit or remove rows here.</p>
+        </fieldset>
+        <div id="settings-modal-error" class="settings-modal-error" hidden></div>
+        <div class="settings-modal-actions">
+          <button type="button" id="settings-cancel">cancel</button>
+          <button type="submit" id="settings-submit">save</button>
+        </div>
+      </form>
     </div>
   </div>
   <main id="grid"></main>
