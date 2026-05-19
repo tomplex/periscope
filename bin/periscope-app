@@ -1,0 +1,24 @@
+#!/bin/bash
+# Rebuild the Tauri shell .app and reopen it — the typical dev loop after
+# editing src-tauri/* or capabilities/*. Frontend-only changes under
+# static/* don't need this: the .app loads localhost:8765 fresh on each
+# Cmd-R, so editing JS/CSS and reloading the window is enough.
+#
+# cargo tauri dev is broken on this macOS (AMFI kills the raw debug binary
+# during icon load — see CLAUDE.md > Tauri shell). The .app bundle launched
+# via open(1) is the supported path.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+APP="$REPO/src-tauri/target/debug/bundle/macos/Periscope.app"
+
+cd "$REPO/src-tauri"
+cargo tauri build --debug
+
+# Replace the running instance. single-instance plugin would otherwise
+# just focus the existing window, leaving the old binary in place.
+pkill -x periscope-app 2>/dev/null || true
+sleep 0.3
+
+open "$APP"
+echo "Periscope.app launched ($APP)"
