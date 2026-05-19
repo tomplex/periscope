@@ -319,6 +319,44 @@ Symptom is "Review tab is blank" because the SPA never bootstraps —
 `<div id="root">` stays empty, the iframe shows nothing. Easy to
 mistake for a periscope iframe sizing bug; it isn't.
 
+## Tauri shell (`src-tauri/`)
+
+Optional native `.app` wrapper for periscope, so it shows up as its
+own entry in Cmd-Tab / Dock instead of living inside a browser tab.
+The shell is just a Tauri 2 window that loads `http://127.0.0.1:8765`
+— launchd still manages the FastAPI server, the GUI app is a pure
+presentation layer. Quitting the app doesn't stop the dashboard;
+killing the server doesn't kill the app (it just shows a connection
+error until the server is back).
+
+Build + launch:
+
+```sh
+cd src-tauri
+cargo tauri build --debug                  # produces target/debug/bundle/macos/Periscope.app
+open target/debug/bundle/macos/Periscope.app
+```
+
+`cargo tauri dev` is **broken on this machine** — the raw debug
+binary trips AMFI during icon load (`PNGReadPlugin::Initialize` on
+the main thread), kernel sets PC=`0x000000000bad4007` and kills the
+process before any window appears. Known Tauri-on-macOS class of
+bug (tauri-apps/tauri#7351, #11912); no upstream fix. The `.app`
+bundle launched via `open` goes through LaunchServices and is not
+affected. So the dev loop is "build --debug + open .app" rather
+than watch-mode HMR — incremental rebuilds are 5-10s once warm.
+
+Frontend (`static/*`) changes don't need any rebuild — the shell
+loads `localhost:8765`, so editing JS/CSS and reloading the window
+(Cmd-R inside the app) picks up changes immediately. Only changes
+to `src-tauri/src/*.rs` or config need a rebuild.
+
+The shell stays minimal on purpose: single-instance, window-state
+persistence, notification plugin available. Native badge + native
+notifications routing from the JS side via `window.__TAURI__` is
+the next layer up (`static/tauri.js`), additive to existing UI —
+the dashboard keeps working unchanged in a regular browser.
+
 ## Conventions
 
 - No frontend framework; vanilla ES modules are part of the value prop.
