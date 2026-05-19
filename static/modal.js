@@ -104,6 +104,8 @@ export function closeModal() {
 //   "terminal"            — live pane terminal (always present, first)
 //   "lgtm-start"          — bootstrap-a-review button (only when no session)
 //   "lgtm:diff"           — the diff tab (gets its own button)
+//   "lgtm:walkthrough"    — the walkthrough view (only when a walkthrough
+//                           has been set; its own LGTM iframe view, NOT an item)
 //   "lgtm:<doc-id>"       — one of N documents (collapsed into a dropdown)
 // CSS treats "terminal" specially via `#modal[data-tab="terminal"]`;
 // everything else maps to the review pane.
@@ -134,6 +136,7 @@ function buildTabSpec(data) {
   return {
     slug,
     showDiff: hasSession && items.some(i => i.id === "diff"),
+    showWalkthrough: hasSession && !!data?.lgtm?.walkthrough,
     mounted,
     docs: allDocs,
     showStart: !hasSession && !!data?.cwd_raw,
@@ -190,6 +193,7 @@ function ensureStripStructure(spec) {
   // those just toggle is-active flags.
   const signature = JSON.stringify({
     diff: spec.showDiff,
+    walkthrough: spec.showWalkthrough,
     mounted: spec.mounted.map(d => [d.id, d.label]),
     docs: spec.docs.map(d => [d.id, d.label]),
     start: spec.showStart,
@@ -202,6 +206,7 @@ function ensureStripStructure(spec) {
 
   modalTabs.appendChild(makeTabBtn("terminal", "Terminal"));
   if (spec.showDiff) modalTabs.appendChild(makeTabBtn("lgtm:diff", "Diff"));
+  if (spec.showWalkthrough) modalTabs.appendChild(makeTabBtn("lgtm:walkthrough", "Walkthrough"));
   for (const m of spec.mounted) modalTabs.appendChild(makeMountedTab(m.id, m.label));
   if (spec.docs.length > 0) modalTabs.appendChild(makeDocsDropdown(spec.docs));
   if (spec.showStart) modalTabs.appendChild(makeTabBtn("lgtm-start", "+ Start review"));
@@ -317,6 +322,7 @@ function performAutoSwitch(spec) {
   //      back to Terminal.
   const validIds = new Set(["terminal"]);
   if (spec.showDiff) validIds.add("lgtm:diff");
+  if (spec.showWalkthrough) validIds.add("lgtm:walkthrough");
   for (const d of spec.docs) validIds.add(d.id);
   if (spec.showStart) validIds.add("lgtm-start");
 
@@ -514,10 +520,37 @@ function renderReviewPane(data) {
     return;
   }
 
+  if (tabId === "lgtm:walkthrough") {
+    renderLgtmWalkthrough(data);
+    return;
+  }
+
   if (tabId.startsWith("lgtm:")) {
     renderLgtmItem(data, tabId.slice(5));
     return;
   }
+}
+
+function renderLgtmWalkthrough(data) {
+  const lgtm = data.lgtm;
+  if (!lgtm?.slug || !lgtm?.url) return;
+  // Walkthrough is a separate LGTM view, not an item — load with
+  // ?view=walkthrough so LGTM's main.tsx boots into walkthrough mode
+  // before first paint.
+  const baseUrl = rewriteLgtmHost(lgtm.url);
+  const url = `${baseUrl}?embedded=1&view=walkthrough`;
+  if (mountedTabId === "lgtm:walkthrough") return;
+
+  let iframe = modalReviewContent.querySelector("iframe");
+  if (!iframe) {
+    modalReviewContent.innerHTML = "";
+    iframe = document.createElement("iframe");
+    iframe.title = "LGTM walkthrough";
+    iframe.referrerPolicy = "no-referrer";
+    modalReviewContent.appendChild(iframe);
+  }
+  iframe.src = url;
+  mountedTabId = "lgtm:walkthrough";
 }
 
 function renderLgtmItem(data, itemId) {

@@ -81,6 +81,31 @@ async def _lgtm_fetch_items(client, slug: str) -> list[dict]:
         return []
 
 
+async def _lgtm_fetch_walkthrough(client, slug: str) -> dict | None:
+    """One project's walkthrough header info, or None if absent / unreachable.
+
+    LGTM keeps walkthroughs separate from /items — they live on their own
+    iframe view (?view=walkthrough) and have their own SSE event
+    (walkthrough_changed). We only need to know whether one exists so the
+    frontend can offer a tab; the iframe itself fetches the full payload.
+    """
+    try:
+        r = await client.get(f"{LGTM_BASE_URL}/project/{slug}/walkthrough", timeout=2.0)
+        if r.status_code != 200:
+            return None
+        payload = r.json() or {}
+        wt = payload.get("walkthrough")
+        if not wt:
+            return None
+        return {
+            "stops": len(wt.get("stops") or []),
+            "stale": bool(payload.get("stale")),
+            "generated_at": wt.get("generatedAt"),
+        }
+    except Exception:
+        return None
+
+
 async def _lgtm_refresh_all() -> None:
     """Pull /projects + per-slug /items, rebuild the cache, reconcile SSE subs."""
     try:
@@ -89,13 +114,15 @@ async def _lgtm_refresh_all() -> None:
             r.raise_for_status()
             payload = r.json()
             projects = payload.get("projects", []) or []
-            # Fetch each project's items in parallel — keeps refresh latency
-            # at one round-trip even with a dozen sessions.
+            # Fetch each project's items + walkthrough in parallel — keeps
+            # refresh latency at one round-trip even with a dozen sessions.
             slugs = [p["slug"] for p in projects if p.get("slug")]
-            items_lists = await asyncio.gather(
-                *[_lgtm_fetch_items(client, s) for s in slugs]
+            items_lists, walkthroughs = await asyncio.gather(
+                asyncio.gather(*[_lgtm_fetch_items(client, s) for s in slugs]),
+                asyncio.gather(*[_lgtm_fetch_walkthrough(client, s) for s in slugs]),
             )
             items_by_slug = dict(zip(slugs, items_lists))
+            walkthrough_by_slug = dict(zip(slugs, walkthroughs))
     except (httpx.HTTPError, OSError):
         # LGTM not running, port closed, etc. Keep the existing cache; the
         # next refresh will fix it. No log — silence on the common path.
@@ -119,6 +146,7 @@ async def _lgtm_refresh_all() -> None:
             "user_comments": int(p.get("userCommentCount") or 0),
             "submitted": _lgtm_submitted(slug),
             "items": items_by_slug.get(slug, []),
+            "walkthrough": walkthrough_by_slug.get(slug),
         }
     with _LGTM_LOCK:
         _LGTM_BY_REPO.clear()
