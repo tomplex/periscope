@@ -53,11 +53,33 @@ export function initAlerts() {
     if (target) openModal(target);
   });
 
+  // Keep --header-h synced with .periscope-header's height so the rail
+  // tucks under the sticky header instead of sliding up over it. The
+  // filter row can wrap on narrow widths, which is why we observe rather
+  // than measure once.
+  trackHeaderHeight();
+
   // Poll always, regardless of open state — keeps the badge fresh so a
   // need_human firing while the panel is closed still alerts the user.
   // The interval is cheap (one in-memory walk + json serialize).
   poll();
   pollTimer = setInterval(poll, POLL_MS);
+}
+
+function trackHeaderHeight() {
+  const header = document.querySelector(".periscope-header");
+  if (!header) return;
+  const apply = () => {
+    document.documentElement.style.setProperty(
+      "--header-h", header.offsetHeight + "px"
+    );
+  };
+  apply();
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(apply).observe(header);
+  } else {
+    window.addEventListener("resize", apply);
+  }
 }
 
 function isOpen() {

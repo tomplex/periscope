@@ -2357,12 +2357,16 @@ body.disconnected .grid {
 /* The rail itself: fixed to the right edge, full viewport height below the
    sticky header. Transformed off-screen when closed so opening it slides
    in; CSS-only, no JS animation. */
+/* Rail sits below the sticky header, not over it. `--header-h` is set by
+   alerts.js via a ResizeObserver on .periscope-header so the offset stays
+   correct when the filter row wraps. The fallback (80px) is a sane default
+   for first paint before JS runs. */
 #alerts-rail {
   position: fixed;
-  top: 0;
+  top: var(--header-h, 80px);
   right: 0;
   width: 340px;
-  height: 100vh;
+  height: calc(100vh - var(--header-h, 80px));
   background: var(--bg-1);
   border-left: 1px solid var(--line-soft);
   display: flex;
