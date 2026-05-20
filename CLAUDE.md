@@ -428,6 +428,20 @@ git worktree remove ../periscope-feature
 Set it when intentionally running a second instance that must not kill
 the existing one — rare; debug only.
 
-The launchd plist (`com.tom.periscope.plist`) lives in the repo;
-`bin/periscope install` copies it to `~/Library/LaunchAgents/` and
-loads it.
+`bin/periscope install` generates the launchd plist — paths resolved
+from the current checkout and the `uv` location — writes it to
+`~/Library/LaunchAgents/com.tom.periscope.plist`, and loads it.
+
+## Releases
+
+`bin/release X.Y.Z` cuts a release: it bumps the version in
+`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `pyproject.toml`,
+re-syncs `src-tauri/Cargo.lock`, commits `release: vX.Y.Z`, tags it, and
+pushes. The pushed `v*` tag triggers `.github/workflows/release.yml`,
+which builds the universal macOS `.dmg` via `tauri-apps/tauri-action`
+and publishes a GitHub Release.
+
+The `.dmg` is unsigned — no Apple Developer ID is wired up.
+`tauri-action` builds unsigned when no signing secrets are present; to
+ship signed and notarized builds later, add the `APPLE_*` secrets the
+action documents — no workflow restructuring needed.

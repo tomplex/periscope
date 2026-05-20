@@ -44,6 +44,31 @@ npm run dev        # then visit http://127.0.0.1:5174/
 FastAPI, so only one URL matters in the browser. There's no build step —
 production still loads `static/` as-is from FastAPI on :8765.
 
+## Native app (macOS)
+
+Periscope can run as a native `.app` — its own Dock icon and Cmd-Tab
+entry instead of a browser tab. The app is a thin [Tauri](https://tauri.app)
+shell that loads the dashboard from `http://127.0.0.1:8765`, so the
+server still has to be running (`uv run server.py`, or the launchd
+service via `bin/periscope install`).
+
+Download the latest `.dmg` from
+[Releases](https://github.com/tomplex/periscope/releases), or build it
+from source:
+
+```sh
+cd src-tauri
+cargo tauri build        # needs the Rust toolchain + `cargo tauri`
+open target/release/bundle/macos/Periscope.app
+```
+
+Release `.dmg`s are **unsigned**, so Gatekeeper blocks them on first
+launch. After dragging Periscope.app into /Applications:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Periscope.app
+```
+
 ## Auto-rename (optional)
 
 The ✨ button on each session header asks Haiku 4.5 to suggest fresh,
@@ -85,8 +110,7 @@ file — it holds lots of other Claude Code state):
 ```sh
 jq '.mcpServers.periscope = {
   "command": "uv",
-  "args": ["run", "--script", "/ABSOLUTE/PATH/TO/periscope/channel_server.py"],
-  "env": {"PERISCOPE_URL": "http://127.0.0.1:8765"}
+  "args": ["run", "--script", "/ABSOLUTE/PATH/TO/periscope/channel_shim.py"]
 }' ~/.claude.json > ~/.claude.json.tmp && mv ~/.claude.json.tmp ~/.claude.json
 ```
 
@@ -99,8 +123,10 @@ After this, restart any running `claude` sessions you want channels in
 
 When you click `+ claude` in periscope, the spawned command is
 `claude --dangerously-load-development-channels server:periscope`. Claude
-launches `channel_server.py` as a stdio child. The server connects to
-periscope's `/ws/channel` and bridges events both directions.
+launches `channel_shim.py` as a stdio child. The shim proxies MCP
+messages over a unix socket (`/tmp/periscope-mcp.sock`) to periscope's
+in-process MCP server, and reconnects transparently across periscope
+restarts.
 
 The `--dangerously-load-development-channels` flag is required because
 channels are in research preview — bare `--channels` only resolves
