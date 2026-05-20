@@ -1164,7 +1164,7 @@ body.modal-open { overflow: hidden; }
   align-items: center;
   justify-content: center;
   z-index: 100;
-  padding: 24px;
+  padding: 16px;
   backdrop-filter: blur(2px);
   overscroll-behavior: contain;
 }
@@ -1174,8 +1174,11 @@ body.modal-open { overflow: hidden; }
   background: var(--bg-modal);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-modal);
-  width: min(1400px, 95vw);
-  height: min(900px, 90vh);
+  /* Fill most of the viewport. The px caps are generous (ultrawide
+     sanity bound only); on any normal display the vw/vh terms win.
+     `resize: both` still lets the user shrink it per-session. */
+  width: min(2400px, 96vw);
+  height: min(1600px, 94vh);
   min-width: 480px;
   min-height: 320px;
   display: flex;
