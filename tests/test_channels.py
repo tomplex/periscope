@@ -77,3 +77,35 @@ def test_link_linear_tool_writes_to_state(clean_state, mocker):
     _do_link_linear_tool("%5", {"id": "FAR-456"})
 
     assert clean_state["windows"]["abc123"]["linked_linear"] == "FAR-456"
+
+
+def test_link_linear_tool_persists_title_and_status(clean_state, mocker):
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    mocker.patch("periscope.store._write_state")
+
+    _do_link_linear_tool(
+        "%5",
+        {"id": "FAR-456", "title": "Fix the thing", "status": "In Progress"},
+    )
+
+    entry = clean_state["windows"]["abc123"]
+    assert entry["linked_linear"] == "FAR-456"
+    assert entry["linked_linear_title"] == "Fix the thing"
+    assert entry["linked_linear_status"] == "In Progress"
+
+
+def test_link_linear_tool_clears_stale_metadata_on_relink(clean_state, mocker):
+    """Each call fully describes the link — re-linking with just an id must
+    not leave title/status pointing at the previous ticket."""
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    mocker.patch("periscope.store._write_state")
+
+    _do_link_linear_tool(
+        "%5", {"id": "FAR-1", "title": "First", "status": "Done"}
+    )
+    _do_link_linear_tool("%5", {"id": "FAR-2"})
+
+    entry = clean_state["windows"]["abc123"]
+    assert entry["linked_linear"] == "FAR-2"
+    assert "linked_linear_title" not in entry
+    assert "linked_linear_status" not in entry

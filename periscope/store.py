@@ -59,6 +59,8 @@ class WindowAnnotation(TypedDict, total=False):
     """Per-pid annotations persisted in state.json under windows[pid]."""
     linked_pr: int
     linked_linear: str
+    linked_linear_title: str
+    linked_linear_status: str
     completed_at: int
     acked_at: int
     alias: str

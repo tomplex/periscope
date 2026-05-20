@@ -54,10 +54,12 @@ specific enough that you won't over-call them:
   already show a #PR badge. Periscope auto-detects PRs from Claude's
   title bar; if you know there's one and it isn't surfaced, link it.
 
-- link_linear(id): when you identify a Linear ticket in the user's
-  message, branch name, or commit history (TEAM-123 format, e.g.
-  FAR-456). Periscope doesn't auto-detect Linear tickets, so explicit
-  linking is the only way to surface them on the card.
+- link_linear(id, title?, status?): when you identify a Linear ticket
+  in the user's message, branch name, or commit history (TEAM-123
+  format, e.g. FAR-456). Periscope doesn't auto-detect Linear tickets,
+  so explicit linking is the only way to surface them on the card. Pass
+  `title` and `status` whenever you know them — if you fetched the
+  ticket through the Linear MCP, you already have both.
 
 - reply(message, kind="done"): when you finish a substantial task the
   user asked for. One-sentence summary in `message`. Lets the user see
@@ -167,7 +169,12 @@ def _do_link_pr_tool(pane: str, arguments: dict):
 
 
 def _do_link_linear_tool(pane: str, arguments: dict):
-    """Persist a linked Linear ticket id on the window's state.json entry."""
+    """Persist a linked Linear ticket on the window's state.json entry.
+
+    `id` is required; `title` and `status` are optional metadata. Each call
+    fully describes the link — omitted title/status clear any prior value
+    (set_window_fields drops keys set to None), so a re-link with just an id
+    won't leave stale metadata pointing at a different ticket."""
     from mcp import types
 
     ticket_id = str(arguments.get("id", "")).strip()
@@ -175,13 +182,27 @@ def _do_link_linear_tool(pane: str, arguments: dict):
         body = {"ok": False, "error": "id is required and must be non-empty"}
         return [types.TextContent(type="text", text=json.dumps(body))]
 
+    title = str(arguments.get("title", "")).strip()
+    status = str(arguments.get("status", "")).strip()
+
     pid = _resolve_pid_for_pane(pane)
     if not pid:
         body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
         return [types.TextContent(type="text", text=json.dumps(body))]
 
-    set_window_fields(pid, linked_linear=ticket_id)
-    body = {"ok": True, "linked_linear": ticket_id, "pid": pid}
+    set_window_fields(
+        pid,
+        linked_linear=ticket_id,
+        linked_linear_title=title or None,
+        linked_linear_status=status or None,
+    )
+    body = {
+        "ok": True,
+        "linked_linear": ticket_id,
+        "linked_linear_title": title,
+        "linked_linear_status": status,
+        "pid": pid,
+    }
     return [types.TextContent(type="text", text=json.dumps(body))]
 
 
@@ -461,16 +482,34 @@ async def _run_mcp_for_pane(
             types.Tool(
                 name="link_linear",
                 description=(
-                    "Link this pane to a Linear ticket by id. Use when the "
-                    "user is working on a Linear ticket. Periscope doesn't "
-                    "auto-detect Linear tickets, so this is the only way to "
-                    "surface one on the pane card. id format: TEAM-123 "
-                    "(e.g. FAR-456)."
+                    "Link this pane to a Linear ticket. Use when the user is "
+                    "working on a Linear ticket. Periscope doesn't auto-detect "
+                    "Linear tickets, so this is the only way to surface one on "
+                    "the pane card. Pass `title` and `status` when you know "
+                    "them (e.g. you fetched the ticket via the Linear MCP) so "
+                    "the card shows what the ticket is, not just its id. Each "
+                    "call fully describes the link — omitting title/status "
+                    "clears any previously set value."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "id": {"type": "string", "pattern": r"^[A-Z]+-\d+$"},
+                        "id": {
+                            "type": "string",
+                            "pattern": r"^[A-Z]+-\d+$",
+                            "description": "Ticket id, TEAM-123 format (e.g. FAR-456).",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Ticket title, shown alongside the id on the pane card.",
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": (
+                                "Workflow state, free-form (e.g. 'In Progress', "
+                                "'In Review', 'Done'). Rendered as a pill in the modal."
+                            ),
+                        },
                     },
                     "required": ["id"],
                 },

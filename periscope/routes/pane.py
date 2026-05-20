@@ -82,6 +82,8 @@ def pane(session: str, index: int, lines: int = 200):
     persisted = get_window(str(pid) if pid else "")
     linked_pr = persisted.get("linked_pr")
     linked_linear = persisted.get("linked_linear")
+    linked_linear_title = persisted.get("linked_linear_title")
+    linked_linear_status = persisted.get("linked_linear_status")
     if linked_pr:
         pr = dict(pr)
         pr["pr"] = str(linked_pr)
@@ -102,6 +104,8 @@ def pane(session: str, index: int, lines: int = 200):
         "channel_unread": channel_unread,
         "channel_replies": channel_replies,
         "linked_linear": linked_linear,
+        "linked_linear_title": linked_linear_title,
+        "linked_linear_status": linked_linear_status,
         "lgtm": lgtm,
         **parsed,
         **git,

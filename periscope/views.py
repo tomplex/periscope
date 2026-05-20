@@ -112,6 +112,8 @@ def build_window_view(
     # that over heuristic title-bar parsing.
     linked_pr = persisted.get("linked_pr")
     linked_linear = persisted.get("linked_linear")
+    linked_linear_title = persisted.get("linked_linear_title")
+    linked_linear_status = persisted.get("linked_linear_status")
     if linked_pr:
         pr = dict(pr)
         pr["pr"] = str(linked_pr)
@@ -143,6 +145,8 @@ def build_window_view(
         "channel_unread": channel_unread,
         "channel_replies": channel_replies,
         "linked_linear": linked_linear,
+        "linked_linear_title": linked_linear_title,
+        "linked_linear_status": linked_linear_status,
         "lgtm": lgtm,
         "project_pinned_dir": project_key,
         "project_name": project.get("name"),

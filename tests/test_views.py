@@ -172,7 +172,11 @@ def test_view_linked_pr_overrides_auto_detected(mocker, clean_state):
 def test_view_surfaces_linked_linear(mocker, clean_state):
     from periscope.views import build_window_view
     pid = "abc12345"
-    clean_state["windows"][pid] = {"linked_linear": "FAR-456"}
+    clean_state["windows"][pid] = {
+        "linked_linear": "FAR-456",
+        "linked_linear_title": "Fix the thing",
+        "linked_linear_status": "In Progress",
+    }
 
     mocker.patch(
         "periscope.views.parse_pane",
@@ -183,6 +187,8 @@ def test_view_surfaces_linked_linear(mocker, clean_state):
 
     view, _ = build_window_view(_window(pid=pid), now_ts=1000)
     assert view["linked_linear"] == "FAR-456"
+    assert view["linked_linear_title"] == "Fix the thing"
+    assert view["linked_linear_status"] == "In Progress"
 
 
 def test_view_channel_attached_reflects_mcp_session_presence(mocker, clean_state):

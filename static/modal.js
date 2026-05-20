@@ -756,12 +756,21 @@ function renderLinearCard(data) {
   if (data.linked_linear) {
     const id = escapeHtml(data.linked_linear);
     const url = `https://linear.app/issue/${id}`;
+    // title/status are Claude-supplied (link_linear MCP tool) and optional.
+    // Fall back to a generic label when no title was passed.
+    const title = data.linked_linear_title
+      ? escapeHtml(data.linked_linear_title)
+      : "linear ticket";
+    const statusPill = data.linked_linear_status
+      ? `<div class="pr-meta"><span class="pr-mini">${escapeHtml(data.linked_linear_status)}</span></div>`
+      : "";
     return `
       <div class="modal-card-inset">
         <div class="pr-head">
           <a class="pr-num" href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ticket ${id} (linked by claude)">${id}</a>
-          <span class="pr-title">linear ticket</span>
+          <span class="pr-title" title="${title}">${title}</span>
         </div>
+        ${statusPill}
       </div>
     `;
   }

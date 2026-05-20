@@ -247,7 +247,9 @@ Tools exposed to Claude:
   on the pane card without opening the modal.
 - `link_pr(number)` — bind a GitHub PR to the pane, even if Claude's
   status-line URL isn't visible.
-- `link_linear(id)` — same for Linear tickets (no auto-detection path).
+- `link_linear(id, title?, status?)` — same for Linear tickets (no
+  auto-detection path). Optional `title`/`status` metadata renders on
+  the card and in the modal; each call fully describes the link.
 - `spawn_claude(prompt, session?, cwd?, name?)` — fork a fresh Claude
   pane in a new tmux window with the given first message.
 

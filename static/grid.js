@@ -117,9 +117,13 @@ function renderCard(w) {
     // Linear linking is always explicit — periscope doesn't auto-detect, so
     // every linked_linear chip is something Claude (or a future UI affordance)
     // declared. URL points at app.linear.app/issue/<id> which redirects to
-    // the workspace's canonical URL.
+    // the workspace's canonical URL. The chip stays terse (id only — the grid
+    // is dense); title/status, when Claude supplied them, ride in the tooltip.
+    const lid = escapeHtml(w.linked_linear);
+    const ltitle = w.linked_linear_title ? `: ${escapeHtml(w.linked_linear_title)}` : "";
+    const lstatus = w.linked_linear_status ? ` [${escapeHtml(w.linked_linear_status)}]` : "";
     metaParts.push(
-      `<a class="card-linear" href="https://linear.app/issue/${escapeHtml(w.linked_linear)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ticket ${escapeHtml(w.linked_linear)} (linked by claude)">${escapeHtml(w.linked_linear)}</a>`
+      `<a class="card-linear" href="https://linear.app/issue/${lid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ${lid}${ltitle}${lstatus} (linked by claude)">${lid}</a>`
     );
   }
   const aff = w.worktree_affiliation || { kind: "no-repo" };
