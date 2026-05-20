@@ -1,0 +1,39 @@
+#!/bin/sh
+# Cut a release. Bumps the version in tauri.conf.json, Cargo.toml and
+# pyproject.toml, re-syncs Cargo.lock, commits, tags `vX.Y.Z`, and pushes.
+# The pushed tag triggers .github/workflows/release.yml, which builds the
+# macOS .dmg and publishes the GitHub Release.
+#
+#   bin/release 0.2.0
+set -eu
+
+VERSION="${1:-}"
+if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "usage: $0 X.Y.Z" >&2
+  exit 1
+fi
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO"
+
+if ! git diff-index --quiet HEAD --; then
+  echo "working tree is dirty — commit or stash before releasing" >&2
+  exit 1
+fi
+
+sed -i '' -E "s/\"version\": \"[0-9][^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+sed -i '' -E "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+sed -i '' -E "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" pyproject.toml
+
+# Keep Cargo.lock's own-package version in step with Cargo.toml.
+cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null
+
+git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock pyproject.toml
+git commit -m "release: v$VERSION"
+git tag "v$VERSION"
+git push origin HEAD
+git push origin "v$VERSION"
+
+echo
+echo "tagged v$VERSION and pushed — release build:"
+echo "  https://github.com/tomplex/periscope/actions"
