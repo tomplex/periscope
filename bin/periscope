@@ -1,16 +1,59 @@
 #!/bin/sh
 # Helper for managing the launchd-managed periscope service. See
 # docs/superpowers/specs/2026-05-15-periscope-stability-design.md.
+#
+# `install` generates the launchd plist from the current checkout — the
+# repo path and the `uv` location are resolved at install time, so
+# periscope can be cloned anywhere and installed by anyone.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-PLIST_SRC="$REPO/com.tom.periscope.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/com.tom.periscope.plist"
 LABEL="gui/$(id -u)/com.tom.periscope"
-LOG="$HOME/.config/periscope/periscope-8765.log"
+CONFIG_DIR="$HOME/.config/periscope"
+LOG="$CONFIG_DIR/periscope-8765.log"
 
 case "$1" in
   install)
-    cp "$PLIST_SRC" "$PLIST_DST"
+    UV="$(command -v uv)" || {
+      echo "uv not found on PATH — install it: https://docs.astral.sh/uv/" >&2
+      exit 1
+    }
+    mkdir -p "$CONFIG_DIR"
+    cat > "$PLIST_DST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tom.periscope</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$UV</string>
+    <string>run</string>
+    <string>server.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(dirname "$UV"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>$CONFIG_DIR/launchd-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>$CONFIG_DIR/launchd-stderr.log</string>
+</dict>
+</plist>
+EOF
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
     ;;
   uninstall)
