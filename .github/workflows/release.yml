@@ -1,0 +1,50 @@
+name: release
+
+# Pushing a `vX.Y.Z` tag (see `bin/release`) builds the universal macOS
+# .dmg and publishes it as a GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add universal Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build .dmg and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Periscope ${{ github.ref_name }}
+          releaseBody: |
+            Native macOS shell for periscope (universal — Apple Silicon + Intel).
+
+            The app is a thin Tauri shell that loads the dashboard from
+            `http://127.0.0.1:8765`, so the periscope server still has to be
+            running — `uv run server.py`, or the launchd service via
+            `bin/periscope install`.
+
+            **Unsigned build.** macOS Gatekeeper blocks it on first launch.
+            After moving Periscope.app into /Applications, clear the
+            quarantine flag:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/Periscope.app
+            ```
+          releaseDraft: false
+          prerelease: false
+          args: --target universal-apple-darwin --bundles dmg
