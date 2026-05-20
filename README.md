@@ -80,20 +80,6 @@ cp .env.example .env
 # then edit .env and paste your key
 ```
 
-## Endpoints
-
-- `GET  /api/state` — every tmux window with parsed Claude status
-- `GET  /api/pane?session=…&index=…&lines=200` — capture last N lines (with ANSI escapes)
-- `POST /api/focus?session=…&index=…` — switch every attached tmux client to that window
-- `POST /api/send?session=…&index=…` — body `{keys: [...], paste: "..."}`; sends keystrokes / bracketed paste
-- `POST /api/rename?session=…&index=…` — body `{name: "..."}`; renames a window
-- `POST /api/auto-rename-session?session=…` — Haiku-driven batch rename of every window in a session
-- `WS   /ws/pane?session=…&index=…` — live bidirectional pane stream (xterm.js powers the modal)
-- `POST /api/channel/push?pane=%N` — body `{content, meta?}`; queues an event for the pane's channel server
-- `POST /api/channel/reply?pane=%N` — body `{message, kind?, severity?}`; called by the channel server's `reply` tool
-- `POST /api/channel/clear-unread?pane=%N` — zeroes the pane's unread reply count
-- `WS   /ws/channel?pane=%N` — subscriber endpoint for the per-pane channel server (last-writer-wins)
-
 ## Channels (Claude push/reply)
 
 Periscope can push messages into the Claude Code sessions it spawns and
