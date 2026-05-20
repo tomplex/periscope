@@ -1,4 +1,7 @@
-// Pure helpers — no DOM, no state.
+// Pure helpers, plus the shared apiCall wrapper. The pure ones don't
+// touch the DOM; apiCall does, since it surfaces errors via toast.
+
+import { showToast } from "./toast.js";
 
 export function escapeHtml(s) {
   if (s == null) return "";
@@ -31,19 +34,24 @@ export function relTime(epochSec) {
 // Shared error-surfacing wrapper. FastAPI returns `{detail: ...}` on 404/422,
 // not our `{ok, error}` shape, so naive `data.error` reads as "undefined" when
 // e.g. the wrong server version is running. Normalize both shapes.
+//
+// Errors surface via showToast (not alert()) — alert() is blocking and
+// silently no-ops in WKWebView/Tauri, so it was wrong on both fronts.
+// Toasts give the user a 6-second window to read the failure without
+// stealing focus from whatever they're typing into.
 export async function apiCall(label, path, opts = {}) {
   let res;
   try {
     res = await fetch(path, opts);
   } catch (err) {
-    alert(`${label} failed: ${err.message}`);
+    showToast(`${label} failed: ${err.message}`, "bad", 6000);
     return null;
   }
   let data = {};
   try { data = await res.json(); } catch (_) {}
   if (!res.ok || data.ok === false) {
     const err = data.error || data.detail || `HTTP ${res.status}`;
-    alert(`${label} failed: ${err}`);
+    showToast(`${label} failed: ${err}`, "bad", 6000);
     return null;
   }
   return data;

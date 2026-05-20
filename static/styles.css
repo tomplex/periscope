@@ -2799,3 +2799,19 @@ body[data-alerts="open"][data-view="stream"] main {
 .confirm-dialog-actions .confirm-dialog-ok.is-danger:hover {
   background: color-mix(in oklch, var(--s-danger) 38%, var(--bg-1));
 }
+.prompt-dialog-input {
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 7px 10px;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 5px);
+  font: inherit;
+  font-family: var(--mono);
+  box-sizing: border-box;
+}
+.prompt-dialog-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}

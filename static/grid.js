@@ -9,6 +9,7 @@ import * as prefs from './prefs.js';
 import { escapeHtml, targetQuery, apiCall, relTime } from './util.js';
 import { openModal } from './modal.js';
 import { confirmDialog } from './dialog.js';
+import { showToast } from './toast.js';
 
 const POLL_MS = 3000;
 
@@ -802,7 +803,7 @@ async function handlePromote(btn) {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(`promote failed: ${err.detail || res.status}`);
+      showToast(`promote failed: ${err.detail || res.status}`, "bad", 6000);
     }
   } finally {
     btn.disabled = false;
@@ -821,7 +822,7 @@ async function handleAdopt(btn) {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(`adopt failed: ${err.detail || res.status}`);
+      showToast(`adopt failed: ${err.detail || res.status}`, "bad", 6000);
     }
   } finally {
     btn.disabled = false;
@@ -958,10 +959,10 @@ function startProjectRename(pinnedDir) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(`rename failed: ${err.detail || res.status}`);
+        showToast(`rename failed: ${err.detail || res.status}`, "bad", 6000);
       }
     } catch (e) {
-      alert(`rename request failed: ${e.message}`);
+      showToast(`rename request failed: ${e.message}`, "bad", 6000);
     }
   };
   const cancel = () => {
@@ -992,10 +993,10 @@ async function archiveProject(pinnedDir) {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(`archive failed: ${err.detail || res.status}`);
+      showToast(`archive failed: ${err.detail || res.status}`, "bad", 6000);
     }
   } catch (e) {
-    alert(`archive request failed: ${e.message}`);
+    showToast(`archive request failed: ${e.message}`, "bad", 6000);
   }
 }
 
@@ -1116,7 +1117,7 @@ async function handleWorktreeVariant(btn) {
       const res = await fetch(`/api/window/new-worktree?${params}`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(`new worktree tab failed: ${err.detail || res.status}`);
+        showToast(`new worktree tab failed: ${err.detail || res.status}`, "bad", 6000);
         restore();
         return;
       }
@@ -1124,7 +1125,7 @@ async function handleWorktreeVariant(btn) {
       if (body.warning) console.warn("new-worktree warning:", body.warning);
       restore();
     } catch (e) {
-      alert(`request failed: ${e.message}`);
+      showToast(`request failed: ${e.message}`, "bad", 6000);
       restore();
     }
   };
