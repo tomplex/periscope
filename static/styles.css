@@ -2745,3 +2745,57 @@ body[data-alerts="open"][data-view="stream"] main {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ───────────────────────────────────────────────────────────────────
+   Confirm dialog — used by dialog.js as a portable confirm() shim.
+   Native <dialog> handles the backdrop + Esc-to-close + modality.
+   Tauri's WKWebView silently no-ops window.confirm(); this is the
+   replacement that actually shows UI.
+   ─────────────────────────────────────────────────────────────────── */
+.confirm-dialog {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md, 8px);
+  background: var(--bg-modal);
+  color: var(--fg-0);
+  padding: 18px 20px 14px;
+  min-width: 320px;
+  max-width: 480px;
+  font: 13px/1.45 var(--sans);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+.confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.42);
+}
+.confirm-dialog-msg {
+  margin: 0 0 14px;
+  color: var(--fg-1);
+  white-space: pre-wrap;
+}
+.confirm-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.confirm-dialog-actions button {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 5px);
+  background: var(--bg-1);
+  color: var(--fg-0);
+  font: inherit;
+  cursor: pointer;
+}
+.confirm-dialog-actions button:hover {
+  background: var(--bg-1-hi);
+}
+.confirm-dialog-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.confirm-dialog-actions .confirm-dialog-ok.is-danger {
+  background: color-mix(in oklch, var(--s-danger) 25%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--s-danger) 50%, var(--line));
+}
+.confirm-dialog-actions .confirm-dialog-ok.is-danger:hover {
+  background: color-mix(in oklch, var(--s-danger) 38%, var(--bg-1));
+}

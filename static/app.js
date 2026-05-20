@@ -13,6 +13,7 @@ import { initCleanupModal } from './cleanup-modal.js';
 import { initAlerts } from './alerts.js';
 import { initSettingsModal } from './settings-modal.js';
 import { pushEscape, popEscape } from './overlay.js';
+import { confirmDialog } from './dialog.js';
 
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
 // the same shortcut focuses the search input — handled in history.js.)
@@ -242,7 +243,7 @@ sendBulkBtn.addEventListener("click", async () => {
   // Preview is truncated so a multi-line paste doesn't make the dialog scroll
   // off-screen; the full text is what actually gets sent.
   const preview = text.length > 80 ? text.slice(0, 77) + "…" : text;
-  if (!confirm(`Send "${preview}" + Enter to ${visible.length} pane(s)?`)) return;
+  if (!(await confirmDialog(`Send "${preview}" + Enter to ${visible.length} pane(s)?`, { okLabel: "Send" }))) return;
   sendBulkBtn.dataset.busy = "1";
   const prevLabel = sendBulkBtn.textContent;
   sendBulkBtn.textContent = `sending…`;

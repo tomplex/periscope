@@ -8,6 +8,7 @@ import { state } from './state.js';
 import * as prefs from './prefs.js';
 import { escapeHtml, targetQuery, apiCall, relTime } from './util.js';
 import { openModal } from './modal.js';
+import { confirmDialog } from './dialog.js';
 
 const POLL_MS = 3000;
 
@@ -1033,7 +1034,7 @@ async function handleKillSession(btn) {
   const session = btn.dataset.session;
   const n = state.lastWindows.filter((w) => w.session === session).length;
   const msg = `Kill session '${session}'?\n\nCloses ${n} window${n === 1 ? "" : "s"} and detaches any attached client.`;
-  if (!confirm(msg)) return;
+  if (!(await confirmDialog(msg, { okLabel: "Kill", danger: true }))) return;
   await apiCall("kill session", `/api/session?session=${encodeURIComponent(session)}`, {
     method: "DELETE",
   });
@@ -1043,7 +1044,7 @@ async function handleKillSession(btn) {
 async function handleKillWindow(btn) {
   const target = btn.dataset.target;
   const name = btn.dataset.name;
-  if (!confirm(`Kill window '${name}' (${target})?`)) return;
+  if (!(await confirmDialog(`Kill window '${name}' (${target})?`, { okLabel: "Kill", danger: true }))) return;
   await apiCall("kill window", `/api/window?${targetQuery(target)}`, {
     method: "DELETE",
   });
