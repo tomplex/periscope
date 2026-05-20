@@ -13,6 +13,7 @@
     "core:default",
     "notification:default",
     "core:window:allow-set-badge-count",
-    "core:webview:allow-internal-toggle-devtools"
+    "core:webview:allow-internal-toggle-devtools",
+    "opener:allow-open-url"
   ]
 }

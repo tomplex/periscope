@@ -11,9 +11,10 @@ import { initNewProjectModal } from './new-project-modal.js';
 import { initReviewPRModal } from './review-pr-modal.js';
 import { initCleanupModal } from './cleanup-modal.js';
 import { initAlerts } from './alerts.js';
+import { initExternalLinks } from './tauri.js';
 import { initSettingsModal } from './settings-modal.js';
 import { pushEscape, popEscape } from './overlay.js';
-import { confirmDialog } from './dialog.js';
+import { confirmDialog, promptDialog, alertDialog } from './dialog.js';
 
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
 // the same shortcut focuses the search input — handled in history.js.)
@@ -205,7 +206,7 @@ document.querySelectorAll(".tb-dd-menu").forEach((menu) => {
 });
 
 document.getElementById("new-session").addEventListener("click", async () => {
-  const name = prompt("session name:");
+  const name = await promptDialog("session name:", { placeholder: "e.g. tc/feature" });
   if (!name) return;
   await apiCall("new session", `/api/session/new`, {
     method: "POST",
@@ -238,7 +239,7 @@ sendBulkBtn.addEventListener("click", async () => {
     return true;
   });
   if (visible.length < 2) return;
-  const text = prompt(`Send to ${visible.length} pane(s) — text to paste (Enter submits):`);
+  const text = await promptDialog(`Send to ${visible.length} pane(s) — text to paste (Enter submits):`);
   if (text === null || text === "") return;
   // Preview is truncated so a multi-line paste doesn't make the dialog scroll
   // off-screen; the full text is what actually gets sent.
@@ -265,7 +266,7 @@ sendBulkBtn.addEventListener("click", async () => {
           .map((r) => `${r.target}: ${r.error}`)
           .slice(0, 5)
           .join("\n");
-        alert(`Sent to ${res.sent}/${res.total}. ${failed} failed:\n${errs}`);
+        await alertDialog(`Sent to ${res.sent}/${res.total}. ${failed} failed:\n${errs}`);
       }
     }
   } finally {
@@ -312,6 +313,7 @@ async function bootstrap() {
   initCleanupModal();
   initAlerts();
   initSettingsModal();
+  initExternalLinks();
   document.getElementById("open-commands").addEventListener("click", openCommandsModal);
 
   // `?modal=<target>` is the handoff signal from /history resume (and any

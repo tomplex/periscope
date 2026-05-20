@@ -70,3 +70,33 @@ export async function notify({ title, body }) {
     console.warn("[tauri] notify failed:", e);
   }
 }
+
+// In the Tauri shell, WKWebView silently swallows target="_blank" clicks
+// and a plain cross-origin <a href> would replace the dashboard itself.
+// Intercept clicks on external http(s) links and hand them to the OS
+// browser via the opener plugin. No-op in a real browser — there
+// target="_blank" already opens a tab, so this listener never installs.
+//
+// Capture phase is required: the PR/Linear card links carry an inline
+// onclick="event.stopPropagation()", which would prevent a bubble-phase
+// document listener from ever seeing the click.
+export function initExternalLinks() {
+  if (!inTauri()) return;
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest("a[href]");
+    if (!a) return;
+    let url;
+    try {
+      url = new URL(a.href);
+    } catch {
+      return;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
+    if (url.origin === location.origin) return;  // same-origin: navigate normally
+    e.preventDefault();
+    e.stopPropagation();  // don't also open the card behind the link
+    invoke("plugin:opener|open_url", { path: url.href }).catch((err) => {
+      console.warn("[tauri] open_url failed:", err);
+    });
+  }, true);
+}
