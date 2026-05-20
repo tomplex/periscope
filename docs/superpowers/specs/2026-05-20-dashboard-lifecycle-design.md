@@ -62,12 +62,37 @@ lifecycle, not the *project* lifecycle.
 
 ## Concepts
 
-### Worktree is the lifecycle unit
+### The lifecycle unit: the worktree root
 
-Phase and artifacts are scoped to a **worktree** (≈ a branch checkout),
-not a pane. Tabs sharing a worktree share one lifecycle. Rationale:
-artifacts live on the worktree's filesystem, and a worktree maps to one
-branch = one PR = one LGTM session.
+Phase and artifacts are scoped to a **worktree root** — one entry of
+`git worktree list`, i.e. one checkout directory bound to one branch.
+A worktree root is a real on-disk thing, but it is *not* persisted in
+periscope today: `worktrees.py` resolves a pane's cwd against
+`git worktree list` transiently (for the affiliation chip) and discards
+the result each poll. State has `windows` + `projects` + `settings` —
+no worktree key. This spec makes the worktree root a persisted unit.
+
+**Grouping panes to a worktree root.** Each pane's cwd resolves to its
+worktree root via git (`worktrees.py` already does the resolution).
+Panes whose cwds resolve to the same root share one lifecycle. The
+branch is read once per root via the existing `cached_git_state` — a
+worktree has exactly one branch.
+
+**A project may span multiple worktree roots — and the reverse.** This
+is deliberate, not an edge case. Sibling-worktree tabs are first-class
+(`2026-05-15-project-model-design.md`), so one project can have tabs in
+several worktree roots; conversely periscope's own project pins to the
+repo root and *every* tab on `main` resolves to that single root. The
+lifecycle key is therefore the worktree root, **independent of the
+project** — it is neither the project (`pinned_dir`) nor the pane.
+
+**Persistence.** Derived lifecycle (phase/artifacts/staleness) is
+recomputed every poll, never persisted. Only user intent persists: a new
+top-level `worktrees{}` block in `state.json`, keyed by absolute
+worktree-root path, holding `phase_manual_override`. GC: on load, prune
+entries whose path is no longer a live `git worktree list` entry —
+following the existing `store.py` migration pattern. (Pins live
+elsewhere — see the grid section.)
 
 ### Lifecycle state
 
@@ -115,6 +140,17 @@ artifacts(W) = files matching globs AND (
   fall back to **uncommitted + committed-in-last-24h** (sliding window).
   Catches in-flight work without dragging in old specs.
 
+**git calls.** Per worktree root, `lifecycle.py` runs: `git status
+--porcelain` (untracked/modified), `git diff --name-only <base>...HEAD`
+(committed since base), and — for the base-branch fallback —
+`git log --since=24h --name-only`. The 24h-window pattern is already
+proven cheap: `git_pr.py`'s `shared_activity_for` runs `git log -10
+--since=24h` on a 60s SWR cache. `git_pr.py`'s `git_state_for` is *not*
+reusable here — it runs `git diff HEAD --shortstat` (counts, not file
+names). These calls go in a **new cache keyed by worktree-root path**
+(not the repo-keyed `_git_cache` — `git status` is worktree-scoped),
+short TTL.
+
 **Known limitation.** Two concurrent features on the same branch produce
 a *union* artifact view — periscope cannot disambiguate without help.
 Accepted because (a) the union is still more informative than nothing,
@@ -147,6 +183,18 @@ last known state, the worktree folds into the Quiet zone once artifacts
 age past the staleness threshold, and manual override can set a terminal
 phase if desired.
 
+**`merged` detection is net-new, not a `git_pr.py` reuse.** `git_pr.py`
+is open-PRs-only (`pr_state_for` queries `gh pr list --state open`); it
+has no merged/closed query, and `git_state_for`'s `ahead` is computed
+against `@{u}` (upstream), not the base branch. So the `merged` phase
+and `merge` artifact need: (a) a new cached `gh pr view <N> --json
+state,mergedAt` — the **primary** signal, because it catches
+squash-merges; and (b) `git merge-base --is-ancestor <branch> <base>`
+as a fallback when no PR is linked. `git branch --merged` is *not* the
+primary signal — it misses squash-merges, the dominant GitHub workflow
+(same caveat as `2026-05-15-workflow-management-design.md` Verb 5).
+Cache keyed by worktree root, ~5min TTL.
+
 ### Detection globs
 
 Per-project, stored in the `projects` entry in `state.json`. Defaults
@@ -159,10 +207,12 @@ plan_globs: ["docs/**/plan*/**/*.md", "docs/**/*-plan.md"]
 
 ## Card decoration
 
-The card becomes lifecycle-first. The status-line *text* is removed; the
+The card becomes lifecycle-first. The removed text is the cwd-derived
+recap line (`last_line` / `recap` in `grid.js`) — a pure frontend
+change. Claude's status-line *parsing* (`STATUS_RE` in `panes.py`) is
+untouched; this only stops *rendering* the recap text on the card. The
 activity glyph (`idle` / `done` / working-spinner / needs-input) stays —
-it is the pane's pulse, not the status line, and the grid zoning depends
-on needs-input.
+it is the pane's pulse, and the grid zoning depends on needs-input.
 
 ```
 ┌──────────────────────────────────────┐
@@ -224,39 +274,54 @@ old work one click away, never cluttering. Note the ladder with
 `workflow-management-design.md` Verb 5: 3d → folds into Quiet; 14d →
 surfaces as a cleanup candidate.
 
-**Drag-reorder resolution.** Today `grid.js` supports free drag-reorder
-(manual order). Auto-zoning conflicts with a hand-arranged layout.
-Resolution: zoning + within-zone recency sort is automatic; **drag's
-role shrinks to pinning** — drag a card to Zone 1 to pin it there; drag
-a project group to pin it to the front of Zone 2. A pinned card/group
-shows a 📌. Auto is the default; pin is the override.
+**Drag-reorder resolution.** Today `grid.js` persists a full manual
+order — `orderedSessions` reads a `session_order` pref
+(`prefs.getSessionOrder` / `setSessionOrder`). Auto-zoning conflicts
+with a hand-arranged order. Resolution:
+
+- Zoning + within-zone recency sort is automatic; **drag's role shrinks
+  to pinning.** Drag a card to Zone 1 → pins it there; drag a project
+  group to the front of Zone 2 → pins the group. A pin shows 📌.
+- The `session_order` pref is **dropped** and `orderedSessions` stops
+  honoring it. Leaving it would let stale saved order silently keep
+  sorting Zone 2 — a confusing hybrid. Migration removes the key.
+- A **card pin** (Zone 1) is a new field on `windows[pid]`. A
+  **project-group pin** (Zone 2 front) is a new field on
+  `projects[pinned_dir]`. Pins live with the thing pinned;
+  `phase_manual_override` lives on the `worktrees{}` block.
+- `/api/window/move` — cross-session card drag, a real `tmux
+  move-window` mutation — is a **separate gesture and is retained**.
+  Free reordering goes away; moving a tab between sessions does not.
 
 ## Architecture
 
 | Component | Change |
 |---|---|
-| `periscope/lifecycle.py` | **New.** Artifact detection (glob + git working-set scope), phase derivation, staleness. Takes a worktree path + git state, returns a `lifecycle` dict. |
-| `periscope/git_pr.py` | Reused for PR / CI / merge state. Add small `commits_since_base` / `branch_merged` helpers if not already present. |
-| `periscope/lgtm.py` | Reused for `lgtm` + `walkthrough` artifacts. May need to expose whether a session has a walkthrough. |
-| `periscope/store.py` | `projects` entries gain `spec_globs`, `plan_globs`; per-worktree `phase_manual_override` + pin flags. State migration. |
-| `periscope/routes/*` | Endpoint to set phase override + pin/unpin a card/group; lifecycle data rides existing `/api/state`. |
+| `periscope/lifecycle.py` | **New.** cwd→worktree-root resolution, artifact detection (glob + git working-set scope), phase derivation, staleness. Takes a worktree-root path, returns a `lifecycle` dict. |
+| `periscope/worktrees.py` | Reused — already resolves a cwd to its `git worktree list` entry (today transient, for the affiliation chip). `lifecycle.py` calls into it to group panes by worktree root. |
+| `periscope/git_pr.py` | Reused for open-PR / CI state. **Net-new** here: a cached `gh pr view --json state,mergedAt` (merged detection) and `commits_since_base` — `git_pr.py` today is open-PRs-only and computes `ahead` vs `@{u}`, not base. |
+| `periscope/lgtm.py` | Reused as-is for `lgtm` + `walkthrough` artifacts — `_lgtm_fetch_walkthrough` already mirrors walkthrough presence; just consume it. |
+| `periscope/store.py` | New top-level `worktrees{}` block (keyed by worktree-root path) for `phase_manual_override`; `projects` entries gain `spec_globs`/`plan_globs` + a group-pin flag; `windows[pid]` gains a Zone-1 card-pin flag. State migration + prune-missing-worktrees GC. |
+| `periscope/routes/*` | Endpoints to set phase override + pin/unpin; lifecycle data rides existing `/api/state`. |
 | `static/grid.js` | Three-zone rendering, project groups, drag→pin. |
 | card rendering | Phase chip, artifact row, remove status-line text. |
 | `static/modal.js` | Artifact detail + phase-override control. |
 
 ## Data flow
 
-`/api/state` poll (existing 3s cadence) → for each worktree,
-`lifecycle.py` computes phase/artifacts/staleness; git calls are cached
-per repo with a short TTL, matching the existing `git_pr.py` caching
-discipline → lifecycle rides the existing state payload → `grid.js`
+`/api/state` poll (existing 3s cadence) → resolve each pane's cwd to a
+worktree root → for each distinct worktree root, `lifecycle.py` computes
+phase/artifacts/staleness. Git calls are cached in a new cache keyed by
+worktree-root path, short TTL → lifecycle rides the existing state
+payload, fanned out per-window in `build_window_view` → `grid.js`
 buckets cards into zones and renders chips. No new poll loop.
 
 ## Testing
 
-- `tests/test_lifecycle.py` — artifact scoping (feature-branch vs
-  base-branch fallback), the phase-derivation table, staleness math,
-  glob matching. The shared-cwd union case gets an explicit test.
+- `tests/test_lifecycle.py` — cwd→worktree-root resolution, artifact
+  scoping (feature-branch vs base-branch fallback), the phase-derivation
+  table, staleness math, glob matching. The shared-cwd union case and
+  the prune-missing-worktree GC each get an explicit test.
 - `tests/routes/` — phase-override + pin/unpin endpoints.
 - Grid zoning is frontend; verify in the browser (periscope convention:
   no unit tests for view code).
@@ -265,9 +330,10 @@ buckets cards into zones and renders chips. No new poll loop.
 
 Three PRs, each independently shippable:
 
-- **Phase 1 — Lifecycle backend.** `lifecycle.py`, state migration,
-  detection, `/api/state` enrichment. No UI yet; verifiable via the
-  JSON payload.
+- **Phase 1 — Lifecycle backend.** cwd→worktree-root resolution, the
+  `worktrees{}` state block + migration/GC, `lifecycle.py`, artifact +
+  phase + merge detection, `/api/state` enrichment. No UI yet;
+  verifiable via the JSON payload.
 - **Phase 2 — Card decoration.** Phase chip, artifact row, remove
   status-line text, modal artifact detail + override control.
 - **Phase 3 — Three-zone grid.** Zones, project groups, drag→pin.
@@ -292,3 +358,8 @@ Resolved in brainstorming, recorded for traceability.
    ladders below Verb 5's 14d cleanup threshold.
 8. **Drag-reorder shrinks to pinning** — auto-zoning is the default,
    pin is the override.
+9. **Lifecycle is keyed by the worktree root** — a `git worktree list`
+   entry / checkout directory — not by project and not by pane. A
+   project may span multiple worktree roots. `phase_manual_override`
+   persists in a new path-keyed `worktrees{}` state block; pins persist
+   on `windows[pid]` (card) and `projects[pinned_dir]` (group).
