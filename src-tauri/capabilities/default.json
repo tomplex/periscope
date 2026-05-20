@@ -3,9 +3,16 @@
   "identifier": "default",
   "description": "Capabilities for the main window.",
   "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://localhost:8765/*",
+      "http://127.0.0.1:8765/*"
+    ]
+  },
   "permissions": [
     "core:default",
     "notification:default",
-    "core:window:allow-set-badge-count"
+    "core:window:allow-set-badge-count",
+    "core:webview:allow-internal-toggle-devtools"
   ]
 }
