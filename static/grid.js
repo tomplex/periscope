@@ -273,16 +273,21 @@ function renderNewTile(session) {
 }
 
 function orderedSessions(allSessions, bySession) {
-  // Sessions don't move on activity — they stay where the user put them.
-  // User-pinned (drag-reordered) sessions appear in saved order; anything
-  // new the user hasn't placed yet falls in alphabetically.
+  // User-pinned (drag-reordered) sessions appear in their saved order.
+  // Sessions NOT in the saved order are freshly created — surface them at
+  // the TOP, newest first, so a just-made project/session is immediately
+  // visible instead of buried alphabetically at the bottom. A drag-reorder
+  // saves the full order, so once the user places a session it leaves the
+  // "fresh" group and stays put.
   const saved = prefs.getSessionOrder();
-  const present = new Set(allSessions);
-  const ordered = saved.filter((s) => present.has(s));
-  const remaining = allSessions
-    .filter((s) => !ordered.includes(s))
-    .sort((a, b) => a.localeCompare(b));
-  return [...ordered, ...remaining];
+  const ordered = saved.filter((s) => allSessions.includes(s));
+  const orderedSet = new Set(ordered);
+  const recencyOf = (s) =>
+    Math.max(0, ...(bySession.get(s) || []).map((w) => w.acted_at || 0));
+  const fresh = allSessions
+    .filter((s) => !orderedSet.has(s))
+    .sort((a, b) => recencyOf(b) - recencyOf(a));
+  return [...fresh, ...ordered];
 }
 
 // Channel-alert pill rolled up across a session's panes. Visible in both
@@ -1266,6 +1271,9 @@ function wireGrid() {
     const header = e.target.closest(".session-header");
     if (header) {
       header.classList.add("dragging");
+      // Pause polling: the 3s poll rebuilds grid.innerHTML, which would
+      // destroy the element being dragged and silently abort the drag.
+      state.dragging = true;
       e.dataTransfer.setData("text/plain", header.dataset.session);
       e.dataTransfer.effectAllowed = "move";
       return;
@@ -1274,12 +1282,14 @@ function wireGrid() {
     // Skip the "+ new" tile (no data-target). Cards have data-target = "sess:idx".
     if (card && card.dataset.target) {
       card.classList.add("dragging");
+      state.dragging = true;
       e.dataTransfer.setData(CARD_MIME, card.dataset.target);
       e.dataTransfer.effectAllowed = "move";
     }
   });
 
   grid.addEventListener("dragend", () => {
+    state.dragging = false;
     grid.querySelectorAll(".dragging").forEach((el) => el.classList.remove("dragging"));
     grid.querySelectorAll(".drag-over-top, .drag-over-bottom, .card-drop-target")
       .forEach((el) => el.classList.remove("drag-over-top", "drag-over-bottom", "card-drop-target"));
@@ -1317,6 +1327,10 @@ function wireGrid() {
   });
 
   grid.addEventListener("drop", (e) => {
+    // Clear the drag-pause flag here too: the drop handlers below call
+    // render(), which detaches the dragged element — a subsequent dragend
+    // on a detached node isn't guaranteed, so don't rely on it alone.
+    state.dragging = false;
     if (e.dataTransfer.types.includes(CARD_MIME)) {
       const group = e.target.closest(".session-group");
       if (!group) return;
@@ -1355,6 +1369,7 @@ async function moveCard(target, dest) {
 
 export async function poll() {
   if (state.editingTarget) return;  // user is mid-rename; don't blow away their input
+  if (state.dragging) return;  // mid-drag; a render() would destroy the drag source
   try {
     const res = await fetch("/api/state");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

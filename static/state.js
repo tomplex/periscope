@@ -8,6 +8,7 @@ export const state = {
   lastProjects: [],              // from /api/state — non-archived rows only
   projectsByTmux: {},             // indexProjects(lastProjects), rebuilt each render
   editingTarget: null,           // pauses polling while a card rename input is open
+  dragging: false,               // pauses polling mid-drag so the re-render doesn't kill the drag
   collapsedSessions: new Set(),  // hydrated from prefs.getCollapsed() at boot
 
   // stream view

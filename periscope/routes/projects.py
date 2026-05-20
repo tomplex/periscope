@@ -555,16 +555,23 @@ def projects_pr_review(body: PRReviewBody):
     if pr <= 0:
         raise HTTPException(400, f"pr_number must be positive: {pr}")
 
-    # Resolve target name + tmux session up front so we can do a cheap
-    # collision pre-check BEFORE the 15-second gh call. Wastes nothing on
-    # a known-collision retry.
+    # The fetched local branch stays `pr-<N>` — a throwaway review name
+    # that's collision-safe for both same-repo and fork PRs (a fork's
+    # headRefName can be anything, including `main`, so it's unsafe as a
+    # local branch name). The project / tmux-session / worktree-dir name
+    # is separate: it defaults to the PR's head branch (resolved from the
+    # gh call below) so the user doesn't have to type one.
     local_branch = f"pr-{pr}"
-    name_preview = (body.name or local_branch).strip()
-    has_session_code, _ = _run(["tmux", "has-session", "-t", name_preview])
-    if has_session_code == 0:
-        raise HTTPException(
-            409, f"tmux session {name_preview!r} already exists; pick a different name",
-        )
+    # Cheap tmux-collision pre-check, but only possible when the user gave
+    # an explicit name — otherwise the name isn't known until after the
+    # ~15s gh call, so the check moves below.
+    if body.name:
+        explicit_name = body.name.strip()
+        has_session_code, _ = _run(["tmux", "has-session", "-t", explicit_name])
+        if has_session_code == 0:
+            raise HTTPException(
+                409, f"tmux session {explicit_name!r} already exists; pick a different name",
+            )
 
     # gh pr view → metadata.
     code, out = _run(
@@ -594,8 +601,23 @@ def projects_pr_review(body: PRReviewBody):
     # IS the spec's intent — sub-feature work off a PR-review should
     # rebase against the PR's target, not the PR itself. Don't "fix" this.
     base_branch = meta.get("baseRefName") or None
-    name = name_preview
+
+    # Project name: explicit override, else the PR's head branch (so the
+    # user doesn't have to name it), else `pr-<N>` as a last resort.
+    head_ref = (meta.get("headRefName") or "").strip()
+    name = (body.name or head_ref or local_branch).strip()
     tmux_session = name
+
+    # Post-gh collision check for the auto-resolved name (the explicit-name
+    # path already checked above, before the gh call).
+    if not body.name:
+        has_session_code, _ = _run(["tmux", "has-session", "-t", tmux_session])
+        if has_session_code == 0:
+            raise HTTPException(
+                409,
+                f"tmux session {tmux_session!r} already exists "
+                f"(PR head branch) — pass an explicit name to override",
+            )
 
     # Fetch the PR's head commits into a local branch `pr-<N>`. The
     # `pull/<N>/head:<localname>` refspec works for both same-repo and
@@ -623,9 +645,11 @@ def projects_pr_review(body: PRReviewBody):
         raise HTTPException(400, f"git fetch failed: {fetch_out}")
 
     # Resolve the worktree path. Sibling layout, matches spawn_worktree.
+    # Directory is slugged from the project name (the PR's head branch by
+    # default) so the worktree on disk is recognizable, not `pr-<N>`.
     from periscope.worktree_spawn import WORKTREES_DIR, _slug_for_path
     repo_name = os.path.basename(repo.rstrip("/"))
-    wt_path = str(WORKTREES_DIR / repo_name / _slug_for_path(local_branch))
+    wt_path = str(WORKTREES_DIR / repo_name / _slug_for_path(name))
     if os.path.exists(wt_path):
         raise HTTPException(409, f"worktree path already exists: {wt_path}")
 

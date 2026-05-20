@@ -25,18 +25,20 @@ def _gh_view_json(pr_number, head_ref="feature-foo", is_cross=False, state="OPEN
 
 
 def _pr_review_run_sequence(repo_path, gh_output):
-    """Ordered return values for `_run` covering the PR review flow:
+    """Ordered return values for `_run` covering the PR review flow when
+    no explicit name is given (the common case — name auto-resolves from
+    the PR's head branch, so the tmux collision check runs AFTER gh):
       1. git rev-parse --show-toplevel        → (0, repo)
-      2. tmux has-session                     → (1, "") meaning "session not found"
-      3. gh pr view --json ...                → (0, gh_output)
+      2. gh pr view --json ...                → (0, gh_output)
+      3. tmux has-session                     → (1, "") meaning "not found"
       4. git fetch origin pull/N/head:pr-N    → (0, "")
       5. git worktree add <path> pr-N         → (0, "")
     The order MUST match the endpoint's actual call sequence.
     """
     return [
         (0, str(repo_path)),
-        (1, ""),
         (0, gh_output),
+        (1, ""),
         (0, ""),
         (0, ""),
     ]
@@ -128,7 +130,6 @@ def test_pr_review_not_found(client, mocker, tmp_path):
         "periscope.routes.projects._run",
         side_effect=[
             (0, str(repo)),           # rev-parse
-            (1, ""),                  # has-session: session-not-found is fine
             (1, "no pull requests found for branch"),  # gh pr view
         ],
     )
@@ -164,8 +165,10 @@ def test_pr_review_rejects_invalid_pr_number(client, mocker, tmp_path):
     assert r.status_code == 400
 
 
-def test_pr_review_rejects_session_collision(client, mocker, tmp_path):
-    """Pre-flight `tmux has-session` 409 fires before gh."""
+def test_pr_review_rejects_session_collision_explicit_name(client, mocker, tmp_path):
+    """With an explicit name, the `tmux has-session` 409 fires BEFORE gh —
+    the cheap pre-check that avoids a wasted ~15s gh call on a known
+    collision."""
     repo = tmp_path / "repo"
     repo.mkdir()
     mocker.patch(
@@ -176,7 +179,56 @@ def test_pr_review_rejects_session_collision(client, mocker, tmp_path):
         ],
     )
     r = client.post("/api/projects/pr-review", json={
+        "repo": str(repo), "pr_number": 42, "name": "my-review",
+    })
+    assert r.status_code == 409
+    assert "already exists" in r.json()["detail"]
+
+
+def test_pr_review_rejects_session_collision_auto_name(client, mocker, tmp_path):
+    """Without an explicit name, the name comes from the PR's head branch,
+    so the collision check runs AFTER gh resolves it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    mocker.patch(
+        "periscope.routes.projects._run",
+        side_effect=[
+            (0, str(repo)),                          # rev-parse
+            (0, _gh_view_json(42, head_ref="dup")),  # gh pr view
+            (0, ""),                                  # has-session: session exists
+        ],
+    )
+    r = client.post("/api/projects/pr-review", json={
         "repo": str(repo), "pr_number": 42,
     })
     assert r.status_code == 409
     assert "already exists" in r.json()["detail"]
+
+
+def test_pr_review_auto_names_from_head_branch(client, mocker, tmp_path):
+    """No explicit name → project name = the PR's head branch (so the user
+    doesn't have to type one)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    mocker.patch(
+        "periscope.routes.projects._run",
+        side_effect=_pr_review_run_sequence(
+            repo, _gh_view_json(42, head_ref="tc/lookup-redesign"),
+        ),
+    )
+    mocker.patch("periscope.routes.projects._layout_two_window", return_value="abcd1234")
+    create = mocker.patch("periscope.routes.projects.create_project", return_value={
+        "name": "tc/lookup-redesign", "tmux_session": "tc/lookup-redesign",
+        "repo": str(repo), "base_branch": "main", "archived_at": None,
+    })
+    mocker.patch("periscope.routes.projects.os.path.exists", return_value=False)
+    mocker.patch("periscope.routes.projects.all_projects", return_value={})
+    mocker.patch("periscope.routes.projects.set_window_fields")
+
+    r = client.post("/api/projects/pr-review", json={
+        "repo": str(repo), "pr_number": 42,
+    })
+    assert r.status_code == 200, r.text
+    # Project name + tmux session both come from headRefName.
+    assert create.call_args.kwargs["name"] == "tc/lookup-redesign"
+    assert create.call_args.kwargs["tmux_session"] == "tc/lookup-redesign"
