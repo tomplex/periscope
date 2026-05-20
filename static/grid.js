@@ -917,11 +917,15 @@ function startProjectRename(pinnedDir) {
   const nameEl = header.querySelector(".session-name");
   if (!nameEl) return;
 
+  if (state.editingTarget) return;
+
   const currentName = project.name || session;
   const input = document.createElement("input");
   input.type = "text";
   input.value = currentName;
   input.className = "session-name-input";
+  // Suppress the 3s poll re-render while editing; poll() bails on this flag.
+  state.editingTarget = `project:${pinnedDir}`;
   nameEl.replaceWith(input);
   input.focus();
   input.select();
@@ -939,6 +943,7 @@ function startProjectRename(pinnedDir) {
     restored.className = "session-name";
     restored.textContent = currentName;
     input.replaceWith(restored);
+    state.editingTarget = null;  // re-enable poll re-render
     if (!newName || newName === currentName) return;
     try {
       const res = await fetch("/api/projects/patch", {
@@ -963,6 +968,7 @@ function startProjectRename(pinnedDir) {
     restored.className = "session-name";
     restored.textContent = currentName;
     input.replaceWith(restored);
+    state.editingTarget = null;  // re-enable poll re-render
   };
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
