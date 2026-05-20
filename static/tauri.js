@@ -95,7 +95,9 @@ export function initExternalLinks() {
     if (url.origin === location.origin) return;  // same-origin: navigate normally
     e.preventDefault();
     e.stopPropagation();  // don't also open the card behind the link
-    invoke("plugin:opener|open_url", { path: url.href }).catch((err) => {
+    // open_url deserializes a `url` field (not `path`) — see
+    // tauri-plugin-opener commands.rs / guest-js openUrl.
+    invoke("plugin:opener|open_url", { url: url.href }).catch((err) => {
       console.warn("[tauri] open_url failed:", err);
     });
   }, true);
