@@ -35,25 +35,28 @@ export async function setBadgeCount(n) {
   }
 }
 
-// Permission cache. is_permission_granted returns true/false/null
-// (null = needs prompt). We collapse to a tri-state we can short-circuit.
-let _permission = null;  // "granted" | "denied" | null
+// Cache only the positive outcome. is_permission_granted is a pure OS
+// query (no prompt UX), so re-asking every notify() is cheap and lets
+// us recover automatically when the user enables notifications in
+// System Settings after an earlier dismissal — no page reload needed.
+let _granted = false;
 
 async function ensureNotifyPermission() {
   if (!inTauri()) return false;
-  if (_permission === "granted") return true;
-  if (_permission === "denied") return false;
+  if (_granted) return true;
   try {
     const granted = await invoke("plugin:notification|is_permission_granted");
-    if (granted === true) { _permission = "granted"; return true; }
-    if (granted === false) { _permission = "denied"; return false; }
-    // null → prompt. Triggers the OS dialog the first time.
+    if (granted === true) { _granted = true; return true; }
+    if (granted === false) return false;
+    // null → needs prompt. Triggers the OS dialog. If the user dismisses
+    // it, request_permission returns something other than "granted"; we
+    // return false but DON'T sticky-cache the denial — the next notify
+    // will re-check and pick up a later grant from System Settings.
     const next = await invoke("plugin:notification|request_permission");
-    _permission = next === "granted" ? "granted" : "denied";
-    return _permission === "granted";
+    if (next === "granted") { _granted = true; return true; }
+    return false;
   } catch (e) {
     console.warn("[tauri] notification permission check failed:", e);
-    _permission = "denied";
     return false;
   }
 }
