@@ -150,10 +150,28 @@ async def ws_pane(
 
         # 4) Main loop: receive keystrokes from the client and push to tmux.
         #    xterm.js's onData sends raw input including escape sequences
-        #    (e.g. "\x1b[A" for up arrow). We deliver them via load-buffer +
-        #    paste-buffer rather than send-keys -l because tmux's argv parser
-        #    treats a standalone ";" as a command separator — typing a single
-        #    semicolon would otherwise be silently dropped.
+        #    (e.g. "\x1b[A" for up arrow). Each tmux subprocess costs ~20-80ms
+        #    of fork+exec on a loaded host, so we queue keystrokes and let a
+        #    single drain task batch whatever piled up while the previous
+        #    tmux call was in flight. Slow typing still triggers one call
+        #    per key; fast typing / autorepeat / paste coalesces into one
+        #    call per drain cycle. Order is preserved because the queue puts
+        #    and gets all happen on the same asyncio loop.
+        keystroke_q: asyncio.Queue[str] = asyncio.Queue()
+
+        async def drain_input():
+            while True:
+                first = await keystroke_q.get()
+                batch = [first]
+                while not keystroke_q.empty():
+                    batch.append(keystroke_q.get_nowait())
+                text = "".join(batch)
+                await loop.run_in_executor(
+                    None, lambda t=text: deliver_input(target, t)
+                )
+
+        drain_task = _task("ws-deliver", drain_input())
+
         try:
             while True:
                 msg = await websocket.receive()
@@ -181,13 +199,12 @@ async def ws_pane(
                                 None, lambda c=rc, r=rr: set_pane_size(c, r)
                             )
                         continue
-                await loop.run_in_executor(
-                    None, lambda t=text: deliver_input(target, t)
-                )
+                keystroke_q.put_nowait(text)
         except WebSocketDisconnect:
             pass
         finally:
             forward_task.cancel()
+            drain_task.cancel()
     finally:
         # Cleanup in reverse setup order. Each step is best-effort because
         # any of them could fail mid-teardown if the pane already died.

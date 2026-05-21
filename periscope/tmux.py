@@ -4,8 +4,9 @@
 `_tmux_mutate()` — side-effecting; surfaces stderr on failure.
 `_run()` — generic subprocess wrapper used by git_pr and sessions routes.
 `capture()` — wraps `tmux capture-pane` with -e (SGR preserved).
-`deliver_input()` — writes bytes into a pane via load-buffer + paste-buffer
-to dodge tmux's argv parser eating semicolons that send-keys would lose.
+`deliver_input()` — writes bytes into a pane. Small inputs (keystrokes
+and normal-size pastes) use a single `send-keys -H` subprocess; large
+inputs fall back to load-buffer + paste-buffer over stdin to dodge ARG_MAX.
 """
 
 import re
@@ -51,14 +52,35 @@ def capture(target: str, lines: int = 100) -> str:
     return tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
 
 
-def deliver_input(target: str, text: str) -> None:
-    """Pipe raw bytes into a pane via tmux load-buffer + paste-buffer.
+# Threshold below which `send-keys -H` is used (single subprocess, fast path).
+# Above this we go via load-buffer + paste-buffer to avoid argv bloat — each
+# input byte becomes a 2-char hex arg, so ARG_MAX caps the -H path well below
+# the OS limit. 4 KiB covers single keystrokes and normal clipboard pastes.
+_SEND_KEYS_H_MAX = 4096
 
-    Used rather than `send-keys -l` because tmux's argv parser treats a
-    standalone `;` argument as a command separator — when xterm.js forwards
-    a single semicolon keystroke as one WS message, send-keys silently
-    drops it. Stdin avoids that entire parsing path.
+
+def deliver_input(target: str, text: str) -> None:
+    """Pipe raw bytes into a pane.
+
+    Fast path (the common case — keystrokes from xterm.js, short escape
+    sequences, normal pastes): one `send-keys -H` subprocess with each
+    byte as a hex arg. Hex args are never parsed as commands, so the
+    standalone-`;` problem that motivated the old load-buffer dance
+    doesn't apply here. Halves per-keystroke fork+exec cost compared to
+    load-buffer + paste-buffer.
+
+    Fallback (inputs above `_SEND_KEYS_H_MAX`): load-buffer + paste-buffer
+    over stdin. Slower (two subprocesses) but unbounded in size — needed
+    for multi-KB pastes that would otherwise overflow ARG_MAX.
     """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= _SEND_KEYS_H_MAX:
+        hexes = [f"{b:02x}" for b in encoded]
+        subprocess.run(
+            ["tmux", "send-keys", "-t", target, "-H", *hexes],
+            check=False, timeout=5,
+        )
+        return
     buf = f"wd-in-{uuid.uuid4().hex[:8]}"
     subprocess.run(
         ["tmux", "load-buffer", "-b", buf, "-"],

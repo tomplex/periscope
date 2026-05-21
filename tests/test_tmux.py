@@ -99,16 +99,35 @@ def test_capture_calls_tmux_capture_pane_with_lines(mocker):
     assert out == "pane body\n"
 
 
-def test_deliver_input_uses_load_buffer_and_paste(mocker):
+def test_deliver_input_small_uses_send_keys_hex(mocker):
+    """Common path — keystrokes and small pastes — go through a single
+    `send-keys -H` subprocess. Each byte becomes a hex arg, which sidesteps
+    tmux's argv parser eating standalone `;` as a command separator."""
     mock_run = mocker.patch("subprocess.run")
     mock_run.return_value = subprocess.CompletedProcess(
         args=[], returncode=0, stdout="", stderr="",
     )
-    deliver_input("foo:0", "echo hi;\n")
+    deliver_input("foo:0", "a;b\n")
+    assert mock_run.call_count == 1
+    argv = mock_run.call_args_list[0].args[0]
+    assert argv[:5] == ["tmux", "send-keys", "-t", "foo:0", "-H"]
+    # 'a' 0x61, ';' 0x3b, 'b' 0x62, '\n' 0x0a — order preserved.
+    assert argv[5:] == ["61", "3b", "62", "0a"]
+
+
+def test_deliver_input_large_falls_back_to_paste_buffer(mocker):
+    """Inputs above the hex-arg threshold use load-buffer + paste-buffer
+    over stdin so argv length stays bounded regardless of paste size."""
+    mock_run = mocker.patch("subprocess.run")
+    mock_run.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="", stderr="",
+    )
+    big = "x" * 5000
+    deliver_input("foo:0", big)
     assert mock_run.call_count == 2
     first_call = mock_run.call_args_list[0]
     assert first_call.args[0][:2] == ["tmux", "load-buffer"]
-    assert first_call.kwargs.get("input") == "echo hi;\n"
+    assert first_call.kwargs.get("input") == big
     second_call = mock_run.call_args_list[1]
     assert second_call.args[0][:2] == ["tmux", "paste-buffer"]
     assert "foo:0" in second_call.args[0]
