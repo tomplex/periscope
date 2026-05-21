@@ -91,3 +91,79 @@ def test_call_summarizer_returns_none_after_exhausting_retries():
     assert result is None
     # Default max_retries=3 → 4 total attempts (initial + 3 retries)
     assert mock_client.messages.create.call_count == 4
+
+
+def test_call_summarizer_parses_facets():
+    from history.summarize import call_summarizer, SUMMARIZE_TOOL
+    from history.extract import SessionRecord
+
+    # The tool advertises the four facet fields.
+    props = SUMMARIZE_TOOL["input_schema"]["properties"]
+    assert {"outcome", "category", "notable", "topics"} <= set(props)
+
+    class _Block:
+        type = "tool_use"
+        name = "save_session_summary"
+        input = {
+            "summary": "did the thing", "tags": ["a", "b", "c"],
+            "outcome": "shipped", "category": "feature",
+            "notable": True, "topics": ["periscope", "Rust"],
+        }
+
+    class _Msg:
+        content = [_Block()]
+        stop_reason = "tool_use"
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**_kw):
+                return _Msg()
+
+    rec = SessionRecord(
+        session_id="s1", jsonl_path="/x", project_path="/p", branch=None,
+        started_at=0, ended_at=0, duration_s=0,
+        user_msg_count=3, asst_msg_count=3, tool_use_count=0,
+        was_interrupted=0, ended_cleanly=1,
+        first_user_msg="hi", last_user_msg="bye", final_assistant_msg="done",
+        files_touched="[]", notable_cmds="[]", tool_use_counts="{}",
+    )
+    res = call_summarizer(_Client(), rec, model="claude-haiku-4-5")
+    assert res.outcome == "shipped"
+    assert res.category == "feature"
+    assert res.notable is True
+    assert res.topics == ["periscope", "rust"]   # normalized lowercase
+
+
+def test_call_summarizer_rejects_unknown_enum():
+    from history.summarize import call_summarizer
+    from history.extract import SessionRecord
+
+    class _Block:
+        type = "tool_use"
+        name = "save_session_summary"
+        input = {"summary": "x", "tags": ["a", "b", "c"],
+                 "outcome": "banana", "category": "nonsense",
+                 "notable": False, "topics": []}
+
+    class _Msg:
+        content = [_Block()]
+        stop_reason = "tool_use"
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**_kw):
+                return _Msg()
+
+    rec = SessionRecord(
+        session_id="s2", jsonl_path="/x", project_path="/p", branch=None,
+        started_at=0, ended_at=0, duration_s=0,
+        user_msg_count=3, asst_msg_count=3, tool_use_count=0,
+        was_interrupted=0, ended_cleanly=1,
+        first_user_msg="hi", last_user_msg="bye", final_assistant_msg="done",
+        files_touched="[]", notable_cmds="[]", tool_use_counts="{}",
+    )
+    res = call_summarizer(_Client(), rec, model="claude-haiku-4-5")
+    assert res.outcome is None      # unknown enum → None
+    assert res.category is None

@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .extract import SessionRecord
 
 log = logging.getLogger(__name__)
+
+_OUTCOMES = {"shipped", "partial", "abandoned", "explored", "blocked"}
+_CATEGORIES = {"feature", "bugfix", "refactor", "debugging",
+               "research", "ops", "docs", "review"}
 
 SUMMARIZE_TOOL = {
     "name": "save_session_summary",
@@ -30,16 +34,52 @@ SUMMARIZE_TOOL = {
                 "maxItems": 5,
                 "description": "3-5 lowercase tags: project, technology, area, action.",
             },
+            "outcome": {
+                "type": "string",
+                "enum": ["shipped", "partial", "abandoned", "explored", "blocked"],
+                "description": (
+                    "How the session ended. shipped: work landed/committed. "
+                    "partial: real progress, left unfinished. abandoned: started "
+                    "then dropped. explored: investigation or Q&A, no code change "
+                    "intended. blocked: stuck on an external problem."
+                ),
+            },
+            "category": {
+                "type": "string",
+                "enum": ["feature", "bugfix", "refactor", "debugging",
+                         "research", "ops", "docs", "review"],
+                "description": "The primary kind of work in the session.",
+            },
+            "notable": {
+                "type": "boolean",
+                "description": (
+                    "true if the session is substantial or worth revisiting; "
+                    "false for routine, trivial, or false-start work."
+                ),
+            },
+            "topics": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 4,
+                "description": (
+                    "1-4 canonical lowercase topic tags — prefer the project "
+                    "name or a broad tech/area term; singular, deduplicated."
+                ),
+            },
         },
-        "required": ["summary", "tags"],
+        "required": ["summary", "tags", "outcome", "category", "notable", "topics"],
     },
 }
 
 SUMMARIZE_SYSTEM_PROMPT = (
-    "You summarize Claude Code coding sessions for a search index. "
-    "Output is consumed by a developer searching their own history later. "
-    "Bias toward concrete specifics (file names, error messages, decisions) "
-    "over generic descriptions. Always call save_session_summary."
+    "You summarize and classify Claude Code coding sessions for a search "
+    "index. Output is consumed by a developer searching their own history "
+    "later. Bias toward concrete specifics (file names, error messages, "
+    "decisions) over generic descriptions. Also classify the session's "
+    "outcome, category, notability, and topics per the tool schema — the "
+    "final assistant message is the strongest outcome signal. Always call "
+    "save_session_summary."
 )
 
 # Token budget for user messages in the prompt body. Crude char proxy: ~4 chars/token.
@@ -51,6 +91,10 @@ class SummaryResult:
     summary: str
     tags: list[str]
     model: str
+    outcome: str | None = None
+    category: str | None = None
+    notable: bool = False
+    topics: list[str] = field(default_factory=list)
 
 
 def build_summary_prompt(rec: SessionRecord) -> str:
@@ -148,9 +192,24 @@ def call_summarizer(client, rec: SessionRecord, *,
                 continue
             # Normalize + filter empty tags
             norm_tags = [s for s in (str(t).lower().strip() for t in tags) if s]
+            # Facets — unknown enum values degrade to None, not a crash.
+            outcome = data.get("outcome")
+            if outcome not in _OUTCOMES:
+                outcome = None
+            category = data.get("category")
+            if category not in _CATEGORIES:
+                category = None
+            notable = bool(data.get("notable"))
+            raw_topics = data.get("topics")
+            topics = ([s for s in (str(t).lower().strip() for t in raw_topics) if s]
+                      if isinstance(raw_topics, list) else [])
             return SummaryResult(summary=summary.strip(),
                                   tags=norm_tags,
-                                  model=model)
+                                  model=model,
+                                  outcome=outcome,
+                                  category=category,
+                                  notable=notable,
+                                  topics=topics)
         stop_reason = getattr(msg, "stop_reason", "?")
         if not found_block:
             last_failure = f"no tool_use block in response (stop_reason={stop_reason})"
