@@ -538,7 +538,7 @@ function renderLgtmWalkthrough(data) {
   // ?view=walkthrough so LGTM's main.tsx boots into walkthrough mode
   // before first paint.
   const baseUrl = rewriteLgtmHost(lgtm.url);
-  const url = `${baseUrl}?embedded=1&view=walkthrough`;
+  const url = `${baseUrl}?embedded=1&view=walkthrough&host=periscope`;
   if (mountedTabId === "lgtm:walkthrough") return;
 
   let iframe = modalReviewContent.querySelector("iframe");
@@ -564,7 +564,7 @@ function renderLgtmItem(data, itemId) {
   // Build the embedded iframe URL. Rewrite the host to match the parent
   // so localhost/127.0.0.1/LAN-IP all converge on a single hostname pair.
   const baseUrl = rewriteLgtmHost(lgtm.url);
-  const url = `${baseUrl}?embedded=1&item=${encodeURIComponent(itemId)}`;
+  const url = `${baseUrl}?embedded=1&item=${encodeURIComponent(itemId)}&host=periscope`;
   const tabKey = `lgtm:${itemId}`;
   if (mountedTabId === tabKey) return;
 
@@ -1031,13 +1031,30 @@ export function initModal() {
     handleModalAutoRename(btn);
   });
 
-  // Forwarded Escape from the LGTM iframe. When focus is inside the
-  // iframe the keystroke never bubbles to us — LGTM's embedded shim
-  // postMessages on Escape (excluding text-input focus) so the modal
-  // close binding still works while reviewing.
+  // Messages from the embedded LGTM iframe.
   window.addEventListener("message", (e) => {
+    // Forwarded Escape — focus inside the iframe means the keystroke never
+    // bubbles to us, so LGTM postMessages it instead.
     if (e.data?.type === "lgtm-embedded-escape" && !modal.classList.contains("hidden")) {
       closeModal();
+      return;
+    }
+    // LGTM channel event. When embedded with ?host=periscope, LGTM skips its
+    // own (flaky) MCP channel push and hands us the payload; we deliver it to
+    // this pane's Claude over periscope's reliable channel.
+    if (e.data?.type === "lgtm-notify-claude") {
+      const pane = lastPaneData?.pane_id;
+      const content = e.data.content;
+      if (!content) return;
+      if (!pane) {
+        console.warn("lgtm-notify-claude: no pane_id for the open modal; channel event dropped");
+        return;
+      }
+      fetch(`/api/channel/push?pane=${encodeURIComponent(pane)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content }),
+      }).catch(() => {});
     }
   });
 
