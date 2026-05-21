@@ -19,6 +19,11 @@ Two facts found while scoping this work:
 2. **`history.db` is therefore badly stale** — 359 sessions, all from on
    or before 2026-05-13, against **1581 transcripts on disk**. It was
    backfilled once when the feature was built and frozen since.
+3. **Most transcripts on disk are not real sessions.** periscope's
+   `/usage` scraper (`usage.py:scrape_usage_via_tmux`) launches a
+   throwaway `claude` in periscope's own cwd per scrape. **1301 of the
+   1581 (82%)** are these — 0 real user turns, 0 assistant turns,
+   launched-and-killed. The real corpus is ≈ **280 sessions**.
 
 This work makes history search **faceted** — filterable by structured,
 AI-derived classifications, not just keyword — and along the way fixes
@@ -29,8 +34,10 @@ the staleness (full backfill + install the hook).
 - Add four structured, low-cardinality facets to each session, derived by
   extending the existing summarizer (one Haiku call per session, as now).
 - A `/history` UI that filters by those facets, combined with keyword search.
-- Bring `history.db` current (1581 sessions) and keep it current via the hook.
-- Spend the ~$18 of expiring Claude credits on the one-shot classification.
+- Bring `history.db` current (~280 real sessions) and keep it current via
+  the hook — excluding periscope's `/usage` scrape transcripts.
+- Spend a chunk of the expiring Claude credits on the one-shot
+  classification (≈$12-15 on Sonnet over the real corpus).
 
 ## Non-goals
 
@@ -41,6 +48,10 @@ the staleness (full backfill + install the hook).
   `save_session_summary` tool call, so the hook gets them for free.
 - Putting the new columns in `sessions_fts` — FTS5 can't `ALTER`, and
   facets are filtered structurally (`WHERE`), not full-text.
+- Fixing periscope's `/usage` scraper at the source (it litters
+  `~/.claude/projects/` with a throwaway transcript per scrape) — the
+  indexer filters these out; stopping them being written is a separate
+  periscope change.
 
 ## Phasing
 
@@ -101,6 +112,16 @@ migration step. Add one:
 A failed/missing classification stores `NULL` for the facet columns — the
 UI treats a `NULL` facet as "unclassified", never crashes.
 
+### Filter `/usage` scrape sessions
+
+`backfill`/`indexer.py` skip transcripts that are periscope `/usage`
+scrapes — identified by **`asst_msg_count == 0`** (a session where Claude
+never produced an assistant turn is not real work; this cleanly catches
+all 1301 scrape transcripts). Without the filter the index is 82% junk,
+faceted search is meaningless, and the SessionEnd hook adds a fresh junk
+row every few minutes. The same predicate runs as a one-time cleanup over
+the existing 359 rows to drop any scrape sessions already indexed.
+
 ### Install the hook
 
 Add `python -m history hook` as a **second** SessionEnd entry in
@@ -113,19 +134,21 @@ shim vs. an inline `cd … && uv run …`) is settled in the plan.
 
 ### The burn
 
-After the summarizer is extended and tested:
+After the summarizer is extended, the scrape filter is in place, and both
+are tested:
 
-1. **Dry-run cost gate.** Classify ~100 sessions, measure
+1. **Dry-run cost gate.** Classify ~50 real sessions on Sonnet, measure
    `usage.input_tokens` / `output_tokens` from the responses, extrapolate
-   to 1581. The original run was ~$4-6 for 359 sessions (~$0.013/session)
-   → a full Haiku pass projects to ≈ **$15-22**. If the dry-run projects
-   materially over ~$20, trim (skip trivial/very-short sessions) before
-   the full run. **Haiku only** — Sonnet (~3×) would be ≈$60, far over
-   budget, and Sonnet's edge on simple label-classification is marginal.
-2. **Full run.** `backfill` indexes + classifies the ~1200 sessions not
-   yet in the DB; `resummarize --all` re-classifies the original 359 with
-   the extended tool. `resummarize` takes `--model` (add the flag if
-   absent; default stays Haiku). Net: all 1581 sessions carry the facets.
+   to the ~280 real corpus. Reference: the original Haiku run was ~$4-6
+   for 359 sessions (~$0.013/session); the corpus is now small enough that
+   **Sonnet fits** — ~280 × ≈3× ≈ **$12-15**, within budget and better
+   classification on the corpus that matters. If the dry-run projects
+   over ~$18, fall back to Haiku.
+2. **Full run.** `backfill` indexes + classifies every real session not
+   yet in the DB (scrape transcripts excluded by the filter above);
+   `resummarize --all --model <sonnet>` re-classifies the rows already
+   present. `resummarize` takes `--model` (add the flag if absent). Net:
+   every real session carries the facets; no junk session is classified.
 
 ## Phase 2
 
@@ -163,7 +186,8 @@ event, not a periscope process).
 - `db`: the migration adds the four columns to a v1 DB and is idempotent
   on a v2 DB; a fresh DB gets them from `schema.sql`.
 - `indexer`: a classified `SummaryResult` round-trips through the write
-  path into the four columns.
+  path into the four columns; a transcript with `asst_msg_count == 0`
+  (a `/usage` scrape) is skipped — not indexed.
 - `search`: each facet filter narrows results; filters combine (AND) with
   each other and with the FTS query; the facet-count query returns
   correct counts.
