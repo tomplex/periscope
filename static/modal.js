@@ -623,48 +623,85 @@ function renderStartReview(data) {
   });
 }
 
-// ── Sidebar: Linked (PR + Linear placeholder) + Activity timeline. ───
+// ── Sidebar: Linked (PR + Linear) + Activity. ────────────────────────
 // Data rides on the existing 1.5s /api/pane poll — no extra request.
-function renderMessages(data) {
-  const replies = data.channel_replies || [];
-  if (!replies.length) {
-    return `<em class="modal-msg-empty">No messages from Claude yet.</em>`;
-  }
-  // Stored append-order (oldest first); display most-recent-first.
-  const rows = [...replies].sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(r => {
-    const kind = r.kind || "info";
-    const severity = r.severity || "info";
-    const stamp = new Date(r.ts * 1000).toLocaleString([], {
-      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-    });
-    return `
-      <div class="modal-msg modal-msg-${kind} modal-msg-sev-${severity}">
-        <div class="modal-msg-meta">${stamp} · ${escapeHtml(kind)}</div>
-        <div class="modal-msg-body">${escapeHtml(r.message)}</div>
-      </div>
-    `;
-  }).join("");
-  return `<div class="modal-msg-list">${rows}</div>`;
+
+function alertDotColor(kind) {
+  if (kind === "need_human") return "var(--s-danger)";
+  if (kind === "done") return "var(--s-success)";
+  return "var(--fg-3)";
 }
 
-function renderMessageComposer(data) {
-  if (!data.channel_attached) {
-    return `<div class="modal-msg-composer-disabled" title="Channel not attached. Respawn Claude via + claude.">push disabled (no channel)</div>`;
+// One row in the merged Activity stream — either a git/CI event or an
+// alert a session raised over the channel. Alerts wrap (messages run
+// long) and read brighter; git events stay terse and single-line.
+function activityRow(e) {
+  if (e.src === "alert") {
+    return `
+      <li class="timeline-row timeline-row-alert" data-kind="${escapeHtml(e.kind)}">
+        <span class="timeline-dot" style="background:${alertDotColor(e.kind)}"></span>
+        <div class="timeline-body">
+          <div class="timeline-text timeline-text-wrap">${escapeHtml(e.text)}</div>
+          <div class="timeline-when">claude · ${escapeHtml(e.kind)} · ${escapeHtml(relTime(e.at))} ago</div>
+        </div>
+      </li>
+    `;
   }
   return `
-    <form class="modal-msg-composer" data-pane-id="${data.pane_id}">
-      <input type="text" class="modal-msg-composer-input" placeholder="Push to Claude...">
-      <button type="submit" class="modal-msg-composer-btn">push</button>
-    </form>
+    <li class="timeline-row" data-kind="${escapeHtml(e.kind)}">
+      <span class="timeline-dot" style="background:${timelineColor(e.kind, e.state)}"></span>
+      <div class="timeline-body">
+        <div class="timeline-text">${escapeHtml(e.text)}</div>
+        <div class="timeline-when">${escapeHtml(timelineLabel(e.kind, e.state))} · ${escapeHtml(relTime(e.at))} ago</div>
+      </div>
+    </li>
   `;
+}
+
+// Merged chronological stream: git/CI activity + channel alerts. An
+// unresolved need_human alert (the latest alert, when nothing newer has
+// superseded it) is pinned above the stream so a blocked pane stays loud
+// even after older events scroll it out of view.
+function renderActivitySection(data) {
+  const alerts = (data.channel_replies || []).map((r) => ({
+    src: "alert", at: r.ts, kind: r.kind || "info", text: r.message || "",
+  }));
+  const events = (data.activity || []).map((e) => ({
+    src: "git", at: e.at, kind: e.kind, state: e.state, text: e.text || "",
+  }));
+
+  const latestAlert = alerts.reduce(
+    (best, a) => (best && best.at >= a.at ? best : a), null);
+  const pinned =
+    latestAlert && latestAlert.kind === "need_human" ? latestAlert : null;
+
+  const stream = [...alerts, ...events]
+    .filter((e) => e !== pinned)
+    .sort((a, b) => (b.at || 0) - (a.at || 0));
+
+  let html = "";
+  if (pinned) {
+    html += `
+      <div class="activity-pinned">
+        <div class="activity-pinned-label">needs you · ${escapeHtml(relTime(pinned.at))} ago</div>
+        <div class="activity-pinned-text">${escapeHtml(pinned.text)}</div>
+      </div>
+    `;
+  }
+  if (stream.length) {
+    html += `<ol class="timeline activity-stream">${stream.map(activityRow).join("")}</ol>`;
+  } else if (!pinned) {
+    html += `<div class="timeline-empty">no recent activity</div>`;
+  }
+  return html;
 }
 
 function renderModalSidebar(data) {
   if (!modalSide) return;
   // The 1.5s header poll re-renders the sidebar wholesale. If focus is inside
-  // the sidebar (notes textarea, tag input, message composer), rebuilding the
-  // innerHTML drops focus and clobbers in-flight typing. Skip this tick — the
-  // next poll after blur will catch up.
+  // the sidebar (notes textarea, tag input), rebuilding the innerHTML drops
+  // focus and clobbers in-flight typing. Skip this tick — the next poll after
+  // blur will catch up.
   if (modalSide.contains(document.activeElement)) return;
   modalSide.innerHTML = `
     <section class="modal-side-section">
@@ -678,16 +715,10 @@ function renderModalSidebar(data) {
     </section>
     <section class="modal-side-section modal-side-activity">
       <h4>Activity</h4>
-      ${renderActivityTimeline(data.activity)}
-    </section>
-    <section class="modal-side-section modal-side-messages">
-      <h4>Messages</h4>
-      ${renderMessages(data)}
-      ${renderMessageComposer(data)}
+      ${renderActivitySection(data)}
     </section>
   `;
   wireNotesEditor(data);
-  wireMessageComposer(data);
   wireLinkAskButtons(data);
 
   // Clear unread when the modal is showing replies. Fire-and-forget.
@@ -803,25 +834,6 @@ function timelineLabel(kind, evState) {
   return kind;
 }
 
-function renderActivityTimeline(events) {
-  if (!events || events.length === 0) {
-    return `<div class="timeline-empty">no recent activity</div>`;
-  }
-  return `
-    <ol class="timeline">
-      ${events.map((e) => `
-        <li class="timeline-row" data-kind="${escapeHtml(e.kind)}">
-          <span class="timeline-dot" style="background:${timelineColor(e.kind, e.state)}"></span>
-          <div class="timeline-body">
-            <div class="timeline-text">${escapeHtml(e.text || "")}</div>
-            <div class="timeline-when">${escapeHtml(timelineLabel(e.kind, e.state))} · ${escapeHtml(relTime(e.at))} ago</div>
-          </div>
-        </li>
-      `).join("")}
-    </ol>
-  `;
-}
-
 function renderNotesEditor(data) {
   const pid = data.pid || "";
   const ann = pid ? prefs.getAnnotation(pid) : null;
@@ -932,23 +944,6 @@ function wireLinkAskButtons(data) {
         btn.disabled = false;
         btn.textContent = orig;
       }
-    });
-  });
-}
-
-function wireMessageComposer(data) {
-  const form = modalSide?.querySelector(".modal-msg-composer");
-  if (!form) return;
-  const input = form.querySelector(".modal-msg-composer-input");
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = input.value.trim();
-    if (!text || !data.pane_id) return;
-    input.value = "";
-    await fetch(`/api/channel/push?pane=${encodeURIComponent(data.pane_id)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: text }),
     });
   });
 }

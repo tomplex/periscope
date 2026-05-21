@@ -2228,87 +2228,44 @@ body.modal-open { overflow: hidden; }
     color: var(--fg-0);
 }
 
-.modal-msg-list {
-    max-height: 240px;
+/* Activity stream scrolls; the pinned need_human block stays above it,
+   always visible. */
+.activity-stream {
+    max-height: 260px;
     overflow-y: auto;
 }
 
-.modal-side-messages .modal-msg {
-    padding: 6px 8px;
-    margin-bottom: 6px;
+/* Alert rows carry a real message — let them wrap and read brighter than
+   the terse single-line git/CI events around them. */
+.timeline-text-wrap {
+    white-space: normal;
+    overflow: visible;
+}
+.timeline-row-alert .timeline-text {
+    color: var(--fg-1);
+    font-weight: 500;
+}
+
+/* Pinned need_human: a blocked pane stays loud at the top of Activity. */
+.activity-pinned {
+    border: 1px solid var(--s-danger);
+    border-left-width: 3px;
     border-radius: 4px;
-    background: var(--bg-3, #222);
-    font-size: 12px;
-    line-height: 1.4;
-    border-left: 3px solid transparent;
+    background: color-mix(in oklch, var(--s-danger) 12%, transparent);
+    padding: 6px 8px;
+    margin-bottom: 8px;
 }
-
-.modal-side-messages .modal-msg-need_human {
-    border-left-color: #ef4444;
-}
-
-.modal-side-messages .modal-msg-done {
-    border-left-color: #4ade80;
-}
-
-.modal-side-messages .modal-msg-sev-warning {
-    background: rgba(234, 179, 8, 0.1);
-}
-
-.modal-side-messages .modal-msg-sev-bad {
-    background: rgba(239, 68, 68, 0.1);
-}
-
-.modal-side-messages .modal-msg-meta {
+.activity-pinned-label {
     font-size: 10px;
-    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--s-danger);
     margin-bottom: 2px;
 }
-
-.modal-msg-empty {
-    opacity: 0.5;
+.activity-pinned-text {
     font-size: 12px;
-}
-
-.modal-msg-composer {
-    display: flex;
-    gap: 4px;
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border, #333);
-}
-
-.modal-msg-composer-input {
-    flex: 1;
-    background: var(--bg-3, #222);
-    border: 1px solid var(--border, #333);
-    color: inherit;
-    padding: 4px 6px;
-    font-size: 12px;
-    border-radius: 3px;
-}
-
-.modal-msg-composer-btn {
-    background: var(--accent, #3b82f6);
-    color: white;
-    border: none;
-    padding: 4px 10px;
-    font-size: 12px;
-    border-radius: 3px;
-    cursor: pointer;
-}
-
-.modal-msg-composer-btn:hover {
-    background: var(--accent-hover, #2563eb);
-}
-
-.modal-msg-composer-disabled {
-    font-size: 11px;
-    opacity: 0.5;
-    text-align: center;
-    margin-top: 8px;
-    padding: 4px;
-    cursor: not-allowed;
+    line-height: 1.4;
+    color: var(--fg-1);
 }
 
 /* Needs-attention treatment: a pane card pulses red when Claude has called
