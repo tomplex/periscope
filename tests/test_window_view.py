@@ -52,14 +52,14 @@ def _window(**overrides) -> dict:
 
 def _stub_subsystems(mocker, *, pane_content="", git=None, pr=None, lgtm=None):
     """Mock the read-only caches the view consumes."""
-    mocker.patch("periscope.views.capture", return_value=pane_content)
-    mocker.patch("periscope.views.cached_git_state", return_value=git or {})
-    mocker.patch("periscope.views.cached_pr_state", return_value=pr or {})
-    mocker.patch("periscope.views.cached_lgtm_state", return_value=lgtm)
+    mocker.patch("periscope.window_view.capture", return_value=pane_content)
+    mocker.patch("periscope.window_view.cached_git_state", return_value=git or {})
+    mocker.patch("periscope.window_view.cached_pr_state", return_value=pr or {})
+    mocker.patch("periscope.window_view.cached_lgtm_state", return_value=lgtm)
 
 
 def test_view_returns_target_and_focused_at(mocker, clean_state):
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
     _stub_subsystems(mocker)
     w = _window()
     view, _ = build_window_view(w, now_ts=1000)
@@ -68,7 +68,7 @@ def test_view_returns_target_and_focused_at(mocker, clean_state):
 
 
 def test_view_classifies_non_claude_as_shell(mocker, clean_state):
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
     _stub_subsystems(mocker, pane_content="$ ls\nREADME.md\n$")
     view, _ = build_window_view(_window(), now_ts=1000)
     assert view["is_claude"] is False
@@ -78,13 +78,13 @@ def test_view_classifies_non_claude_as_shell(mocker, clean_state):
 def test_view_promotes_blank_state_to_working_when_spinner_present(mocker, clean_state):
     """Spinner hysteresis: if we have a spinner but parse_pane returned
     a blank/idle state, the spinner promotes the state to 'working'."""
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
     from periscope import panes
 
-    mocker.patch("periscope.views.capture", return_value="claude pane")
+    mocker.patch("periscope.window_view.capture", return_value="claude pane")
     # parse_pane returns is_claude=True, state=idle, but has a spinner.
     mocker.patch(
-        "periscope.views.parse_pane",
+        "periscope.window_view.parse_pane",
         return_value={
             "is_claude": True, "state": "idle",
             "spinner": "Envisioning",
@@ -92,7 +92,7 @@ def test_view_promotes_blank_state_to_working_when_spinner_present(mocker, clean
     )
     _stub_subsystems(mocker, pane_content="x")
     # Re-patch capture since _stub_subsystems clobbered it above.
-    mocker.patch("periscope.views.capture", return_value="claude pane")
+    mocker.patch("periscope.window_view.capture", return_value="claude pane")
     view, _ = build_window_view(_window(), now_ts=1000)
     assert view["state"] == "working"
 
@@ -101,7 +101,7 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
     """If the previous state was working and current is idle, the
     completed_at stamp bumps. If acked_at < completed_at and the pane
     is_claude, the state becomes 'done'."""
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
     from periscope import panes
 
     pid = "abc12345"
@@ -109,11 +109,11 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
     panes._prev_state[pid] = "working"
 
     mocker.patch(
-        "periscope.views.parse_pane",
+        "periscope.window_view.parse_pane",
         return_value={"is_claude": True, "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
-    mocker.patch("periscope.views.capture", return_value="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
 
     view, stamp = build_window_view(_window(pid=pid), now_ts=5000)
     assert view["state"] == "done"
@@ -125,7 +125,7 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
 def test_view_no_stamp_update_when_persisted_already_current(mocker, clean_state):
     """If the persisted completed_at/acked_at already match the in-memory
     values, no stamp update is needed."""
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
     from periscope import panes
 
     pid = "abc12345"
@@ -134,11 +134,11 @@ def test_view_no_stamp_update_when_persisted_already_current(mocker, clean_state
     clean_state["windows"][pid] = {"completed_at": 5000, "acked_at": 6000}
 
     mocker.patch(
-        "periscope.views.parse_pane",
+        "periscope.window_view.parse_pane",
         return_value={"is_claude": True, "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
-    mocker.patch("periscope.views.capture", return_value="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
 
     _, stamp = build_window_view(_window(pid=pid), now_ts=7000)
     assert stamp is None
@@ -147,13 +147,13 @@ def test_view_no_stamp_update_when_persisted_already_current(mocker, clean_state
 def test_view_linked_pr_overrides_auto_detected(mocker, clean_state):
     """When _STATE["windows"][pid]["linked_pr"] is set, it overrides
     the auto-detected pr field and pops the stale CI glyph."""
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
 
     pid = "abc12345"
     clean_state["windows"][pid] = {"linked_pr": 1234}
 
     mocker.patch(
-        "periscope.views.parse_pane",
+        "periscope.window_view.parse_pane",
         return_value={"is_claude": True, "state": "idle", "spinner": None},
     )
     _stub_subsystems(
@@ -161,7 +161,7 @@ def test_view_linked_pr_overrides_auto_detected(mocker, clean_state):
         pane_content="x",
         pr={"pr": "999", "ci": "✓"},
     )
-    mocker.patch("periscope.views.capture", return_value="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
 
     view, _ = build_window_view(_window(pid=pid), now_ts=1000)
     # `pr` is normalized to int regardless of source (auto-detect or linked).
@@ -171,7 +171,7 @@ def test_view_linked_pr_overrides_auto_detected(mocker, clean_state):
 
 
 def test_view_surfaces_linked_linear(mocker, clean_state):
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
     pid = "abc12345"
     clean_state["windows"][pid] = {
         "linked_linear": "FAR-456",
@@ -180,11 +180,11 @@ def test_view_surfaces_linked_linear(mocker, clean_state):
     }
 
     mocker.patch(
-        "periscope.views.parse_pane",
+        "periscope.window_view.parse_pane",
         return_value={"is_claude": True, "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
-    mocker.patch("periscope.views.capture", return_value="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
 
     view, _ = build_window_view(_window(pid=pid), now_ts=1000)
     assert view["linked_linear"] == "FAR-456"
@@ -193,7 +193,7 @@ def test_view_surfaces_linked_linear(mocker, clean_state):
 
 
 def test_view_channel_attached_reflects_mcp_session_presence(mocker, clean_state):
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
     from periscope.channels import _MCP_SESSIONS, _CHANNEL_UNREAD, _CHANNELS_LOCK
 
     pane_id = "%7"
@@ -202,11 +202,11 @@ def test_view_channel_attached_reflects_mcp_session_presence(mocker, clean_state
         _CHANNEL_UNREAD[pane_id] = 3
 
     mocker.patch(
-        "periscope.views.parse_pane",
+        "periscope.window_view.parse_pane",
         return_value={"is_claude": True, "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
-    mocker.patch("periscope.views.capture", return_value="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
 
     view, _ = build_window_view(_window(pane_id=pane_id), now_ts=1000)
     assert view["channel_attached"] is True
@@ -215,12 +215,12 @@ def test_view_channel_attached_reflects_mcp_session_presence(mocker, clean_state
 
 def test_view_handles_capture_exception(mocker, clean_state):
     """If capture() raises, the view should still build with state=error."""
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
 
-    mocker.patch("periscope.views.capture", side_effect=Exception("tmux died"))
-    mocker.patch("periscope.views.cached_git_state", return_value={})
-    mocker.patch("periscope.views.cached_pr_state", return_value={})
-    mocker.patch("periscope.views.cached_lgtm_state", return_value=None)
+    mocker.patch("periscope.window_view.capture", side_effect=Exception("tmux died"))
+    mocker.patch("periscope.window_view.cached_git_state", return_value={})
+    mocker.patch("periscope.window_view.cached_pr_state", return_value={})
+    mocker.patch("periscope.window_view.cached_lgtm_state", return_value=None)
 
     view, _ = build_window_view(_window(), now_ts=1000)
     assert view["state"] == "shell"  # error → is_claude=False → shell
@@ -229,18 +229,18 @@ def test_view_handles_capture_exception(mocker, clean_state):
 def test_view_persisted_acked_at_suppresses_done_state(mocker, clean_state):
     """When acked_at >= completed_at, state stays 'idle' (user has
     already engaged since the last completion)."""
-    from periscope.views import build_window_view
+    from periscope.window_view import build_window_view
     from periscope import panes
 
     pid = "abc12345"
     clean_state["windows"][pid] = {"completed_at": 5000, "acked_at": 6000}
 
     mocker.patch(
-        "periscope.views.parse_pane",
+        "periscope.window_view.parse_pane",
         return_value={"is_claude": True, "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
-    mocker.patch("periscope.views.capture", return_value="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
 
     view, _ = build_window_view(_window(pid=pid), now_ts=7000)
     assert view["state"] == "idle"  # NOT promoted to "done"

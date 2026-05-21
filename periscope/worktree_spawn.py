@@ -19,12 +19,15 @@ worktree-integration spec §"Pre-spawn fetch".
 
 import os
 import re
+import time
 from pathlib import Path
+
+from fastapi import HTTPException
 
 from periscope import worktrees
 from periscope.log import log
 from periscope.repo_locks import repo_lock
-from periscope.tmux import _run
+from periscope.tmux import _run, _tmux_mutate, tmux
 
 
 WORKTREES_DIR = Path.home() / "dev" / "worktrees"
@@ -212,3 +215,77 @@ def spawn_worktree(
     if warning:
         result["warning"] = warning
     return result
+
+
+def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
+    """Apply the trellis-style 2-window layout: window 1 'claude',
+    window 2 'shell'. tmux session is created from scratch and ends with
+    window 1 active. The user is NOT attached — periscope is a dashboard,
+    not a terminal client.
+
+    The 100ms sleep before each send-keys lets the shell finish loading
+    its rc file before the command lands (see CLAUDE.md "Key invariants"
+    note 5). Without it, `claude` can land mid-rc and either get echoed
+    as text or fail silently.
+
+    Returns the claude window's stamped @periscope_id. Phase 4's PR-review
+    endpoint uses this to write state.windows[pid].linked_pr synchronously;
+    other callers can ignore the return.
+
+    Raises HTTPException(500) on any tmux failure — this layout primitive
+    is deliberately coupled to FastAPI so its callers (the project-CRUD
+    route handlers) can let the exception propagate as an HTTP error.
+    """
+    from periscope.panes import note_focus, note_action
+    from periscope.pids import stamp_new_window
+
+    # new-session creates window 0 (or whatever base-index is) with a bare
+    # shell at cwd = pinned_dir.
+    ok, msg = _tmux_mutate(
+        "new-session", "-d", "-s", tmux_session, "-c", pinned_dir,
+        "-n", "claude",
+    )
+    if not ok:
+        raise HTTPException(500, f"tmux new-session failed: {msg}")
+
+    # Send `claude` into window 1, with the periscope channels flag so the
+    # spawned Claude connects to periscope's MCP socket.
+    from periscope.config import CLAUDE_EXEC
+    time.sleep(0.1)
+    _tmux_mutate(
+        "send-keys", "-t", f"{tmux_session}:claude", CLAUDE_EXEC, "Enter",
+    )
+
+    # Window 2: shell.
+    ok, msg = _tmux_mutate(
+        "new-window", "-t", f"{tmux_session}:", "-c", pinned_dir,
+        "-n", "shell",
+    )
+    if not ok:
+        # Worktree + session + window 1 already exist; don't roll back.
+        log.warning("new-project: failed to create shell window: %s", msg)
+
+    # Park focus on window 1 (claude).
+    _tmux_mutate("select-window", "-t", f"{tmux_session}:claude")
+
+    # Stamp focus + action so the new project sorts to the top of the
+    # grid + stream views on the next poll. Match the pattern in
+    # routes/sessions.py:46-47 for `+ session`.
+    # The claude window is the first one created; its tmux window index
+    # depends on base-index. Resolve it by looking up the window-id.
+    idx_out = tmux(
+        "display-message", "-t", f"{tmux_session}:claude",
+        "-p", "#{window_index}",
+    ).strip()
+    if not idx_out.isdigit():
+        # If we can't resolve the claude window's index after creating it,
+        # something is very wrong with tmux state. Fail loudly — silently
+        # returning "" would let PR-review skip the linked_pr write and
+        # create a project with no #PR badge, which the user couldn't
+        # detect without inspecting state.json.
+        raise HTTPException(500, "could not resolve claude window index")
+    target = f"{tmux_session}:{idx_out}"
+    note_focus(target)
+    note_action(target)
+    pid = stamp_new_window(target)
+    return pid

@@ -1,7 +1,7 @@
 """GET /api/state — the main dashboard poll endpoint.
 
 Fan-out + assembly: list_windows, then build_window_view per pane
-(in periscope.views), then batched stamp persistence + resume GC.
+(in periscope.window_view), then batched stamp persistence + resume GC.
 
 Polled every 3s from the browser; everything underneath is cached on
 its own clock, so this handler is mostly orchestration.
@@ -20,7 +20,7 @@ from periscope.pids import _attach_git_then_resolve_pids
 from periscope.projects import all_projects
 from periscope.store import set_window_fields_bulk
 from periscope.usage import cached_claude_usage, cached_scraped_usage
-from periscope.views import build_window_view
+from periscope.window_view import build_window_view
 
 router = APIRouter()
 
