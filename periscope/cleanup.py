@@ -26,7 +26,7 @@ from typing import TypedDict, Optional
 
 from periscope.log import log
 from periscope.projects import all_projects, MAIN_KEY
-from periscope.store import get_window, get_settings
+from periscope.store import get_settings
 from periscope.tmux import _run
 from periscope import worktrees
 

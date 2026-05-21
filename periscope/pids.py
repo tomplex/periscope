@@ -10,7 +10,6 @@ import time
 import uuid
 
 from periscope.git_pr import cached_git_state
-from periscope.panes import list_windows
 from periscope import store as _store
 from periscope.tmux import tmux
 

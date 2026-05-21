@@ -13,16 +13,6 @@ const cache = {
   commands: [],
 };
 
-let lastError = "";
-
-export function isLoaded() {
-  return cache.loaded;
-}
-
-export function lastLoadError() {
-  return lastError;
-}
-
 export async function loadPrefs() {
   try {
     const res = await fetch("/api/prefs");
@@ -32,12 +22,10 @@ export async function loadPrefs() {
     cache.windows = data.windows || {};
     cache.commands = data.commands || [];
     cache.loaded = true;
-    lastError = "";
     await migrateLocalStorage();
     return cache;
   } catch (err) {
     cache.loaded = false;
-    lastError = err.message || String(err);
     return null;
   }
 }

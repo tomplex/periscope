@@ -21,7 +21,6 @@ import re
 import shutil
 import threading
 import time
-from typing import Any
 
 from periscope.log import _bg
 from periscope.panes import _acted_at, list_windows
