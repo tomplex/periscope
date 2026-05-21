@@ -65,100 +65,81 @@ def session_delete(session: str):
     return {"ok": True, "session": session}
 
 
-@router.post("/api/window/new")
-def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str = "shell", resume_id: str | None = None):
-    """Spawn a window in `session`. `exec` param sends a command to the new window;
-    legacy `mode` maps to `exec` for backwards-compat. `mode=resume` runs
-    `claude --resume <resume_id>` in the original session's project dir.
-    cwd is inherited from the session's active pane — without `-c`,
-    tmux would use the periscope server's cwd, which is never what you want."""
-    # Legacy `mode` → exec_cmd mapping for callers still on the old contract.
-    # `mode=resume` synthesizes the actual command from resume_id; the
-    # _resuming registration happens after the spawn (below) so the existing-
-    # session fall-through path doesn't lose either side-effect.
-    if not exec_cmd:
-        if mode in ("claude", "vim", "shell"):
-            exec_cmd = {"claude": CLAUDE_EXEC, "vim": "vim", "shell": ""}.get(mode, "")
-        elif mode == "resume" and resume_id:
-            exec_cmd = f"{CLAUDE_EXEC} --resume {resume_id}"
+def _send_and_stamp(target: str, cmd: str) -> None:
+    """Optionally send `cmd` into `target` — after a 100ms shell-rc settle
+    so the command lands as a real prompt entry, not mid-rc echoed text
+    (CLAUDE.md "Key invariants" note 5) — then stamp focus + action so the
+    window sorts to the top on the next poll. Shared by every window-spawn
+    endpoint."""
+    if cmd:
+        time.sleep(0.1)
+        tmux("send-keys", "-t", target, cmd, "Enter")
+    note_focus(target)
+    note_action(target)
 
-    # mode=resume looks up the original project_path and runs claude --resume
-    # there; we resolve cwd up front so the rest of the spawn path is shared.
-    resume_sess = None
-    if mode == "resume":
-        if not resume_id:
-            return {"ok": False, "error": "resume_id required for mode=resume"}
-        from history.search import get_session
-        resume_sess = get_session(resume_id)
-        if resume_sess is None:
-            return {"ok": False, "error": f"unknown session_id: {resume_id}"}
-        # Liveness guard: refuse if the jsonl was written to in the last 60s
-        # (the session may be currently active in another window/process,
-        # and two concurrent appenders would interleave into the same JSONL).
-        if resume_sess["jsonl_path"] and os.path.isfile(resume_sess["jsonl_path"]):
-            mtime_age = time.time() - os.path.getmtime(resume_sess["jsonl_path"])
-            if mtime_age < 60:
-                return {"ok": False, "error": "session looks live; wait a minute or pick another"}
-        # Already resumed elsewhere in this periscope process?
-        if resume_id in _resuming:
-            existing = _resuming[resume_id]
-            return {"ok": False,
-                    "error": f"already resumed in {existing['target']}",
-                    "existing_target": existing["target"]}
-        cwd = resume_sess["project_path"] or os.path.expanduser("~")
-        if not os.path.isdir(cwd):
-            cwd = os.path.expanduser("~")
-        # Resume convention: the frontend always sends `session=resumes`
-        # (or any sentinel). If that session doesn't exist yet, create it
-        # on first use so the resume button doesn't bounce. Side-effect-
-        # only when actually missing; existing sessions pass through.
-        code, _ = _run(["tmux", "has-session", "-t", session])
-        if code != 0:
-            # `-P -F #{window_index}` is essential: with `base-index 1` in
-            # tmux.conf the first window isn't 0, and a hardcoded `:0` target
-            # makes the follow-up send-keys silently no-op (tmux() discards
-            # stderr) — the user sees the session appear but claude never
-            # launches.
-            ok, msg = _tmux_mutate(
-                "new-session", "-d", "-s", session, "-c", cwd,
-                "-P", "-F", "#{window_index}",
-            )
-            if not ok:
-                return {"ok": False, "error": f"failed to create session '{session}': {msg}"}
-            try:
-                index = int(msg)
-            except ValueError:
-                return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
-            target = f"{session}:{index}"
-            time.sleep(0.1)
-            tmux("send-keys", "-t", target, f"{CLAUDE_EXEC} --resume {resume_id}", "Enter")
-            _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
-            note_focus(target)
-            note_action(target)
-            return {
-                "ok": True,
-                "session": session,
-                "index": index,
-                "target": target,
-                "mode": mode,
-                "resumed_session_id": resume_id,
-            }
-    else:
-        # Project pin always wins over active-pane cwd. If the target
-        # session is owned by a non-archived non-main project, new tabs
-        # land in the project's pinned_dir — even if the user has cd'd
-        # away in the active pane. Fall back to the pane's cwd only
-        # when no project owns the session (e.g. an unmanaged session
-        # the user hasn't adopted, or __main__ which is unpinned).
-        project_key = resolve_project_for_window({"session": session})
-        project = get_project(project_key) if project_key else {}
-        if project_key and project_key != MAIN_KEY and not project.get("archived_at"):
-            cwd = project_key  # the projects dict's key IS the pinned_dir path
-            # (see _lookup_key in periscope/projects.py for the realpath normalization).
-        else:
-            cwd = tmux(
-                "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
-            ).strip() or os.path.expanduser("~")
+
+def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode: str) -> dict:
+    """`mode=resume`: look up the original session's project dir via the
+    history index and run `claude --resume <id>` there. The sentinel
+    `session` is auto-created on first use. Returns the standard
+    window-spawn result dict, or `{"ok": False, ...}` on any guard failure.
+    """
+    if not resume_id:
+        return {"ok": False, "error": "resume_id required for mode=resume"}
+    from history.search import get_session
+    resume_sess = get_session(resume_id)
+    if resume_sess is None:
+        return {"ok": False, "error": f"unknown session_id: {resume_id}"}
+    # Liveness guard: refuse if the jsonl was written to in the last 60s
+    # (the session may be currently active in another window/process, and
+    # two concurrent appenders would interleave into the same JSONL).
+    if resume_sess["jsonl_path"] and os.path.isfile(resume_sess["jsonl_path"]):
+        mtime_age = time.time() - os.path.getmtime(resume_sess["jsonl_path"])
+        if mtime_age < 60:
+            return {"ok": False, "error": "session looks live; wait a minute or pick another"}
+    # Already resumed elsewhere in this periscope process?
+    if resume_id in _resuming:
+        existing = _resuming[resume_id]
+        return {"ok": False,
+                "error": f"already resumed in {existing['target']}",
+                "existing_target": existing["target"]}
+    cwd = resume_sess["project_path"] or os.path.expanduser("~")
+    if not os.path.isdir(cwd):
+        cwd = os.path.expanduser("~")
+
+    # Resume convention: the frontend always sends `session=resumes` (or
+    # any sentinel). If that session doesn't exist yet, create it on first
+    # use so the resume button doesn't bounce.
+    code, _ = _run(["tmux", "has-session", "-t", session])
+    if code != 0:
+        # `-P -F #{window_index}` is essential: with `base-index 1` in
+        # tmux.conf the first window isn't 0, and a hardcoded `:0` target
+        # makes the follow-up send-keys silently no-op (tmux() discards
+        # stderr) — the user sees the session appear but claude never
+        # launches.
+        ok, msg = _tmux_mutate(
+            "new-session", "-d", "-s", session, "-c", cwd,
+            "-P", "-F", "#{window_index}",
+        )
+        if not ok:
+            return {"ok": False, "error": f"failed to create session '{session}': {msg}"}
+        try:
+            index = int(msg)
+        except ValueError:
+            return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
+        target = f"{session}:{index}"
+        _send_and_stamp(target, f"{CLAUDE_EXEC} --resume {resume_id}")
+        _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
+        return {
+            "ok": True,
+            "session": session,
+            "index": index,
+            "target": target,
+            "mode": mode,
+            "resumed_session_id": resume_id,
+        }
+
+    # Session exists — spawn a new window into it.
     ok, msg = _tmux_mutate(
         "new-window", "-t", f"{session}:", "-c", cwd,
         "-P", "-F", "#{window_index}",
@@ -171,27 +152,74 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
         return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
     target = f"{session}:{index}"
 
-    # Execute the command if provided via exec or legacy mode mapping.
     cmd = exec_cmd.strip()
-    if cmd:
-        # Let the shell finish its rc before the command line arrives, so
-        # the command runs as a real prompt entry rather than mid-rc
-        # echoed text. (See CLAUDE.md "Key invariants" note 5.)
-        time.sleep(0.1)
-        tmux("send-keys", "-t", target, cmd, "Enter")
-
-    # Resume bookkeeping for the fall-through path (existing `resumes`
-    # session). The new-session branch above already set this inline before
-    # its early return.
-    if mode == "resume" and resume_id and resume_id not in _resuming:
+    _send_and_stamp(target, cmd)
+    if resume_id not in _resuming:
         _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
+    return {
+        "ok": True,
+        "session": session,
+        "index": index,
+        "target": target,
+        "mode": mode,
+        "exec": cmd,
+        "resumed_session_id": resume_id,
+    }
 
-    note_focus(target)
-    note_action(target)
-    result = {"ok": True, "session": session, "index": index, "target": target, "mode": mode, "exec": cmd}
+
+def _window_new_plain(session: str, exec_cmd: str, mode: str) -> dict:
+    """Non-resume window spawn: resolve cwd, open a new window in `session`,
+    optionally run `exec_cmd`."""
+    # Project pin always wins over active-pane cwd. If the target session
+    # is owned by a non-archived non-main project, new tabs land in the
+    # project's pinned_dir — even if the user has cd'd away in the active
+    # pane. Fall back to the pane's cwd only when no project owns the
+    # session (an unmanaged session, or __main__ which is unpinned).
+    project_key = resolve_project_for_window({"session": session})
+    project = get_project(project_key) if project_key else {}
+    if project_key and project_key != MAIN_KEY and not project.get("archived_at"):
+        cwd = project_key  # the projects dict's key IS the pinned_dir path
+        # (see _lookup_key in periscope/projects.py for the realpath normalization).
+    else:
+        cwd = tmux(
+            "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
+        ).strip() or os.path.expanduser("~")
+    ok, msg = _tmux_mutate(
+        "new-window", "-t", f"{session}:", "-c", cwd,
+        "-P", "-F", "#{window_index}",
+    )
+    if not ok:
+        return {"ok": False, "error": msg}
+    try:
+        index = int(msg)
+    except ValueError:
+        return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
+    target = f"{session}:{index}"
+
+    cmd = exec_cmd.strip()
+    _send_and_stamp(target, cmd)
+    return {"ok": True, "session": session, "index": index, "target": target, "mode": mode, "exec": cmd}
+
+
+@router.post("/api/window/new")
+def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str = "shell", resume_id: str | None = None):
+    """Spawn a window in `session`. `exec` param sends a command to the new
+    window; legacy `mode` maps to `exec` for backwards-compat. `mode=resume`
+    runs `claude --resume <resume_id>` in the original session's project
+    dir. cwd is inherited from the session's active pane — without `-c`,
+    tmux would use the periscope server's cwd, which is never what you
+    want."""
+    # Legacy `mode` → exec_cmd mapping for callers still on the old
+    # contract. `mode=resume` synthesizes the command from resume_id.
+    if not exec_cmd:
+        if mode in ("claude", "vim", "shell"):
+            exec_cmd = {"claude": CLAUDE_EXEC, "vim": "vim", "shell": ""}.get(mode, "")
+        elif mode == "resume" and resume_id:
+            exec_cmd = f"{CLAUDE_EXEC} --resume {resume_id}"
+
     if mode == "resume":
-        result["resumed_session_id"] = resume_id
-    return result
+        return _window_new_resume(session, exec_cmd, resume_id, mode)
+    return _window_new_plain(session, exec_cmd, mode)
 
 
 @router.post("/api/window/new-worktree")
@@ -296,14 +324,7 @@ def window_new_worktree(
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()
-    if cmd:
-        # Shell-rc race window — match the existing /api/window/new and
-        # /api/projects flows (CLAUDE.md "Key invariants" note 5).
-        time.sleep(0.1)
-        tmux("send-keys", "-t", target, cmd, "Enter")
-
-    note_focus(target)
-    note_action(target)
+    _send_and_stamp(target, cmd)
 
     result = {
         "ok": True,
