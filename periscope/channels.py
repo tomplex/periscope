@@ -410,6 +410,137 @@ async def _handle_mcp_connection(
             pass
 
 
+# --- MCP tool registry ---
+# Each record co-locates a tool's name, JSON schema, and handler. `_list_tools`
+# maps it to `types.Tool` objects (mcp `types` is lazy-imported, so the registry
+# itself stays plain data); `_call_tool` dispatches by iterating it. Adding a
+# tool is one record here plus one `_do_*` handler — no separate schema list and
+# dispatch branch to keep in sync.
+_CHANNEL_TOOLS = [
+    {
+        "name": "notify",
+        "description": (
+            "Surface a message in periscope's UI for this pane. "
+            "Use kind=\"need_human\" when blocked and waiting on the user, "
+            "kind=\"done\" when the current task is complete, "
+            "otherwise kind=\"info\"."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "kind": {
+                    "type": "string",
+                    "enum": ["info", "need_human", "done"],
+                    "default": "info",
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["info", "good", "warning", "bad"],
+                    "default": "info",
+                },
+            },
+            "required": ["message"],
+        },
+        "handler": _do_notify_tool,
+    },
+    {
+        "name": "link_pr",
+        "description": (
+            "Link this pane to a GitHub PR by number. Use when the user "
+            "is working on a specific PR and periscope's auto-detection "
+            "hasn't surfaced it on the pane card (periscope reads PR "
+            "URLs from Claude's title-bar status line; if the card "
+            "shows no #PR badge but you know there is one, link it). "
+            "Overrides the auto-detected PR until the user removes the "
+            "link."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "number": {"type": "integer", "minimum": 1},
+            },
+            "required": ["number"],
+        },
+        "handler": _do_link_pr_tool,
+    },
+    {
+        "name": "link_linear",
+        "description": (
+            "Link this pane to a Linear ticket. Use when the user is "
+            "working on a Linear ticket. Periscope doesn't auto-detect "
+            "Linear tickets, so this is the only way to surface one on "
+            "the pane card. Pass `title` and `status` when you know "
+            "them (e.g. you fetched the ticket via the Linear MCP) so "
+            "the card shows what the ticket is, not just its id. Each "
+            "call fully describes the link — omitting title/status "
+            "clears any previously set value."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": r"^[A-Z]+-\d+$",
+                    "description": "Ticket id, TEAM-123 format (e.g. FAR-456).",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Ticket title, shown alongside the id on the pane card.",
+                },
+                "status": {
+                    "type": "string",
+                    "description": (
+                        "Workflow state, free-form (e.g. 'In Progress', "
+                        "'In Review', 'Done'). Rendered as a pill in the modal."
+                    ),
+                },
+            },
+            "required": ["id"],
+        },
+        "handler": _do_link_linear_tool,
+    },
+    {
+        "name": "spawn_claude",
+        "description": (
+            "Spawn a fresh Claude Code session in a new tmux window "
+            "and deliver an initial prompt to it. The new window "
+            "appears on periscope's dashboard alongside this one. "
+            "Use when: (1) the user explicitly asks to delegate, "
+            "parallelize, or spin up another Claude session; "
+            "(2) the current task decomposes into independent "
+            "sub-tasks that benefit from focused, isolated "
+            "contexts running concurrently. Returns target / "
+            "session / index / pid / pane_id for the spawned pane "
+            "— keep them so you can address it again later."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Initial message to send to the spawned Claude session.",
+                },
+                "session": {
+                    "type": "string",
+                    "description": "tmux session to spawn into. Defaults to the caller's session. Created if it doesn't exist.",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory for the spawned window. Defaults to the caller's pane cwd.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional name for the new tmux window.",
+                },
+            },
+            "required": ["prompt"],
+        },
+        "handler": _do_spawn_claude_tool,
+    },
+]
+
+
 async def _run_mcp_for_pane(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter, pane: str
 ) -> None:
@@ -441,134 +572,21 @@ async def _run_mcp_for_pane(
             pass
         return [
             types.Tool(
-                name="notify",
-                description=(
-                    "Surface a message in periscope's UI for this pane. "
-                    "Use kind=\"need_human\" when blocked and waiting on the user, "
-                    "kind=\"done\" when the current task is complete, "
-                    "otherwise kind=\"info\"."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"},
-                        "kind": {
-                            "type": "string",
-                            "enum": ["info", "need_human", "done"],
-                            "default": "info",
-                        },
-                        "severity": {
-                            "type": "string",
-                            "enum": ["info", "good", "warning", "bad"],
-                            "default": "info",
-                        },
-                    },
-                    "required": ["message"],
-                },
-            ),
-            types.Tool(
-                name="link_pr",
-                description=(
-                    "Link this pane to a GitHub PR by number. Use when the user "
-                    "is working on a specific PR and periscope's auto-detection "
-                    "hasn't surfaced it on the pane card (periscope reads PR "
-                    "URLs from Claude's title-bar status line; if the card "
-                    "shows no #PR badge but you know there is one, link it). "
-                    "Overrides the auto-detected PR until the user removes the "
-                    "link."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "number": {"type": "integer", "minimum": 1},
-                    },
-                    "required": ["number"],
-                },
-            ),
-            types.Tool(
-                name="link_linear",
-                description=(
-                    "Link this pane to a Linear ticket. Use when the user is "
-                    "working on a Linear ticket. Periscope doesn't auto-detect "
-                    "Linear tickets, so this is the only way to surface one on "
-                    "the pane card. Pass `title` and `status` when you know "
-                    "them (e.g. you fetched the ticket via the Linear MCP) so "
-                    "the card shows what the ticket is, not just its id. Each "
-                    "call fully describes the link — omitting title/status "
-                    "clears any previously set value."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "pattern": r"^[A-Z]+-\d+$",
-                            "description": "Ticket id, TEAM-123 format (e.g. FAR-456).",
-                        },
-                        "title": {
-                            "type": "string",
-                            "description": "Ticket title, shown alongside the id on the pane card.",
-                        },
-                        "status": {
-                            "type": "string",
-                            "description": (
-                                "Workflow state, free-form (e.g. 'In Progress', "
-                                "'In Review', 'Done'). Rendered as a pill in the modal."
-                            ),
-                        },
-                    },
-                    "required": ["id"],
-                },
-            ),
-            types.Tool(
-                name="spawn_claude",
-                description=(
-                    "Spawn a fresh Claude Code session in a new tmux window "
-                    "and deliver an initial prompt to it. The new window "
-                    "appears on periscope's dashboard alongside this one. "
-                    "Use when: (1) the user explicitly asks to delegate, "
-                    "parallelize, or spin up another Claude session; "
-                    "(2) the current task decomposes into independent "
-                    "sub-tasks that benefit from focused, isolated "
-                    "contexts running concurrently. Returns target / "
-                    "session / index / pid / pane_id for the spawned pane "
-                    "— keep them so you can address it again later."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "prompt": {
-                            "type": "string",
-                            "description": "Initial message to send to the spawned Claude session.",
-                        },
-                        "session": {
-                            "type": "string",
-                            "description": "tmux session to spawn into. Defaults to the caller's session. Created if it doesn't exist.",
-                        },
-                        "cwd": {
-                            "type": "string",
-                            "description": "Working directory for the spawned window. Defaults to the caller's pane cwd.",
-                        },
-                        "name": {
-                            "type": "string",
-                            "description": "Optional name for the new tmux window.",
-                        },
-                    },
-                    "required": ["prompt"],
-                },
-            ),
+                name=t["name"],
+                description=t["description"],
+                inputSchema=t["inputSchema"],
+            )
+            for t in _CHANNEL_TOOLS
         ]
 
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-        if name == "notify":
-            return _do_notify_tool(pane, arguments)
-        if name == "link_pr":
-            return _do_link_pr_tool(pane, arguments)
-        if name == "link_linear":
-            return _do_link_linear_tool(pane, arguments)
-        if name == "spawn_claude":
-            return await _do_spawn_claude_tool(pane, arguments)
+        for tool in _CHANNEL_TOOLS:
+            if tool["name"] == name:
+                handler = tool["handler"]
+                if asyncio.iscoroutinefunction(handler):
+                    return await handler(pane, arguments)
+                return handler(pane, arguments)
         raise ValueError(f"unknown tool: {name}")
 
     # Bridge: asyncio socket → anyio object stream of SessionMessage.
