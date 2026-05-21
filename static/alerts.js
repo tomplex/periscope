@@ -67,6 +67,15 @@ export function initAlerts() {
     if (target) openModal(target);
   });
 
+  // When Periscope is foregrounded shortly after a native notification
+  // fired — i.e. the user clicked the banner, which activates the app —
+  // jump straight to the pane that alerted. Tauri only: native banners
+  // never fire in a plain browser tab, so the listeners would be inert.
+  if (inTauri()) {
+    window.addEventListener("focus", consumeRoutesOnForeground);
+    document.addEventListener("visibilitychange", consumeRoutesOnForeground);
+  }
+
   // Keep --header-h synced with .periscope-header's height so the rail
   // tucks under the sticky header instead of sliding up over it. The
   // filter row can wrap on narrow widths, which is why we observe rather
@@ -188,6 +197,7 @@ function maybeNativeNotify() {
     seenAlertKeys.add(k);
     const paneLabel = `${r.session} · ${r.name || `:${r.index}`}`;
     notify({ title: `⚠ ${paneLabel}`, body: r.message || "" });
+    recordRoute(r.target);
   }
   // Keep the set bounded — drop entries that aren't in the current
   // feed anymore so the Set doesn't grow unboundedly across a long
@@ -195,5 +205,40 @@ function maybeNativeNotify() {
   const current = new Set(needHuman.map(alertKey));
   for (const k of seenAlertKeys) {
     if (!current.has(k)) seenAlertKeys.delete(k);
+  }
+}
+
+// --- Native-notification → pane routing ---------------------------------
+//
+// macOS desktop notifications emit no click event — tauri-plugin-
+// notification wires click/action handlers only on mobile. So we can't
+// learn *which* banner the user clicked. Instead: when a banner fires,
+// remember the pane it was for; when Periscope is next foregrounded
+// (clicking a banner activates the app), route there. A lone pending
+// alert opens its modal; several open the alerts rail so the user picks.
+//
+// The window bounds the link: a foreground long after the banner is
+// almost certainly an unrelated app switch, not a click-through.
+const ROUTE_WINDOW_MS = 60_000;
+let pendingRoutes = [];  // [{ target, ts }]
+
+function recordRoute(target) {
+  const now = Date.now();
+  pendingRoutes = pendingRoutes.filter((r) => now - r.ts < ROUTE_WINDOW_MS);
+  pendingRoutes.push({ target, ts: now });
+}
+
+function consumeRoutesOnForeground() {
+  if (document.visibilityState !== "visible") return;
+  const now = Date.now();
+  const fresh = pendingRoutes.filter((r) => now - r.ts < ROUTE_WINDOW_MS);
+  pendingRoutes = [];
+  if (!fresh.length) return;
+  const targets = [...new Set(fresh.map((r) => r.target))];
+  if (targets.length === 1) {
+    openModal(targets[0]);
+  } else {
+    applyOpen(true);
+    prefs.setAlertsOpen(true);
   }
 }
