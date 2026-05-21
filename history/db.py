@@ -4,7 +4,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MECHANICAL_VERSION = 1
 DEFAULT_HAIKU_MODEL = "claude-haiku-4-5"
 
@@ -15,9 +15,27 @@ _SCHEMA_SQL = (Path(__file__).parent / "schema.sql").read_text()
 _LOCK = threading.Lock()
 
 
+# Columns added after schema_version 1. SQLite has no ADD COLUMN IF NOT
+# EXISTS, so the migration is a guarded PRAGMA-checked ALTER — idempotent.
+_V2_COLUMNS = (("outcome", "TEXT"), ("category", "TEXT"),
+               ("notable", "INTEGER"), ("topics", "TEXT"))
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent in-place column adds for existing DBs."""
+    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'")
+    if cur.fetchone() is None:
+        return  # fresh DB — schema.sql already has the columns
+    have = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    for name, decl in _V2_COLUMNS:
+        if name not in have:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {decl}")
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
-    """Run the schema DDL and seed meta keys. Idempotent."""
+    """Run the schema DDL, migrate existing tables, seed meta keys. Idempotent."""
     conn.executescript(_SCHEMA_SQL)
+    _migrate(conn)
     cur = conn.execute("SELECT key FROM meta")
     existing = {row[0] for row in cur}
     seed = {
@@ -28,6 +46,11 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     for key, value in seed.items():
         if key not in existing:
             conn.execute("INSERT INTO meta(key, value) VALUES (?, ?)", (key, value))
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('schema_version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(SCHEMA_VERSION),),
+    )
     conn.commit()
 
 

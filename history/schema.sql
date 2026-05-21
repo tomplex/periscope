@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   tags                 TEXT,
   summary_input_hash   TEXT,
   summary_model        TEXT,
+  outcome              TEXT,
+  category             TEXT,
+  notable              INTEGER,
+  topics               TEXT,
 
   first_user_msg       TEXT,
   last_user_msg        TEXT,
