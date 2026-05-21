@@ -14,6 +14,7 @@ import json
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 from periscope import config
 from periscope.git_pr import shared_activity_for
@@ -162,3 +163,55 @@ def cached_pane_activity(target, pane_id, path, branch, limit=40):
                        "text": "opened in periscope"})
     events.sort(key=lambda e: e.get("at", 0), reverse=True)
     return events[:limit]
+
+
+# --- Live transcript location ------------------------------------------
+#
+# Claude Code writes transcripts to ~/.claude/projects/<encoded-cwd>/
+# <session-uuid>.jsonl. We resolve via the encoded dir ('/' and '.' ->
+# '-') as a fast path — scanning all ~3500 transcript dirs every worker
+# tick is the wrong cost. The cwd-field check below still guards file
+# selection within that dir. If Claude Code ever encodes a character
+# differently, that cwd gets no transcript (graceful: resets still fire
+# from the context-% drop; milestones still summarize commit messages).
+
+_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+
+def _encode_cwd(cwd: str) -> str:
+    return cwd.replace("/", "-").replace(".", "-")
+
+
+def _transcript_cwd(jsonl_path: Path) -> str | None:
+    """The `cwd` recorded in a transcript. Scans the first 15 lines — a
+    transcript opens with cwd-less entries (file-history-snapshot,
+    queue-operation, last-prompt) before the first real turn."""
+    try:
+        with jsonl_path.open() as fh:
+            for _ in range(15):
+                line = fh.readline()
+                if not line:
+                    break
+                try:
+                    cwd = json.loads(line).get("cwd")
+                except Exception:
+                    continue
+                if cwd:
+                    return cwd
+    except Exception:
+        return None
+    return None
+
+
+def live_transcript_for(cwd: str) -> Path | None:
+    """The live transcript JSONL for a pane at `cwd`: newest-mtime file in
+    the encoded projects dir whose recorded `cwd` matches. None if absent."""
+    d = _PROJECTS_DIR / _encode_cwd(cwd)
+    if not d.is_dir():
+        return None
+    files = sorted(d.glob("*.jsonl"),
+                   key=lambda f: f.stat().st_mtime, reverse=True)
+    for f in files:
+        if _transcript_cwd(f) == cwd:
+            return f
+    return None

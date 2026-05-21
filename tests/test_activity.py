@@ -88,3 +88,51 @@ def test_cached_pane_activity_tags_git_events_with_src(monkeypatch):
     out = activity.cached_pane_activity("s:1", "%1", "/repo", "main")
     assert out[0]["src"] == "git"
     assert out[0]["url"] == "http://x"
+
+
+import json as _json
+
+
+def _write_transcript(path, cwd, *, mtime=None):
+    # Faithful to the real shape: the first line is a file-history-snapshot
+    # with no cwd; user text lives at message.content, not a top-level key.
+    lines = [
+        {"type": "file-history-snapshot"},
+        {"type": "user", "cwd": cwd,
+         "message": {"role": "user", "content": "hi"}},
+    ]
+    path.write_text("\n".join(_json.dumps(d) for d in lines) + "\n")
+    if mtime is not None:
+        import os
+        os.utime(path, (mtime, mtime))
+
+
+def test_live_transcript_for_matches_on_cwd(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    d = projects / "-Users-tom-dev-periscope"
+    d.mkdir(parents=True)
+    tf = d / "abc.jsonl"
+    _write_transcript(tf, "/Users/tom/dev/periscope")
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", projects)
+    assert activity.live_transcript_for("/Users/tom/dev/periscope") == tf
+
+
+def test_live_transcript_for_picks_newest_mtime(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    d = projects / "-repo"
+    d.mkdir(parents=True)
+    old, new = d / "old.jsonl", d / "new.jsonl"
+    _write_transcript(old, "/repo", mtime=1000)
+    _write_transcript(new, "/repo", mtime=2000)
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", projects)
+    assert activity.live_transcript_for("/repo") == new
+
+
+def test_live_transcript_for_rejects_cwd_mismatch(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    d = projects / "-repo"
+    d.mkdir(parents=True)
+    tf = d / "abc.jsonl"
+    _write_transcript(tf, "/some/other/repo")
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", projects)
+    assert activity.live_transcript_for("/repo") is None
