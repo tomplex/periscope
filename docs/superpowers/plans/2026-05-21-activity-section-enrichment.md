@@ -1134,10 +1134,10 @@ In `periscope/app.py`, inside `lifespan`, after the `lgtm_task = ...` line:
     # Activity worker: context-reset + milestone detection. Prod only —
     # periscope.db is a single shared file; two workers would race the
     # milestone cursor and double-spend Haiku. Same guard as the MCP
-    # listener above.
+    # listener above. NB: _task's signature is _task(name, coro).
     if config.PORT == 8765:
         from periscope import activity
-        activity_task = _task(activity.run_worker(), "activity-worker")
+        activity_task = _task("activity-worker", activity.run_worker())
     else:
         activity_task = None
 ```
