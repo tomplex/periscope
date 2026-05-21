@@ -11,7 +11,7 @@ import * as prefs from './prefs.js';
 import { escapeHtml, relTime } from './util.js';
 import { openModal } from './modal.js';
 import { showToast } from './toast.js';
-import { setBadgeCount, notify, inTauri } from './tauri.js';
+import { setBadgeCount, notify, onNotificationClick, inTauri } from './tauri.js';
 
 const POLL_MS = 3000;
 
@@ -64,6 +64,13 @@ export function initAlerts() {
     const row = e.target.closest(".alerts-row");
     if (!row) return;
     const target = row.dataset.target;
+    if (target) openModal(target);
+  });
+
+  // A click on a native macOS notification routes here from the Rust
+  // bridge — open the modal for the pane that fired the banner. No-op
+  // outside the Tauri shell.
+  onNotificationClick((target) => {
     if (target) openModal(target);
   });
 
@@ -187,7 +194,7 @@ function maybeNativeNotify() {
     if (seenAlertKeys.has(k)) continue;
     seenAlertKeys.add(k);
     const paneLabel = `${r.session} · ${r.name || `:${r.index}`}`;
-    notify({ title: `⚠ ${paneLabel}`, body: r.message || "" });
+    notify({ title: `⚠ ${paneLabel}`, body: r.message || "", target: r.target });
   }
   // Keep the set bounded — drop entries that aren't in the current
   // feed anymore so the Set doesn't grow unboundedly across a long

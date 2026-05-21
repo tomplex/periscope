@@ -9,10 +9,12 @@
 // stable Tauri 2 contracts — see tauri-2/scripts/bundle.global.js and
 // tauri-plugin-notification/src/commands.rs.
 //
-// macOS gotcha: the first notification triggers a system permission
-// prompt. We probe permission lazily (on the first attempt to notify),
-// not on init, so the prompt only appears when there's actually a
-// notification to show.
+// Native notifications go through our own UNUserNotificationCenter bridge
+// in Rust (src-tauri/src/notifications.rs), not tauri-plugin-notification:
+// the plugin's macOS backend reports no click callback. We hand a banner
+// to Rust over the "periscope:notify" event and Rust hands the click back
+// over "periscope:notification-clicked" — events, because the webview is
+// a remote origin that can't invoke Rust commands.
 
 export function inTauri() {
   return typeof window !== "undefined"
@@ -35,39 +37,38 @@ export async function setBadgeCount(n) {
   }
 }
 
-// Cache only the positive outcome. is_permission_granted is a pure OS
-// query (no prompt UX), so re-asking every notify() is cheap and lets
-// us recover automatically when the user enables notifications in
-// System Settings after an earlier dismissal — no page reload needed.
-let _granted = false;
-
-async function ensureNotifyPermission() {
-  if (!inTauri()) return false;
-  if (_granted) return true;
+// Emit a banner to the Rust side, which owns UNUserNotificationCenter
+// (delegate, authorization, click routing). `target` is the pane the
+// banner is about — Rust stashes it so a click can route back here.
+export async function notify({ title, body, target }) {
+  if (!inTauri()) return;
   try {
-    const granted = await invoke("plugin:notification|is_permission_granted");
-    if (granted === true) { _granted = true; return true; }
-    if (granted === false) return false;
-    // null → needs prompt. Triggers the OS dialog. If the user dismisses
-    // it, request_permission returns something other than "granted"; we
-    // return false but DON'T sticky-cache the denial — the next notify
-    // will re-check and pick up a later grant from System Settings.
-    const next = await invoke("plugin:notification|request_permission");
-    if (next === "granted") { _granted = true; return true; }
-    return false;
+    await invoke("plugin:event|emit", {
+      event: "periscope:notify",
+      payload: { title, body, target },
+    });
   } catch (e) {
-    console.warn("[tauri] notification permission check failed:", e);
-    return false;
+    console.warn("[tauri] notify failed:", e);
   }
 }
 
-export async function notify({ title, body }) {
+// Register a handler for native-notification clicks. macOS already
+// foregrounds Periscope on click; the payload is the pane target so the
+// caller can open that pane's modal. transformCallback is the raw-JS way
+// to receive a Tauri event without the @tauri-apps/api event module.
+export async function onNotificationClick(cb) {
   if (!inTauri()) return;
-  if (!(await ensureNotifyPermission())) return;
   try {
-    await invoke("plugin:notification|notify", { options: { title, body } });
+    const handler = window.__TAURI_INTERNALS__.transformCallback((e) => {
+      if (e && e.payload) cb(e.payload);
+    });
+    await invoke("plugin:event|listen", {
+      event: "periscope:notification-clicked",
+      target: { kind: "Any" },
+      handler,
+    });
   } catch (e) {
-    console.warn("[tauri] notify failed:", e);
+    console.warn("[tauri] notification-click listener failed:", e);
   }
 }
 

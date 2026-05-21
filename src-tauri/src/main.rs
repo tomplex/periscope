@@ -4,6 +4,8 @@
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Manager;
 
+mod notifications;
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -22,6 +24,7 @@ fn main() {
             // Cmd-C/V, etc.) get bound to webview actions. Without an Edit
             // submenu, paste in input fields silently fails.
             let handle = app.handle();
+            notifications::init(handle);
             let app_submenu = SubmenuBuilder::new(handle, "Periscope")
                 .item(&PredefinedMenuItem::about(handle, Some("Periscope"), None)?)
                 .separator()
