@@ -22,8 +22,9 @@ import shutil
 import threading
 import time
 
+from periscope import config
 from periscope.log import _bg
-from periscope.panes import _acted_at, list_windows
+from periscope.panes import list_windows
 from periscope.tmux import _run
 
 
@@ -142,16 +143,10 @@ def _fetch_pr_into_cache(path: str, branch: str) -> None:
 
 # --- Activity timeline (for modal sidebar) -------------------------------
 #
-# Per pane, surface a short timeline of recent events: commits on the repo
-# in the last 24h, CI runs on the branch, and a single "opened in periscope"
-# anchor sourced from _acted_at. Repo+branch events are cached by
-# (cwd, branch) since they're the same for every window on the same branch;
-# the per-target open event is layered in fresh on each call.
-
-_ACTIVITY_TTL = 60.0
-_activity_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
-_activity_fetching: set[tuple[str, str]] = set()
-_activity_lock = threading.Lock()
+# Per repo+branch, surface recent commits and CI runs. The merge with
+# persisted events and the per-target "opened in periscope" anchor lives in
+# activity.py, which holds the read-path cache; this module only computes
+# the git/gh half via shared_activity_for.
 
 
 def _gh_run_state(run: dict) -> str | None:
@@ -170,41 +165,55 @@ def _gh_run_state(run: dict) -> str | None:
     return None
 
 
+def github_origin(path: str) -> str | None:
+    """'owner/repo' for the repo's GitHub `origin` remote, or None for a
+    non-GitHub remote or no remote. Handles git@ and https forms."""
+    code, url = _run(["git", "-C", path, "remote", "get-url", "origin"])
+    if code != 0 or not url:
+        return None
+    m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?\s*$", url)
+    return m.group(1) if m else None
+
+
 def shared_activity_for(path: str, branch: str) -> list[dict]:
-    """Repo/branch-scoped events: commits in last 24h + CI runs on branch."""
+    """Repo/branch-scoped events: commits within the ACTIVITY_DAYS window
+    + CI runs on the branch. Commit and CI events carry a `url`."""
     events: list[dict] = []
     if not path or not os.path.isdir(path):
         return events
     code, _ = _run(["git", "-C", path, "rev-parse", "--git-dir"])
     if code != 0:
         return events
-    # %ct = committer date as unix seconds; %s = subject. Tab-separated so
-    # subjects with spaces don't confuse the split.
+    slug = github_origin(path)
+    # %ct = committer unix time, %H = full sha, %s = subject. Tab-separated
+    # so subjects with spaces survive the split.
     code, out = _run(
-        ["git", "-C", path, "log", "-10", "--since=24h", "--pretty=format:%ct%x09%s"],
+        ["git", "-C", path, "log", "-20",
+         f"--since={config.ACTIVITY_DAYS}d",
+         "--pretty=format:%ct%x09%H%x09%s"],
         timeout=3.0,
     )
     if code == 0 and out:
         for line in out.split("\n"):
-            tab = line.find("\t")
-            if tab < 0:
+            parts = line.split("\t", 2)
+            if len(parts) != 3:
                 continue
             try:
-                at = int(line[:tab])
+                at = int(parts[0])
             except ValueError:
                 continue
-            subj = line[tab + 1 :].strip()
-            if subj:
-                events.append({"kind": "commit", "at": at, "text": subj})
+            sha, subj = parts[1], parts[2].strip()
+            if not subj:
+                continue
+            ev = {"kind": "commit", "at": at, "text": subj}
+            if slug:
+                ev["url"] = f"https://github.com/{slug}/commit/{sha}"
+            events.append(ev)
 
     if _GH_AVAILABLE and branch:
         code, out = _run(
-            [
-                "gh", "run", "list",
-                "--branch", branch,
-                "--limit", "5",
-                "--json", "conclusion,status,createdAt,displayTitle,name",
-            ],
+            ["gh", "run", "list", "--branch", branch, "--limit", "10",
+             "--json", "conclusion,status,createdAt,displayTitle,name,url"],
             cwd=path,
             timeout=5.0,
         )
@@ -220,54 +229,17 @@ def shared_activity_for(path: str, branch: str) -> list[dict]:
                     continue
                 created = run.get("createdAt") or ""
                 try:
-                    # GitHub timestamps are RFC3339 with a trailing Z.
                     at = int(
                         datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
                     )
                 except Exception:
                     continue
                 name = run.get("displayTitle") or run.get("name") or "workflow"
-                events.append(
-                    {"kind": "ci", "at": at, "text": name, "state": state}
-                )
+                ev = {"kind": "ci", "at": at, "text": name, "state": state}
+                if run.get("url"):
+                    ev["url"] = run["url"]
+                events.append(ev)
     return events
-
-
-def _fetch_activity_into_cache(path: str, branch: str) -> None:
-    try:
-        events = shared_activity_for(path, branch)
-    except Exception:
-        events = []
-    with _activity_lock:
-        _activity_cache[(path, branch)] = (time.time(), events)
-        _activity_fetching.discard((path, branch))
-
-
-def cached_pane_activity(target: str, path: str, branch: str | None) -> list[dict]:
-    """Return up to 8 timeline events for this pane, newest-first. Shared
-    (repo+branch) events come from a stale-while-revalidate cache; the
-    per-target 'open' event is layered in fresh from _acted_at."""
-    events: list[dict] = []
-    if path and branch:
-        key = (path, branch)
-        now = time.time()
-        with _activity_lock:
-            cached = _activity_cache.get(key)
-            stale = cached is None or (now - cached[0] >= _ACTIVITY_TTL)
-            if stale and key not in _activity_fetching:
-                _activity_fetching.add(key)
-                _bg("activity-fetch", _fetch_activity_into_cache, path, branch)
-            shared = cached[1] if cached else []
-        events.extend(shared)
-
-    opened_at = _acted_at.get(target, 0)
-    if opened_at:
-        events.append(
-            {"kind": "open", "at": opened_at, "text": "opened in periscope"}
-        )
-
-    events.sort(key=lambda e: e.get("at", 0), reverse=True)
-    return events[:8]
 
 
 def cached_pr_state(path: str, branch: str | None) -> dict | None:

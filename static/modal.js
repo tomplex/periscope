@@ -647,11 +647,14 @@ function activityRow(e) {
       </li>
     `;
   }
+  const body = e.url
+    ? `<a class="timeline-text timeline-link" href="${escapeHtml(e.url)}" target="_blank" rel="noopener">${escapeHtml(e.text)}</a>`
+    : `<div class="timeline-text">${escapeHtml(e.text)}</div>`;
   return `
     <li class="timeline-row" data-kind="${escapeHtml(e.kind)}">
       <span class="timeline-dot" style="background:${timelineColor(e.kind, e.state)}"></span>
       <div class="timeline-body">
-        <div class="timeline-text">${escapeHtml(e.text)}</div>
+        ${body}
         <div class="timeline-when">${escapeHtml(timelineLabel(e.kind, e.state))} · ${escapeHtml(relTime(e.at))} ago</div>
       </div>
     </li>
@@ -663,21 +666,15 @@ function activityRow(e) {
 // superseded it) is pinned above the stream so a blocked pane stays loud
 // even after older events scroll it out of view.
 function renderActivitySection(data) {
-  const alerts = (data.channel_alerts || []).map((r) => ({
-    src: "alert", at: r.ts, kind: r.kind || "info", text: r.message || "",
-  }));
-  const events = (data.activity || []).map((e) => ({
-    src: "git", at: e.at, kind: e.kind, state: e.state, text: e.text || "",
-  }));
+  const stream = data.activity || [];
 
-  const latestAlert = alerts.reduce(
-    (best, a) => (best && best.at >= a.at ? best : a), null);
+  // Pin the latest unresolved need_human alert above the stream.
+  const latestAlert = stream
+    .filter((e) => e.src === "alert")
+    .reduce((best, a) => (best && best.at >= a.at ? best : a), null);
   const pinned =
     latestAlert && latestAlert.kind === "need_human" ? latestAlert : null;
-
-  const stream = [...alerts, ...events]
-    .filter((e) => e !== pinned)
-    .sort((a, b) => (b.at || 0) - (a.at || 0));
+  const rest = stream.filter((e) => e !== pinned);
 
   let html = "";
   if (pinned) {
@@ -688,8 +685,8 @@ function renderActivitySection(data) {
       </div>
     `;
   }
-  if (stream.length) {
-    html += `<ol class="timeline activity-stream">${stream.map(activityRow).join("")}</ol>`;
+  if (rest.length) {
+    html += `<ol class="timeline activity-stream">${rest.map(activityRow).join("")}</ol>`;
   } else if (!pinned) {
     html += `<div class="timeline-empty">no recent activity</div>`;
   }
@@ -824,6 +821,8 @@ function timelineColor(kind, evState) {
     return "var(--s-success)";
   }
   if (kind === "open") return "var(--fg-3)";
+  if (kind === "reset") return "var(--s-working)";
+  if (kind === "milestone") return "var(--s-success)";
   return "var(--fg-3)";
 }
 
@@ -831,6 +830,8 @@ function timelineLabel(kind, evState) {
   if (kind === "commit") return "commit";
   if (kind === "ci") return evState ? `ci ${evState}` : "ci";
   if (kind === "open") return "opened";
+  if (kind === "reset") return evState === "compacted" ? "compacted" : "cleared";
+  if (kind === "milestone") return "milestone";
   return kind;
 }
 
