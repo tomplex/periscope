@@ -262,41 +262,76 @@ def list_windows() -> list[dict]:
     return rows
 
 
-def parse_pane(content: str) -> dict:
-    # `content` from capture() includes SGR escape sequences (-e). Strip them
-    # for the bulk of parsing; keep the raw rows for the prompt-line check
-    # below, which needs the color info to distinguish real input from
-    # Claude's ghost-text suggestion.
+# ── parse_pane: per-signal detectors + orchestrator ─────────────────────
+# parse_pane runs eight independent passes over a pane's captured buffer,
+# then resolves a single state. Each pass is its own `_detect_*` helper so
+# the next "Claude tweaked its TUI" fix lands in one named place; parse_pane
+# itself is just the orchestration + the state-priority ladder.
+
+
+def _split_buffers(content: str) -> tuple[list[str], list[str], list[str]]:
+    """Split capture() output into (raw_rows, plain_rows, lines).
+
+    `content` includes SGR escape sequences (capture -e). `raw_rows` keeps
+    them — the prompt-line ghost-text check needs the fg-color info to tell
+    real input from Claude's greyed-out suggestion. `plain_rows` strips
+    them; `lines` is the non-empty plain rows.
+    """
     raw_rows = content.rstrip("\n").split("\n")
     plain_rows = [_ANSI_SGR_RE.sub("", row) for row in raw_rows]
     lines = [p for p in plain_rows if p.strip() != ""]
+    return raw_rows, plain_rows, lines
 
-    status = None
-    # Claude Code's bottom status line ("X% | ↑n ↓n | $cost | model") signals
-    # both "this is a Claude pane" and gives us the context+model fields.
-    # Branch/PR/CI used to be parsed from a custom statusline rendered above
-    # this — we now derive them from the pane's cwd via git/gh instead.
-    tail = lines[-4:]
-    for line in reversed(tail):
+
+def _is_chrome_line(line: str) -> bool:
+    """True if `line` is Claude-TUI chrome rather than real content:
+      ─ / ❯ / ⏵     separator, empty prompt, auto-mode footer hint
+      STATUS_RE      `XX% | ↑Nk ↓N | $cost | model` status line
+      title bar      `<repo> | <branch> | <diff> | github.com/<path>…`
+                     (Claude Code renders this inline above the convo)
+      SPINNER/ACTIVE active spinner line — the verb is already the card's
+                     state label, so re-rendering it as a snippet is noise
+    Used to walk past chrome when hunting the closest real content line.
+    """
+    s = line.strip()
+    if s.startswith(("─", "❯", "⏵")):
+        return True
+    if STATUS_RE.match(line):
+        return True
+    if "github.com/" in line and line.count("|") >= 3:
+        return True
+    if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
+        return True
+    return False
+
+
+def _detect_status(lines: list[str]) -> dict | None:
+    """Claude Code's bottom status line ("X% | ↑n ↓n | $cost | model"),
+    searched in the last 4 non-empty lines. Its presence signals "this is
+    a Claude pane" and yields the context+model fields. Returns the regex
+    groupdict, or None if absent.
+
+    Branch/PR/CI used to be parsed from a custom statusline rendered above
+    this — periscope now derives them from the pane's cwd via git/gh.
+    """
+    for line in reversed(lines[-4:]):
         m = STATUS_RE.match(line)
         if m:
-            status = m.groupdict()
-            break
+            return m.groupdict()
+    return None
 
-    is_claude = status is not None
 
-    # Iterate the bottom rows looking for a state signal. Whichever signal
-    # is closest to the prompt wins:
-    #   - IDLE_INDICATOR_RE: Claude finished thinking → spinner stays None.
-    #     Stops the search so we never reach quoted/stale markers in
-    #     scrollback or in the assistant's own response code blocks.
-    #   - SPINNER_RE / ACTIVE_OP_RE: an active marker is below the past-tense
-    #     line (or there is no past-tense line) → spinner gets the verb.
-    #
-    # Verb extraction always falls back to the string "working" if no clean
-    # [A-Z]\w+(ing|ed) match — a phrase like "3 reasons why" used to surface
-    # "3…" via a "first word" fallback, which was uninformative noise.
-    spinner = None
+def _detect_spinner(lines: list[str]) -> str | None:
+    """Active-operation verb for the card label, or None when idle.
+
+    Scans the last 15 lines bottom-up; whichever signal is closest to the
+    prompt wins. IDLE_INDICATOR_RE (past-tense `✻ Brewed for Xs`) stops the
+    search so stale/quoted markers higher up (scrollback, or the assistant
+    quoting the marker form in a code block) don't false-positive. Verb
+    extraction falls back to "working" when there's no clean
+    [A-Z]\\w+(ing|ed) match — a phrase like "3 reasons why" used to surface
+    "3…" via a first-word fallback, which was uninformative noise.
+    """
     for line in reversed(lines[-15:]):
         if IDLE_INDICATOR_RE.match(line):
             break
@@ -304,186 +339,210 @@ def parse_pane(content: str) -> dict:
         if m:
             phrase = m.group("phrase").strip()
             vm = SPINNER_VERB_RE.search(phrase)
-            spinner = vm.group(1) if vm else "working"
-            break
+            return vm.group(1) if vm else "working"
         if ACTIVE_OP_RE.match(line):
             vm = SPINNER_VERB_RE.search(line)
-            spinner = vm.group(1) if vm else "working"
-            break
+            return vm.group(1) if vm else "working"
+    return None
 
-    # Needs-input: look for the dialog's footer line in the last few lines.
-    # The footer is always a single line at the bottom of the pane when a
-    # dialog is active, so restricting the search to a tight tail avoids
-    # matching prose that happens to discuss dialog UI.
-    needs_input = any(
-        NEEDS_INPUT_FOOTER_RE.search(line) for line in lines[-5:]
-    )
-    # The dialog footer is Claude-specific UI; if we see it the pane IS
+
+def _detect_needs_input(lines: list[str]) -> bool:
+    """True when Claude's numbered-choice permission-dialog footer is in
+    the last few lines. The footer is a single line at the bottom while a
+    dialog is active; restricting to a tight tail avoids matching prose
+    that merely discusses dialog UI.
+    """
+    return any(NEEDS_INPUT_FOOTER_RE.search(line) for line in lines[-5:])
+
+
+def _detect_pending_input(
+    raw_rows: list[str], plain_rows: list[str]
+) -> str | None:
+    """Text typed at the `❯` prompt but not yet submitted, or None.
+
+    Ghost-text filter: Claude Code shows a greyed-out suggestion in the
+    input slot when nothing's typed. It looks like real input in plain
+    text, but in the colored row it shares the prompt prefix's fg color
+    (single distinct fg code). Real typed input switches to a different fg
+    color (≥2 distinct fg codes). A row with no SGR escapes at all (e.g.
+    test fixtures) carries no color info — trust the visible text.
+
+    Caller invokes this only when no dialog is open — `❯ 1.` would
+    otherwise read as the dialog's selection line, not user typing.
+    """
+    for raw, plain in zip(reversed(raw_rows), reversed(plain_rows)):
+        if not plain.strip():
+            continue
+        m = PROMPT_LINE_RE.match(plain.strip())
+        if not m:
+            continue
+        input_text = m.group("input").strip()
+        if not input_text:
+            return None
+        if "\x1b[" in raw:
+            fg_codes = set(_FG_COLOR_RE.findall(raw))
+            return input_text if len(fg_codes) >= 2 else None
+        return input_text
+    return None
+
+
+def _extract_recap(lines: list[str]) -> str | None:
+    """The most recent `※ recap:` block — whitespace-collapsed, capped at
+    400 chars — or None.
+    """
+    full = "\n".join(lines)
+    matches = list(RECAP_RE.finditer(full))
+    if not matches:
+        return None
+    recap = matches[-1].group("text").strip()
+    return re.sub(r"\s+", " ", recap)[:400]
+
+
+def _last_meaningful_line(lines: list[str]) -> str:
+    """The closest "real" content line from the bottom — recent prose, a
+    subtask line, or a past-tense indicator — skipping TUI chrome. Used for
+    shell panes and the card snippet fallback. "" if nothing real.
+    """
+    for line in reversed(lines):
+        s = line.strip()
+        if not s:
+            continue
+        if _is_chrome_line(line):
+            continue
+        return s[:200]
+    return ""
+
+
+def _detect_asked_question(lines: list[str]) -> bool:
+    """True when Claude's last visible reply ends with `?` — the pane is
+    waiting on a human even without a permission dialog.
+
+    Anchors on the past-tense indicator (`✻ Brewed for Xs`): it always
+    sits immediately after a finished assistant turn, with post-reply
+    chrome (TodoWrite list, separator, prompt) below it. Two gates:
+      1. The latest indicator must be followed by chrome only. A submitted
+         user reply (`❯ <text>`), tool call (`⏺ Word(...)`), or tool
+         result (`⎿ …`) below it means the conversation moved past the
+         question and the indicator is stale (Claude is mid-new-turn).
+      2. The closest non-chrome line above the indicator must end with `?`.
+    No indicator visible (rare — pane scrolled past the last turn) →
+    leave the flag off; better to miss the case than to false-positive on
+    something further up the buffer.
+
+    Caller invokes this only for Claude panes with no dialog open.
+    """
+    idle_idx = None
+    for i in range(len(lines) - 1, -1, -1):
+        if IDLE_INDICATOR_RE.match(lines[i]):
+            idle_idx = i
+            break
+    if idle_idx is None:
+        return False
+    # Gate 1: nothing meaningful between the indicator and the bottom.
+    # "Meaningful" is narrow on purpose — TodoWrite list rows render below
+    # the indicator as end-of-turn chrome and must NOT count. Only three
+    # patterns prove a NEW turn started after the indicator:
+    #   - `❯ <text>` — submitted user reply or pending typing.
+    #   - `<glyph> Word(...)` — tool-call header.
+    #   - `⎿ …` — tool-result indicator.
+    for line in lines[idle_idx + 1:]:
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("❯") and len(s) > 1 and s.lstrip("❯").strip():
+            return False
+        if s.startswith("⎿"):
+            return False
+        if TOOL_CALL_RE.match(s):
+            return False
+    # Gate 2: the closest non-chrome line above the indicator ends with `?`.
+    for line in reversed(lines[:idle_idx]):
+        s = line.strip()
+        if not s:
+            continue
+        if _is_chrome_line(line):
+            continue
+        return s.rstrip().endswith("?")
+    return False
+
+
+def _detect_api_error(lines: list[str]) -> bool:
+    """True when the most recent `⎿` tool-result line is an API Error.
+
+    Claude Code renders rate-limit / transport failures as a normal tool
+    result whose body begins "API Error:" and then STOPS — no auto-retry;
+    the turn just ends until the user nudges it (`keep going`, etc.). The
+    flag tracks "pane is silently blocked". A later non-error `⎿` means a
+    subsequent turn succeeded and the flag clears.
+
+    Caller invokes this only for Claude panes — prose mentioning "API
+    Error" in a shell pane (logs, grep output) must not trip it.
+    """
+    for line in reversed(lines):
+        if API_ERROR_RE.match(line):
+            return True
+        if TOOL_RESULT_RE.match(line):
+            return False
+    return False
+
+
+def _resolve_state(
+    is_claude: bool,
+    needs_input: bool,
+    asked_question: bool,
+    spinner: str | None,
+) -> str:
+    """State priority: needs-input wins over working (a spinner glyph can
+    linger in scrollback above the dialog), working wins over idle. `idle`
+    is the parse-level neutral state — /api/state may refine it to `done`
+    when there's an unacknowledged completion stamp.
+    """
+    if not is_claude:
+        return "shell"
+    if needs_input or asked_question:
+        return "needs-input"
+    if spinner:
+        return "working"
+    return "idle"
+
+
+def parse_pane(content: str) -> dict:
+    """Parse a captured tmux pane into the dashboard's per-pane signals.
+
+    Orchestration only: each signal is detected by its own `_detect_*`
+    helper above; the state-priority ladder lives in `_resolve_state`.
+    """
+    raw_rows, plain_rows, lines = _split_buffers(content)
+
+    status = _detect_status(lines)
+    is_claude = status is not None
+
+    spinner = _detect_spinner(lines)
+
+    needs_input = _detect_needs_input(lines)
+    # The dialog footer is Claude-specific UI; seeing it means the pane IS
     # Claude even if STATUS_RE missed (the dialog occupies the bottom rows
     # where the status line normally lives).
     if needs_input:
         is_claude = True
 
-    # Pending input: ❯ followed by some text the user has typed but not
-    # submitted. Skip when needs_input is true — `❯ 1.` is the dialog's
-    # selection line, not user typing.
-    #
-    # Ghost-text filter: Claude Code shows a greyed-out suggestion in the
-    # input slot when nothing's been typed. The suggestion looks like real
-    # input in plain text, but in the colored row it shares the prompt
-    # prefix's fg color (single distinct fg code on the line). Real typed
-    # input switches to a different fg color (≥2 distinct fg codes). When
-    # the row carries no SGR escapes at all (e.g. test fixtures), we have
-    # no color info and trust the visible text.
-    pending_input = None
-    if not needs_input:
-        for raw, plain in zip(reversed(raw_rows), reversed(plain_rows)):
-            if not plain.strip():
-                continue
-            m = PROMPT_LINE_RE.match(plain.strip())
-            if not m:
-                continue
-            input_text = m.group("input").strip()
-            if not input_text:
-                break
-            if "\x1b[" in raw:
-                fg_codes = set(_FG_COLOR_RE.findall(raw))
-                if len(fg_codes) >= 2:
-                    pending_input = input_text
-                # else: ghost text — leave pending_input as None
-            else:
-                pending_input = input_text
-            break
+    # `❯ 1.` is the dialog's selection line, not user typing — skip
+    # pending-input detection entirely when a dialog is open.
+    pending_input = (
+        None if needs_input else _detect_pending_input(raw_rows, plain_rows)
+    )
 
-    # Most recent recap block
-    full = "\n".join(lines)
-    recap = None
-    matches = list(RECAP_RE.finditer(full))
-    if matches:
-        recap = matches[-1].group("text").strip()
-        recap = re.sub(r"\s+", " ", recap)[:400]
+    recap = _extract_recap(lines)
+    last_line = _last_meaningful_line(lines)
 
-    # Last meaningful line for shell panes / card snippet fallback. Walk up
-    # from the bottom skipping TUI chrome — what's left is the closest
-    # "real" content (recent prose, subtask line, or past-tense indicator).
-    #   ─ / ❯           separator and empty prompt
-    #   ⏵               `⏵⏵ auto mode on (shift+tab to cycle)` footer hint
-    #   STATUS_RE       `XX% | ↑Nk ↓N | $cost | model` status line
-    #   title bar       `<repo> | <branch> | <diff> | github.com/<path>…`
-    #                   (Claude Code renders this inline above the convo)
-    #   SPINNER/ACTIVE  active spinner line — the verb is already shown as
-    #                   the card's state label, so re-rendering the full
-    #                   spinner line as the snippet would be redundant.
-    last_line = ""
-    for line in reversed(lines):
-        s = line.strip()
-        if not s:
-            continue
-        if s.startswith(("─", "❯", "⏵")):
-            continue
-        if STATUS_RE.match(line):
-            continue
-        if "github.com/" in line and line.count("|") >= 3:
-            continue
-        if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
-            continue
-        last_line = s[:200]
-        break
+    asked_question = (
+        _detect_asked_question(lines)
+        if is_claude and not needs_input
+        else False
+    )
+    api_error = _detect_api_error(lines) if is_claude else False
 
-    # Question-mark needs-input: when Claude's last visible reply ends with
-    # `?` we treat the pane as waiting on the user, even without a dialog.
-    #
-    # Anchor on the past-tense indicator (`✻ Brewed for Xs`). It always sits
-    # immediately after a finished assistant turn, and post-reply chrome
-    # (TodoWrite list, separator, prompt) renders below it. The last visible
-    # line of Claude's actual message is therefore the closest non-chrome
-    # line ABOVE the indicator.
-    #
-    # Two gates before flagging:
-    #   1. The latest indicator must be followed by chrome only. A submitted
-    #      user reply (`❯ <text>`), tool call (`⏺ Word(...)`), or tool result
-    #      (`⎿ …`) below it means the conversation moved past the question
-    #      and the indicator is stale (Claude is mid-new-turn, no fresh
-    #      indicator rendered yet).
-    #   2. The line above the indicator must end with `?`.
-    #
-    # If no past-tense indicator is visible (rare — pane scrolled past the
-    # last turn) we leave the flag off; better to miss the case than to
-    # false-positive on something further up the buffer.
-    asked_question = False
-    if is_claude and not needs_input:
-        idle_idx = None
-        for i in range(len(lines) - 1, -1, -1):
-            if IDLE_INDICATOR_RE.match(lines[i]):
-                idle_idx = i
-                break
-        # Gate 1: nothing meaningful between the indicator and the bottom.
-        # "Meaningful" is narrow on purpose — TodoWrite list rows render
-        # below the indicator as end-of-turn chrome and must NOT count. Only
-        # three patterns prove a NEW turn started after the indicator:
-        #   - `❯ <text>` — submitted user reply or pending typing.
-        #   - `<glyph> Word(...)` — tool-call header.
-        #   - `⎿ …` — tool-result indicator.
-        moved_past = False
-        if idle_idx is not None:
-            for line in lines[idle_idx + 1:]:
-                s = line.strip()
-                if not s:
-                    continue
-                if s.startswith("❯") and len(s) > 1 and s.lstrip("❯").strip():
-                    moved_past = True
-                    break
-                if s.startswith("⎿"):
-                    moved_past = True
-                    break
-                if TOOL_CALL_RE.match(s):
-                    moved_past = True
-                    break
-        if idle_idx is not None and not moved_past:
-            for line in reversed(lines[:idle_idx]):
-                s = line.strip()
-                if not s:
-                    continue
-                if s.startswith(("─", "❯", "⏵")):
-                    continue
-                if STATUS_RE.match(line):
-                    continue
-                if "github.com/" in line and line.count("|") >= 3:
-                    continue
-                if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
-                    continue
-                if s.rstrip().endswith("?"):
-                    asked_question = True
-                break
-
-    # API-error flag: walk tool-result lines bottom-up and flip on iff the
-    # most recent `⎿` line is an API Error. The turn aborts when Claude
-    # hits one — no auto-retry — so the flag tracks "pane is silently
-    # blocked waiting for the user to say `keep going`". A successful
-    # tool result below it (after the user nudged) clears it. Only
-    # meaningful on Claude panes — prose mentioning "API Error" in a
-    # shell pane (logs, grep output) must not trip it.
-    api_error = False
-    if is_claude:
-        for line in reversed(lines):
-            if API_ERROR_RE.match(line):
-                api_error = True
-                break
-            if TOOL_RESULT_RE.match(line):
-                break
-
-    # State priority: needs-input wins over working (a spinner glyph can
-    # linger in scrollback above the dialog), working wins over idle.
-    # `idle` is the parse-level neutral state — /api/state may refine it to
-    # `done` when there's an unacknowledged completion stamp.
-    if not is_claude:
-        state = "shell"
-    elif needs_input or asked_question:
-        state = "needs-input"
-    elif spinner:
-        state = "working"
-    else:
-        state = "idle"
+    state = _resolve_state(is_claude, needs_input, asked_question, spinner)
 
     return {
         "is_claude": is_claude,
