@@ -65,6 +65,8 @@ def _cmd_backfill(argv: list[str]) -> int:
     parser.add_argument("--db-path", default=None)
     parser.add_argument("--since", default=None, help="YYYY-MM-DD or unix ts")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--model", default=None,
+                        help="override the summarizer model for this run")
     args = parser.parse_args(argv)
     from .backfill import backfill, find_jsonl_files
     from pathlib import Path
@@ -80,7 +82,8 @@ def _cmd_backfill(argv: list[str]) -> int:
         paths = find_jsonl_files(projects) if projects is not None else find_jsonl_files()
         print(f"would scan {len(paths)} jsonl files")
         return 0
-    kwargs = {"workers": args.workers, "db_path": args.db_path, "since": since_ts}
+    kwargs = {"workers": args.workers, "db_path": args.db_path,
+              "since": since_ts, "model": args.model}
     if projects is not None:
         kwargs["projects_dir"] = projects
     result = backfill(**kwargs)
@@ -222,6 +225,8 @@ def _cmd_resummarize(argv: list[str]) -> int:
                      help="force re-summary of every row (clears summary_input_hash)")
     parser.add_argument("--db-path", default=None)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--model", default=None,
+                        help="override the summarizer model for this run")
     args = parser.parse_args(argv)
     conn = connect(args.db_path)
     try:
@@ -243,7 +248,8 @@ def _cmd_resummarize(argv: list[str]) -> int:
     from .indexer import index_one
     statuses: dict[str, int] = {}
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(index_one, p, db_path=args.db_path) for p in paths]
+        futures = [pool.submit(index_one, p, db_path=args.db_path, model=args.model)
+                   for p in paths]
         for fut in as_completed(futures):
             try:
                 status = fut.result().get("status", "?")

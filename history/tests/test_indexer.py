@@ -247,3 +247,28 @@ def test_index_one_persists_facets(tmp_path, monkeypatch):
     assert row["notable"] == 1
     import json as _j
     assert _j.loads(row["topics"]) == ["periscope"]
+
+
+def test_index_one_model_override_beats_meta_default(tmp_path, monkeypatch):
+    from history import indexer
+    from history.summarize import SummaryResult
+
+    seen = {}
+    monkeypatch.setattr(indexer, "get_anthropic_client", lambda: object())
+    def _fake(client, rec, model=None):
+        seen["model"] = model
+        return SummaryResult(summary="s", tags=["a", "b", "c"], model=model or "?",
+                             outcome="explored", category="research",
+                             notable=False, topics=["x"])
+    monkeypatch.setattr(indexer, "call_summarizer", _fake)
+
+    jp = tmp_path / "real.jsonl"
+    jp.write_text("\n".join([
+        '{"type":"user","cwd":"/r","sessionId":"m1","timestamp":"2026-05-20T10:00:00.000Z","message":{"role":"user","content":"first request please"}}',
+        '{"type":"assistant","sessionId":"m1","timestamp":"2026-05-20T10:01:00.000Z","message":{"role":"assistant","content":"ok"}}',
+        '{"type":"user","cwd":"/r","sessionId":"m1","timestamp":"2026-05-20T10:02:00.000Z","message":{"role":"user","content":"second request please"}}',
+        '{"type":"assistant","sessionId":"m1","timestamp":"2026-05-20T10:03:00.000Z","message":{"role":"assistant","content":"done"}}',
+    ]) + "\n")
+    indexer.index_one(str(jp), db_path=tmp_path / "h.db", force=True,
+                      model="claude-sonnet-test")
+    assert seen["model"] == "claude-sonnet-test"

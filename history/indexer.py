@@ -197,7 +197,7 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
 
 
 def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
-              force: bool = False) -> dict[str, Any]:
+              force: bool = False, model: str | None = None) -> dict[str, Any]:
     """Index (or re-index) one session. Returns a status dict."""
     p = Path(jsonl_path)
     if not p.is_file():
@@ -233,7 +233,7 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
 
     conn = connect(db_path)
     try:
-        target_model = get_meta(conn, "haiku_model") or "claude-haiku-4-5"
+        target_model = model or get_meta(conn, "haiku_model") or "claude-haiku-4-5"
         row = conn.execute(
             "SELECT summary, tags, summary_input_hash, summary_model, "
             "outcome, category, notable, topics FROM sessions WHERE session_id = ?",

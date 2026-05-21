@@ -41,7 +41,8 @@ def find_jsonl_files(projects_dir: Path | None = None) -> list[Path]:
 def backfill(*, projects_dir: Path | None = None,
              db_path: Path | str | None = None,
              workers: int = 2,
-             since: int | None = None) -> dict:
+             since: int | None = None,
+             model: str | None = None) -> dict:
     """Index every JSONL under projects_dir (or both live + archive if None)."""
     paths = find_jsonl_files(projects_dir)
     if since is not None:
@@ -50,7 +51,8 @@ def backfill(*, projects_dir: Path | None = None,
     errors: list[tuple[str, str]] = []
     log.info("history.backfill: scanning %d jsonl files (workers=%d)", len(paths), workers)
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(index_one, str(p), db_path=db_path): p for p in paths}
+        futures = {pool.submit(index_one, str(p), db_path=db_path, model=model): p
+                   for p in paths}
         for fut in as_completed(futures):
             p = futures[fut]
             try:
