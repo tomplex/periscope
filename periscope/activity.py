@@ -16,6 +16,9 @@ import threading
 import time
 
 from periscope import config
+from periscope.git_pr import shared_activity_for
+from periscope.log import _bg
+from periscope.panes import _acted_at
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -107,3 +110,55 @@ def _row_to_event(event_kind, at, text, detail, url):
     # reset / milestone — session-sourced rows.
     return {"src": "session", "kind": event_kind, "at": at,
             "text": text, "state": detail, "url": url}
+
+
+# --- Read path: merge persisted events with computed git events --------
+#
+# shared_activity_for() runs git/gh subprocesses, so its result is held in
+# a stale-while-revalidate cache keyed by (path, branch): a hit returns
+# instantly, a miss/expiry kicks a background refresh and returns whatever
+# is cached (possibly nothing on the very first call). Same pattern the
+# PR cache uses in git_pr.py.
+
+_GIT_TTL = 60.0
+_git_cache: dict[tuple, tuple[float, list]] = {}
+_git_fetching: set = set()
+_git_lock = threading.Lock()
+
+
+def _fetch_git_into_cache(path, branch):
+    try:
+        events = shared_activity_for(path, branch)
+    except Exception:
+        events = []
+    with _git_lock:
+        _git_cache[(path, branch)] = (time.time(), events)
+        _git_fetching.discard((path, branch))
+
+
+def cached_pane_activity(target, pane_id, path, branch, limit=40):
+    """Merged Activity stream for a pane, newest-first: git/CI events
+    (stale-while-revalidate cache) + persisted alert/reset/milestone
+    events + the per-target 'opened in periscope' anchor."""
+    events: list[dict] = []
+    if path and branch:
+        key = (path, branch)
+        now = time.time()
+        with _git_lock:
+            cached = _git_cache.get(key)
+            stale = cached is None or (now - cached[0] >= _GIT_TTL)
+            if stale and key not in _git_fetching:
+                _git_fetching.add(key)
+                _bg("activity-git-fetch", _fetch_git_into_cache, path, branch)
+            git_events = cached[1] if cached else []
+        for e in git_events:
+            events.append({**e, "src": "git"})
+    # Persisted events (alerts, resets, milestones).
+    events.extend(events_for(pane_id, path, branch, limit=limit))
+    # Per-target "opened in periscope" anchor.
+    opened_at = _acted_at.get(target, 0)
+    if opened_at:
+        events.append({"src": "git", "kind": "open", "at": opened_at,
+                       "text": "opened in periscope"})
+    events.sort(key=lambda e: e.get("at", 0), reverse=True)
+    return events[:limit]

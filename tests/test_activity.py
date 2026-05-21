@@ -6,9 +6,11 @@ from periscope import config, activity
 
 @pytest.fixture(autouse=True)
 def fresh_db(tmp_path, monkeypatch):
-    """Every test gets an isolated periscope.db."""
+    """Every test gets an isolated periscope.db and empty caches."""
     monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "t.db")
     activity._CONN = None
+    activity._git_cache.clear()
+    activity._git_fetching.clear()
     yield
     if activity._CONN is not None:
         activity._CONN.close()
@@ -57,3 +59,32 @@ def test_prune_drops_old_rows():
     activity.prune(max_age_days=30)
     out = activity.events_for("%1", "/repo", "main")
     assert [e["text"] for e in out] == ["recent"]
+
+
+import time as _time
+
+
+def test_cached_pane_activity_merges_and_sorts(monkeypatch):
+    # Pre-seed the git SWR cache so the merge runs with no bg fetch.
+    activity._git_cache[("/repo", "main")] = (_time.time(), [
+        {"kind": "commit", "at": 50, "text": "older commit"},
+        {"kind": "commit", "at": 150, "text": "newer commit"},
+    ])
+    monkeypatch.setattr(activity, "_acted_at", {"sess:1": 100})
+    activity.record("pane", "%9", "alert", "an alert", detail="info", at=120)
+
+    out = activity.cached_pane_activity("sess:1", "%9", "/repo", "main")
+    # Newest-first: 150 commit, 120 alert, 100 open, 50 commit.
+    assert [e["at"] for e in out] == [150, 120, 100, 50]
+    assert out[1]["src"] == "alert"
+    assert out[2]["kind"] == "open"
+
+
+def test_cached_pane_activity_tags_git_events_with_src(monkeypatch):
+    activity._git_cache[("/repo", "main")] = (_time.time(), [
+        {"kind": "commit", "at": 10, "text": "c", "url": "http://x"},
+    ])
+    monkeypatch.setattr(activity, "_acted_at", {})
+    out = activity.cached_pane_activity("s:1", "%1", "/repo", "main")
+    assert out[0]["src"] == "git"
+    assert out[0]["url"] == "http://x"
