@@ -22,6 +22,7 @@ import shutil
 import threading
 import time
 
+from periscope import config
 from periscope.log import _bg
 from periscope.panes import _acted_at, list_windows
 from periscope.tmux import _run
@@ -170,41 +171,55 @@ def _gh_run_state(run: dict) -> str | None:
     return None
 
 
+def github_origin(path: str) -> str | None:
+    """'owner/repo' for the repo's GitHub `origin` remote, or None for a
+    non-GitHub remote or no remote. Handles git@ and https forms."""
+    code, url = _run(["git", "-C", path, "remote", "get-url", "origin"])
+    if code != 0 or not url:
+        return None
+    m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?\s*$", url)
+    return m.group(1) if m else None
+
+
 def shared_activity_for(path: str, branch: str) -> list[dict]:
-    """Repo/branch-scoped events: commits in last 24h + CI runs on branch."""
+    """Repo/branch-scoped events: commits within the ACTIVITY_DAYS window
+    + CI runs on the branch. Commit and CI events carry a `url`."""
     events: list[dict] = []
     if not path or not os.path.isdir(path):
         return events
     code, _ = _run(["git", "-C", path, "rev-parse", "--git-dir"])
     if code != 0:
         return events
-    # %ct = committer date as unix seconds; %s = subject. Tab-separated so
-    # subjects with spaces don't confuse the split.
+    slug = github_origin(path)
+    # %ct = committer unix time, %H = full sha, %s = subject. Tab-separated
+    # so subjects with spaces survive the split.
     code, out = _run(
-        ["git", "-C", path, "log", "-10", "--since=24h", "--pretty=format:%ct%x09%s"],
+        ["git", "-C", path, "log", "-20",
+         f"--since={config.ACTIVITY_DAYS}d",
+         "--pretty=format:%ct%x09%H%x09%s"],
         timeout=3.0,
     )
     if code == 0 and out:
         for line in out.split("\n"):
-            tab = line.find("\t")
-            if tab < 0:
+            parts = line.split("\t", 2)
+            if len(parts) != 3:
                 continue
             try:
-                at = int(line[:tab])
+                at = int(parts[0])
             except ValueError:
                 continue
-            subj = line[tab + 1 :].strip()
-            if subj:
-                events.append({"kind": "commit", "at": at, "text": subj})
+            sha, subj = parts[1], parts[2].strip()
+            if not subj:
+                continue
+            ev = {"kind": "commit", "at": at, "text": subj}
+            if slug:
+                ev["url"] = f"https://github.com/{slug}/commit/{sha}"
+            events.append(ev)
 
     if _GH_AVAILABLE and branch:
         code, out = _run(
-            [
-                "gh", "run", "list",
-                "--branch", branch,
-                "--limit", "5",
-                "--json", "conclusion,status,createdAt,displayTitle,name",
-            ],
+            ["gh", "run", "list", "--branch", branch, "--limit", "10",
+             "--json", "conclusion,status,createdAt,displayTitle,name,url"],
             cwd=path,
             timeout=5.0,
         )
@@ -220,16 +235,16 @@ def shared_activity_for(path: str, branch: str) -> list[dict]:
                     continue
                 created = run.get("createdAt") or ""
                 try:
-                    # GitHub timestamps are RFC3339 with a trailing Z.
                     at = int(
                         datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
                     )
                 except Exception:
                     continue
                 name = run.get("displayTitle") or run.get("name") or "workflow"
-                events.append(
-                    {"kind": "ci", "at": at, "text": name, "state": state}
-                )
+                ev = {"kind": "ci", "at": at, "text": name, "state": state}
+                if run.get("url"):
+                    ev["url"] = run["url"]
+                events.append(ev)
     return events
 
 

@@ -1,5 +1,7 @@
 """Git + GitHub PR state, plus the activity-timeline cache."""
 
+import subprocess
+
 import pytest
 
 from periscope.git_pr import (
@@ -98,3 +100,37 @@ def test_gh_run_state_returns_none_for_neutral():
 
 def test_gh_run_state_returns_none_for_unknown():
     assert _gh_run_state({}) is None
+
+
+from periscope.git_pr import github_origin
+
+
+def _git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True,
+                   capture_output=True)
+
+
+def test_github_origin_ssh_form(tmp_path):
+    _git(tmp_path, "init")
+    _git(tmp_path, "remote", "add", "origin",
+         "git@github.com:faradayio/periscope.git")
+    assert github_origin(str(tmp_path)) == "faradayio/periscope"
+
+
+def test_github_origin_https_form(tmp_path):
+    _git(tmp_path, "init")
+    _git(tmp_path, "remote", "add", "origin",
+         "https://github.com/faradayio/periscope.git")
+    assert github_origin(str(tmp_path)) == "faradayio/periscope"
+
+
+def test_github_origin_none_for_non_github(tmp_path):
+    _git(tmp_path, "init")
+    _git(tmp_path, "remote", "add", "origin",
+         "https://gitlab.com/x/y.git")
+    assert github_origin(str(tmp_path)) is None
+
+
+def test_github_origin_none_when_no_remote(tmp_path):
+    _git(tmp_path, "init")
+    assert github_origin(str(tmp_path)) is None
