@@ -111,6 +111,14 @@ Tests live under `tests/` mirroring the package structure (one
 `tests/routes/test_<route>.py` per route). 222 pytest tests on a
 clean run. Run with `uv run pytest -q`.
 
+Five modules deviate from the one-test-per-module mirror.
+`cleanup.py` and `projects.py` have no `tests/test_<module>.py` but
+are exercised indirectly through their route tests
+(`tests/routes/test_cleanup.py`, `tests/routes/test_projects.py`).
+`repo_locks.py`, `worktrees.py`, and `worktree_spawn.py` have no
+direct test and no route test — they currently lack coverage. Add a
+direct `tests/test_<module>.py` when you next touch those.
+
 `tests/test_channel_smoke.py` is a separate PEP-723 `# /// script`
 that exercises an older `channel_server.py` shape; it's excluded from
 pytest collection via `tests/conftest.py:collect_ignore`. Run it
@@ -257,6 +265,12 @@ Notifications go the other way as `notifications/claude/channel`
 messages, surfacing in Claude's prompt as `<channel source="periscope">`
 blocks. The pinned `mcp==1.27.*` is checked at startup and exercised by
 `tests/test_channel_shim.py`; bump both together.
+
+`.empty-mcp.json` at the repo root (`{"mcpServers":{}}`) is read only
+by `periscope/usage.py` — it's passed to `claude --strict-mcp-config`
+so the hidden `/usage`-scrape session boots with no MCP servers.
+`scrape_usage_via_tmux` recreates it if missing, so deleting it is
+harmless.
 
 ### Shim survives periscope restarts
 

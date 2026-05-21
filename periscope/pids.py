@@ -211,7 +211,10 @@ def resolve_pids(windows: list[dict]) -> None:
 def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
     """resolve_pids relies on `branch` for its secondary match. Populate it
     via cached_git_state before calling so the rebind heuristic has
-    everything it needs."""
+    everything it needs.
+
+    Despite the query-sounding name, this performs I/O: resolve_pids stamps
+    `@periscope_id` onto tmux windows and may write state.json."""
     for w in windows:
         git = cached_git_state(w.get("cwd", "")) or {}
         if "branch" in git:

@@ -49,8 +49,10 @@ def git_state_for(path: str) -> dict | None:
         branch = f"@{sha}" if sha else "?"
     # Compact diff stats vs HEAD (covers staged + unstaged together).
     _, diff = _run(["git", "-C", path, "diff", "HEAD", "--shortstat"])
-    adds = int(re.search(r"(\d+) insertion", diff).group(1)) if "insertion" in diff else 0
-    dels = int(re.search(r"(\d+) deletion", diff).group(1)) if "deletion" in diff else 0
+    adds_m = re.search(r"(\d+) insertion", diff)
+    dels_m = re.search(r"(\d+) deletion", diff)
+    adds = int(adds_m.group(1)) if adds_m else 0
+    dels = int(dels_m.group(1)) if dels_m else 0
     # Unpushed commits ahead of upstream.
     code, ahead_s = _run(["git", "-C", path, "rev-list", "--count", "@{u}..HEAD"])
     ahead = int(ahead_s) if code == 0 and ahead_s.isdigit() else 0

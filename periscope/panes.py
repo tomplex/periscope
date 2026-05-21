@@ -71,6 +71,8 @@ CLAUDE_STICKY_S = 120.0
 
 
 def smooth_spinner(target: str, current: str | None) -> str | None:
+    """Side effect: records/expires this target's entry in `_spinner_last_seen`
+    for hysteresis — not idempotent, repeated same-arg calls can differ."""
     now = time.time()
     if current:
         _spinner_last_seen[target] = (current, now)
@@ -83,6 +85,8 @@ def smooth_spinner(target: str, current: str | None) -> str | None:
 
 
 def smooth_is_claude(target: str, current: bool) -> bool:
+    """Side effect: records/expires this target's entry in `_claude_last_seen`
+    for stickiness — not idempotent, repeated same-arg calls can differ."""
     now = time.time()
     if current:
         _claude_last_seen[target] = now
