@@ -31,6 +31,13 @@ export function relTime(epochSec) {
   return `${Math.floor(diff / 86400)}d`;
 }
 
+// GitHub PR URL for a pane's repo. `slug` ("owner/repo") is derived
+// server-side from `git remote get-url origin`; null when the repo's origin
+// isn't a GitHub remote — callers then render the PR badge unlinked.
+export function prUrl(slug, pr) {
+  return slug ? `https://github.com/${slug}/pull/${pr}` : null;
+}
+
 // Shared error-surfacing wrapper. FastAPI returns `{detail: ...}` on 404/422,
 // not our `{ok, error}` shape, so naive `data.error` reads as "undefined" when
 // e.g. the wrong server version is running. Normalize both shapes.

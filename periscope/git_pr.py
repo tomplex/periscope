@@ -22,6 +22,7 @@ import shutil
 import threading
 import time
 
+from periscope.gitutil import github_slug
 from periscope.log import _bg
 from periscope.panes import _acted_at, list_windows
 from periscope.tmux import _run
@@ -59,7 +60,9 @@ def git_state_for(path: str) -> dict | None:
     state = "clean" if (adds == 0 and dels == 0) else f"+{adds} -{dels}"
     if ahead > 0:
         state += " *"
-    return {"branch": branch, "git": state}
+    # `repo_slug` (owner/repo) lets the frontend build PR URLs without
+    # hardcoding a repo — periscope watches panes across many repos.
+    return {"branch": branch, "git": state, "repo_slug": github_slug(path)}
 
 
 def cached_git_state(path: str) -> dict | None:

@@ -6,7 +6,7 @@
 
 import { state } from './state.js';
 import * as prefs from './prefs.js';
-import { escapeHtml, targetQuery, apiCall, relTime } from './util.js';
+import { escapeHtml, targetQuery, apiCall, relTime, prUrl } from './util.js';
 import { openModal } from './modal.js';
 import { confirmDialog } from './dialog.js';
 import { showToast } from './toast.js';
@@ -88,7 +88,10 @@ function renderCardMeta(w, aff) {
     // (overrides periscope's auto-detection from the title bar).
     const linkedTitle = w.pr_linked ? " (linked by claude)" : "";
     const linkedClass = w.pr_linked ? " card-pr-linked" : "";
-    const prLink = `<a class="card-pr${linkedClass}" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="PR #${w.pr}${linkedTitle}">#${w.pr}</a>`;
+    const prHref = prUrl(w.repo_slug, w.pr);
+    const prLink = prHref
+      ? `<a class="card-pr${linkedClass}" href="${prHref}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="PR #${w.pr}${linkedTitle}">#${w.pr}</a>`
+      : `<span class="card-pr${linkedClass}" title="PR #${w.pr}${linkedTitle}">#${w.pr}</span>`;
     if (w.ci === "✗") {
       // Bundle #PR + ✗ into a single red badge so the failure mode is
       // immediately legible without claiming the card's state accent.

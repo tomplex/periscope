@@ -8,7 +8,7 @@
 import { pushEscape, popEscape } from './overlay.js';
 
 import { state } from './state.js';
-import { escapeHtml, targetQuery, apiCall, relTime } from './util.js';
+import { escapeHtml, targetQuery, apiCall, relTime, prUrl } from './util.js';
 import { startLiveTerminal, stopLiveTerminal, writeTerminalLine } from './terminal.js';
 import { poll } from './grid.js';
 import * as prefs from './prefs.js';
@@ -470,9 +470,11 @@ function updateModalHeader(data) {
   if (data.pr) {
     const ciCls = data.ci === "✓" ? "ci-ok" : data.ci === "✗" ? "ci-bad" : "ci-pending";
     const ci = data.ci ? `<span class="${ciCls}">${data.ci}</span>` : "";
-    parts.push(
-      `<a class="pr" href="https://github.com/faradayio/fdy/pull/${data.pr}" target="_blank" rel="noopener">#${data.pr}</a> ${ci}`
-    );
+    const href = prUrl(data.repo_slug, data.pr);
+    const prTag = href
+      ? `<a class="pr" href="${href}" target="_blank" rel="noopener">#${data.pr}</a>`
+      : `<span class="pr">#${data.pr}</span>`;
+    parts.push(`${prTag} ${ci}`);
   }
   if (data.context_pct != null) parts.push(`${data.context_pct}%`);
   if (data.model) parts.push(escapeHtml(data.model.replace(/\s*\(.*\)/, "")));
@@ -762,13 +764,16 @@ function renderPRCard(data) {
     .map((r) => `<span class="modal-avatar" title="${escapeHtml(r)}">${escapeHtml(avatarChars(r))}</span>`)
     .join("");
   const title = escapeHtml(data.pr_title || "");
-  const url = `https://github.com/faradayio/fdy/pull/${data.pr}`;
+  const url = prUrl(data.repo_slug, data.pr);
+  const prNum = url
+    ? `<a class="pr-num" href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${data.pr}</a>`
+    : `<span class="pr-num">#${data.pr}</span>`;
   const adds = data.pr_additions || 0;
   const dels = data.pr_deletions || 0;
   return `
     <div class="modal-card-inset">
       <div class="pr-head">
-        <a class="pr-num" href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${data.pr}</a>
+        ${prNum}
         <span class="pr-title" title="${title}">${title}</span>
       </div>
       <div class="pr-meta">

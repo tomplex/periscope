@@ -10,6 +10,7 @@ migration runs at import time) can use them without pulling in
 """
 
 import os
+import re
 
 from periscope.tmux import _run
 
@@ -69,3 +70,21 @@ def detect_default_branch(repo: str) -> str:
         if candidate in branches:
             return candidate
     return "main"
+
+
+def github_slug(directory: str) -> str | None:
+    """The `owner/repo` GitHub slug for the repo containing `directory`,
+    derived from `git remote get-url origin`. None when there is no origin
+    remote or it doesn't point at github.com.
+
+    Handles the common origin URL forms:
+      git@github.com:owner/repo.git
+      https://github.com/owner/repo.git
+      https://github.com/owner/repo
+      ssh://git@github.com/owner/repo.git
+    """
+    code, url = _run(["git", "-C", directory, "remote", "get-url", "origin"])
+    if code != 0 or not url:
+        return None
+    m = re.search(r"github\.com[:/]+([^/]+/[^/]+?)(?:\.git)?/?$", url.strip())
+    return m.group(1) if m else None
