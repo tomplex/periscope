@@ -6,8 +6,7 @@
 // We call __TAURI_INTERNALS__.invoke directly instead of importing
 // @tauri-apps/api modules so we stay in periscope's no-bundler regime.
 // The IPC command paths (plugin:window|set_badge_count, etc.) are
-// stable Tauri 2 contracts — see tauri-2/scripts/bundle.global.js and
-// tauri-plugin-notification/src/commands.rs.
+// stable Tauri 2 contracts.
 //
 // Native notifications go through our own UNUserNotificationCenter bridge
 // in Rust (src-tauri/src/notifications.rs), not tauri-plugin-notification:

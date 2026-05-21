@@ -16,7 +16,6 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // macOS expects an App menu with at least Quit; without a menu
