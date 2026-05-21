@@ -45,9 +45,8 @@ def test_auto_rename_session_unknown_session_returns_error(client, mocker):
     _patch(mocker, "server", "list_windows", return_value=[])
     _patch(mocker, "server", "_attach_git_then_resolve_pids")
     r = client.post("/api/auto-rename-session?session=nope")
-    body = r.json()
-    assert body["ok"] is False
-    assert "not found" in body["error"]
+    assert r.status_code == 404
+    assert "not found" in r.json()["detail"]
 
 
 def test_auto_rename_window_applies(client, mocker):

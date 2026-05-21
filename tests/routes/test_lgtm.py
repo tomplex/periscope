@@ -41,7 +41,5 @@ def test_lgtm_start_happy_path(client, mocker, tmp_path):
 def test_lgtm_start_rejects_bad_cwd(client, mocker):
     _patch_lgtm_refresh(mocker)
     r = client.post("/api/lgtm/start", json={"cwd": "/no/such/dir/exists/here"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is False
-    assert "directory" in body["error"]
+    assert r.status_code == 400
+    assert "directory" in r.json()["detail"]

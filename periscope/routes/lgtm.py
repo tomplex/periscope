@@ -14,7 +14,7 @@ relative paths against the pane's cwd, find-or-create logic).
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from periscope.lgtm import LGTM_BASE_URL, _lgtm_refresh_all, cached_lgtm_state
@@ -31,7 +31,7 @@ async def lgtm_start(body: LgtmStartBody):
     import httpx
     cwd = os.path.expanduser((body.cwd or "").strip())
     if not cwd or not Path(cwd).is_dir():
-        return {"ok": False, "error": "cwd must be an existing directory"}
+        raise HTTPException(400, "cwd must be an existing directory")
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.post(
@@ -41,7 +41,7 @@ async def lgtm_start(body: LgtmStartBody):
             r.raise_for_status()
             payload = r.json()
     except (httpx.HTTPError, OSError) as e:
-        return {"ok": False, "error": f"lgtm unreachable: {e}"}
+        raise HTTPException(500, f"lgtm unreachable: {e}")
 
     # Refresh the cache now so the response carries the freshly-registered
     # session — the caller can use the URL immediately to mount the iframe
@@ -73,14 +73,14 @@ async def lgtm_add_doc(body: LgtmAddDocBody):
     cwd = os.path.expanduser((body.cwd or "").strip())
     raw_path = os.path.expanduser((body.path or "").strip())
     if not cwd or not Path(cwd).is_dir():
-        return {"ok": False, "error": "invalid cwd"}
+        raise HTTPException(400, "invalid cwd")
     if not raw_path:
-        return {"ok": False, "error": "path required"}
+        raise HTTPException(400, "path required")
 
     abs_path = raw_path if os.path.isabs(raw_path) else os.path.join(cwd, raw_path)
     abs_path = os.path.normpath(abs_path)
     if not Path(abs_path).is_file():
-        return {"ok": False, "error": f"file not found: {abs_path}"}
+        raise HTTPException(404, f"file not found: {abs_path}")
 
     existing = cached_lgtm_state(cwd)
     slug = existing.get("slug") if existing else None
@@ -96,7 +96,7 @@ async def lgtm_add_doc(body: LgtmAddDocBody):
                 r.raise_for_status()
                 slug = r.json().get("slug")
                 if not slug:
-                    return {"ok": False, "error": "lgtm did not return a slug"}
+                    raise HTTPException(500, "lgtm did not return a slug")
 
             r = await client.post(
                 f"{LGTM_BASE_URL}/project/{slug}/items",
@@ -105,7 +105,7 @@ async def lgtm_add_doc(body: LgtmAddDocBody):
             r.raise_for_status()
             payload = r.json()
     except (httpx.HTTPError, OSError) as e:
-        return {"ok": False, "error": f"lgtm unreachable: {e}"}
+        raise HTTPException(500, f"lgtm unreachable: {e}")
 
     await _lgtm_refresh_all()
     item_id = payload.get("id")
@@ -134,12 +134,12 @@ async def lgtm_remove_item(
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.delete(f"{LGTM_BASE_URL}/project/{slug}/items/{item}")
     except (httpx.HTTPError, OSError) as e:
-        return {"ok": False, "error": f"lgtm unreachable: {e}"}
+        raise HTTPException(500, f"lgtm unreachable: {e}")
 
     if r.status_code == 404:
-        return {"ok": False, "error": "item not found"}
+        raise HTTPException(404, "item not found")
     if r.status_code >= 400:
-        return {"ok": False, "error": f"lgtm returned {r.status_code}"}
+        raise HTTPException(500, f"lgtm returned {r.status_code}")
 
     await _lgtm_refresh_all()
     return {"ok": True}

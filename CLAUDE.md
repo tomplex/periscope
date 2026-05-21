@@ -386,6 +386,12 @@ the dashboard keeps working unchanged in a regular browser.
 - `uv run server.py` must keep working — keep dependencies declared in
   the PEP-723 header at the top of `server.py`.
 - The `.env` file is for local Anthropic API key only; never commit.
+- Route error convention: report errors with `raise HTTPException(status,
+  detail)` — never `return {"ok": False, "error": ...}`. Use real status
+  codes (400 bad input, 404 not found, 409 conflict, 500 internal). Success
+  responses return their normal payload (often `{"ok": True, ...}`); the
+  `ok` key, where present, means "this operation succeeded" — don't reuse it
+  for batch/delivery status.
 
 ### Commit as you go — always
 

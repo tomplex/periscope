@@ -39,7 +39,7 @@ def test_history_session_missing_returns_404(client, mocker):
     mocker.patch("history.search.get_session", return_value=None)
     r = client.get("/api/history/session/nope")
     assert r.status_code == 404
-    assert r.json()["ok"] is False
+    assert "unknown session_id" in r.json()["detail"]
 
 
 def test_history_stats(client, mocker):

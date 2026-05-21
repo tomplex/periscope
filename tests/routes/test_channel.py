@@ -16,10 +16,8 @@ def test_clear_unread_resets_count(client):
 
 def test_clear_unread_rejects_non_pane_id(client):
     r = client.post("/api/channel/clear-unread?pane=not-a-pane")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is False
-    assert "pane" in body["error"]
+    assert r.status_code == 400
+    assert "pane" in r.json()["detail"]
 
 
 def test_push_forwards_to_emit_channel_event(client):
@@ -54,10 +52,8 @@ def test_push_rejects_non_pane_id(client):
         "/api/channel/push?pane=not-a-pane",
         json={"content": "hi"},
     )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is False
-    assert "pane" in body["error"]
+    assert r.status_code == 400
+    assert "pane" in r.json()["detail"]
 
 
 def test_push_rejects_empty_content(client):
@@ -65,7 +61,5 @@ def test_push_rejects_empty_content(client):
         "/api/channel/push?pane=%2542",
         json={"content": "   "},
     )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is False
-    assert "content" in body["error"]
+    assert r.status_code == 400
+    assert "content" in r.json()["detail"]

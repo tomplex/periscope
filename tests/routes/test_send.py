@@ -38,9 +38,8 @@ def test_send_rejects_empty_request(client, mocker):
         "/api/send?session=main&index=0",
         json={"paste": "", "keys": []},
     )
-    body = r.json()
-    assert body["ok"] is False
-    assert "no keys or paste" in body["error"]
+    assert r.status_code == 400
+    assert "no keys or paste" in r.json()["detail"]
 
 
 def test_send_bulk_fans_out(client, mocker):
@@ -68,6 +67,5 @@ def test_send_bulk_fans_out(client, mocker):
 
 def test_send_bulk_rejects_empty(client, mocker):
     r = client.post("/api/send-bulk", json={"targets": [], "keys": ["Enter"]})
-    body = r.json()
-    assert body["ok"] is False
-    assert "no targets" in body["error"]
+    assert r.status_code == 400
+    assert "no targets" in r.json()["detail"]

@@ -38,11 +38,11 @@ class NewSessionBody(BaseModel):
 def session_new(body: NewSessionBody):
     name = body.name.strip()
     if not name:
-        return {"ok": False, "error": "empty name"}
+        raise HTTPException(400, "empty name")
     cwd = body.cwd or os.path.expanduser("~")
     ok, msg = _tmux_mutate("new-session", "-d", "-s", name, "-c", cwd)
     if not ok:
-        return {"ok": False, "error": msg}
+        raise HTTPException(500, msg)
     # Stamp focus so the new session sorts to the top on next poll. Stamping
     # `acted_at` too: creating a session through periscope is a user action,
     # so the new window earns a slot in the stream view.
@@ -55,7 +55,7 @@ def session_new(body: NewSessionBody):
 def session_delete(session: str):
     ok, msg = _tmux_mutate("kill-session", "-t", session)
     if not ok:
-        return {"ok": False, "error": msg}
+        raise HTTPException(500, msg)
     prefix = f"{session}:"
     for t in [t for t in _focused_at if t.startswith(prefix)]:
         _focused_at.pop(t, None)
@@ -82,27 +82,25 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
     """`mode=resume`: look up the original session's project dir via the
     history index and run `claude --resume <id>` there. The sentinel
     `session` is auto-created on first use. Returns the standard
-    window-spawn result dict, or `{"ok": False, ...}` on any guard failure.
+    window-spawn result dict; raises HTTPException on any guard failure.
     """
     if not resume_id:
-        return {"ok": False, "error": "resume_id required for mode=resume"}
+        raise HTTPException(400, "resume_id required for mode=resume")
     from history.search import get_session
     resume_sess = get_session(resume_id)
     if resume_sess is None:
-        return {"ok": False, "error": f"unknown session_id: {resume_id}"}
+        raise HTTPException(404, f"unknown session_id: {resume_id}")
     # Liveness guard: refuse if the jsonl was written to in the last 60s
     # (the session may be currently active in another window/process, and
     # two concurrent appenders would interleave into the same JSONL).
     if resume_sess["jsonl_path"] and os.path.isfile(resume_sess["jsonl_path"]):
         mtime_age = time.time() - os.path.getmtime(resume_sess["jsonl_path"])
         if mtime_age < 60:
-            return {"ok": False, "error": "session looks live; wait a minute or pick another"}
+            raise HTTPException(409, "session looks live; wait a minute or pick another")
     # Already resumed elsewhere in this periscope process?
     if resume_id in _resuming:
         existing = _resuming[resume_id]
-        return {"ok": False,
-                "error": f"already resumed in {existing['target']}",
-                "existing_target": existing["target"]}
+        raise HTTPException(409, f"already resumed in {existing['target']}")
     cwd = resume_sess["project_path"] or os.path.expanduser("~")
     if not os.path.isdir(cwd):
         cwd = os.path.expanduser("~")
@@ -122,11 +120,11 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
             "-P", "-F", "#{window_index}",
         )
         if not ok:
-            return {"ok": False, "error": f"failed to create session '{session}': {msg}"}
+            raise HTTPException(500, f"failed to create session '{session}': {msg}")
         try:
             index = int(msg)
         except ValueError:
-            return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
+            raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
         target = f"{session}:{index}"
         _send_and_stamp(target, f"{CLAUDE_EXEC} --resume {resume_id}")
         _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
@@ -145,11 +143,11 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
         "-P", "-F", "#{window_index}",
     )
     if not ok:
-        return {"ok": False, "error": msg}
+        raise HTTPException(500, msg)
     try:
         index = int(msg)
     except ValueError:
-        return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
+        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()
@@ -189,11 +187,11 @@ def _window_new_plain(session: str, exec_cmd: str, mode: str) -> dict:
         "-P", "-F", "#{window_index}",
     )
     if not ok:
-        return {"ok": False, "error": msg}
+        raise HTTPException(500, msg)
     try:
         index = int(msg)
     except ValueError:
-        return {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
+        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()
@@ -349,16 +347,16 @@ def window_move(session: str, index: int, dest: str):
     front and look up its post-move index by id."""
     src = f"{session}:{index}"
     if not dest or dest == session:
-        return {"ok": False, "error": "destination missing or same as source"}
+        raise HTTPException(400, "destination missing or same as source")
     win_id = tmux("display-message", "-t", src, "-p", "#{window_id}").strip()
     if not win_id.startswith("@"):
-        return {"ok": False, "error": f"unknown source window: {src!r}"}
+        raise HTTPException(404, f"unknown source window: {src!r}")
     code, _ = _run(["tmux", "has-session", "-t", dest])
     if code != 0:
-        return {"ok": False, "error": f"unknown destination session: {dest!r}"}
+        raise HTTPException(404, f"unknown destination session: {dest!r}")
     ok, msg = _tmux_mutate("move-window", "-d", "-s", src, "-t", f"{dest}:")
     if not ok:
-        return {"ok": False, "error": msg}
+        raise HTTPException(500, msg)
     out = tmux("list-windows", "-t", dest, "-F", "#{window_id} #{window_index}")
     new_index = None
     for line in out.splitlines():
@@ -367,7 +365,7 @@ def window_move(session: str, index: int, dest: str):
             new_index = int(idx)
             break
     if new_index is None:
-        return {"ok": False, "error": f"could not locate moved window {win_id}"}
+        raise HTTPException(500, f"could not locate moved window {win_id}")
     new_target = f"{dest}:{new_index}"
     # Carry focus / acted bookkeeping over to the new target so the moved
     # window keeps its sort position instead of dropping to the bottom.
@@ -383,7 +381,7 @@ def window_delete(session: str, index: int):
     target = f"{session}:{index}"
     ok, msg = _tmux_mutate("kill-window", "-t", target)
     if not ok:
-        return {"ok": False, "error": msg}
+        raise HTTPException(500, msg)
     _focused_at.pop(target, None)
     _acted_at.pop(target, None)
     return {"ok": True, "target": target}

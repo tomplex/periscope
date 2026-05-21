@@ -7,7 +7,7 @@ mirror). Mostly an aggregator over already-cached subsystems.
 
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from periscope.channels import (
@@ -118,7 +118,7 @@ def rename(session: str, index: int, body: RenameBody):
     target = f"{session}:{index}"
     name = body.name.strip()
     if not name:
-        return {"ok": False, "error": "empty name"}
+        raise HTTPException(400, "empty name")
     tmux("rename-window", "-t", target, name)
     note_action(target)
     return {"ok": True, "target": target, "name": name}

@@ -8,7 +8,7 @@ claude_complete, then apply the returned names via tmux rename-window.
 import json
 import re
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.panes import list_windows, parse_pane
@@ -25,7 +25,7 @@ def auto_rename_session(session: str):
     target_windows = [w for w in all_windows if w["session"] == session]
     _attach_git_then_resolve_pids(target_windows)
     if not target_windows:
-        return {"ok": False, "error": f"session {session!r} not found"}
+        raise HTTPException(404, f"session {session!r} not found")
 
     # Build per-window context
     context = []
@@ -61,7 +61,7 @@ def auto_rename_session(session: str):
     try:
         result = claude_complete(prompt)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(500, str(e))
 
     # Claude sometimes wraps JSON in code fences despite instructions; strip.
     cleaned = result.strip()
@@ -70,7 +70,7 @@ def auto_rename_session(session: str):
     try:
         new_names = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        return {"ok": False, "error": f"claude returned invalid JSON: {e}", "raw": result[:500]}
+        raise HTTPException(500, f"claude returned invalid JSON: {e}")
 
     applied = []
     for index_str, new_name in new_names.items():
@@ -104,7 +104,7 @@ def auto_rename_window(session: str, index: int):
         ).strip()
         current_name, _, cwd = meta.partition("\t")
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(500, str(e))
 
     # Single-window pid resolution: build a one-element list and reuse the
     # batch helper so `last_seen` stays current for this window too.
@@ -112,13 +112,13 @@ def auto_rename_window(session: str, index: int):
     _attach_git_then_resolve_pids(one)
     pid = one[0].get("pid")
     if not current_name:
-        return {"ok": False, "error": f"target {target!r} not found"}
+        raise HTTPException(404, f"target {target!r} not found")
 
     try:
         content = capture(target, lines=80)
         parsed = parse_pane(content)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(500, str(e))
     plain = re.sub(r"\x1b\[[\d;]*m", "", content)
     snippet_lines = [ln for ln in plain.split("\n") if ln.strip()][-20:]
     snippet = "\n    ".join(snippet_lines)[-1200:]
@@ -138,17 +138,17 @@ def auto_rename_window(session: str, index: int):
     try:
         result = claude_complete(prompt)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(500, str(e))
     cleaned = result.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.MULTILINE)
     try:
         new_names = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        return {"ok": False, "error": f"claude returned invalid JSON: {e}", "raw": result[:500]}
+        raise HTTPException(500, f"claude returned invalid JSON: {e}")
     new_name = (new_names.get(str(index)) or "").strip()
     if not new_name:
-        return {"ok": False, "error": "claude returned empty name"}
+        raise HTTPException(500, "claude returned empty name")
     if new_name == current_name:
         return {"ok": True, "applied": False, "old": current_name, "new": current_name, "pid": pid}
     tmux("rename-window", "-t", target, new_name)

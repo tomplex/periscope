@@ -5,7 +5,7 @@ goes through `set_window_fields` / `update_ui` / `add_command` / etc.,
 which hold `_STATE_LOCK` internally and persist to state.json.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from periscope.store import (
@@ -42,7 +42,7 @@ def patch_prefs_ui(body: UIPatch):
     patch = body.model_dump(exclude_none=True)
     # `view` is validated against a fixed enum to keep junk out of the file.
     if "view" in patch and patch["view"] not in ("grid", "stream"):
-        return {"ok": False, "error": f"invalid view: {patch['view']!r}"}
+        raise HTTPException(400, f"invalid view: {patch['view']!r}")
     update_ui(patch)
     from periscope.store import get_ui
     return {"ok": True, "ui": get_ui()}
@@ -58,7 +58,7 @@ def put_window_annotation(pid: str, body: WindowAnnotation):
     """Set/replace notes and tags on a window. `last_seen` and other
     fields are left intact — only notes/tags are managed via this endpoint."""
     if not pid or not pid.isalnum():
-        return {"ok": False, "error": "invalid pid"}
+        raise HTTPException(400, "invalid pid")
     patch = body.model_dump(exclude_none=True)
     # Coerce tags to a trimmed unique list, preserving order.
     if "tags" in patch:
@@ -88,7 +88,7 @@ def put_window_annotation(pid: str, body: WindowAnnotation):
 def delete_window_annotation(pid: str):
     """Remove notes + tags. last_seen is preserved (it's the rebind hint)."""
     if not pid or not pid.isalnum():
-        return {"ok": False, "error": "invalid pid"}
+        raise HTTPException(400, "invalid pid")
     set_window_fields(pid, notes=None, tags=None)
     return {"ok": True, "pid": pid}
 
@@ -111,10 +111,10 @@ class CommandPatch(BaseModel):
 def add_command(body: Command):
     label = body.label.strip()
     if not label:
-        return {"ok": False, "error": "empty label"}
+        raise HTTPException(400, "empty label")
     # Single-user dashboard: TOCTOU on duplicate detection is fine.
     if any(c["label"] == label for c in get_commands()):
-        return {"ok": False, "error": f"duplicate label: {label!r}"}
+        raise HTTPException(409, f"duplicate label: {label!r}")
     store_add_command(label, body.exec or "")
     return {"ok": True, "commands": get_commands()}
 
@@ -123,12 +123,12 @@ def add_command(body: Command):
 def update_command(label: str, body: CommandPatch):
     new_label = (body.label or label).strip() if body.label is not None else label
     if not new_label:
-        return {"ok": False, "error": "empty label"}
+        raise HTTPException(400, "empty label")
     existing = get_commands()
     if not any(c["label"] == label for c in existing):
-        return {"ok": False, "error": f"unknown label: {label!r}"}
+        raise HTTPException(404, f"unknown label: {label!r}")
     if new_label != label and any(c["label"] == new_label for c in existing):
-        return {"ok": False, "error": f"duplicate label: {new_label!r}"}
+        raise HTTPException(409, f"duplicate label: {new_label!r}")
     store_update_command(
         label,
         exec_cmd=body.exec if body.exec is not None else None,
@@ -140,7 +140,7 @@ def update_command(label: str, body: CommandPatch):
 @router.delete("/api/prefs/commands/{label}")
 def delete_command(label: str):
     if not store_delete_command(label):
-        return {"ok": False, "error": f"unknown label: {label!r}"}
+        raise HTTPException(404, f"unknown label: {label!r}")
     return {"ok": True, "commands": get_commands()}
 
 

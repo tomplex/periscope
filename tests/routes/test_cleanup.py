@@ -59,7 +59,6 @@ def test_archive_happy_path(client, mocker):
     })
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] is True
     assert body["archived"] == ["/wt1"]
     assert body["failed"] == []
     archive_spy.assert_called_once_with("/wt1")
@@ -168,4 +167,4 @@ def test_archive_rejects_main(client, mocker):
 def test_archive_empty_candidates(client, mocker):
     r = client.post("/api/cleanup/archive", json={"candidates": []})
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "archived": [], "failed": []}
+    assert r.json() == {"archived": [], "failed": []}

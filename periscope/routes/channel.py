@@ -1,6 +1,6 @@
 """POST /api/channel/{clear-unread,push} — MCP channel control endpoints."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from periscope.channels import (
@@ -15,7 +15,7 @@ router = APIRouter()
 @router.post("/api/channel/clear-unread")
 def channel_clear_unread(pane: str = Query(...)):
     if not pane.startswith("%"):
-        return {"ok": False, "error": "pane must be a %N tmux pane id"}
+        raise HTTPException(400, "pane must be a %N tmux pane id")
     with _CHANNELS_LOCK:
         _CHANNEL_UNREAD[pane] = 0
     return {"ok": True}
@@ -31,9 +31,9 @@ async def channel_push(body: PushBody, pane: str = Query(...)):
     # Frontend uses this for the "Push to Claude..." composer and for the
     # sidebar's "+ link pull request" / "+ link Linear ticket" buttons.
     if not pane.startswith("%"):
-        return {"ok": False, "error": "pane must be a %N tmux pane id"}
+        raise HTTPException(400, "pane must be a %N tmux pane id")
     content = body.content.strip()
     if not content:
-        return {"ok": False, "error": "content required"}
+        raise HTTPException(400, "content required")
     sent = await emit_channel_event(pane, content)
     return {"ok": sent}

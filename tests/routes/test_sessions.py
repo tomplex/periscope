@@ -22,9 +22,8 @@ def test_session_new_creates_session(client, mocker):
 def test_session_new_rejects_empty_name(client, mocker):
     _patch(mocker, "_tmux_mutate", return_value=(True, ""))
     r = client.post("/api/session/new", json={"name": "   "})
-    body = r.json()
-    assert body["ok"] is False
-    assert "empty" in body["error"]
+    assert r.status_code == 400
+    assert "empty" in r.json()["detail"]
 
 
 def test_session_delete(client, mocker):
@@ -50,9 +49,8 @@ def test_window_new_resume_unknown_session_id(client, mocker):
     # Patch history.search.get_session to return None.
     mocker.patch("history.search.get_session", return_value=None)
     r = client.post("/api/window/new?session=resumes&mode=resume&resume_id=nope")
-    body = r.json()
-    assert body["ok"] is False
-    assert "unknown session_id" in body["error"]
+    assert r.status_code == 404
+    assert "unknown session_id" in r.json()["detail"]
 
 
 def test_window_move(client, mocker):
@@ -76,9 +74,8 @@ def test_window_move(client, mocker):
 
 def test_window_move_rejects_same_session(client, mocker):
     r = client.post("/api/window/move?session=main&index=0&dest=main")
-    body = r.json()
-    assert body["ok"] is False
-    assert "same as source" in body["error"]
+    assert r.status_code == 400
+    assert "same as source" in r.json()["detail"]
 
 
 def test_window_delete(client, mocker):

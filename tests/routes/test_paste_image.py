@@ -50,8 +50,6 @@ def test_paste_image_rejects_empty_body(client, mocker):
             continue
 
     r = client.post("/api/paste-image?session=main&index=0", content=b"")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is False
-    assert "empty" in body["error"]
+    assert r.status_code == 400
+    assert "empty" in r.json()["detail"]
     tmux_mock.assert_not_called()

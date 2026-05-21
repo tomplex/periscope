@@ -14,7 +14,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from periscope.panes import note_action, note_focus
 from periscope.tmux import tmux
@@ -51,9 +51,9 @@ async def paste_image(session: str, index: int, request: Request):
     target = f"{session}:{index}"
     body = await request.body()
     if not body:
-        return {"ok": False, "error": "empty body"}
+        raise HTTPException(400, "empty body")
     if len(body) > _PASTE_IMG_MAX_BYTES:
-        return {"ok": False, "error": f"image too large ({len(body)} bytes)"}
+        raise HTTPException(400, f"image too large ({len(body)} bytes)")
     mime = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     ext = _EXT_BY_MIME.get(mime, "png")
     _sweep_old_paste_images()

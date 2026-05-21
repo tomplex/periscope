@@ -19,9 +19,8 @@ def test_patch_prefs_ui_valid_view(client, clean_state):
 
 def test_patch_prefs_ui_rejects_bogus_view(client, clean_state):
     r = client.patch("/api/prefs/ui", json={"view": "weird"})
-    body = r.json()
-    assert body["ok"] is False
-    assert "invalid view" in body["error"]
+    assert r.status_code == 400
+    assert "invalid view" in r.json()["detail"]
 
 
 def test_put_window_annotation(client, clean_state):
@@ -35,9 +34,8 @@ def test_put_window_annotation(client, clean_state):
 
 def test_put_window_annotation_invalid_pid(client, clean_state):
     r = client.put("/api/prefs/windows/abc-123", json={"notes": "hi"})
-    body = r.json()
-    assert body["ok"] is False
-    assert "invalid pid" in body["error"]
+    assert r.status_code == 400
+    assert "invalid pid" in r.json()["detail"]
 
 
 def test_delete_window_annotation(client, clean_state):
@@ -53,8 +51,8 @@ def test_add_and_delete_command(client, clean_state):
     assert r.json()["ok"] is True
     # Duplicate rejected.
     r2 = client.post("/api/prefs/commands", json={"label": "deploy"})
-    assert r2.json()["ok"] is False
-    assert "duplicate" in r2.json()["error"]
+    assert r2.status_code == 409
+    assert "duplicate" in r2.json()["detail"]
     # Delete.
     r3 = client.delete("/api/prefs/commands/deploy")
     assert r3.json()["ok"] is True

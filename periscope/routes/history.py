@@ -7,8 +7,8 @@ optional sqlite/embeddings dependencies.
 
 import time
 
-from fastapi import APIRouter
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from periscope.config import STATIC
 from periscope.panes import _resuming
@@ -73,7 +73,7 @@ def history_session(session_id: str):
     from history.search import get_session
     data = get_session(session_id)
     if data is None:
-        return JSONResponse({"ok": False, "error": "unknown session_id"}, status_code=404)
+        raise HTTPException(404, "unknown session_id")
     data["is_resuming"] = session_id in _resuming
     return data
 

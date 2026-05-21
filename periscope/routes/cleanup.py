@@ -129,4 +129,4 @@ def cleanup_archive(body: ArchiveBody):
         except Exception as e:
             failed.append({"pinned_dir": pinned_dir, "error": str(e)})
 
-    return {"ok": True, "archived": archived, "failed": failed}
+    return {"archived": archived, "failed": failed}

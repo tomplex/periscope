@@ -70,6 +70,5 @@ def test_rename_rejects_empty(client, mocker):
         except (AttributeError, ModuleNotFoundError):
             continue
     r = client.post("/api/rename?session=main&index=0", json={"name": "   "})
-    body = r.json()
-    assert body["ok"] is False
-    assert "empty" in body["error"]
+    assert r.status_code == 400
+    assert "empty" in r.json()["detail"]

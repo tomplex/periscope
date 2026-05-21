@@ -10,7 +10,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from periscope.panes import note_action, note_focus
@@ -33,9 +33,10 @@ class SendBulkBody(BaseModel):
 def _send_to_target(target: str, paste: str | None, keys: list[str]) -> dict:
     """Core paste-buffer + send-keys logic. Used by `/api/send` and the bulk
     variant; both bump focus + acted_at on the target. Returns a result dict
-    suitable for inclusion in the endpoint response."""
+    on success; raises HTTPException on bad input or a tmux failure (the bulk
+    variant catches it per-target so one bad pane doesn't fail the batch)."""
     if not keys and (paste is None or paste == ""):
-        return {"target": target, "ok": False, "error": "no keys or paste"}
+        raise HTTPException(400, "no keys or paste")
     try:
         if paste is not None and paste != "":
             # Unique buffer name so concurrent calls (including bulk fan-out)
@@ -52,7 +53,7 @@ def _send_to_target(target: str, paste: str | None, keys: list[str]) -> dict:
         if keys:
             tmux("send-keys", "-t", target, *keys)
     except Exception as e:
-        return {"target": target, "ok": False, "error": str(e)}
+        raise HTTPException(500, str(e))
     note_focus(target)
     note_action(target)
     return {"target": target, "ok": True}
@@ -70,9 +71,7 @@ def send(session: str, index: int, body: SendBody):
     (Enter, Escape, C-c, S-Tab, Up, F1, …) or a literal string.
     """
     target = f"{session}:{index}"
-    result = _send_to_target(target, body.paste, body.keys)
-    if not result["ok"]:
-        return result
+    _send_to_target(target, body.paste, body.keys)
     return {"ok": True, "target": target}
 
 
@@ -88,15 +87,19 @@ def send_bulk(body: SendBulkBody):
     uuid'd buf per call.
     """
     if not body.targets:
-        return {"ok": False, "error": "no targets"}
+        raise HTTPException(400, "no targets")
     if not body.keys and (body.paste is None or body.paste == ""):
-        return {"ok": False, "error": "no keys or paste"}
+        raise HTTPException(400, "no keys or paste")
+
+    def _send_one(t: str) -> dict:
+        # Per-target failures are collected into `results`, not raised — one
+        # unreachable pane shouldn't fail the whole broadcast.
+        try:
+            return _send_to_target(t, body.paste, body.keys)
+        except HTTPException as e:
+            return {"target": t, "ok": False, "error": e.detail}
+
     with ThreadPoolExecutor(max_workers=min(32, len(body.targets))) as pool:
-        results = list(
-            pool.map(
-                lambda t: _send_to_target(t, body.paste, body.keys),
-                body.targets,
-            )
-        )
+        results = list(pool.map(_send_one, body.targets))
     ok_count = sum(1 for r in results if r["ok"])
     return {"ok": True, "sent": ok_count, "total": len(results), "results": results}
