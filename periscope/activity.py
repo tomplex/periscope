@@ -323,3 +323,24 @@ async def run_worker() -> None:
         except Exception:
             log.exception("activity worker tick failed")
         await asyncio.sleep(30)
+
+
+# --- Haiku milestones --------------------------------------------------
+
+def build_milestone_prompt(commits: list[str], prompts: list[str]) -> str:
+    """Prompt asking Haiku to compress a run of work into one line.
+    commits: subject lines, oldest first. prompts: user-turn text."""
+    lines = [
+        "A developer just finished a run of work on one git branch.",
+        "Summarize what was accomplished as ONE line, in exactly this form:",
+        "  completed: <feature>",
+        "Constraints: <= 80 characters total, concrete, no trailing period.",
+        "",
+        "Commits (oldest first):",
+    ]
+    lines += [f"  - {c}" for c in commits]
+    if prompts:
+        lines += ["", "What the developer asked for:"]
+        lines += [f"  - {p}" for p in prompts]
+    lines += ["", "Return ONLY the single 'completed: ...' line, nothing else."]
+    return "\n".join(lines)

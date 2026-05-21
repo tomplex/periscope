@@ -179,3 +179,22 @@ def test_compact_or_clear_labels_compacted_with_marker(tmp_path, monkeypatch):
     detail, text = activity._compact_or_clear("/repo")
     assert detail == "compacted"
     assert "303k" in text and "14k" in text
+
+
+def test_build_milestone_prompt_shape():
+    p = activity.build_milestone_prompt(
+        ["add the parser", "wire the parser into routes"],
+        ["please add a config parser"],
+    )
+    assert "completed:" in p
+    assert "add the parser" in p
+    assert "wire the parser into routes" in p
+    assert "please add a config parser" in p
+    # Asks for exactly one line.
+    assert "ONE line" in p or "one line" in p
+
+
+def test_build_milestone_prompt_without_prompts():
+    p = activity.build_milestone_prompt(["fix the bug"], [])
+    assert "fix the bug" in p
+    assert "completed:" in p
