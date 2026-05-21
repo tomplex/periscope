@@ -821,6 +821,7 @@ function timelineColor(kind, evState) {
     return "var(--s-success)";
   }
   if (kind === "open") return "var(--fg-3)";
+  if (kind === "reset") return "var(--s-working)";
   return "var(--fg-3)";
 }
 
@@ -828,6 +829,7 @@ function timelineLabel(kind, evState) {
   if (kind === "commit") return "commit";
   if (kind === "ci") return evState ? `ci ${evState}` : "ci";
   if (kind === "open") return "opened";
+  if (kind === "reset") return evState === "compacted" ? "compacted" : "cleared";
   return kind;
 }
 
