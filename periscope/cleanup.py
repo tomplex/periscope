@@ -173,6 +173,104 @@ class Candidate(TypedDict):
 IDLE_THRESHOLD_DAYS = 14
 
 
+def _evaluate_worktree(
+    wt_path: str,
+    branch: Optional[str],
+    repo: str,
+    default: str,
+    project_by_pinned: dict[str, dict],
+    windows_snapshot: dict[str, dict],
+    alive_sessions: set[str],
+    idle_threshold: int,
+) -> Optional[Candidate]:
+    """Evaluate one worktree of `repo`. Returns a Candidate when any
+    staleness signal fires, or None — for the repo's own main checkout, or
+    a worktree that is healthy from cleanup's perspective.
+    """
+    # Skip the main checkout itself — it's not a worktree we'd ever
+    # clean up.
+    if os.path.realpath(wt_path) == os.path.realpath(repo):
+        return None
+
+    # Match against a project row (if any).
+    matched = next(
+        (
+            (p, row) for p, row in project_by_pinned.items()
+            if os.path.realpath(p) == wt_path
+        ),
+        (None, None),
+    )
+    pinned_dir, project_row = matched
+    project_name = project_row.get("name") if project_row else None
+    tmux_session = project_row.get("tmux_session") if project_row else None
+
+    branch = branch or "(detached)"
+    signals: list[Signal] = []
+
+    # Signal 1: PR merged/closed (primary).
+    linked_pr = None
+    is_fork = False
+    if project_row and tmux_session:
+        # Walk the hoisted windows snapshot for the first window
+        # tied to this project's tmux session that has linked_pr
+        # set. Tmux session names are unique per project (adopt
+        # would 409 on collision) so this correctly scopes.
+        for pid, ann in windows_snapshot.items():
+            last = ann.get("last_seen") or {}
+            if last.get("session") == tmux_session and ann.get("linked_pr"):
+                linked_pr = ann["linked_pr"]
+                is_fork = bool(ann.get("is_fork"))
+                break
+
+    if linked_pr:
+        state = _pr_state(repo, linked_pr)
+        if state == "MERGED":
+            signals.append({"kind": "pr_merged", "label": f"PR #{linked_pr} merged"})
+        elif state == "CLOSED":
+            signals.append({"kind": "pr_closed", "label": f"PR #{linked_pr} closed"})
+
+    # Signal 2: branch merged into default (fallback when no PR
+    # state, or in addition).
+    if branch != "(detached)" and branch != default:
+        if _is_branch_merged(repo, branch, default):
+            if not any(s["kind"].startswith("pr_") for s in signals):
+                signals.append({"kind": "branch_merged", "label": f"branch merged into {default}"})
+
+    # Signal 3: remote branch deleted. Skipped for fork PRs
+    # where the local branch was never on origin.
+    if branch != "(detached)" and branch != default and not is_fork:
+        if not _remote_branch_exists(repo, branch):
+            signals.append({"kind": "remote_gone", "label": f"origin/{branch} deleted"})
+
+    # Signal 4: idle. Days since last commit on the worktree's
+    # HEAD; only flagged when no active tmux session AND
+    # > threshold. Session-alive check uses the hoisted
+    # `alive_sessions` set — no per-candidate tmux call.
+    idle_days = _last_commit_age_days(wt_path)
+    session_alive = bool(tmux_session and tmux_session in alive_sessions)
+    if not session_alive and idle_days > idle_threshold:
+        signals.append({"kind": "idle", "label": f"idle {idle_days}d"})
+
+    if not signals:
+        # Worktree is healthy from cleanup's perspective.
+        return None
+
+    dirty = _is_dirty(wt_path)
+
+    return {
+        "pinned_dir": pinned_dir or wt_path,
+        "project_name": project_name,
+        "tmux_session": tmux_session,
+        "repo": repo,
+        "branch": branch,
+        "is_fork": is_fork,
+        "signals": signals,
+        "dirty": dirty,
+        "untracked": project_row is None,
+        "idle_days": idle_days,
+    }
+
+
 def compute_candidates(repo_filter: Optional[str] = None) -> list[Candidate]:
     """Walk every repo periscope knows about and return the cleanup
     candidate list. A worktree appears as a candidate if ANY signal
@@ -220,87 +318,12 @@ def compute_candidates(repo_filter: Optional[str] = None) -> list[Candidate]:
         default = _detect_default_branch(repo)
         # `_cached_worktrees` returns [(realpath, branch_or_none), ...]
         for wt_path, branch in worktrees._cached_worktrees(repo):
-            # Skip the main checkout itself — it's not a worktree we'd
-            # ever clean up.
-            if os.path.realpath(wt_path) == os.path.realpath(repo):
-                continue
-
-            # Match against a project row (if any).
-            matched = next(
-                (
-                    (p, row) for p, row in project_by_pinned.items()
-                    if os.path.realpath(p) == wt_path
-                ),
-                (None, None),
+            cand = _evaluate_worktree(
+                wt_path, branch, repo, default,
+                project_by_pinned, windows_snapshot,
+                alive_sessions, idle_threshold,
             )
-            pinned_dir, project_row = matched
-            project_name = project_row.get("name") if project_row else None
-            tmux_session = project_row.get("tmux_session") if project_row else None
-
-            branch = branch or "(detached)"
-            signals: list[Signal] = []
-
-            # Signal 1: PR merged/closed (primary).
-            linked_pr = None
-            is_fork = False
-            if project_row and tmux_session:
-                # Walk the hoisted windows snapshot for the first window
-                # tied to this project's tmux session that has linked_pr
-                # set. Tmux session names are unique per project (adopt
-                # would 409 on collision) so this correctly scopes.
-                for pid, ann in windows_snapshot.items():
-                    last = ann.get("last_seen") or {}
-                    if last.get("session") == tmux_session and ann.get("linked_pr"):
-                        linked_pr = ann["linked_pr"]
-                        is_fork = bool(ann.get("is_fork"))
-                        break
-
-            if linked_pr:
-                state = _pr_state(repo, linked_pr)
-                if state == "MERGED":
-                    signals.append({"kind": "pr_merged", "label": f"PR #{linked_pr} merged"})
-                elif state == "CLOSED":
-                    signals.append({"kind": "pr_closed", "label": f"PR #{linked_pr} closed"})
-
-            # Signal 2: branch merged into default (fallback when no PR
-            # state, or in addition).
-            if branch != "(detached)" and branch != default:
-                if _is_branch_merged(repo, branch, default):
-                    if not any(s["kind"].startswith("pr_") for s in signals):
-                        signals.append({"kind": "branch_merged", "label": f"branch merged into {default}"})
-
-            # Signal 3: remote branch deleted. Skipped for fork PRs
-            # where the local branch was never on origin.
-            if branch != "(detached)" and branch != default and not is_fork:
-                if not _remote_branch_exists(repo, branch):
-                    signals.append({"kind": "remote_gone", "label": f"origin/{branch} deleted"})
-
-            # Signal 4: idle. Days since last commit on the worktree's
-            # HEAD; only flagged when no active tmux session AND
-            # > threshold. Session-alive check uses the hoisted
-            # `alive_sessions` set — no per-candidate tmux call.
-            idle_days = _last_commit_age_days(wt_path)
-            session_alive = bool(tmux_session and tmux_session in alive_sessions)
-            if not session_alive and idle_days > idle_threshold:
-                signals.append({"kind": "idle", "label": f"idle {idle_days}d"})
-
-            if not signals:
-                # Worktree is healthy from cleanup's perspective. Skip.
-                continue
-
-            dirty = _is_dirty(wt_path)
-
-            candidates.append({
-                "pinned_dir": pinned_dir or wt_path,
-                "project_name": project_name,
-                "tmux_session": tmux_session,
-                "repo": repo,
-                "branch": branch,
-                "is_fork": is_fork,
-                "signals": signals,
-                "dirty": dirty,
-                "untracked": project_row is None,
-                "idle_days": idle_days,
-            })
+            if cand is not None:
+                candidates.append(cand)
 
     return candidates
