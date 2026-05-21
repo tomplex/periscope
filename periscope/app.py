@@ -38,6 +38,9 @@ async def lifespan(_app: FastAPI):
     # Reap any periscope-usage-* tmux sessions left behind by a prior
     # crash before the new scrape thread spawns a fresh one.
     kill_orphan_usage_sessions()
+    # Bound activity.db growth — drop events older than 30 days.
+    from periscope import activity
+    _bg("activity-prune", activity.prune)
     # Kick off cache prewarms eagerly so the first /api/state poll already
     # has PR badges and the usage bars populated.
     _bg("prewarm-pr", prewarm_pr_cache)
