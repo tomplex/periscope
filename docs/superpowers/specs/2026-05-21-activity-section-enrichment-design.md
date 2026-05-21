@@ -250,12 +250,14 @@ entry and has no `system` subtype); only compaction writes a
 `compact_boundary` entry. So detection keys off the one signal common to
 both: the **status-line context %**.
 
-`STATUS_RE` already parses the context % on every poll, and that figure
-only ever *climbs* during a session (tokens accumulate) — it drops
-*only* on a reset. The worker tracks the last-seen context % per pane
-(in memory) and, on a drop, records a `reset` event. The first
-observation of a pane sets the baseline and is not a reset; a reset
-during periscope downtime is missed (acceptable — periscope wasn't
+`parse_pane` already surfaces the context % as `context_pct` (an int, or
+`None` when the status line is obscured — `panes.py`). That figure only
+ever *climbs* during a session (tokens accumulate) — it drops *only* on
+a reset. The worker tracks the last-seen `context_pct` per pane (in
+memory) and, on a drop between two **non-None** readings, records a
+`reset` event. A `None` reading is skipped, not treated as a drop. The
+first observation of a pane sets the baseline and is not a reset; a
+reset during periscope downtime is missed (acceptable — periscope wasn't
 watching). 30s granularity on the event `at` is fine.
 
 **Compact-vs-clear label (best-effort).** On a detected drop the worker
