@@ -1618,12 +1618,14 @@ body.modal-open { overflow: hidden; }
   letter-spacing: 0.12em;
 }
 
-/* The Activity section is the only one that scrolls — Linked is fixed
-   shape (one PR card + one Linear placeholder). */
+/* Activity fills the sidebar's leftover height. It's a flex column so the
+   heading and any pinned alert stay put while only the stream scrolls. */
 .modal-side-activity {
   flex: 1;
-  overflow-y: auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .modal-side-notes .modal-notes {
@@ -2228,10 +2230,11 @@ body.modal-open { overflow: hidden; }
     color: var(--fg-0);
 }
 
-/* Activity stream scrolls; the pinned need_human block stays above it,
-   always visible. */
+/* The stream fills the section's remaining height and scrolls within it;
+   the heading and any pinned need_human block stay fixed above. */
 .activity-stream {
-    max-height: 260px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
 }
 
