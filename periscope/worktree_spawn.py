@@ -90,6 +90,22 @@ def _resolve_layout(repo: str) -> str:
     return layout
 
 
+def worktree_path(repo: str, slug: str) -> str:
+    """Absolute on-disk path for a worktree of `repo` identified by `slug`.
+
+    Honors the repo's layout (see `_resolve_layout`): `inline` places
+    worktrees at `<repo>/.worktrees/<slug>`, the default `sibling` layout
+    at `~/dev/worktrees/<repo-basename>/<slug>`. `slug` is path-slugged.
+    Shared by `spawn_worktree` and the PR-review route so a layout change
+    reaches both.
+    """
+    safe = _slug_for_path(slug)
+    if _resolve_layout(repo) == "inline":
+        return str(Path(repo) / ".worktrees" / safe)
+    repo_name = os.path.basename(repo.rstrip("/"))
+    return str(WORKTREES_DIR / repo_name / safe)
+
+
 def spawn_worktree(
     repo: str,
     branch: str,
@@ -130,17 +146,8 @@ def spawn_worktree(
 
     base = base_branch or detect_default_branch(repo)
 
-    repo_name = os.path.basename(repo.rstrip("/"))
-
-    # Resolve layout + worktree path.
-    layout = _resolve_layout(repo)
-    if layout == "inline":
-        # `<repo>/.worktrees/<branch-slugged>` — splash convention.
-        wt_path = Path(repo) / ".worktrees" / _slug_for_path(branch)
-    else:
-        # Default: sibling layout.
-        wt_path = WORKTREES_DIR / repo_name / _slug_for_path(branch)
-    wt_path_str = str(wt_path)
+    wt_path_str = worktree_path(repo, branch)
+    wt_path = Path(wt_path_str)
 
     if wt_path.exists():
         raise ValueError(f"worktree path already exists: {wt_path_str}")

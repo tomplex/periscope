@@ -2,6 +2,21 @@
 
 import json
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _stub_worktree_path(mocker, tmp_path):
+    """projects_pr_review resolves the worktree path via worktree_path(),
+    which calls _resolve_layout (settings I/O + a git-worktree-list). Stub
+    it to a tmp path so these tests stay hermetic — none of them assert on
+    the worktree path itself.
+    """
+    mocker.patch(
+        "periscope.routes.projects.worktree_path",
+        side_effect=lambda repo, slug: str(tmp_path / "wt" / slug.replace("/", "-")),
+    )
+
 
 # === phase 4: PR review =====================================================
 
