@@ -58,6 +58,15 @@ only). `cached_pane_activity` moves to `activity.py` and calls into
 "one file per subsystem" convention; Activity logic currently smeared
 across `git_pr.py` + `channels.py` + `modal.js` gets a single owner.
 
+**Import discipline.** `activity.py` imports `git_pr.shared_activity_for`
+and (for the worker) `panes`, `rename_ai`, and the `store` XDG-path
+helper; `channels.py` imports `activity`. To keep this a DAG, `git_pr.py`
+must never import `activity.py`. `routes/pane.py` currently imports
+`cached_pane_activity` from `git_pr` — that import moves to `activity`.
+Like `store.py`, `activity.py` must do no DB work at import time (open
+the connection lazily on first use) to avoid the import-order fragility
+documented in `store.py`.
+
 ### Event model
 
 Every row the API returns is an event:
@@ -82,20 +91,21 @@ Every row the API returns is an event:
 
 SQLite DB at `~/.config/periscope/activity.db` — alongside `state.json`
 (`$XDG_CONFIG_HOME/periscope/`, see `store.py:_state_path`). WAL mode, so
-a dev instance (port 8766) and prod (8765) can both write without lock
-contention.
+a dev instance (port 8766) can read the DB for its modal while the prod
+instance — the sole writer, see "The activity worker" — writes.
 
 ```sql
 CREATE TABLE events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   scope_kind  TEXT NOT NULL,        -- 'pane' | 'branch'
-  scope_key   TEXT NOT NULL,        -- periscope_id  |  repo_path\x1fbranch
+  scope_key   TEXT NOT NULL,        -- pane_id (tmux %N)  |  repo_path\x1fbranch
   event_kind  TEXT NOT NULL,        -- 'alert' | 'milestone' | 'compaction'
   at          INTEGER NOT NULL,     -- unix seconds
   text        TEXT NOT NULL,
   detail      TEXT,                 -- alert: done/need_human/info; else NULL
   url         TEXT,
-  payload     TEXT                  -- JSON, optional extras
+  payload     TEXT,                 -- JSON, optional extras
+  dedup_key   TEXT UNIQUE           -- natural id; record() does INSERT OR IGNORE
 );
 CREATE INDEX idx_events_scope ON events (scope_kind, scope_key, at);
 
@@ -106,35 +116,39 @@ CREATE TABLE cursors (key TEXT PRIMARY KEY, value TEXT);
 
 `activity.py` API (all stdlib `sqlite3`, no ORM):
 
-- `record(scope_kind, scope_key, event_kind, text, *, at=None, detail=None, url=None, payload=None)`
-- `events_for(periscope_id, repo_path, branch, limit=40) -> list[dict]`
-  — reads `pane`-scoped rows for the `periscope_id` and `branch`-scoped
-  rows for `(repo_path, branch)`, mapped into the event model above.
+- `record(scope_kind, scope_key, event_kind, text, *, at=None, detail=None, url=None, payload=None, dedup_key=None)`
+  — `INSERT OR IGNORE` on `dedup_key`, so a re-tailed compaction or a
+  double-fired milestone is idempotent. `dedup_key=None` always inserts.
+- `events_for(pane_id, repo_path, branch, limit=40) -> list[dict]`
+  — reads `pane`-scoped rows for `pane_id` and `branch`-scoped rows for
+  `(repo_path, branch)`, mapped into the event model above.
 - `prune(max_age_days=30)` — called once at lifespan startup; bounds DB
   growth. 30d is generous; the modal shows far fewer.
 
 ### Keying
 
-- **Alerts & compaction** → `scope_kind='pane'`, `scope_key=periscope_id`.
-  `periscope_id` (`periscope/pids.py`) is the stable pane identity;
-  unlike tmux's `%N`, it does not get reused when a pane is destroyed,
-  so old activity cannot bleed into a recreated pane.
+- **Alerts & compaction** → `scope_kind='pane'`, `scope_key=pane_id` (the
+  tmux pane id, `%N`). This matches how `_CHANNEL_ALERTS` and
+  `routes/alerts.py` already key panes, and keeps `_do_notify_tool` a
+  cheap dict-append + local SQLite insert — no tmux/git subprocess on the
+  `notify()` hot path. `%N` is unique for the life of the tmux server and
+  is never recycled, so it is a sound durable key; it survives
+  `bin/periscope restart` because tmux outlives periscope. (It is lost
+  only if the tmux server itself restarts — effectively a reboot.)
 - **Milestones** → `scope_kind='branch'`, `scope_key=f"{repo_path}\x1f{branch}"`.
   Milestones are commit-anchored, so they share the keying of the
   `commit` events they summarize and appear for every pane on the branch.
 
 ### Alerts move to the store
 
-`channels.py:_do_notify_tool` currently appends to `_CHANNEL_ALERTS`.
-It additionally calls `activity.record(...)`. `_CHANNEL_ALERTS` stays as
+`channels.py:_do_notify_tool` already receives the pane (`%N`) and
+currently appends to `_CHANNEL_ALERTS`. It additionally calls
+`activity.record(scope_kind='pane', scope_key=pane, ...)` — no extra
+lookup, the key it needs is already in hand. `_CHANNEL_ALERTS` stays as
 a write-through in-memory cache — the unread badge and the existing
 `channel_alerts` field on `/api/pane` keep working unchanged. On
 startup, `activity.py` does **not** rehydrate `_CHANNEL_ALERTS` (unread
 state is intentionally session-fresh); it only feeds the merged stream.
-
-Resolving `periscope_id` inside `_do_notify_tool`: the channel layer
-already maps a pane → pid (see `channels.py` pid-mint path); `pids.py`
-resolves pid → `periscope_id`.
 
 ### Wider window
 
@@ -158,19 +172,24 @@ URL sources:
 
 - `ci` → the run's `url` (add `url` to the `--json` field list in
   `shared_activity_for`'s `gh run list` call).
-- `commit` → `https://github.com/<owner>/<repo>/commit/<sha>`. The
-  owner/repo is already parsed from the status line's PR URL
-  (`PR_RE` / status parsing in `panes.py`); the commit SHA is added to
-  the `git log` `--pretty` format (`%H`).
+- `commit` → `https://github.com/<owner>/<repo>/commit/<sha>`. periscope
+  does **not** currently capture owner/repo (the status-line parser
+  keeps only the PR number — there is no `PR_RE` retaining the slug);
+  `git_pr.py` derives it fresh from `git remote get-url origin`,
+  normalizing the `git@…:…` / `https://…` / `.git` forms. The SHA comes
+  from adding `%H` to the `git log` `--pretty` format. A repo with no
+  GitHub `origin` yields no `url` — the row simply stays inert.
 - `milestone` → the GitHub *compare* URL across the summarized commit
-  range (`/compare/<first>^...<last>`).
+  range (`/compare/<first>^...<last>`), built from the same origin.
 
 **Inline reply on the pinned `need_human` alert.** The
 `activity-pinned` block gains a one-line text input + send button that
-POSTs to `/api/send` (the existing endpoint — session/index as query
-params, multi-line-safe paste path). This unblocks a stuck pane without
-opening the terminal. Only the pinned alert gets this; ordinary stream
-rows do not.
+POSTs to `/api/send`. That endpoint takes session/index as query params
+(invariant #6); the modal already POSTs to query-param endpoints via
+`targetQuery(...)`. The inline form keys off `data.target` /
+`data.session` from the `/api/pane` payload — **not** the alert record,
+which carries no target. This unblocks a stuck pane without opening the
+terminal. Only the pinned alert gets this; ordinary stream rows do not.
 
 ## Thread 2 — Haiku milestones + compaction
 
@@ -181,14 +200,18 @@ Both features need to read the **live** transcript JSONL for a pane.
 ### Locating the live transcript
 
 Claude Code writes transcripts to
-`~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`, where
-`encoded-cwd` is the pane's cwd with `/` and `.` replaced by `-` (e.g.
-`/Users/tom/dev/periscope` → `-Users-tom-dev-periscope`). The encoding
-is lossy and not reversible, so resolution is **forward-only**:
+`~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`. The directory
+name encodes the cwd (observed: `/` and `.` → `-`), but that encoding is
+not treated as authoritative — every transcript entry carries an
+explicit `cwd` field, so resolution does not depend on reproducing it:
 
-1. Encode the pane's cwd, glob `*.jsonl` in that dir, pick newest mtime.
-2. Confirm the file's recorded `cwd` field matches the pane's cwd
-   (transcript entries carry `cwd`).
+1. Glob `~/.claude/projects/*/*.jsonl` for files whose first entry's
+   `cwd` matches the pane's cwd. The encoded dir name narrows the glob
+   as an optimization, but the `cwd`-field check is what's trusted.
+2. Among matches, pick the file with the most recent append (newest
+   mtime) — the one currently being written. Known edge case: two live
+   Claude sessions sharing one cwd; the worker picks the more recently
+   active and accepts that as good enough.
 
 `history/backfill.py` already has `DEFAULT_PROJECTS_DIR` and
 `find_jsonl_files`; `activity.py` adds a `live_transcript_for(cwd)`
@@ -205,19 +228,33 @@ deliberately lifespan-driven: a commit run in a pane whose modal is
 *not* open must still produce a milestone, so the worker cannot hang off
 the modal-only `/api/pane` fetch.
 
+The worker is **gated to the prod instance** (`config.PORT == 8765`) —
+the same guard `app.py` uses for the MCP listener. `activity.db` is a
+single shared file; two workers (a dev instance alongside prod) would
+double-spend Haiku and race the milestone cursor. Prod is the sole
+writer; a dev instance only reads the DB for its modal. To exercise the
+worker in dev, run the dev instance on `PERISCOPE_PORT=8765` with prod
+stopped. The per-tick `git rev-parse HEAD` overlaps the 60s
+activity-cache's `git log` but at microsecond cost — not worth
+deduplicating.
+
 ### Compaction events (commit 2)
 
-The worker tails the live transcript of each active Claude pane. The compaction marker is a
-transcript entry with `type: "system"`, `subtype: "compact_boundary"`,
-carrying `timestamp` and a `compactMetadata` object
-(`trigger` = `manual`/`auto`, `preTokens`, `postTokens`). On a match the
-tailer calls `activity.record(scope_kind='pane',
-event_kind='compaction', ...)` with text derived from the metadata —
-e.g. `context compacted (auto · 303k → 14k tokens)`.
+The worker tails the live transcript of each active Claude pane. The
+compaction marker is a transcript entry with `type: "system"`,
+`subtype: "compact_boundary"`, carrying its own `uuid`, a `timestamp`,
+and a `compactMetadata` object (`trigger` = `manual`/`auto`, `preTokens`,
+`postTokens`). On a match the tailer calls `activity.record(
+scope_kind='pane', event_kind='compaction', dedup_key=<entry uuid>, ...)`
+with text derived from the metadata — e.g.
+`context compacted (auto · 303k → 14k tokens)`.
 
-The tailer tracks a per-file byte offset (in the `cursors` table below)
-so each restart re-reads only new lines. It does not re-emit compaction
-events already in the DB (dedup on `(scope_key, event_kind, at)`).
+The tailer tracks a per-file byte offset in the `cursors` table so each
+restart re-reads only new lines. The transcript entry's `uuid` is the
+`dedup_key`: even if the cursor and the DB fall out of sync (a
+half-written tick, a crash), `INSERT OR IGNORE` makes re-emission a
+no-op. The byte offset is an optimization; the `uuid` is the correctness
+guarantee.
 
 ### Haiku "completed X" milestones (commit 3)
 
@@ -230,10 +267,13 @@ unique `(path, branch)` across active Claude panes:
    `(path, branch)`, stored in a `cursors` table —
    `cursors(key TEXT PRIMARY KEY, value TEXT)`, also used for the
    compaction tailer's per-file byte offsets.
-2. If `HEAD` advanced **and** every pane on the branch is idle
-   (`parse_pane` state ≠ `working` — i.e. the commit run is over),
-   proceed; otherwise wait for the next tick (debounce — a burst of
-   commits collapses into one summary once the pane goes quiet).
+2. If `HEAD` advanced **and** every pane on the branch is settled —
+   `parse_pane` state `idle` or `shell`, *not* `working` or
+   `needs-input` (a pane blocked on a permission prompt mid-run is not
+   done) — proceed; otherwise wait for the next tick (debounce — a burst
+   of commits collapses into one summary once the panes go quiet). The
+   worker calls `parse_pane` directly, so it sees the raw five-state
+   output, not the `/api/state` refinement (`idle`→`done`, etc.).
 3. Gather: commit subjects + bodies since the last-summarized SHA
    (`git log <last>..HEAD`), and the user-turn text from the live
    transcript since the previous milestone's `at`.
@@ -241,9 +281,9 @@ unique `(path, branch)` across active Claude panes:
    model="claude-haiku-4-5")` (the `rename_ai.py` helper — same client,
    same Haiku model). The prompt asks for **one line**, format
    `completed: <feature>`, ≤ 80 chars.
-5. `activity.record(scope_kind='branch', event_kind='milestone', ...)`,
-   `at` = the newest commit's timestamp, `url` = the compare URL.
-   Advance the last-summarized SHA.
+5. `activity.record(scope_kind='branch', event_kind='milestone',
+   dedup_key=f"milestone:{HEAD-SHA}", ...)`, `at` = the newest commit's
+   timestamp, `url` = the compare URL. Advance the last-summarized SHA.
 
 Caps: at most ~15 commits and ~4000 chars of prompt text fed to Haiku
 per call (truncate oldest-first) — bounds cost and latency.
@@ -291,15 +331,17 @@ Three independent commits, each shippable on its own:
   rows past `max_age_days`.
 - Read-path merge: `pane`-scoped + `branch`-scoped + computed git events
   sort newest-first into one stream.
-- `live_transcript_for`: encodes cwd correctly; picks newest mtime;
-  rejects a dir whose transcript `cwd` mismatches.
+- `live_transcript_for`: matches a transcript on its `cwd` field; picks
+  newest mtime among matches; rejects a file whose `cwd` mismatches.
 - `build_milestone_prompt`: shape assertions on the prompt text.
 - Milestone trigger: with a recorded `git log` fixture and a **mocked**
   `claude_complete`, `maybe_emit_milestone` emits exactly one row for a
   multi-commit run and advances the SHA; a no-op when `HEAD` is
-  unchanged or a pane is still `working`.
-- Compaction: a JSONL fixture with a compaction marker yields one
-  `compaction` row; re-running the tailer does not duplicate it.
+  unchanged or a pane is still `working`/`needs-input`. A second run on
+  the same `HEAD` is a no-op via the `dedup_key`.
+- Compaction: a JSONL fixture with a `compact_boundary` entry yields one
+  `compaction` row; re-running the tailer (cursor reset) does not
+  duplicate it, because the entry `uuid` is the `dedup_key`.
 
 Existing suites (`test_parse_pane.py`, channel smoke) are untouched.
 ```
