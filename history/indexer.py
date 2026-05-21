@@ -199,6 +199,14 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
                          source_mtime=int(stat.st_mtime),
                          source_size=stat.st_size)
 
+    # periscope's /usage scraper launches a throwaway `claude` that is
+    # screen-scraped and killed — it never produces an assistant turn.
+    # asst_msg_count == 0 means no real work; skip without a DB write.
+    # (The SessionEnd hook fires for these too, so the filter must live
+    # here, not just in backfill.)
+    if rec.asst_msg_count == 0:
+        return {"status": "skipped-scrape", "session_id": rec.session_id}
+
     if not force and _is_live(rec.source_mtime, rec.ended_at):
         return {"status": "skipped-live", "session_id": rec.session_id}
 

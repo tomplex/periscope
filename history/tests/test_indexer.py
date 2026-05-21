@@ -189,3 +189,22 @@ def test_index_one_force_bypasses_live_skip(temp_db, fixture_dir, tmp_path, monk
     with patch("history.indexer.get_anthropic_client", return_value=client):
         result_force = index_one(str(dst), db_path=db_path, force=True)
     assert result_force["status"] in ("summarized", "trivial")  # depends on content
+
+
+def test_index_one_skips_scrape_session(tmp_path):
+    """A transcript with no assistant turn (a /usage scrape) is not indexed."""
+    from history import indexer
+    # A minimal transcript: one user line, zero assistant lines.
+    jp = tmp_path / "scrape.jsonl"
+    jp.write_text(
+        '{"type":"user","cwd":"/repo","sessionId":"sc1",'
+        '"timestamp":"2026-05-20T10:00:00.000Z",'
+        '"message":{"role":"user","content":"hi"}}\n'
+    )
+    db = tmp_path / "h.db"
+    res = indexer.index_one(str(jp), db_path=db, force=True)
+    assert res["status"] == "skipped-scrape"
+    from history.db import connect
+    conn = connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+    conn.close()
