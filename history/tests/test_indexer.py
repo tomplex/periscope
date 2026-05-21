@@ -114,7 +114,10 @@ def test_row_needs_resummary_logic():
     row = {"summary_input_hash": "h1", "summary_model": "claude-haiku-4-5", "summary": "x"}
     assert _row_needs_resummary(row, new_hash="h1", target_model="claude-haiku-4-5") is False
     assert _row_needs_resummary(row, new_hash="h2", target_model="claude-haiku-4-5") is True
-    assert _row_needs_resummary(row, new_hash="h1", target_model="claude-haiku-5") is True
+    # A default-model change alone does NOT trigger resummary — a valid
+    # summary stays cached; a deliberate model switch goes through
+    # `resummarize --all`, which NULLs the hash to force re-summary.
+    assert _row_needs_resummary(row, new_hash="h1", target_model="claude-haiku-5") is False
     # NULL summary -> always needs resummary
     row_null = {"summary_input_hash": "h1", "summary_model": "claude-haiku-4-5", "summary": None}
     assert _row_needs_resummary(row_null, new_hash="h1", target_model="claude-haiku-4-5") is True
@@ -208,3 +211,39 @@ def test_index_one_skips_scrape_session(tmp_path):
     conn = connect(db)
     assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
     conn.close()
+
+
+def test_index_one_persists_facets(tmp_path, monkeypatch):
+    from history import indexer
+    from history.summarize import SummaryResult
+
+    # Stub the Anthropic client + the summarizer call.
+    monkeypatch.setattr(indexer, "get_anthropic_client", lambda: object())
+    monkeypatch.setattr(indexer, "call_summarizer", lambda client, rec, model=None:
+        SummaryResult(summary="s", tags=["t1", "t2", "t3"], model="m",
+                      outcome="shipped", category="bugfix",
+                      notable=True, topics=["periscope"]))
+
+    # A non-trivial transcript: >=2 user msgs, an assistant turn, >60s span.
+    jp = tmp_path / "real.jsonl"
+    jp.write_text("\n".join([
+        '{"type":"user","cwd":"/repo","sessionId":"r1","timestamp":"2026-05-20T10:00:00.000Z","message":{"role":"user","content":"first request please"}}',
+        '{"type":"assistant","sessionId":"r1","timestamp":"2026-05-20T10:01:00.000Z","message":{"role":"assistant","content":"working on it"}}',
+        '{"type":"user","cwd":"/repo","sessionId":"r1","timestamp":"2026-05-20T10:02:00.000Z","message":{"role":"user","content":"second request please"}}',
+        '{"type":"assistant","sessionId":"r1","timestamp":"2026-05-20T10:03:00.000Z","message":{"role":"assistant","content":"done"}}',
+    ]) + "\n")
+    db = tmp_path / "h.db"
+    res = indexer.index_one(str(jp), db_path=db, force=True)
+    assert res["status"] == "summarized"
+
+    from history.db import connect
+    conn = connect(db)
+    row = conn.execute(
+        "SELECT outcome, category, notable, topics FROM sessions WHERE session_id='r1'"
+    ).fetchone()
+    conn.close()
+    assert row["outcome"] == "shipped"
+    assert row["category"] == "bugfix"
+    assert row["notable"] == 1
+    import json as _j
+    assert _j.loads(row["topics"]) == ["periscope"]
