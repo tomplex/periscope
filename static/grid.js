@@ -321,7 +321,7 @@ function sessionChannelAlert(ws) {
   const preview = top ? escapeHtml(top.message.slice(0, 60)) : "";
   const more = count > 1 ? ` <span class="session-channel-more">+${count - 1}</span>` : "";
   return {
-    html: `<span class="session-channel-pill session-channel-${topKind}" title="${count} unread Claude alert(s)">${icon} ${preview}${more}</span>`,
+    html: `<span class="session-channel-pill session-channel-${topKind}" title="${count} unread Claude notification(s)">${icon} ${preview}${more}</span>`,
     kind: topKind,
   };
 }

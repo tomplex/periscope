@@ -114,7 +114,7 @@ async function poll() {
     const data = await res.json();
     if (pollFailed) {
       pollFailed = false;
-      showToast("alerts feed reconnected", "good");
+      showToast("notifications feed reconnected", "good");
     }
     lastItems = data.items || [];
     maybeNativeNotify();
@@ -122,7 +122,7 @@ async function poll() {
   } catch (e) {
     if (!pollFailed) {
       pollFailed = true;
-      showToast(`alerts feed unavailable: ${e.message}`, "bad");
+      showToast(`notifications feed unavailable: ${e.message}`, "bad");
     }
     // Keep the stale list visible — better than blanking the panel.
   }
@@ -132,7 +132,7 @@ function render() {
   if (!body) return;
   updateBadge();
   if (!lastItems.length) {
-    body.innerHTML = `<div class="alerts-empty">No alerts yet. Panes call <code>notify()</code> through the channel to show up here.</div>`;
+    body.innerHTML = `<div class="alerts-empty">No notifications yet. Panes call <code>notify()</code> through the channel to show up here.</div>`;
     return;
   }
   body.innerHTML = lastItems.map(renderRow).join("");
