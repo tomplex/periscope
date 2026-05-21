@@ -10,6 +10,7 @@ git_pr.py must NEVER import activity.py (would create a cycle). No DB work
 happens at import time — the connection opens lazily on first use.
 """
 
+import asyncio
 import json
 import sqlite3
 import threading
@@ -19,8 +20,9 @@ from pathlib import Path
 
 from periscope import config
 from periscope.git_pr import shared_activity_for
-from periscope.log import _bg
-from periscope.panes import _acted_at
+from periscope.log import _bg, log
+from periscope.panes import _acted_at, list_windows, parse_pane
+from periscope.tmux import tmux
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -288,3 +290,36 @@ def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
     detail, text = _compact_or_clear(cwd)
     record("pane", pane_id, "reset", text, detail=detail)
     return True
+
+
+# --- Background worker -------------------------------------------------
+#
+# One lifespan-driven loop (prod instance only — see app.py). Every ~30s
+# it captures each active Claude pane and runs the context-reset check.
+# Phase 3 extends _worker_tick with the milestone check.
+
+def _worker_tick(last_ctx: dict) -> None:
+    """One worker pass. Blocking (tmux subprocesses) — run off-loop."""
+    for w in list_windows():
+        target = f"{w['session']}:{w['index']}"
+        try:
+            content = tmux("capture-pane", "-t", target, "-p", "-e", "-S", "-60")
+            parsed = parse_pane(content)
+        except Exception:
+            continue
+        if not parsed.get("is_claude"):
+            continue
+        _check_reset(w.get("pane_id") or "", w.get("cwd") or "",
+                     parsed.get("context_pct"), last_ctx)
+
+
+async def run_worker() -> None:
+    """Lifespan task: drive _worker_tick every 30s. The blocking tick runs
+    in a thread so it never stalls the event loop."""
+    last_ctx: dict = {}
+    while True:
+        try:
+            await asyncio.to_thread(_worker_tick, last_ctx)
+        except Exception:
+            log.exception("activity worker tick failed")
+        await asyncio.sleep(30)

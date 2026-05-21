@@ -58,6 +58,15 @@ async def lifespan(_app: FastAPI):
     # No-op while LGTM isn't running; surfaces on the dashboard the
     # moment it comes up.
     lgtm_task = _task("lgtm-refresh", _lgtm_periodic_refresh())
+    # Activity worker: context-reset + milestone detection. Prod only —
+    # periscope.db is a single shared file; two workers would race the
+    # milestone cursor and double-spend Haiku. Same guard as the MCP
+    # listener above. NB: _task's signature is _task(name, coro).
+    if config.PORT == 8765:
+        from periscope import activity
+        activity_task = _task("activity-worker", activity.run_worker())
+    else:
+        activity_task = None
     try:
         yield
     finally:
@@ -65,6 +74,8 @@ async def lifespan(_app: FastAPI):
         if mcp_task is not None:
             mcp_task.cancel()
         lgtm_task.cancel()
+        if activity_task is not None:
+            activity_task.cancel()
         for t in list(_LGTM_SSE_TASKS.values()):
             t.cancel()
         if mcp_task is not None:
