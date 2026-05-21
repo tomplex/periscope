@@ -253,6 +253,11 @@ def _refresh_scrape_into_cache() -> None:
     with _scrape_lock:
         if result:
             _scrape_cache = (time.time(), result)
+        else:
+            # Stamp the timestamp even on failure so cached_scraped_usage
+            # backs off for USAGE_SCRAPE_REFRESH_S instead of re-spawning a
+            # scrape on every poll. Keep the previously-cached data.
+            _scrape_cache = (time.time(), _scrape_cache[1])
         _scrape_in_flight = False
 
 

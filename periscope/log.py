@@ -51,7 +51,7 @@ def _bg(name: str, fn, *args, **kwargs) -> threading.Thread:
     return t
 
 
-def _task(coro, name: str) -> asyncio.Task:
+def _task(name: str, coro) -> asyncio.Task:
     """Schedule an asyncio task with a done-callback that logs crashes."""
     t = asyncio.create_task(coro, name=name)
 

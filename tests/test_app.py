@@ -40,7 +40,7 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
 
     Mock the heavyweight prewarms + async loops so the test is fast and
     doesn't bind a real unix socket. _lgtm_periodic_refresh and
-    _mcp_listener are async functions wrapped via _task(coro, name) — they
+    _mcp_listener are async functions wrapped via _task(name, coro) — they
     must return a coroutine, so we patch with a coroutine factory rather
     than return_value=None (which would make _task crash on
     asyncio.create_task(None)).

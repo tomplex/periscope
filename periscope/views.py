@@ -116,7 +116,9 @@ def build_window_view(
     linked_linear_status = persisted.get("linked_linear_status")
     if linked_pr:
         pr = dict(pr)
-        pr["pr"] = str(linked_pr)
+        # Keep `pr` an int to match the auto-detected path (pr_state_for
+        # yields gh's `number` as an int); linked_pr is persisted as int too.
+        pr["pr"] = int(linked_pr)
         pr["pr_linked"] = True
         # `ci` (CI glyph) is keyed to the auto-detected PR; an explicit
         # linked PR may not have a fresh CI signal until a future poll

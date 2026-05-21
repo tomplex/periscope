@@ -641,7 +641,7 @@ function renderStream(windows) {
   // Topmost row's session powers the "+ new tab" button — keep this
   // before the empty-state early returns so the button updates even when
   // the filtered list is empty (it stays usable while you're searching).
-  updateStreamNewTab(visible[0] || opened.sort((a, b) => b.acted_at - a.acted_at)[0]);
+  updateStreamNewTab(visible[0] || [...opened].sort((a, b) => b.acted_at - a.acted_at)[0]);
 
   if (!opened.length) {
     banner.textContent = "";

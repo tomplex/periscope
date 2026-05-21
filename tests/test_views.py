@@ -164,7 +164,8 @@ def test_view_linked_pr_overrides_auto_detected(mocker, clean_state):
     mocker.patch("periscope.views.capture", return_value="x")
 
     view, _ = build_window_view(_window(pid=pid), now_ts=1000)
-    assert view["pr"] == "1234"
+    # `pr` is normalized to int regardless of source (auto-detect or linked).
+    assert view["pr"] == 1234
     assert view["pr_linked"] is True
     assert "ci" not in view  # stale glyph dropped
 

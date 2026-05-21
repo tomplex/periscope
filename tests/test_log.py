@@ -45,7 +45,7 @@ def test_task_logs_uncaught_exception(mocker):
         raise RuntimeError("async kaboom")
 
     async def run():
-        t = _task(crashes(), "async-crashy")
+        t = _task("async-crashy", crashes())
         await asyncio.sleep(0.05)
         return t
 

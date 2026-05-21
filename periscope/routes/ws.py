@@ -146,7 +146,7 @@ async def ws_pane(
                 chunk = await out_queue.get()
                 await websocket.send_bytes(chunk)
 
-        forward_task = _task(forward_out(), "ws-forward")
+        forward_task = _task("ws-forward", forward_out())
 
         # 4) Main loop: receive keystrokes from the client and push to tmux.
         #    xterm.js's onData sends raw input including escape sequences

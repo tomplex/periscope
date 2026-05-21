@@ -159,7 +159,7 @@ async def _lgtm_refresh_all() -> None:
             if not t.done():
                 t.cancel()
     for slug in seen_slugs - set(_LGTM_SSE_TASKS):
-        _LGTM_SSE_TASKS[slug] = _task(_lgtm_sse_loop(slug), f"lgtm-sse-{slug}")
+        _LGTM_SSE_TASKS[slug] = _task(f"lgtm-sse-{slug}", _lgtm_sse_loop(slug))
 
 
 async def _lgtm_sse_loop(slug: str) -> None:

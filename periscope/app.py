@@ -47,14 +47,14 @@ async def lifespan(_app: FastAPI):
     # channels always talk to prod. Dev periscopes on other ports leave
     # the socket alone — see spec §"Dev never serves channels."
     if config.PORT == 8765:
-        mcp_task = _task(_mcp_listener(), "mcp-listener")
+        mcp_task = _task("mcp-listener", _mcp_listener())
     else:
         mcp_task = None
         log.info("dev port %d: skipping MCP listener", config.PORT)
     # LGTM mirror: polls localhost:9900 + subscribes per-session SSE.
     # No-op while LGTM isn't running; surfaces on the dashboard the
     # moment it comes up.
-    lgtm_task = _task(_lgtm_periodic_refresh(), "lgtm-refresh")
+    lgtm_task = _task("lgtm-refresh", _lgtm_periodic_refresh())
     try:
         yield
     finally:

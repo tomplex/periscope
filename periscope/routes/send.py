@@ -6,7 +6,6 @@ lands. Both endpoints share it; the bulk variant fans out via a
 ThreadPoolExecutor.
 """
 
-import subprocess
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -52,8 +51,6 @@ def _send_to_target(target: str, paste: str | None, keys: list[str]) -> dict:
                 time.sleep(0.10)
         if keys:
             tmux("send-keys", "-t", target, *keys)
-    except subprocess.CalledProcessError as e:
-        return {"target": target, "ok": False, "error": (e.stderr or str(e)).strip()}
     except Exception as e:
         return {"target": target, "ok": False, "error": str(e)}
     note_focus(target)

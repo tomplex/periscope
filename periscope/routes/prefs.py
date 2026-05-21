@@ -37,7 +37,7 @@ class UIPatch(BaseModel):
 
 
 @router.patch("/api/prefs/ui")
-async def patch_prefs_ui(body: UIPatch):
+def patch_prefs_ui(body: UIPatch):
     """Merge partial UI prefs. Only fields present in the body get written."""
     patch = body.model_dump(exclude_none=True)
     # `view` is validated against a fixed enum to keep junk out of the file.
@@ -54,7 +54,7 @@ class WindowAnnotation(BaseModel):
 
 
 @router.put("/api/prefs/windows/{pid}")
-async def put_window_annotation(pid: str, body: WindowAnnotation):
+def put_window_annotation(pid: str, body: WindowAnnotation):
     """Set/replace notes and tags on a window. `last_seen` and other
     fields are left intact — only notes/tags are managed via this endpoint."""
     if not pid or not pid.isalnum():
@@ -85,7 +85,7 @@ async def put_window_annotation(pid: str, body: WindowAnnotation):
 
 
 @router.delete("/api/prefs/windows/{pid}")
-async def delete_window_annotation(pid: str):
+def delete_window_annotation(pid: str):
     """Remove notes + tags. last_seen is preserved (it's the rebind hint)."""
     if not pid or not pid.isalnum():
         return {"ok": False, "error": "invalid pid"}
@@ -108,7 +108,7 @@ class CommandPatch(BaseModel):
 
 
 @router.post("/api/prefs/commands")
-async def add_command(body: Command):
+def add_command(body: Command):
     label = body.label.strip()
     if not label:
         return {"ok": False, "error": "empty label"}
@@ -120,7 +120,7 @@ async def add_command(body: Command):
 
 
 @router.put("/api/prefs/commands/{label}")
-async def update_command(label: str, body: CommandPatch):
+def update_command(label: str, body: CommandPatch):
     new_label = (body.label or label).strip() if body.label is not None else label
     if not new_label:
         return {"ok": False, "error": "empty label"}
@@ -138,7 +138,7 @@ async def update_command(label: str, body: CommandPatch):
 
 
 @router.delete("/api/prefs/commands/{label}")
-async def delete_command(label: str):
+def delete_command(label: str):
     if not store_delete_command(label):
         return {"ok": False, "error": f"unknown label: {label!r}"}
     return {"ok": True, "commands": get_commands()}
@@ -149,7 +149,7 @@ class CommandsReorder(BaseModel):
 
 
 @router.put("/api/prefs/commands")
-async def reorder_commands_route(body: CommandsReorder):
+def reorder_commands_route(body: CommandsReorder):
     """Reorder the commands list to match `labels`. Unknown labels are
     ignored; missing labels stay at the end."""
     reorder_commands(body.labels)
