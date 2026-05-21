@@ -1846,14 +1846,13 @@ body.modal-open { overflow: hidden; }
   color: var(--fg-2);
 }
 .timeline-text {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 /* Actionable rows (commit/CI/milestone) wrap their text in <a.timeline-link>.
-   display:block so the .timeline-text ellipsis works on the anchor (inline
-   anchors ignore text-overflow); at rest it reads as plain row text, and
-   reveals its clickability — brighten + underline — only on hover. */
+   display:block so each link is its own row block; at rest it reads as plain
+   row text, and reveals its clickability — brighten + underline — only on
+   hover. */
 .timeline-link {
   display: block;
   color: inherit;
@@ -2251,12 +2250,8 @@ body.modal-open { overflow: hidden; }
     overflow-y: auto;
 }
 
-/* Alert rows carry a real message — let them wrap and read brighter than
-   the terse single-line git/CI events around them. */
-.timeline-text-wrap {
-    white-space: normal;
-    overflow: visible;
-}
+/* Alert rows carry a real message — they read brighter than the terse
+   git/CI events around them. (Wrapping is the default for all rows.) */
 .timeline-row-alert .timeline-text {
     color: var(--fg-1);
     font-weight: 500;

@@ -641,7 +641,7 @@ function activityRow(e) {
       <li class="timeline-row timeline-row-alert" data-kind="${escapeHtml(e.kind)}">
         <span class="timeline-dot" style="background:${alertDotColor(e.kind)}"></span>
         <div class="timeline-body">
-          <div class="timeline-text timeline-text-wrap">${escapeHtml(e.text)}</div>
+          <div class="timeline-text">${escapeHtml(e.text)}</div>
           <div class="timeline-when">claude · ${escapeHtml(e.kind)} · ${escapeHtml(relTime(e.at))} ago</div>
         </div>
       </li>
@@ -700,6 +700,10 @@ function renderModalSidebar(data) {
   // focus and clobbers in-flight typing. Skip this tick — the next poll after
   // blur will catch up.
   if (modalSide.contains(document.activeElement)) return;
+  // The wholesale rebuild also resets the activity stream's scrollTop. Stash
+  // it across the rebuild so a user scrolled into older events stays put.
+  const priorStream = modalSide.querySelector(".activity-stream");
+  const priorScroll = priorStream ? priorStream.scrollTop : 0;
   modalSide.innerHTML = `
     <section class="modal-side-section">
       <h4>Linked</h4>
@@ -715,6 +719,8 @@ function renderModalSidebar(data) {
       ${renderActivitySection(data)}
     </section>
   `;
+  const newStream = modalSide.querySelector(".activity-stream");
+  if (newStream && priorScroll) newStream.scrollTop = priorScroll;
   wireNotesEditor(data);
   wireLinkAskButtons(data);
 
