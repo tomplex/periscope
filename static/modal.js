@@ -630,17 +630,21 @@ function renderMessages(data) {
   if (!replies.length) {
     return `<em class="modal-msg-empty">No messages from Claude yet.</em>`;
   }
-  return replies.map(r => {
+  // Stored append-order (oldest first); display most-recent-first.
+  const rows = [...replies].sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(r => {
     const kind = r.kind || "info";
     const severity = r.severity || "info";
-    const time = new Date(r.ts * 1000).toLocaleTimeString();
+    const stamp = new Date(r.ts * 1000).toLocaleString([], {
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
     return `
       <div class="modal-msg modal-msg-${kind} modal-msg-sev-${severity}">
-        <div class="modal-msg-meta">${time} · ${escapeHtml(kind)}</div>
+        <div class="modal-msg-meta">${stamp} · ${escapeHtml(kind)}</div>
         <div class="modal-msg-body">${escapeHtml(r.message)}</div>
       </div>
     `;
   }).join("");
+  return `<div class="modal-msg-list">${rows}</div>`;
 }
 
 function renderMessageComposer(data) {

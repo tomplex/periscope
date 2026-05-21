@@ -2228,6 +2228,11 @@ body.modal-open { overflow: hidden; }
     color: var(--fg-0);
 }
 
+.modal-msg-list {
+    max-height: 240px;
+    overflow-y: auto;
+}
+
 .modal-side-messages .modal-msg {
     padding: 6px 8px;
     margin-bottom: 6px;
