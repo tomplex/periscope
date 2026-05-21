@@ -281,12 +281,11 @@ git commit -m "activity: SQLite store for durable activity events"
 
 - [ ] **Step 1: Write the failing test for `github_origin`**
 
-Create or append to `tests/test_git_pr.py`:
+`tests/test_git_pr.py` already exists with other tests — **append** the
+following to it; do not recreate the file. Ensure `import subprocess` is
+among its imports (add it if absent).
 
 ```python
-"""Tests for periscope/git_pr.py."""
-import subprocess
-
 from periscope.git_pr import github_origin
 
 
@@ -441,9 +440,12 @@ git commit -m "git_pr: github_origin + actionable commit/CI URLs + ACTIVITY_DAYS
 Append to `tests/test_activity.py`:
 
 ```python
+import time as _time
+
+
 def test_cached_pane_activity_merges_and_sorts(monkeypatch):
-    # Fake git half: shared_activity_for returns two commit events.
-    monkeypatch.setattr(activity, "shared_activity_for", lambda p, b: [
+    # Pre-seed the git SWR cache so the merge runs with no bg fetch.
+    activity._git_cache[("/repo", "main")] = (_time.time(), [
         {"kind": "commit", "at": 50, "text": "older commit"},
         {"kind": "commit", "at": 150, "text": "newer commit"},
     ])
@@ -458,7 +460,7 @@ def test_cached_pane_activity_merges_and_sorts(monkeypatch):
 
 
 def test_cached_pane_activity_tags_git_events_with_src(monkeypatch):
-    monkeypatch.setattr(activity, "shared_activity_for", lambda p, b: [
+    activity._git_cache[("/repo", "main")] = (_time.time(), [
         {"kind": "commit", "at": 10, "text": "c", "url": "http://x"},
     ])
     monkeypatch.setattr(activity, "_acted_at", {})
@@ -467,11 +469,9 @@ def test_cached_pane_activity_tags_git_events_with_src(monkeypatch):
     assert out[0]["url"] == "http://x"
 ```
 
-Note: the git half is normally fetched through a stale-while-revalidate
-cache on a background thread. To keep the test synchronous, these tests
-patch `shared_activity_for` and the test calls `cached_pane_activity`
-twice if needed — the implementation below seeds the cache synchronously
-on the first call when it is empty (see Step 2's `cached_pane_activity`).
+These pre-seed `activity._git_cache` directly, so the merge logic is
+exercised with no background thread and no timing. Step 3 makes the
+`fresh_db` fixture clear that cache between tests.
 
 - [ ] **Step 2: Add the merge to `periscope/activity.py`**
 
@@ -538,38 +538,30 @@ def cached_pane_activity(target, pane_id, path, branch, limit=40):
     return events[:limit]
 ```
 
-- [ ] **Step 3: Make the first cache miss synchronous-friendly for tests**
+- [ ] **Step 3: Clear the git cache between tests**
 
-The two new tests patch `shared_activity_for` and expect git events on the
-first call. `_bg` runs the fetch on a thread, so the first call may race.
-Make the test deterministic by having `cached_pane_activity` block briefly
-for the *initial* fill only. Replace the `if stale ...` block inside
-`cached_pane_activity` with:
+`_git_cache` / `_git_fetching` are module globals; the `fresh_db` fixture
+must clear them so a pre-seeded cache from one test cannot leak into the
+next. In `tests/test_activity.py`, replace the `fresh_db` fixture with:
 
 ```python
-        with _git_lock:
-            cached = _git_cache.get(key)
-            stale = cached is None or (now - cached[0] >= _GIT_TTL)
-            if stale and key not in _git_fetching:
-                _git_fetching.add(key)
-                if cached is None:
-                    # First fill: do it inline so the very first modal
-                    # poll already shows git events (no empty flash).
-                    _git_lock.release()
-                    try:
-                        _fetch_git_into_cache(path, branch)
-                    finally:
-                        _git_lock.acquire()
-                    cached = _git_cache.get(key)
-                else:
-                    _bg("activity-git-fetch", _fetch_git_into_cache, path, branch)
-            git_events = cached[1] if cached else []
+@pytest.fixture(autouse=True)
+def fresh_db(tmp_path, monkeypatch):
+    """Every test gets an isolated periscope.db and empty caches."""
+    monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "t.db")
+    activity._CONN = None
+    activity._git_cache.clear()
+    activity._git_fetching.clear()
+    yield
+    if activity._CONN is not None:
+        activity._CONN.close()
+        activity._CONN = None
 ```
 
 - [ ] **Step 4: Run the tests — verify they pass**
 
 Run: `uv run pytest -q tests/test_activity.py`
-Expected: PASS (7 tests).
+Expected: PASS (9 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -779,9 +771,12 @@ import json as _json
 
 
 def _write_transcript(path, cwd, *, mtime=None):
+    # Faithful to the real shape: the first line is a file-history-snapshot
+    # with no cwd; user text lives at message.content, not a top-level key.
     lines = [
-        {"type": "file-history-snapshot"},          # first line has no cwd
-        {"type": "user", "cwd": cwd, "text": "hi"},
+        {"type": "file-history-snapshot"},
+        {"type": "user", "cwd": cwd,
+         "message": {"role": "user", "content": "hi"}},
     ]
     path.write_text("\n".join(_json.dumps(d) for d in lines) + "\n")
     if mtime is not None:
@@ -833,9 +828,12 @@ Add to `periscope/activity.py` (add `from pathlib import Path` to the imports):
 # --- Live transcript location ------------------------------------------
 #
 # Claude Code writes transcripts to ~/.claude/projects/<encoded-cwd>/
-# <session-uuid>.jsonl. The dir encoding (observed: '/' and '.' -> '-')
-# is not treated as authoritative — every transcript entry carries an
-# explicit `cwd`, which is what we trust.
+# <session-uuid>.jsonl. We resolve via the encoded dir ('/' and '.' ->
+# '-') as a fast path — scanning all ~3500 transcript dirs every worker
+# tick is the wrong cost. The cwd-field check below still guards file
+# selection within that dir. If Claude Code ever encodes a character
+# differently, that cwd gets no transcript (graceful: resets still fire
+# from the context-% drop; milestones still summarize commit messages).
 
 _PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -845,11 +843,12 @@ def _encode_cwd(cwd: str) -> str:
 
 
 def _transcript_cwd(jsonl_path: Path) -> str | None:
-    """The `cwd` recorded in a transcript — read the first few lines
-    (the very first is a file-history-snapshot with no cwd)."""
+    """The `cwd` recorded in a transcript. Scans the first 15 lines — a
+    transcript opens with cwd-less entries (file-history-snapshot,
+    queue-operation, last-prompt) before the first real turn."""
     try:
         with jsonl_path.open() as fh:
-            for _ in range(5):
+            for _ in range(15):
                 line = fh.readline()
                 if not line:
                     break
@@ -901,7 +900,9 @@ git commit -m "activity: live_transcript_for — locate a pane's transcript by c
 Append to `tests/test_activity.py`:
 
 ```python
-def test_check_reset_fires_on_context_drop():
+def test_check_reset_fires_on_context_drop(monkeypatch):
+    # Keep _compact_or_clear hermetic — no real ~/.claude lookup.
+    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
     last = {}
     assert activity._check_reset("%1", "/repo", 60, last) is False   # baseline
     assert activity._check_reset("%1", "/repo", 62, last) is False   # climbing
@@ -910,7 +911,8 @@ def test_check_reset_fires_on_context_drop():
     assert len(out) == 1 and out[0]["kind"] == "reset"
 
 
-def test_check_reset_ignores_none_readings():
+def test_check_reset_ignores_none_readings(monkeypatch):
+    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
     last = {}
     activity._check_reset("%1", "/repo", 60, last)
     assert activity._check_reset("%1", "/repo", None, last) is False  # obscured
@@ -1271,6 +1273,28 @@ def _commit(repo, msg):
     _git(repo, "commit", "-m", msg)
 
 
+def test_recent_user_prompts_reads_message_content(tmp_path, monkeypatch):
+    # Regression guard: user text is at message.content, never a top-level
+    # `text` key. A buggy d.get("text") reader returns [] and this fails.
+    tf = tmp_path / "t.jsonl"
+    entries = [
+        {"type": "user", "isMeta": True,
+         "message": {"role": "user", "content": "<system junk>"}},
+        {"type": "user",
+         "message": {"role": "user", "content": "add a config parser"}},
+        {"type": "assistant",
+         "message": {"role": "assistant", "content": "ok"}},
+        {"type": "user",
+         "message": {"role": "user", "content": [{"type": "tool_result"}]}},
+        {"type": "user",
+         "message": {"role": "user", "content": "now wire it up"}},
+    ]
+    tf.write_text("\n".join(_json.dumps(e) for e in entries) + "\n")
+    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: tf)
+    assert activity._recent_user_prompts("/repo") == [
+        "add a config parser", "now wire it up"]
+
+
 def test_maybe_emit_milestone_summarizes_a_commit_run(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1316,8 +1340,8 @@ def test_maybe_emit_milestone_noop_when_not_settled(tmp_path, monkeypatch):
 
 - [ ] **Step 2: Run — verify it fails**
 
-Run: `uv run pytest -q tests/test_activity.py -k maybe_emit`
-Expected: FAIL — `AttributeError: ... 'maybe_emit_milestone'`.
+Run: `uv run pytest -q tests/test_activity.py -k "maybe_emit or recent_user_prompts"`
+Expected: FAIL — `AttributeError` (`maybe_emit_milestone` / `_recent_user_prompts` not defined yet).
 
 - [ ] **Step 3: Implement `maybe_emit_milestone` + helpers**
 
@@ -1373,7 +1397,10 @@ def _commits_since(path: str, last: str | None, head: str) -> list[tuple[int, st
 
 
 def _recent_user_prompts(cwd: str, limit: int = 4) -> list[str]:
-    """Best-effort: the last few user-turn texts from the live transcript."""
+    """Best-effort: the last few real user-turn texts from the live
+    transcript. Claude Code stores user text at message.content — a string
+    for a typed prompt, a list of blocks for tool-result/image turns.
+    Skip meta turns and non-string content; there is no top-level `text`."""
     tf = live_transcript_for(cwd)
     if not tf:
         return []
@@ -1384,10 +1411,11 @@ def _recent_user_prompts(cwd: str, limit: int = 4) -> list[str]:
                 d = json.loads(line)
             except Exception:
                 continue
-            if d.get("type") == "user":
-                txt = d.get("text") or ""
-                if isinstance(txt, str) and txt.strip():
-                    prompts.append(txt.strip()[:300])
+            if d.get("type") != "user" or d.get("isMeta"):
+                continue
+            content = (d.get("message") or {}).get("content")
+            if isinstance(content, str) and content.strip():
+                prompts.append(content.strip()[:300])
     except Exception:
         return []
     return prompts[-limit:]
@@ -1610,7 +1638,7 @@ git commit -m "alerts: surface milestones in the dashboard notifications feed"
 
 **Deviations from the spec, called out:**
 - The worker runs as an async `_task` that offloads the blocking tick via `asyncio.to_thread`. The spec said `_task`; this honors that while keeping subprocess work off the event loop.
-- `cached_pane_activity` fills the git cache **inline** on the very first miss (Task 4, Step 3) so the first modal poll isn't blank; subsequent refreshes stay on a background thread. The spec described pure stale-while-revalidate; this is a small, deliberate refinement.
+- `live_transcript_for` resolves a transcript via the *encoded projects-dir* path only (`/` and `.` → `-`), not a full `~/.claude/projects/*/*.jsonl` glob. The spec's wording leans on the glob with the encoded dir as "an optimization"; scanning all ~3500 transcript dirs every 30s worker tick is the wrong cost. The `cwd`-field check still guards file selection *within* the encoded dir. Failure mode if Claude Code ever encodes a character differently: that cwd gets no milestone prompts and no compact-vs-clear label — graceful, since resets still fire from the context-% drop and milestones still summarize from commit messages.
 
 **Placeholder scan:** none — every code step shows the exact code to write, every command its expected output.
 
