@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 .env
 node_modules/
+.private-journal/
 
 # Tauri shell build artifacts
 src-tauri/target/
