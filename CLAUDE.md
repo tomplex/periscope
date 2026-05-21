@@ -16,7 +16,7 @@ Bolted on alongside the dashboard:
 - **`channel_shim.py`** + the channels block in `server.py` — an
   in-process MCP server over a unix socket. Each Claude pane spawns the
   shim, which proxies stdio↔socket so periscope can offer tools
-  (`reply`, `link_pr`, `link_linear`, `spawn_claude`) and push
+  (`notify`, `link_pr`, `link_linear`, `spawn_claude`) and push
   notifications back into the pane's prompt context.
 
 ## Running
@@ -243,8 +243,8 @@ shim is the documented stdio MCP entry point; the actual server logic
 `server.py` so it has access to the same state the dashboard does.
 
 Tools exposed to Claude:
-- `reply(message, kind=done|need_human|info)` — surfaces a status badge
-  on the pane card without opening the modal.
+- `notify(message, kind=done|need_human|info)` — surfaces an alert on
+  the pane card and in the dashboard's alert feed without opening the modal.
 - `link_pr(number)` — bind a GitHub PR to the pane, even if Claude's
   status-line URL isn't visible.
 - `link_linear(id, title?, status?)` — same for Linear tickets (no

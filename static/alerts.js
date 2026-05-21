@@ -1,5 +1,5 @@
 // Right-rail alerts feed: cross-pane reverse-chronological view of every
-// reply() the panes have sent through the channel. Polls /api/alerts/recent
+// notify() the panes have sent through the channel. Polls /api/alerts/recent
 // on the same 3s cadence as the main /api/state poll, but on its own
 // interval so the rail can refresh while the user is anywhere in the UI.
 //
@@ -132,7 +132,7 @@ function render() {
   if (!body) return;
   updateBadge();
   if (!lastItems.length) {
-    body.innerHTML = `<div class="alerts-empty">No alerts yet. Panes call <code>reply()</code> through the channel to show up here.</div>`;
+    body.innerHTML = `<div class="alerts-empty">No alerts yet. Panes call <code>notify()</code> through the channel to show up here.</div>`;
     return;
   }
   body.innerHTML = lastItems.map(renderRow).join("");

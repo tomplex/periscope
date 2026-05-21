@@ -1,4 +1,4 @@
-"""Channels: tool implementations + reply log + GC.
+"""Channels: tool implementations + alert log + GC.
 
 The live MCP listener (binds /tmp/periscope-mcp.sock, runs an MCP Server
 per connection) is exercised by `tests/test_channel_smoke.py` against the
@@ -9,9 +9,9 @@ tests cover the pure-logic surface that the listener dispatches into.
 import pytest
 
 from periscope.channels import (
-    _CHANNELS_LOCK, _CHANNEL_REPLIES, _CHANNEL_UNREAD, _MCP_SESSIONS,
+    _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
     _channel_gc,
-    _do_reply_tool, _do_link_pr_tool, _do_link_linear_tool,
+    _do_notify_tool, _do_link_pr_tool, _do_link_linear_tool,
 )
 
 
@@ -20,44 +20,44 @@ def reset_channel_state():
     """Clear the in-memory channel dicts between tests so each one starts
     from a clean slate."""
     with _CHANNELS_LOCK:
-        _CHANNEL_REPLIES.clear()
+        _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
     yield
     with _CHANNELS_LOCK:
-        _CHANNEL_REPLIES.clear()
+        _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
 
 
-def test_reply_tool_appends_reply_and_bumps_unread():
-    _do_reply_tool("%5", {"message": "done", "kind": "done"})
-    assert len(_CHANNEL_REPLIES["%5"]) == 1
-    entry = _CHANNEL_REPLIES["%5"][0]
+def test_notify_tool_appends_alert_and_bumps_unread():
+    _do_notify_tool("%5", {"message": "done", "kind": "done"})
+    assert len(_CHANNEL_ALERTS["%5"]) == 1
+    entry = _CHANNEL_ALERTS["%5"][0]
     assert entry["message"] == "done"
     assert entry["kind"] == "done"
     assert "ts" in entry
     assert _CHANNEL_UNREAD["%5"] == 1
 
 
-def test_reply_tool_multiple_replies_accumulate():
-    _do_reply_tool("%5", {"message": "first", "kind": "info"})
-    _do_reply_tool("%5", {"message": "second", "kind": "done"})
-    assert len(_CHANNEL_REPLIES["%5"]) == 2
+def test_notify_tool_multiple_alerts_accumulate():
+    _do_notify_tool("%5", {"message": "first", "kind": "info"})
+    _do_notify_tool("%5", {"message": "second", "kind": "done"})
+    assert len(_CHANNEL_ALERTS["%5"]) == 2
     assert _CHANNEL_UNREAD["%5"] == 2
 
 
 def test_channel_gc_drops_unknown_panes():
-    _CHANNEL_REPLIES["%5"] = [{"message": "x", "kind": "info", "ts": 0}]
+    _CHANNEL_ALERTS["%5"] = [{"message": "x", "kind": "info", "ts": 0}]
     _CHANNEL_UNREAD["%5"] = 1
-    _CHANNEL_REPLIES["%99"] = [{"message": "y", "kind": "info", "ts": 0}]
+    _CHANNEL_ALERTS["%99"] = [{"message": "y", "kind": "info", "ts": 0}]
     _CHANNEL_UNREAD["%99"] = 1
 
     _channel_gc({"%5"})
 
-    assert "%5" in _CHANNEL_REPLIES
+    assert "%5" in _CHANNEL_ALERTS
     assert "%5" in _CHANNEL_UNREAD
-    assert "%99" not in _CHANNEL_REPLIES
+    assert "%99" not in _CHANNEL_ALERTS
     assert "%99" not in _CHANNEL_UNREAD
 
 

@@ -14,7 +14,7 @@ def reset_panes_and_channels():
     """Clear in-memory pane + channel state between tests."""
     from periscope import panes
     from periscope.channels import (
-        _CHANNELS_LOCK, _CHANNEL_REPLIES, _CHANNEL_UNREAD, _MCP_SESSIONS,
+        _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
     )
     panes._focused_at.clear()
     panes._acted_at.clear()
@@ -23,7 +23,7 @@ def reset_panes_and_channels():
     panes._spinner_last_seen.clear()
     panes._claude_last_seen.clear()
     with _CHANNELS_LOCK:
-        _CHANNEL_REPLIES.clear()
+        _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
     yield
@@ -34,7 +34,7 @@ def reset_panes_and_channels():
     panes._spinner_last_seen.clear()
     panes._claude_last_seen.clear()
     with _CHANNELS_LOCK:
-        _CHANNEL_REPLIES.clear()
+        _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
 

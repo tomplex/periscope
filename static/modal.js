@@ -663,7 +663,7 @@ function activityRow(e) {
 // superseded it) is pinned above the stream so a blocked pane stays loud
 // even after older events scroll it out of view.
 function renderActivitySection(data) {
-  const alerts = (data.channel_replies || []).map((r) => ({
+  const alerts = (data.channel_alerts || []).map((r) => ({
     src: "alert", at: r.ts, kind: r.kind || "info", text: r.message || "",
   }));
   const events = (data.activity || []).map((e) => ({

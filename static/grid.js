@@ -70,13 +70,13 @@ function renderCard(w) {
   const apiErrCls = w.api_error ? " api-error" : "";
   const kind = w.is_claude ? "claude" : "shell";
 
-  // Claude reply override: while there are unread replies, the most recent
+  // Claude alert override: while there are unread alerts, the most recent
   // one takes over the card's activity line and tints the card background.
   // Opening the modal clears unread (T13), and the card drops back to its
   // normal pending/recap/last_line activity on the next poll.
-  const hasUnread = (w.channel_unread || 0) > 0 && (w.channel_replies || []).length > 0;
-  const unreadReply = hasUnread ? w.channel_replies[w.channel_replies.length - 1] : null;
-  const channelKind = unreadReply ? (unreadReply.kind || "info") : null;
+  const hasUnread = (w.channel_unread || 0) > 0 && (w.channel_alerts || []).length > 0;
+  const unreadAlert = hasUnread ? w.channel_alerts[w.channel_alerts.length - 1] : null;
+  const channelKind = unreadAlert ? (unreadAlert.kind || "info") : null;
   const channelClass = channelKind ? ` card-channel card-channel-${channelKind}` : "";
 
   // Needs-attention pulse: only when Claude has actively flagged need_human
@@ -154,13 +154,13 @@ function renderCard(w) {
     ? `<div class="card-meta">${metaParts.join(" ")}</div>`
     : "";
 
-  // Activity row. Priority: unread Claude reply (highest — Claude is actively
+  // Activity row. Priority: unread Claude alert (highest — Claude is actively
   // saying something the user hasn't seen) > pending_input (claude is going
   // to act on whatever you type next) > recap > last_line. is-shell when
   // it's a bare shell pane with nothing claude-shaped to show.
   let activity = "";
-  if (unreadReply) {
-    activity = `<div class="card-activity is-channel is-channel-${channelKind}"><span class="card-channel-prefix">claude</span>${escapeHtml(unreadReply.message)}</div>`;
+  if (unreadAlert) {
+    activity = `<div class="card-activity is-channel is-channel-${channelKind}"><span class="card-channel-prefix">claude</span>${escapeHtml(unreadAlert.message)}</div>`;
   } else if (w.pending_input) {
     activity = `<div class="card-activity is-pending"><span class="prompt">›</span>${escapeHtml(w.pending_input)}</div>`;
   } else if (w.recap) {
@@ -304,10 +304,10 @@ const _KIND_ICON = { need_human: "⚠", done: "✓", info: "•" };
 
 function sessionChannelAlert(ws) {
   const alerts = ws
-    .filter(w => (w.channel_unread || 0) > 0 && (w.channel_replies || []).length > 0)
+    .filter(w => (w.channel_unread || 0) > 0 && (w.channel_alerts || []).length > 0)
     .map(w => ({
-      kind: (w.channel_replies[w.channel_replies.length - 1].kind || "info"),
-      message: w.channel_replies[w.channel_replies.length - 1].message || "",
+      kind: (w.channel_alerts[w.channel_alerts.length - 1].kind || "info"),
+      message: w.channel_alerts[w.channel_alerts.length - 1].message || "",
     }));
   if (!alerts.length) return { html: "", kind: null };
   const topKind = alerts.reduce(
@@ -498,7 +498,7 @@ function passesStreamQuery(w, q) {
 // elsewhere.
 function hasUnreadNeedHuman(w) {
   if (!(w.channel_unread > 0)) return false;
-  return (w.channel_replies || []).some((r) => r.kind === "need_human");
+  return (w.channel_alerts || []).some((r) => r.kind === "need_human");
 }
 
 const STREAM_QUERY_KEY = "periscope-stream-query";
@@ -730,7 +730,7 @@ export function render(windows) {
   // Fade non-alerting cards when something needs the user's eyes. Same gate
   // as the per-card needsAttention so the two stay in sync.
   const anyAttention = windows.some((w) => {
-    return (w.channel_replies || []).some((r) => r.kind === "need_human")
+    return (w.channel_alerts || []).some((r) => r.kind === "need_human")
         && (w.channel_unread || 0) > 0;
   });
   grid.classList.toggle("grid-has-attention", anyAttention);

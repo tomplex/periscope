@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from periscope.channels import (
-    _CHANNELS_LOCK, _CHANNEL_REPLIES, _CHANNEL_UNREAD, _MCP_SESSIONS,
+    _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
 )
 from periscope.git_pr import cached_git_state, cached_pane_activity, cached_pr_state
 from periscope.lgtm import cached_lgtm_state
@@ -77,7 +77,7 @@ def pane(session: str, index: int, lines: int = 200):
     with _CHANNELS_LOCK:
         channel_attached = pane_id in _MCP_SESSIONS if pane_id else False
         channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
-        channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
+        channel_alerts = list(_CHANNEL_ALERTS.get(pane_id, [])) if pane_id else []
     # Persisted links — same override semantics as /api/state.
     persisted = get_window(str(pid) if pid else "")
     linked_pr = persisted.get("linked_pr")
@@ -102,7 +102,7 @@ def pane(session: str, index: int, lines: int = 200):
         "activity": activity,
         "channel_attached": channel_attached,
         "channel_unread": channel_unread,
-        "channel_replies": channel_replies,
+        "channel_alerts": channel_alerts,
         "linked_linear": linked_linear,
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,

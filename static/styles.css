@@ -2269,7 +2269,7 @@ body.modal-open { overflow: hidden; }
 }
 
 /* Needs-attention treatment: a pane card pulses red when Claude has called
-   reply(kind="need_human") and there are unread replies. Opening the modal
+   notify(kind="need_human") and there are unread alerts. Opening the modal
    clears unread, which removes the pulse on the next poll. The pulsing
    ring stacks on top of the card-channel-need_human background tint
    (defined above) for two layers of "look here." */

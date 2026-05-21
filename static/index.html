@@ -80,8 +80,8 @@
 
       <span class="filters-spacer"></span>
       <!-- Alerts toggle: opens the right-rail feed of every pane's recent
-           reply()s. Badge shows count of unread need_human alerts. -->
-      <button id="alerts-toggle" class="filter-btn is-action" aria-pressed="false" title="toggle alerts panel — cross-pane reply feed">
+           notify()s. Badge shows count of unread need_human alerts. -->
+      <button id="alerts-toggle" class="filter-btn is-action" aria-pressed="false" title="toggle alerts panel — cross-pane alert feed">
         <span class="alerts-toggle-label">🔔 alerts</span><span class="alerts-badge" id="alerts-badge" hidden>0</span>
       </button>
       <div class="view-switch" id="view-switch" role="tablist" aria-label="view">
@@ -90,7 +90,7 @@
       </div>
     </nav>
   </header>
-  <!-- Right rail: cross-pane reply feed. Hidden by default; toggled via the
+  <!-- Right rail: cross-pane alert feed. Hidden by default; toggled via the
        alerts button in the header. CSS keys off body[data-alerts="open"]. -->
   <aside id="alerts-rail" aria-label="alerts">
     <header class="alerts-rail-head">

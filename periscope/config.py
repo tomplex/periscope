@@ -20,7 +20,7 @@ USAGE_SESSION_PREFIX = "periscope-usage-"
 
 # Command line periscope sends into tmux when spawning a Claude window.
 # The dev-channels flag is what makes Claude connect to periscope's MCP
-# socket via channel_shim.py — without it, `link_pr` / `reply` / `+ link
+# socket via channel_shim.py — without it, `link_pr` / `notify` / `+ link
 # pull request` etc. all silently no-op for that pane. Every code path that
 # spawns Claude must use this constant; new hardcoded `"claude"` strings
 # reintroduce the channel-less-spawn bug.

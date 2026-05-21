@@ -6,7 +6,7 @@ and proxies bytes between Claude's stdio and our socket. All MCP logic —
 tool registration, capability declaration, notification emission — lives
 here.
 
-Locking: `_CHANNELS_LOCK` (threading.Lock) protects the reply log and
+Locking: `_CHANNELS_LOCK` (threading.Lock) protects the alert log and
 session registry. Separate from `_STATE_LOCK` because channel state is
 touched from both sync request handlers (FastAPI threadpool) and async
 MCP handlers; threading.Lock works correctly from both whereas
@@ -61,16 +61,16 @@ specific enough that you won't over-call them:
   `title` and `status` whenever you know them — if you fetched the
   ticket through the Linear MCP, you already have both.
 
-- reply(message, kind="done"): when you finish a substantial task the
+- notify(message, kind="done"): when you finish a substantial task the
   user asked for. One-sentence summary in `message`. Lets the user see
   at-a-glance that this pane is done and what you did, without opening
   the modal.
 
-- reply(message, kind="need_human"): when you're blocked and waiting on
+- notify(message, kind="need_human"): when you're blocked and waiting on
   input. Pulses the pane card with a red border so the user notices the
   alert across a busy dashboard.
 
-- reply(message, kind="info"): for status updates worth glancing at but
+- notify(message, kind="info"): for status updates worth glancing at but
   not blocking on (e.g., "tests pass, about to commit"). Use sparingly
   — this is the lowest-signal kind and adds dashboard noise if overused.
 
@@ -91,9 +91,9 @@ Messages going the other direction (periscope → you) arrive as
 """
 
 _CHANNELS_LOCK = threading.Lock()
-# pane_id -> list[dict]   reply log (kind, severity, message, ts)
-_CHANNEL_REPLIES: dict[str, list[dict]] = {}
-# pane_id -> int          unread reply count, cleared when modal opens
+# pane_id -> list[dict]   alert log (kind, severity, message, ts)
+_CHANNEL_ALERTS: dict[str, list[dict]] = {}
+# pane_id -> int          unread alert count, cleared when modal opens
 _CHANNEL_UNREAD: dict[str, int] = {}
 # pane_id -> MCP ServerSession reference. Presence is the "channel
 # attached" indicator and the route for notification emission. Typed Any
@@ -104,16 +104,16 @@ _MCP_SESSIONS: dict[str, Any] = {}
 
 
 def _channel_gc(known_pane_ids: set[str]) -> None:
-    """Drop reply state for panes that no longer exist. Session registry is
+    """Drop alert state for panes that no longer exist. Session registry is
     GC'd by the connection handler on disconnect, not here."""
     with _CHANNELS_LOCK:
-        for d in (_CHANNEL_REPLIES, _CHANNEL_UNREAD):
+        for d in (_CHANNEL_ALERTS, _CHANNEL_UNREAD):
             for stale in [k for k in d if k not in known_pane_ids]:
                 d.pop(stale, None)
 
 
-def _do_reply_tool(pane: str, arguments: dict):
-    """Tool implementation for `reply` — appends to the per-pane reply log
+def _do_notify_tool(pane: str, arguments: dict):
+    """Tool implementation for `notify` — appends to the per-pane alert log
     and bumps the unread count. Surfaces in periscope's UI on next poll."""
     from mcp import types
 
@@ -128,7 +128,7 @@ def _do_reply_tool(pane: str, arguments: dict):
         "ts": int(time.time()),
     }
     with _CHANNELS_LOCK:
-        _CHANNEL_REPLIES.setdefault(pane, []).append(entry)
+        _CHANNEL_ALERTS.setdefault(pane, []).append(entry)
         _CHANNEL_UNREAD[pane] = _CHANNEL_UNREAD.get(pane, 0) + 1
 
     body = {"ok": True, "kind": kind, "severity": severity}
@@ -435,7 +435,7 @@ async def _run_mcp_for_pane(
             pass
         return [
             types.Tool(
-                name="reply",
+                name="notify",
                 description=(
                     "Surface a message in periscope's UI for this pane. "
                     "Use kind=\"need_human\" when blocked and waiting on the user, "
@@ -555,8 +555,8 @@ async def _run_mcp_for_pane(
 
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-        if name == "reply":
-            return _do_reply_tool(pane, arguments)
+        if name == "notify":
+            return _do_notify_tool(pane, arguments)
         if name == "link_pr":
             return _do_link_pr_tool(pane, arguments)
         if name == "link_linear":

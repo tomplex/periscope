@@ -16,7 +16,7 @@ _STATE_LOCK acquisition for efficiency.
 from typing import Optional
 
 from periscope.channels import (
-    _CHANNELS_LOCK, _CHANNEL_REPLIES, _CHANNEL_UNREAD, _MCP_SESSIONS,
+    _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
 )
 from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.lgtm import cached_lgtm_state
@@ -104,7 +104,7 @@ def build_window_view(
     with _CHANNELS_LOCK:
         channel_attached = pane_id in _MCP_SESSIONS if pane_id else False
         channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
-        channel_replies = list(_CHANNEL_REPLIES.get(pane_id, [])) if pane_id else []
+        channel_alerts = list(_CHANNEL_ALERTS.get(pane_id, [])) if pane_id else []
 
     # Persisted Claude-driven links (via the link_pr / link_linear MCP
     # tools). `linked_pr` overrides the auto-detected `pr` field — when
@@ -143,7 +143,7 @@ def build_window_view(
         "completed_at": completed,
         "channel_attached": channel_attached,
         "channel_unread": channel_unread,
-        "channel_replies": channel_replies,
+        "channel_alerts": channel_alerts,
         "linked_linear": linked_linear,
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,

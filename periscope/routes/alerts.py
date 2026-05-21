@@ -1,7 +1,7 @@
-"""GET /api/alerts/recent — cross-pane reply feed for the dashboard rail.
+"""GET /api/alerts/recent — cross-pane alert feed for the dashboard rail.
 
-Walks `_CHANNEL_REPLIES` (the in-memory per-pane reply log written by the
-`reply` MCP tool — see periscope.channels) and flattens it into a single
+Walks `_CHANNEL_ALERTS` (the in-memory per-pane alert log written by the
+`notify` MCP tool — see periscope.channels) and flattens it into a single
 reverse-chronological list with pane metadata attached. The frontend's
 right-rail alerts panel polls this; each row links to the originating
 pane's modal.
@@ -13,7 +13,7 @@ when the lack of cross-restart history actually bites.
 
 from fastapi import APIRouter, Query
 
-from periscope.channels import _CHANNELS_LOCK, _CHANNEL_REPLIES
+from periscope.channels import _CHANNELS_LOCK, _CHANNEL_ALERTS
 from periscope.panes import list_windows
 
 router = APIRouter()
@@ -31,15 +31,15 @@ def alerts_recent(limit: int = Query(100, ge=1, le=500)):
             by_pane[pane_id] = w
 
     with _CHANNELS_LOCK:
-        snapshot = {pid: list(rs) for pid, rs in _CHANNEL_REPLIES.items()}
+        snapshot = {pid: list(rs) for pid, rs in _CHANNEL_ALERTS.items()}
 
     items: list[dict] = []
-    for pane_id, replies in snapshot.items():
+    for pane_id, alerts in snapshot.items():
         w = by_pane.get(pane_id)
         if not w:
             continue
         target = f"{w['session']}:{w['index']}"
-        for r in replies:
+        for r in alerts:
             items.append({
                 "ts": int(r.get("ts") or 0),
                 "kind": r.get("kind") or "info",
