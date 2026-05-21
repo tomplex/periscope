@@ -19,10 +19,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from periscope import config
-from periscope.git_pr import shared_activity_for
+from periscope.git_pr import cached_git_state, github_origin, shared_activity_for
 from periscope.log import _bg, log
 from periscope.panes import _acted_at, list_windows, parse_pane
-from periscope.tmux import tmux
+from periscope.rename_ai import claude_complete
+from periscope.tmux import _run, tmux
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -299,7 +300,8 @@ def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
 # Phase 3 extends _worker_tick with the milestone check.
 
 def _worker_tick(last_ctx: dict) -> None:
-    """One worker pass. Blocking (tmux subprocesses) — run off-loop."""
+    """One worker pass. Blocking (tmux + git subprocesses) — run off-loop."""
+    panes: list[tuple[dict, dict]] = []
     for w in list_windows():
         target = f"{w['session']}:{w['index']}"
         try:
@@ -309,8 +311,25 @@ def _worker_tick(last_ctx: dict) -> None:
             continue
         if not parsed.get("is_claude"):
             continue
+        panes.append((w, parsed))
         _check_reset(w.get("pane_id") or "", w.get("cwd") or "",
                      parsed.get("context_pct"), last_ctx)
+    # Milestones: one check per unique (cwd, branch) across Claude panes.
+    seen: set = set()
+    for w, _parsed in panes:
+        cwd = w.get("cwd")
+        if not cwd:
+            continue
+        branch = (cached_git_state(cwd) or {}).get("branch")
+        if not branch or (cwd, branch) in seen:
+            continue
+        seen.add((cwd, branch))
+        on_branch = [p for p in panes if p[0].get("cwd") == cwd]
+        settled = all(p[1].get("state") in ("idle", "shell") for p in on_branch)
+        try:
+            maybe_emit_milestone(cwd, branch, settled)
+        except Exception:
+            log.exception("maybe_emit_milestone failed for %s", cwd)
 
 
 async def run_worker() -> None:
@@ -344,3 +363,100 @@ def build_milestone_prompt(commits: list[str], prompts: list[str]) -> str:
         lines += [f"  - {p}" for p in prompts]
     lines += ["", "Return ONLY the single 'completed: ...' line, nothing else."]
     return "\n".join(lines)
+
+
+def _cursor_get(key: str) -> str | None:
+    with _LOCK:
+        c = _conn()
+        row = c.execute("SELECT value FROM cursors WHERE key=?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _cursor_set(key: str, value: str) -> None:
+    with _LOCK:
+        c = _conn()
+        c.execute("INSERT INTO cursors (key,value) VALUES (?,?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (key, value))
+        c.commit()
+
+
+def _git_head(path: str) -> str | None:
+    code, out = _run(["git", "-C", path, "rev-parse", "HEAD"])
+    return out.strip() if code == 0 and out else None
+
+
+def _commits_since(path: str, last: str | None, head: str) -> list[tuple[int, str]]:
+    """(committer_unix_time, subject) for commits in last..head, oldest
+    first. When last is None, the most recent 15 commits up to head."""
+    rev = f"{last}..{head}" if last else f"-15 {head}"
+    code, out = _run(["git", "-C", path, "log", *rev.split(),
+                      "--pretty=format:%ct%x09%s"], timeout=3.0)
+    rows: list[tuple[int, str]] = []
+    if code == 0 and out:
+        for line in out.split("\n"):
+            ct, _, subj = line.partition("\t")
+            if ct.isdigit() and subj.strip():
+                rows.append((int(ct), subj.strip()))
+    rows.reverse()  # oldest first
+    return rows[-15:]
+
+
+def _recent_user_prompts(cwd: str, limit: int = 4) -> list[str]:
+    """Best-effort: the last few real user-turn texts from the live
+    transcript. Claude Code stores user text at message.content — a string
+    for a typed prompt, a list of blocks for tool-result/image turns.
+    Skip meta turns and non-string content; there is no top-level `text`."""
+    tf = live_transcript_for(cwd)
+    if not tf:
+        return []
+    prompts: list[str] = []
+    try:
+        for line in tf.read_text().splitlines():
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("type") != "user" or d.get("isMeta"):
+                continue
+            content = (d.get("message") or {}).get("content")
+            if isinstance(content, str) and content.strip():
+                prompts.append(content.strip()[:300])
+    except Exception:
+        return []
+    return prompts[-limit:]
+
+
+def maybe_emit_milestone(path: str, branch: str, settled: bool) -> None:
+    """If HEAD advanced past the last summarized SHA and every Claude pane
+    on the branch is settled, summarize the commit run via Haiku and
+    record one milestone event."""
+    head = _git_head(path)
+    if not head:
+        return
+    branch_key = f"{path}\x1f{branch}"
+    cursor = f"milestone:{branch_key}"
+    last = _cursor_get(cursor)
+    if last == head:
+        return
+    if not settled:
+        return  # debounce — wait for the commit run to finish
+    commits = _commits_since(path, last, head)
+    if not commits:
+        _cursor_set(cursor, head)
+        return
+    prompts = _recent_user_prompts(path)
+    try:
+        line = claude_complete(
+            build_milestone_prompt([c[1] for c in commits], prompts)
+        ).strip()
+    except Exception:
+        log.warning("milestone summary failed", exc_info=True)
+        return  # do NOT advance the cursor — retry next tick
+    text = (line.splitlines()[0][:90]) if line else "completed: (work)"
+    slug = github_origin(path)
+    url = (f"https://github.com/{slug}/compare/{last}...{head}"
+           if slug and last else None)
+    record("branch", branch_key, "milestone", text,
+           at=commits[-1][0], url=url, dedup_key=f"milestone:{head}")
+    _cursor_set(cursor, head)
