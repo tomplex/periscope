@@ -278,3 +278,15 @@ def test_maybe_emit_milestone_noop_when_not_settled(tmp_path, monkeypatch):
     monkeypatch.setattr(activity, "claude_complete", lambda p: "completed: x")
     activity.maybe_emit_milestone(str(repo), "main", settled=False)
     assert activity.events_for(None, str(repo), "main") == []
+
+
+def test_maybe_emit_milestone_empty_completion_does_not_advance(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _commit(repo, "a commit")
+    monkeypatch.setattr(activity, "claude_complete", lambda p: "   ")
+    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
+    activity.maybe_emit_milestone(str(repo), "main", settled=True)
+    # Empty completion: no junk milestone, cursor not advanced.
+    assert activity.events_for(None, str(repo), "main") == []

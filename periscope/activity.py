@@ -15,6 +15,7 @@ import json
 import sqlite3
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -246,12 +247,14 @@ def _compact_is_recent(ts: str) -> bool:
 
 def _recent_compact_meta(jsonl_path) -> dict | None:
     """Scan the tail of a transcript for a recent compact_boundary entry;
-    return its compactMetadata, or None."""
+    return its compactMetadata, or None. Bounded tail read — transcripts
+    can be tens of MB."""
     try:
-        data = jsonl_path.read_text()
+        with jsonl_path.open() as fh:
+            tail = deque(fh, maxlen=200)
     except Exception:
         return None
-    for line in reversed(data.splitlines()[-200:]):
+    for line in reversed(tail):
         try:
             d = json.loads(line)
         except Exception:
@@ -406,24 +409,27 @@ def _recent_user_prompts(cwd: str, limit: int = 4) -> list[str]:
     """Best-effort: the last few real user-turn texts from the live
     transcript. Claude Code stores user text at message.content — a string
     for a typed prompt, a list of blocks for tool-result/image turns.
-    Skip meta turns and non-string content; there is no top-level `text`."""
+    Skip meta turns and non-string content; there is no top-level `text`.
+    Bounded tail read — transcripts can be tens of MB."""
     tf = live_transcript_for(cwd)
     if not tf:
         return []
     prompts: list[str] = []
     try:
-        for line in tf.read_text().splitlines():
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            if d.get("type") != "user" or d.get("isMeta"):
-                continue
-            content = (d.get("message") or {}).get("content")
-            if isinstance(content, str) and content.strip():
-                prompts.append(content.strip()[:300])
+        with tf.open() as fh:
+            tail = deque(fh, maxlen=2000)
     except Exception:
         return []
+    for line in tail:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("type") != "user" or d.get("isMeta"):
+            continue
+        content = (d.get("message") or {}).get("content")
+        if isinstance(content, str) and content.strip():
+            prompts.append(content.strip()[:300])
     return prompts[-limit:]
 
 
@@ -453,7 +459,10 @@ def maybe_emit_milestone(path: str, branch: str, settled: bool) -> None:
     except Exception:
         log.warning("milestone summary failed", exc_info=True)
         return  # do NOT advance the cursor — retry next tick
-    text = (line.splitlines()[0][:90]) if line else "completed: (work)"
+    if not line:
+        log.warning("milestone summary returned empty; will retry next tick")
+        return  # degenerate success — do NOT advance the cursor
+    text = line.splitlines()[0][:90]
     slug = github_origin(path)
     url = (f"https://github.com/{slug}/compare/{last}...{head}"
            if slug and last else None)
