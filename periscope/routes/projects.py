@@ -28,10 +28,9 @@ from periscope.projects import (
 )
 from periscope.repo_locks import repo_lock
 from periscope.store import set_window_fields
+from periscope.gitutil import detect_default_branch, resolve_repo_and_branch
 from periscope.tmux import _run, _tmux_mutate
-from periscope.worktree_spawn import (
-    spawn_worktree, _detect_default_branch, _layout_two_window,
-)
+from periscope.worktree_spawn import spawn_worktree, _layout_two_window
 from periscope.worktrees import invalidate as worktrees_invalidate
 
 
@@ -107,17 +106,7 @@ def projects_adopt(body: AdoptBody):
     if pinned_dir in all_projects():
         raise HTTPException(409, f"project already exists at {pinned_dir!r}")
 
-    # Resolve repo via --git-common-dir (same algorithm as the v2 migration).
-    code, common = _run(["git", "-C", pinned_dir, "rev-parse", "--git-common-dir"])
-    if code == 0 and common:
-        common_abs = common if os.path.isabs(common) else os.path.join(pinned_dir, common)
-        repo = os.path.realpath(os.path.dirname(common_abs))
-    else:
-        repo = pinned_dir
-
-    _, branch = _run(["git", "-C", pinned_dir, "rev-parse", "--abbrev-ref", "HEAD"])
-    if branch == "HEAD":
-        branch = ""
+    repo, branch = resolve_repo_and_branch(pinned_dir)
 
     try:
         row = create_project(
@@ -243,7 +232,7 @@ def projects_create(body: CreateBody):
     if branch.startswith("-"):
         raise HTTPException(400, f"branch name cannot start with '-': {branch!r}")
 
-    default = _detect_default_branch(repo)
+    default = detect_default_branch(repo)
 
     # Pre-flight collision checks before ANY filesystem/tmux mutation.
     # Pre-checking up here means a 409 leaves the user's state untouched —
@@ -352,24 +341,7 @@ def projects_promote(body: PromoteBody):
             409, f"project already exists at {pinned_dir!r}"
         )
 
-    # Resolve repo via --git-common-dir (matches Task 1's migration +
-    # adopt endpoints).
-    code, common = _run(
-        ["git", "-C", pinned_dir, "rev-parse", "--git-common-dir"]
-    )
-    if code == 0 and common:
-        common_abs = (
-            common if os.path.isabs(common) else os.path.join(pinned_dir, common)
-        )
-        repo = os.path.realpath(os.path.dirname(common_abs))
-    else:
-        repo = pinned_dir
-
-    _, branch = _run(
-        ["git", "-C", pinned_dir, "rev-parse", "--abbrev-ref", "HEAD"]
-    )
-    if branch == "HEAD":
-        branch = ""
+    repo, branch = resolve_repo_and_branch(pinned_dir)
 
     name = (body.name or os.path.basename(pinned_dir)).strip()
     tmux_session = name

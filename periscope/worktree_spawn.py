@@ -25,6 +25,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from periscope import worktrees
+from periscope.gitutil import detect_default_branch
 from periscope.log import log
 from periscope.repo_locks import repo_lock
 from periscope.tmux import _run, _tmux_mutate, tmux
@@ -89,26 +90,6 @@ def _resolve_layout(repo: str) -> str:
     return layout
 
 
-def _detect_default_branch(repo: str) -> str:
-    """Returns 'main' / 'master' / similar. Falls back to 'main' if
-    nothing matches — caller's fetch will then fail loudly."""
-    code, ref = _run(
-        ["git", "-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD"]
-    )
-    if code == 0 and ref:
-        # e.g. refs/remotes/origin/main → "main"
-        return ref.rsplit("/", 1)[-1]
-    # Fallback: probe local branches.
-    code, out = _run(
-        ["git", "-C", repo, "branch", "--format=%(refname:short)"]
-    )
-    branches = out.split("\n") if code == 0 else []
-    for candidate in ("main", "master"):
-        if candidate in branches:
-            return candidate
-    return "main"
-
-
 def spawn_worktree(
     repo: str,
     branch: str,
@@ -147,7 +128,7 @@ def spawn_worktree(
         # Either way it must exist.
         raise ValueError(f"not a git repo: {repo}")
 
-    base = base_branch or _detect_default_branch(repo)
+    base = base_branch or detect_default_branch(repo)
 
     repo_name = os.path.basename(repo.rstrip("/"))
 

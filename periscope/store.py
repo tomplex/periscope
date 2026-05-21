@@ -177,6 +177,7 @@ def _migrate_v1_to_v2(data: dict) -> tuple[dict, bool]:
         return data, False
 
     # Lazy imports — see docstring.
+    from periscope.gitutil import resolve_repo_and_branch
     from periscope.panes import list_windows
     from periscope.tmux import _run
 
@@ -237,22 +238,10 @@ def _migrate_v1_to_v2(data: dict) -> tuple[dict, bool]:
             )
             continue
 
-        # Resolve the project's repo. For a normal checkout, --git-common-dir
-        # returns <root>/.git, so the algorithm degenerates to "this cwd's
-        # toplevel = repo." For a worktree, --git-common-dir returns the
-        # shared .git dir of the main checkout, whose parent is the repo.
-        code, common = _run(["git", "-C", pinned_dir, "rev-parse", "--git-common-dir"])
-        if code == 0 and common:
-            common_abs = common if os.path.isabs(common) else os.path.join(pinned_dir, common)
-            repo = os.path.realpath(os.path.dirname(common_abs))
-        else:
-            repo = pinned_dir
-
-        # base_branch: the worktree's current branch when first observed.
-        # Empty if detached. Used by phase 3's worktree-tab spawn.
-        _, branch = _run(["git", "-C", pinned_dir, "rev-parse", "--abbrev-ref", "HEAD"])
-        if branch == "HEAD":
-            branch = ""
+        # repo + base_branch from the pinned dir (gitutil documents the
+        # --git-common-dir worktree-vs-checkout reasoning). base_branch is
+        # the worktree's branch when first observed — empty if detached.
+        repo, branch = resolve_repo_and_branch(pinned_dir)
 
         projects[pinned_dir] = {
             "name": session_name,

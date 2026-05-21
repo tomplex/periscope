@@ -24,6 +24,7 @@ import threading
 import time
 from typing import TypedDict, Optional
 
+from periscope.gitutil import detect_default_branch
 from periscope.log import log
 from periscope.projects import all_projects, MAIN_KEY
 from periscope.store import get_settings
@@ -50,25 +51,13 @@ def _now() -> float:
 # === Signal helpers ========================================================
 
 def _detect_default_branch(repo: str) -> str:
-    """Cached `git symbolic-ref refs/remotes/origin/HEAD` fallback to
-    main/master. 5-min TTL — repo defaults don't churn."""
+    """Cached default-branch lookup — 5-min TTL, repo defaults don't churn.
+    The uncached resolution lives in `gitutil.detect_default_branch`."""
     with _lock:
         cached = _default_branch_cache.get(repo)
         if cached and _now() - cached[0] < _PR_STATE_TTL:
             return cached[1]
-    code, ref = _run(
-        ["git", "-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD"],
-        timeout=3.0,
-    )
-    if code == 0 and ref:
-        branch = ref.rsplit("/", 1)[-1]
-    else:
-        code, out = _run(
-            ["git", "-C", repo, "branch", "--format=%(refname:short)"],
-            timeout=3.0,
-        )
-        branches = out.split("\n") if code == 0 else []
-        branch = "main" if "main" in branches else ("master" if "master" in branches else "main")
+    branch = detect_default_branch(repo)
     with _lock:
         _default_branch_cache[repo] = (_now(), branch)
     return branch
