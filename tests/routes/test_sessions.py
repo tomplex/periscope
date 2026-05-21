@@ -1,14 +1,5 @@
 """Tests for /api/session/* and /api/window/*."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def _patch(mocker, name, **kwargs):
     """Patch in either the route module (post-extract) or server (pre)."""

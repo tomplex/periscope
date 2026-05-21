@@ -1,14 +1,6 @@
 """Tests for /api/projects/*."""
 
 import json
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
 
 
 # === phase 4: PR review =====================================================

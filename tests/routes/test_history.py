@@ -1,14 +1,5 @@
 """Tests for /api/history/* and /history page."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def test_history_search_with_query(client, mocker):
     mocker.patch(

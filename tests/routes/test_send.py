@@ -1,14 +1,5 @@
 """Tests for /api/send and /api/send-bulk."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def _patch_tmux(mocker):
     for path in ("periscope.routes.send.tmux", "server.tmux"):

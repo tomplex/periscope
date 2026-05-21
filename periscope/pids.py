@@ -77,6 +77,133 @@ def _rebind_pid(
     return None
 
 
+# Immunity fields: any of these set means the row carries state the user
+# expects to persist past archive (per the project-model spec §"GC
+# extension"). `notes`/`tags` were the v1 list; phase 1 added the
+# channels-MCP fields so archiving a project doesn't silently erase its
+# PR/Linear linkage.
+_IMMUNITY_FIELDS = (
+    "notes", "tags",
+    "linked_pr", "linked_linear",
+    "acked_at", "completed_at",
+    "alias", "is_fork",
+)
+
+
+def _resolve_one(w: dict, wblock: dict, taken: set[str], now_ts: int) -> bool:
+    """Resolve one window's pid in place and refresh its `last_seen`.
+
+    Picks a pid (reuse @periscope_id / rebind / mint), stamps tmux when the
+    id was synthesized, records `pid` on `w`, strips the internal `pid_raw`,
+    and updates `wblock[pid]["last_seen"]`. Mutates `taken` with the chosen
+    pid. Returns True when something dirtying state.json changed (a stamp or
+    an identity change in last_seen) — a pure `ts` bump is not dirtying.
+
+    Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
+    """
+    target = f"{w['session']}:{w['index']}"
+    pid_raw = (w.get("pid_raw") or "").strip()
+    pid: str | None = None
+    if pid_raw and len(pid_raw) == 8 and all(c in "0123456789abcdef" for c in pid_raw):
+        # Reject a pid_raw already claimed earlier in this pass —
+        # tmux occasionally ends up with the same @periscope_id on
+        # multiple windows (session-copy, swap-window, set-option
+        # racing with new-window, etc.). Without this check, every
+        # duplicate window resolves to the same persisted state
+        # entry, so acted_at / completed_at / linked_pr / notes all
+        # collapse onto a single record and the grid sort can't
+        # distinguish the windows.
+        if pid_raw not in taken:
+            pid = pid_raw
+    if pid is None:
+        pid = _rebind_pid(
+            wblock,
+            session=w["session"],
+            name=w["name"],
+            branch=w.get("branch"),
+            cwd=w.get("cwd"),
+            taken_pids=taken,
+        )
+    if pid is None:
+        pid = _mint_pid()
+    dirty = False
+    # Stamp tmux only when we synthesized the id (mint or rebind).
+    if pid != pid_raw:
+        _stamp_pid(target, pid)
+        dirty = True
+    taken.add(pid)
+    w["pid"] = pid
+    # `pid_raw` was internal — strip it before emit.
+    w.pop("pid_raw", None)
+    # Refresh last_seen. Only flag dirty if something *other than*
+    # `ts` changed — a pure ts bump every 3s would thrash state.json
+    # to disk thousands of times an hour for no semantic gain.
+    entry = wblock.setdefault(pid, {})
+    prev = entry.get("last_seen") or {}
+    new_seen = {
+        "session": w["session"],
+        "name": w["name"],
+        "branch": w.get("branch"),
+        "cwd": w.get("cwd"),
+        "ts": now_ts,
+    }
+    identity_changed = (
+        "last_seen" not in entry
+        or any(prev.get(k) != new_seen[k] for k in ("session", "name", "branch", "cwd"))
+    )
+    entry["last_seen"] = new_seen
+    if identity_changed:
+        dirty = True
+    return dirty
+
+
+def _gc_windows(wblock: dict, taken: set[str], now_ts: int) -> bool:
+    """GC the `windows` block: drop entries that (a) carry no immunity
+    fields, AND (b) weren't refreshed this pass, AND (c) have a last_seen
+    older than 30 days. Annotated entries are immune — losing one would
+    lose notes. Returns True if anything was deleted.
+
+    Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
+    """
+    dirty = False
+    cutoff = now_ts - _PID_TTL_S
+    for pid in list(wblock.keys()):
+        if pid in taken:
+            continue
+        entry = wblock[pid]
+        if any(entry.get(k) for k in _IMMUNITY_FIELDS):
+            continue
+        ts = (entry.get("last_seen") or {}).get("ts") or 0
+        if ts < cutoff:
+            del wblock[pid]
+            dirty = True
+    return dirty
+
+
+def _gc_projects(projects: dict, now_ts: int) -> bool:
+    """GC the `projects` block: drop archived projects whose archived_at is
+    older than 30 days (spec §"GC" rule 2). Auto-archive itself is a
+    phase-6 feature; this just collects what the user (or future phases)
+    explicitly archived. `__main__` is invariant — even if some future bug
+    wrote archived_at on it, the GC must not delete it. Returns True if
+    anything was deleted.
+
+    Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
+    """
+    from periscope.projects import MAIN_KEY as _MAIN_KEY
+
+    dirty = False
+    for key in list(projects.keys()):
+        if key == _MAIN_KEY:
+            continue
+        row = projects[key]
+        archived_at = row.get("archived_at")
+        if archived_at and now_ts - archived_at > _PID_TTL_S:
+            del projects[key]
+            dirty = True
+    return dirty
+
+
 def resolve_pids(windows: list[dict]) -> None:
     """Mutates `windows` in place, adding a `pid` field to every entry.
 
@@ -109,101 +236,17 @@ def resolve_pids(windows: list[dict]) -> None:
         wblock = _store._STATE.setdefault("windows", {})
         taken: set[str] = set()
         dirty = False
+        # Phase 1: per-window pid resolution + last_seen refresh.
         for w in windows:
-            target = f"{w['session']}:{w['index']}"
-            pid_raw = (w.get("pid_raw") or "").strip()
-            pid: str | None = None
-            if pid_raw and len(pid_raw) == 8 and all(c in "0123456789abcdef" for c in pid_raw):
-                # Reject a pid_raw already claimed earlier in this pass —
-                # tmux occasionally ends up with the same @periscope_id on
-                # multiple windows (session-copy, swap-window, set-option
-                # racing with new-window, etc.). Without this check, every
-                # duplicate window resolves to the same persisted state
-                # entry, so acted_at / completed_at / linked_pr / notes all
-                # collapse onto a single record and the grid sort can't
-                # distinguish the windows.
-                if pid_raw not in taken:
-                    pid = pid_raw
-            if pid is None:
-                pid = _rebind_pid(
-                    wblock,
-                    session=w["session"],
-                    name=w["name"],
-                    branch=w.get("branch"),
-                    cwd=w.get("cwd"),
-                    taken_pids=taken,
-                )
-            if pid is None:
-                pid = _mint_pid()
-            # Stamp tmux only when we synthesized the id (mint or rebind).
-            if pid != pid_raw:
-                _stamp_pid(target, pid)
+            if _resolve_one(w, wblock, taken, now_ts):
                 dirty = True
-            taken.add(pid)
-            w["pid"] = pid
-            # `pid_raw` was internal — strip it before emit.
-            w.pop("pid_raw", None)
-            # Refresh last_seen. Only flag dirty if something *other than*
-            # `ts` changed — a pure ts bump every 3s would thrash state.json
-            # to disk thousands of times an hour for no semantic gain.
-            entry = wblock.setdefault(pid, {})
-            prev = entry.get("last_seen") or {}
-            new_seen = {
-                "session": w["session"],
-                "name": w["name"],
-                "branch": w.get("branch"),
-                "cwd": w.get("cwd"),
-                "ts": now_ts,
-            }
-            identity_changed = (
-                "last_seen" not in entry
-                or any(prev.get(k) != new_seen[k] for k in ("session", "name", "branch", "cwd"))
-            )
-            entry["last_seen"] = new_seen
-            if identity_changed:
-                dirty = True
-        # GC: drop windows entries that (a) carry no immunity fields, AND
-        # (b) weren't refreshed this pass, AND (c) have a last_seen older
-        # than 30 days. Annotated entries are immune — losing one would
-        # lose notes.
-        cutoff = now_ts - _PID_TTL_S
-        # Immunity fields: any of these set means the row carries state the
-        # user expects to persist past archive (per the project-model spec
-        # §"GC extension"). `notes`/`tags` were the v1 list; phase 1 adds
-        # the channels-MCP fields so archiving a project doesn't silently
-        # erase its PR/Linear linkage.
-        _IMMUNITY_FIELDS = (
-            "notes", "tags",
-            "linked_pr", "linked_linear",
-            "acked_at", "completed_at",
-            "alias", "is_fork",
-        )
-        for pid in list(wblock.keys()):
-            if pid in taken:
-                continue
-            entry = wblock[pid]
-            if any(entry.get(k) for k in _IMMUNITY_FIELDS):
-                continue
-            ts = (entry.get("last_seen") or {}).get("ts") or 0
-            if ts < cutoff:
-                del wblock[pid]
-                dirty = True
-        # Project GC: drop archived projects whose archived_at is older
-        # than 30 days (spec §"GC" rule 2). Auto-archive itself is a
-        # phase-6 feature; this just collects what the user (or future
-        # phases) explicitly archived.
-        # __main__ is invariant — even if some future bug wrote
-        # archived_at on it, the GC must not delete it.
-        from periscope.projects import MAIN_KEY as _MAIN_KEY
+        # Phase 2: window-entry GC.
+        if _gc_windows(wblock, taken, now_ts):
+            dirty = True
+        # Phase 3: archived-project GC.
         projects = _store._STATE.setdefault("projects", {})
-        for key in list(projects.keys()):
-            if key == _MAIN_KEY:
-                continue
-            row = projects[key]
-            archived_at = row.get("archived_at")
-            if archived_at and now_ts - archived_at > _PID_TTL_S:
-                del projects[key]
-                dirty = True
+        if _gc_projects(projects, now_ts):
+            dirty = True
         if dirty:
             _store._write_state(_store._STATE)
 

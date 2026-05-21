@@ -64,6 +64,117 @@ function indexProjects(projects) {
   return idx;
 }
 
+// Join non-empty HTML-string parts with the `·` separator, interleaved once
+// between adjacent parts only — no leading or trailing separator. Replaces the
+// repeated `if (parts.length) parts.push(separator)` idiom: callers push each
+// chip when present, then call this once. The separator is space-padded on
+// both sides — byte-identical to the prior `[chip, dot, chip].join(" ")`.
+function joinWithDots(parts) {
+  return parts.join(` <span class="card-dot">·</span> `);
+}
+
+// Meta row: branch · clean/dirty · #PR ci.  PR/CI stays on the card so
+// a glance still surfaces CI breakage; matches the existing scan pattern.
+// `aff` (worktree affiliation) is passed in — renderCard also needs it for
+// the promote button, so it's computed once there.
+function renderCardMeta(w, aff) {
+  const metaParts = [];
+  if (w.branch) metaParts.push(`<span class="card-branch">${escapeHtml(w.branch)}</span>`);
+  if (w.git) {
+    metaParts.push(gitMetaSpan(w.git));
+  }
+  if (w.pr) {
+    // pr_linked: Claude explicitly linked this PR via the link_pr MCP tool
+    // (overrides periscope's auto-detection from the title bar).
+    const linkedTitle = w.pr_linked ? " (linked by claude)" : "";
+    const linkedClass = w.pr_linked ? " card-pr-linked" : "";
+    const prLink = `<a class="card-pr${linkedClass}" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="PR #${w.pr}${linkedTitle}">#${w.pr}</a>`;
+    if (w.ci === "✗") {
+      // Bundle #PR + ✗ into a single red badge so the failure mode is
+      // immediately legible without claiming the card's state accent.
+      metaParts.push(`<span class="card-pr-fail">${prLink}<span class="card-ci-bad">✗</span></span>`);
+    } else {
+      // PR link and CI glyph are one meta part — space-joined, no dot between
+      // them (the dot separator only goes between distinct chips).
+      const ci = w.ci ? ` ${ciSpan(w.ci)}` : "";
+      metaParts.push(`${prLink}${ci}`);
+    }
+  }
+  if (w.linked_linear) {
+    // Linear linking is always explicit — periscope doesn't auto-detect, so
+    // every linked_linear chip is something Claude (or a future UI affordance)
+    // declared. URL points at app.linear.app/issue/<id> which redirects to
+    // the workspace's canonical URL. The chip stays terse (id only — the grid
+    // is dense); title/status, when Claude supplied them, ride in the tooltip.
+    const lid = escapeHtml(w.linked_linear);
+    const ltitle = w.linked_linear_title ? `: ${escapeHtml(w.linked_linear_title)}` : "";
+    const lstatus = w.linked_linear_status ? ` [${escapeHtml(w.linked_linear_status)}]` : "";
+    metaParts.push(
+      `<a class="card-linear" href="https://linear.app/issue/${lid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ${lid}${ltitle}${lstatus} (linked by claude)">${lid}</a>`
+    );
+  }
+  if (aff.kind === "sibling") {
+    metaParts.push(
+      `<span class="card-worktree-chip card-worktree-chip-sibling" title="this tab is in a sibling worktree of the project's repo">↪ ${escapeHtml(aff.label || "")}</span>`
+    );
+  } else if (aff.kind === "off-repo") {
+    metaParts.push(
+      `<span class="card-worktree-chip card-worktree-chip-off-repo" title="this tab's cwd is outside the project's repo">⚠ ${escapeHtml(aff.label || "")}</span>`
+    );
+  }
+  if (w.lgtm) {
+    // LGTM session is registered for this pane's repo. Click opens the modal
+    // pre-switched to the Review tab; the existing card click handler keys
+    // off `data-lgtm-badge`.
+    const total = (w.lgtm.claude_comments || 0) + (w.lgtm.user_comments || 0);
+    const countLabel = total > 0 ? ` <span class="card-lgtm-n">${total}</span>` : "";
+    const tip = total > 0 ? `LGTM review · ${total} comment${total === 1 ? "" : "s"}` : "LGTM review (no comments)";
+    metaParts.push(
+      `<button type="button" class="card-lgtm" data-lgtm-badge data-target="${w.target}" title="${tip}">👁 review${countLabel}</button>`
+    );
+  }
+  return metaParts.length
+    ? `<div class="card-meta">${joinWithDots(metaParts)}</div>`
+    : "";
+}
+
+// Activity row. Priority: unread Claude alert (highest — Claude is actively
+// saying something the user hasn't seen) > pending_input (claude is going
+// to act on whatever you type next) > recap > last_line. is-shell when
+// it's a bare shell pane with nothing claude-shaped to show. `unreadAlert`
+// and `channelKind` are derived in renderCard (also used for card-class).
+function renderCardActivity(w, unreadAlert, channelKind) {
+  if (unreadAlert) {
+    return `<div class="card-activity is-channel is-channel-${channelKind}"><span class="card-channel-prefix">claude</span>${escapeHtml(unreadAlert.message)}</div>`;
+  } else if (w.pending_input) {
+    return `<div class="card-activity is-pending"><span class="prompt">›</span>${escapeHtml(w.pending_input)}</div>`;
+  } else if (w.recap) {
+    return `<div class="card-activity is-output">${escapeHtml(w.recap)}</div>`;
+  } else if (w.last_line) {
+    const cls = w.is_claude ? "is-output" : "is-shell";
+    return `<div class="card-activity ${cls}">${escapeHtml(w.last_line)}</div>`;
+  }
+  return "";
+}
+
+// Footer: progress bar + ctx% + model + viewed-age. Progress bar only when
+// we have a context % to fill; otherwise the row reads "model · viewed Xm".
+function renderCardFooter(w) {
+  const footParts = [];
+  if (w.context_pct != null) {
+    footParts.push(`<div class="card-progress"><i style="width:${w.context_pct}%"></i></div>`);
+    footParts.push(`<span class="card-pct">${w.context_pct}%</span>`);
+  }
+  if (w.model) {
+    footParts.push(`<span class="card-model">${escapeHtml(w.model.replace(/\s*\(.*\)/, ""))}</span>`);
+  }
+  const recent = relTime(w.focused_at);
+  if (recent) footParts.push(`<span class="card-viewed">viewed ${recent}</span>`);
+  return footParts.length
+    ? `<div class="card-foot">${footParts.join(" ")}</div>`
+    : "";
+}
+
 function renderCard(w) {
   const stateClass = `state-${w.state}`;
   const ciBadCls = w.ci === "✗" ? " ci-bad" : "";
@@ -88,87 +199,12 @@ function renderCard(w) {
     ? `<span class="card-anno" title="has notes">📝</span>`
     : "";
 
-  // Meta row: branch · clean/dirty · #PR ci.  PR/CI stays on the card so
-  // a glance still surfaces CI breakage; matches the existing scan pattern.
-  const metaParts = [];
-  if (w.branch) metaParts.push(`<span class="card-branch">${escapeHtml(w.branch)}</span>`);
-  if (w.git) {
-    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
-    metaParts.push(gitMetaSpan(w.git));
-  }
-  if (w.pr) {
-    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
-    // pr_linked: Claude explicitly linked this PR via the link_pr MCP tool
-    // (overrides periscope's auto-detection from the title bar).
-    const linkedTitle = w.pr_linked ? " (linked by claude)" : "";
-    const linkedClass = w.pr_linked ? " card-pr-linked" : "";
-    const prLink = `<a class="card-pr${linkedClass}" href="https://github.com/faradayio/fdy/pull/${w.pr}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="PR #${w.pr}${linkedTitle}">#${w.pr}</a>`;
-    if (w.ci === "✗") {
-      // Bundle #PR + ✗ into a single red badge so the failure mode is
-      // immediately legible without claiming the card's state accent.
-      metaParts.push(`<span class="card-pr-fail">${prLink}<span class="card-ci-bad">✗</span></span>`);
-    } else {
-      metaParts.push(prLink);
-      if (w.ci) metaParts.push(ciSpan(w.ci));
-    }
-  }
-  if (w.linked_linear) {
-    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
-    // Linear linking is always explicit — periscope doesn't auto-detect, so
-    // every linked_linear chip is something Claude (or a future UI affordance)
-    // declared. URL points at app.linear.app/issue/<id> which redirects to
-    // the workspace's canonical URL. The chip stays terse (id only — the grid
-    // is dense); title/status, when Claude supplied them, ride in the tooltip.
-    const lid = escapeHtml(w.linked_linear);
-    const ltitle = w.linked_linear_title ? `: ${escapeHtml(w.linked_linear_title)}` : "";
-    const lstatus = w.linked_linear_status ? ` [${escapeHtml(w.linked_linear_status)}]` : "";
-    metaParts.push(
-      `<a class="card-linear" href="https://linear.app/issue/${lid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ${lid}${ltitle}${lstatus} (linked by claude)">${lid}</a>`
-    );
-  }
+  // `aff` (worktree affiliation) feeds both the meta row and the promote
+  // button, so compute it once here and pass it down.
   const aff = w.worktree_affiliation || { kind: "no-repo" };
-  if (aff.kind === "sibling") {
-    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
-    metaParts.push(
-      `<span class="card-worktree-chip card-worktree-chip-sibling" title="this tab is in a sibling worktree of the project's repo">↪ ${escapeHtml(aff.label || "")}</span>`
-    );
-  } else if (aff.kind === "off-repo") {
-    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
-    metaParts.push(
-      `<span class="card-worktree-chip card-worktree-chip-off-repo" title="this tab's cwd is outside the project's repo">⚠ ${escapeHtml(aff.label || "")}</span>`
-    );
-  }
-  if (w.lgtm) {
-    if (metaParts.length) metaParts.push(`<span class="card-dot">·</span>`);
-    // LGTM session is registered for this pane's repo. Click opens the modal
-    // pre-switched to the Review tab; the existing card click handler keys
-    // off `data-lgtm-badge`.
-    const total = (w.lgtm.claude_comments || 0) + (w.lgtm.user_comments || 0);
-    const countLabel = total > 0 ? ` <span class="card-lgtm-n">${total}</span>` : "";
-    const tip = total > 0 ? `LGTM review · ${total} comment${total === 1 ? "" : "s"}` : "LGTM review (no comments)";
-    metaParts.push(
-      `<button type="button" class="card-lgtm" data-lgtm-badge data-target="${w.target}" title="${tip}">👁 review${countLabel}</button>`
-    );
-  }
-  const metaRow = metaParts.length
-    ? `<div class="card-meta">${metaParts.join(" ")}</div>`
-    : "";
+  const metaRow = renderCardMeta(w, aff);
 
-  // Activity row. Priority: unread Claude alert (highest — Claude is actively
-  // saying something the user hasn't seen) > pending_input (claude is going
-  // to act on whatever you type next) > recap > last_line. is-shell when
-  // it's a bare shell pane with nothing claude-shaped to show.
-  let activity = "";
-  if (unreadAlert) {
-    activity = `<div class="card-activity is-channel is-channel-${channelKind}"><span class="card-channel-prefix">claude</span>${escapeHtml(unreadAlert.message)}</div>`;
-  } else if (w.pending_input) {
-    activity = `<div class="card-activity is-pending"><span class="prompt">›</span>${escapeHtml(w.pending_input)}</div>`;
-  } else if (w.recap) {
-    activity = `<div class="card-activity is-output">${escapeHtml(w.recap)}</div>`;
-  } else if (w.last_line) {
-    const cls = w.is_claude ? "is-output" : "is-shell";
-    activity = `<div class="card-activity ${cls}">${escapeHtml(w.last_line)}</div>`;
-  }
+  const activity = renderCardActivity(w, unreadAlert, channelKind);
 
   // Status label. needs-input wins over the spinner verb (a stale "envisioning…"
   // in scrollback shouldn't drown out the blocking prompt).
@@ -194,25 +230,11 @@ function renderCard(w) {
     ? `<span class="card-api-error" title="last tool result was an API error — pane is waiting for a nudge (e.g. 'keep going')">⚠ API error</span>`
     : "";
 
-  // Footer: progress bar + ctx% + model + viewed-age. Progress bar only when
-  // we have a context % to fill; otherwise the row reads "model · viewed Xm".
-  const footParts = [];
-  if (w.context_pct != null) {
-    footParts.push(`<div class="card-progress"><i style="width:${w.context_pct}%"></i></div>`);
-    footParts.push(`<span class="card-pct">${w.context_pct}%</span>`);
-  }
-  if (w.model) {
-    footParts.push(`<span class="card-model">${escapeHtml(w.model.replace(/\s*\(.*\)/, ""))}</span>`);
-  }
-  const recent = relTime(w.focused_at);
-  if (recent) footParts.push(`<span class="card-viewed">viewed ${recent}</span>`);
-  const footRow = footParts.length
-    ? `<div class="card-foot">${footParts.join(" ")}</div>`
-    : "";
+  const footRow = renderCardFooter(w);
 
   // Promote-to-project: only on tabs in the __main__ project, only
   // when the cwd is inside a git repo (worktree_affiliation tells us).
-  // `aff` is already in scope from the worktree-chip block above.
+  // `aff` is already in scope from the card-class block above.
   const isMainTab = w.project_pinned_dir === "__main__";
   const canPromote = isMainTab && aff.kind && aff.kind !== "no-repo";
   const promoteBtn = canPromote

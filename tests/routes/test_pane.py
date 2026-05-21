@@ -1,14 +1,5 @@
 """Tests for /api/pane and /api/rename."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def _patch(mocker, name, **kwargs):
     for prefix in (f"periscope.routes.pane.{name}", f"server.{name}"):

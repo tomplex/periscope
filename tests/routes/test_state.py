@@ -1,14 +1,5 @@
 """Tests for GET /api/state — the big aggregator."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def _patch(mocker, name, **kwargs):
     for prefix in (f"periscope.routes.state.{name}", f"server.{name}"):

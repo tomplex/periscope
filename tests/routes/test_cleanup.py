@@ -1,14 +1,5 @@
 """Tests for /api/cleanup/*."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def test_candidates_returns_list(client, mocker):
     mocker.patch(

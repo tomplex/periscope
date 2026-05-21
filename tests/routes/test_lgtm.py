@@ -1,14 +1,5 @@
 """Tests for /api/lgtm/start."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def _patch_lgtm_refresh(mocker):
     """_lgtm_refresh_all is async; patch to a no-op coroutine factory."""

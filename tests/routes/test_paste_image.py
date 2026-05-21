@@ -1,14 +1,5 @@
 """Tests for /api/paste-image."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def test_paste_image_writes_file_and_pastes(client, mocker, tmp_path):
     # Redirect the temp-image dir into a tmpdir so the test doesn't litter /tmp.

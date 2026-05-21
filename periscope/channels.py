@@ -103,6 +103,15 @@ _CHANNEL_UNREAD: dict[str, int] = {}
 _MCP_SESSIONS: dict[str, Any] = {}
 
 
+def _tool_result(body: dict) -> list:
+    """Wrap a tool-result dict in the MCP TextContent list shape every tool
+    handler returns. One place to change if the wire format ever grows an
+    `isError` flag or a structured-content field."""
+    from mcp import types
+
+    return [types.TextContent(type="text", text=json.dumps(body))]
+
+
 def _channel_gc(known_pane_ids: set[str]) -> None:
     """Drop alert state for panes that no longer exist. Session registry is
     GC'd by the connection handler on disconnect, not here."""
@@ -115,8 +124,6 @@ def _channel_gc(known_pane_ids: set[str]) -> None:
 def _do_notify_tool(pane: str, arguments: dict):
     """Tool implementation for `notify` — appends to the per-pane alert log
     and bumps the unread count. Surfaces in periscope's UI on next poll."""
-    from mcp import types
-
     message = arguments["message"]
     kind = arguments.get("kind", "info")
     severity = arguments.get("severity", "info")
@@ -132,40 +139,49 @@ def _do_notify_tool(pane: str, arguments: dict):
         _CHANNEL_UNREAD[pane] = _CHANNEL_UNREAD.get(pane, 0) + 1
 
     body = {"ok": True, "kind": kind, "severity": severity}
-    return [types.TextContent(type="text", text=json.dumps(body))]
+    return _tool_result(body)
+
+
+def _resolve_window(match) -> tuple[str, str]:
+    """Find the first `list_windows()` entry satisfying `match`, resolve its
+    persistent @periscope_id (minting one if the window is new), and return
+    `(pid, pane_id)`. Returns `("", "")` if no window matches — e.g. the
+    pane has vanished from tmux's list-windows.
+
+    `match` is a predicate over a window dict; callers vary only in the
+    lookup key (pane_id %N vs (session, index))."""
+    for w in list_windows():
+        if match(w):
+            _attach_git_then_resolve_pids([w])
+            return w.get("pid") or "", w.get("pane_id") or ""
+    return "", ""
 
 
 def _resolve_pid_for_pane(pane_id: str) -> str:
     """Find the persistent @periscope_id (pid) for a tmux %N pane id.
     Mints a fresh pid if the window hasn't been seen before. Returns ""
     if the pane has vanished from tmux's list-windows."""
-    windows = list_windows()
-    for w in windows:
-        if w.get("pane_id") == pane_id:
-            _attach_git_then_resolve_pids([w])
-            return w.get("pid") or ""
-    return ""
+    pid, _ = _resolve_window(lambda w: w.get("pane_id") == pane_id)
+    return pid
 
 
 def _do_link_pr_tool(pane: str, arguments: dict):
     """Persist a linked PR number on the window's state.json entry.
     Overrides the auto-detected `pr` field when present."""
-    from mcp import types
-
     try:
         number = int(arguments["number"])
     except (KeyError, TypeError, ValueError):
         body = {"ok": False, "error": "number must be an integer"}
-        return [types.TextContent(type="text", text=json.dumps(body))]
+        return _tool_result(body)
 
     pid = _resolve_pid_for_pane(pane)
     if not pid:
         body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
-        return [types.TextContent(type="text", text=json.dumps(body))]
+        return _tool_result(body)
 
     set_window_fields(pid, linked_pr=number)
     body = {"ok": True, "linked_pr": number, "pid": pid}
-    return [types.TextContent(type="text", text=json.dumps(body))]
+    return _tool_result(body)
 
 
 def _do_link_linear_tool(pane: str, arguments: dict):
@@ -175,12 +191,10 @@ def _do_link_linear_tool(pane: str, arguments: dict):
     fully describes the link — omitted title/status clear any prior value
     (set_window_fields drops keys set to None), so a re-link with just an id
     won't leave stale metadata pointing at a different ticket."""
-    from mcp import types
-
     ticket_id = str(arguments.get("id", "")).strip()
     if not ticket_id:
         body = {"ok": False, "error": "id is required and must be non-empty"}
-        return [types.TextContent(type="text", text=json.dumps(body))]
+        return _tool_result(body)
 
     title = str(arguments.get("title", "")).strip()
     status = str(arguments.get("status", "")).strip()
@@ -188,7 +202,7 @@ def _do_link_linear_tool(pane: str, arguments: dict):
     pid = _resolve_pid_for_pane(pane)
     if not pid:
         body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
-        return [types.TextContent(type="text", text=json.dumps(body))]
+        return _tool_result(body)
 
     set_window_fields(
         pid,
@@ -203,7 +217,7 @@ def _do_link_linear_tool(pane: str, arguments: dict):
         "linked_linear_status": status,
         "pid": pid,
     }
-    return [types.TextContent(type="text", text=json.dumps(body))]
+    return _tool_result(body)
 
 
 async def _do_spawn_claude_tool(pane: str, arguments: dict):
@@ -212,12 +226,10 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     Async because Claude's TUI needs ~1.5s to mount before it can absorb a
     paste — using time.sleep here would block the event loop for every
     other pane's MCP connection sharing it."""
-    from mcp import types
-
     prompt = str(arguments.get("prompt", "")).strip()
     if not prompt:
         body = {"ok": False, "error": "prompt is required and must be non-empty"}
-        return [types.TextContent(type="text", text=json.dumps(body))]
+        return _tool_result(body)
 
     # Caller's pane → its session + cwd. If the pane has vanished (rare —
     # the connection would normally drop first), tmux returns empty and we
@@ -252,12 +264,12 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         )
     if not ok:
         body = {"ok": False, "error": msg}
-        return [types.TextContent(type="text", text=json.dumps(body))]
+        return _tool_result(body)
     try:
         index = int(msg)
     except ValueError:
         body = {"ok": False, "error": f"tmux returned unexpected index: {msg!r}"}
-        return [types.TextContent(type="text", text=json.dumps(body))]
+        return _tool_result(body)
     target = f"{session}:{index}"
 
     # Let the shell rc finish before the `claude` command line arrives, so
@@ -288,17 +300,11 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     note_action(target)
 
     # Resolve the spawned window's stable @periscope_id so the caller can
-    # reference it across restarts. Same lookup pattern as
-    # _resolve_pid_for_pane but matched on (session, index) because we
-    # don't have the pane_id %N yet.
-    pid = ""
-    pane_id = ""
-    for w in list_windows():
-        if w.get("session") == session and w.get("index") == index:
-            _attach_git_then_resolve_pids([w])
-            pid = w.get("pid") or ""
-            pane_id = w.get("pane_id") or ""
-            break
+    # reference it across restarts. Matched on (session, index) rather than
+    # pane_id %N because we don't have the pane_id yet.
+    pid, pane_id = _resolve_window(
+        lambda w: w.get("session") == session and w.get("index") == index
+    )
 
     body = {
         "ok": True,
@@ -308,7 +314,7 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         "pid": pid,
         "pane_id": pane_id,
     }
-    return [types.TextContent(type="text", text=json.dumps(body))]
+    return _tool_result(body)
 
 
 async def emit_channel_event(pane: str, content: str, meta: dict | None = None) -> bool:

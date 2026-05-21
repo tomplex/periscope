@@ -2,15 +2,6 @@
 
 import json
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def _patch(mocker, base_path, name, **kwargs):
     """Patch a name across both possible locations during the move."""

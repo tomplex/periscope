@@ -1,14 +1,5 @@
 """Tests for /api/settings."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def test_get_settings_returns_block(client, mocker):
     mocker.patch(

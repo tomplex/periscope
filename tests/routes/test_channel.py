@@ -2,15 +2,6 @@
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def test_clear_unread_resets_count(client):
     from periscope.channels import _CHANNEL_UNREAD, _CHANNELS_LOCK

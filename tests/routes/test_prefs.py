@@ -1,14 +1,5 @@
 """Tests for /api/prefs/*."""
 
-import pytest
-from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client():
-    from periscope.app import app
-    return TestClient(app)
-
 
 def test_get_prefs_returns_state(client, clean_state):
     clean_state["ui"]["view"] = "grid"
