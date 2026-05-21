@@ -136,3 +136,46 @@ def test_live_transcript_for_rejects_cwd_mismatch(tmp_path, monkeypatch):
     _write_transcript(tf, "/some/other/repo")
     monkeypatch.setattr(activity, "_PROJECTS_DIR", projects)
     assert activity.live_transcript_for("/repo") is None
+
+
+def test_check_reset_fires_on_context_drop(monkeypatch):
+    # Keep _compact_or_clear hermetic — no real ~/.claude lookup.
+    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
+    last = {}
+    assert activity._check_reset("%1", "/repo", 60, last) is False   # baseline
+    assert activity._check_reset("%1", "/repo", 62, last) is False   # climbing
+    assert activity._check_reset("%1", "/repo", 8, last) is True     # dropped
+    out = activity.events_for("%1", "/repo", "main")
+    assert len(out) == 1 and out[0]["kind"] == "reset"
+
+
+def test_check_reset_ignores_none_readings(monkeypatch):
+    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
+    last = {}
+    activity._check_reset("%1", "/repo", 60, last)
+    assert activity._check_reset("%1", "/repo", None, last) is False  # obscured
+    assert activity._check_reset("%1", "/repo", 61, last) is False    # climbed
+    assert activity.events_for("%1", "/repo", "main") == []
+
+
+def test_compact_or_clear_labels_cleared_without_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
+    detail, text = activity._compact_or_clear("/repo")
+    assert detail == "cleared"
+    assert "clear" in text.lower()
+
+
+def test_compact_or_clear_labels_compacted_with_marker(tmp_path, monkeypatch):
+    tf = tmp_path / "t.jsonl"
+    entry = {
+        "type": "system", "subtype": "compact_boundary",
+        "timestamp": "2026-05-21T12:00:00.000Z",
+        "compactMetadata": {"trigger": "auto",
+                            "preTokens": 303000, "postTokens": 14000},
+    }
+    tf.write_text(_json.dumps(entry) + "\n")
+    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: tf)
+    monkeypatch.setattr(activity, "_compact_is_recent", lambda ts: True)
+    detail, text = activity._compact_or_clear("/repo")
+    assert detail == "compacted"
+    assert "303k" in text and "14k" in text

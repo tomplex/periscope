@@ -14,6 +14,7 @@ import json
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from periscope import config
@@ -215,3 +216,75 @@ def live_transcript_for(cwd: str) -> Path | None:
         if _transcript_cwd(f) == cwd:
             return f
     return None
+
+
+# --- Context-reset detection -------------------------------------------
+#
+# Both /clear and a compaction reset Claude's context. /clear leaves no
+# transcript marker, so detection keys off the status-line context %,
+# which climbs monotonically during a session and drops only on a reset.
+
+def _human_tokens(n) -> str:
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "?"
+    return f"{round(n / 1000)}k" if n >= 1000 else str(n)
+
+
+def _compact_is_recent(ts: str) -> bool:
+    """True if an ISO8601 timestamp is within the last 5 minutes."""
+    try:
+        when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return False
+    return (datetime.now(timezone.utc) - when).total_seconds() < 300
+
+
+def _recent_compact_meta(jsonl_path) -> dict | None:
+    """Scan the tail of a transcript for a recent compact_boundary entry;
+    return its compactMetadata, or None."""
+    try:
+        data = jsonl_path.read_text()
+    except Exception:
+        return None
+    for line in reversed(data.splitlines()[-200:]):
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("type") == "system" and d.get("subtype") == "compact_boundary":
+            if _compact_is_recent(d.get("timestamp") or ""):
+                return d.get("compactMetadata") or {}
+    return None
+
+
+def _compact_or_clear(cwd: str) -> tuple[str, str]:
+    """Best-effort label for a context reset. A recent compact_boundary in
+    the live transcript -> ('compacted', text); else ('cleared', text)."""
+    try:
+        tf = live_transcript_for(cwd)
+        if tf:
+            meta = _recent_compact_meta(tf)
+            if meta is not None:
+                trig = meta.get("trigger") or "auto"
+                pre = _human_tokens(meta.get("preTokens"))
+                post = _human_tokens(meta.get("postTokens"))
+                return "compacted", f"context compacted ({trig} · {pre} → {post})"
+    except Exception:
+        pass
+    return "cleared", "context cleared (/clear)"
+
+
+def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
+    """Compare context_pct to the last reading for pane_id. A drop between
+    two non-None readings is a context reset — record it. Returns True if
+    a reset was recorded. last_ctx is the worker's per-pane memory."""
+    prev = last_ctx.get(pane_id)
+    if context_pct is not None:
+        last_ctx[pane_id] = context_pct
+    if prev is None or context_pct is None or context_pct >= prev:
+        return False
+    detail, text = _compact_or_clear(cwd)
+    record("pane", pane_id, "reset", text, detail=detail)
+    return True
