@@ -124,6 +124,33 @@ def update_focus_from_windows(windows: list[dict]) -> None:
             _active_per_session[session] = target
 
 
+def record_state_transition(
+    pid: str, target: str, state: str | None, now_ts: int
+) -> None:
+    """Record this poll's parsed `state` for `pid`. On a working/needs-input
+    → idle edge, stamp `target`'s completed-at to `now_ts` — the signal that
+    Claude finished something the user hasn't acknowledged. No-op when `pid`
+    is empty. Lets window_view drive the done-vs-idle edge without touching
+    `_prev_state` / `_completed_at` directly."""
+    if not pid:
+        return
+    prev = _prev_state.get(pid)
+    if prev in ("working", "needs-input") and state == "idle":
+        _completed_at[target] = now_ts
+    _prev_state[pid] = state
+
+
+def recency_stamps_for(target: str) -> dict:
+    """In-memory focus / action / completion stamps for `target` — each 0
+    when never observed in this process. The persisted counterparts live in
+    state.json under the window's pid."""
+    return {
+        "focused_at": _focused_at.get(target, 0),
+        "acted_at": _acted_at.get(target, 0),
+        "completed_at": _completed_at.get(target, 0),
+    }
+
+
 # Status line at the bottom of every Claude pane:
 #   "  24% | ↑235k ↓479 | $17.04 | Opus 4.7 (1M context)"
 STATUS_RE = re.compile(

@@ -15,14 +15,12 @@ _STATE_LOCK acquisition for efficiency.
 
 from typing import Optional
 
-from periscope.channels import (
-    _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
-)
+from periscope.channels import channel_state_for
 from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.lgtm import cached_lgtm_state
 from periscope.panes import (
-    _acted_at, _completed_at, _focused_at, _prev_state,
-    parse_pane, smooth_is_claude, smooth_spinner,
+    parse_pane, record_state_transition, recency_stamps_for,
+    smooth_is_claude, smooth_spinner,
 )
 from periscope.projects import resolve_project_for_window, get_project
 from periscope.store import get_window
@@ -73,18 +71,15 @@ def build_window_view(
     # done-vs-idle refinement. Uses per-pid stamps (persisted via
     # state.json) so a server restart preserves the "Claude finished
     # something you haven't looked at" signal across the gap.
-    prev = _prev_state.get(pid) if pid else None
     cur = parsed.get("state")
-    if pid and prev in ("working", "needs-input") and cur == "idle":
-        _completed_at[target] = now_ts
-    if pid:
-        _prev_state[pid] = cur
+    record_state_transition(pid, target, cur, now_ts)
 
     # Pull persisted stamps; in-memory may be ahead (just bumped) or
     # behind (fresh process, never observed a transition this run).
+    stamps = recency_stamps_for(target)
     persisted = get_window(pid) if pid else {}
-    completed = max(_completed_at.get(target, 0), int(persisted.get("completed_at") or 0))
-    acked = max(_acted_at.get(target, 0), int(persisted.get("acked_at") or 0))
+    completed = max(stamps["completed_at"], int(persisted.get("completed_at") or 0))
+    acked = max(stamps["acted_at"], int(persisted.get("acked_at") or 0))
 
     if cur == "idle" and parsed.get("is_claude") and completed > acked:
         parsed["state"] = "done"
@@ -100,11 +95,7 @@ def build_window_view(
     pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
     lgtm = cached_lgtm_state(w.get("cwd", ""))
 
-    pane_id = w.get("pane_id") or ""
-    with _CHANNELS_LOCK:
-        channel_attached = pane_id in _MCP_SESSIONS if pane_id else False
-        channel_unread = _CHANNEL_UNREAD.get(pane_id, 0) if pane_id else 0
-        channel_alerts = list(_CHANNEL_ALERTS.get(pane_id, [])) if pane_id else []
+    channel = channel_state_for(w.get("pane_id") or "")
 
     # Persisted Claude-driven links (via the link_pr / link_linear MCP
     # tools). `linked_pr` overrides the auto-detected `pr` field — when
@@ -140,12 +131,12 @@ def build_window_view(
         # 0 means "never engaged through periscope" — stream view
         # filters these out; grid view sorts cards within each session
         # by acted_at desc (most-recently-opened leftmost).
-        "focused_at": _focused_at.get(target, 0),
+        "focused_at": stamps["focused_at"],
         "acted_at": acked,
         "completed_at": completed,
-        "channel_attached": channel_attached,
-        "channel_unread": channel_unread,
-        "channel_alerts": channel_alerts,
+        "channel_attached": channel["attached"],
+        "channel_unread": channel["unread"],
+        "channel_alerts": channel["alerts"],
         "linked_linear": linked_linear,
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,

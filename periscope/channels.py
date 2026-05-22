@@ -103,6 +103,21 @@ _CHANNEL_UNREAD: dict[str, int] = {}
 _MCP_SESSIONS: dict[str, Any] = {}
 
 
+def channel_state_for(pane_id: str) -> dict:
+    """Channel state for a pane: whether an MCP session is attached, the
+    unread-alert count, and a copy of the alert log. Empty when `pane_id`
+    is blank. Holds `_CHANNELS_LOCK` internally so callers (window_view,
+    routes/pane) need not reach into the channel dicts directly."""
+    if not pane_id:
+        return {"attached": False, "unread": 0, "alerts": []}
+    with _CHANNELS_LOCK:
+        return {
+            "attached": pane_id in _MCP_SESSIONS,
+            "unread": _CHANNEL_UNREAD.get(pane_id, 0),
+            "alerts": list(_CHANNEL_ALERTS.get(pane_id, [])),
+        }
+
+
 def _tool_result(body: dict) -> list:
     """Wrap a tool-result dict in the MCP TextContent list shape every tool
     handler returns. One place to change if the wire format ever grows an
