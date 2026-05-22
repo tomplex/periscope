@@ -147,7 +147,11 @@ function render() {
 
 function renderRow(r) {
   const kind = r.kind || "info";
-  const icon = kind === "need_human" ? "⚠" : kind === "done" ? "✓" : "•";
+  const icon =
+    kind === "need_human" ? "⚠"
+    : kind === "done" ? "✓"
+    : kind === "milestone" ? "★"
+    : "•";
   const time = r.ts ? relTime(r.ts) : "";
   const paneLabel = `${r.session} · ${r.name || `:${r.index}`}`;
   return `

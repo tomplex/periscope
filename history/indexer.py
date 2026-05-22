@@ -9,6 +9,7 @@ Idempotency: if a row already exists with matching hash + model, reuse summary.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -58,8 +59,6 @@ def _row_needs_resummary(row, *, new_hash: str, target_model: str) -> bool:
         return True
     if row["summary_input_hash"] != new_hash:
         return True
-    if row["summary_model"] != target_model:
-        return True
     return False
 
 
@@ -96,13 +95,18 @@ def _is_live(source_mtime: int, last_event_ts: int) -> bool:
 
 def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
              summary: str | None, tags_csv: str | None,
-             summary_input_hash: str | None, summary_model: str | None) -> None:
+             summary_input_hash: str | None, summary_model: str | None,
+             outcome: str | None = None, category: str | None = None,
+             notable: int | None = None, topics_json: str | None = None) -> None:
     """One transaction: UPSERT sessions + refresh sessions_fts.
 
     `tags_csv` is the canonical stored form (comma-separated). The sessions
     table stores it as NULL when absent; the sessions_fts virtual table
     cannot hold NULL in indexed columns, so we substitute "" there. This
-    asymmetry is intentional — don't change one side without the other."""
+    asymmetry is intentional — don't change one side without the other.
+
+    The four facet columns (outcome/category/notable/topics) are AI-derived
+    and stay out of sessions_fts — they are filtered structurally."""
     conn.execute(
         """
         INSERT INTO sessions (
@@ -111,6 +115,7 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
           user_msg_count, asst_msg_count, tool_use_count,
           was_interrupted, ended_cleanly,
           summary, tags, summary_input_hash, summary_model,
+          outcome, category, notable, topics,
           first_user_msg, last_user_msg, final_assistant_msg,
           files_touched, notable_cmds, tool_use_counts,
           indexed_at, mechanical_version, source_mtime, source_size
@@ -120,6 +125,7 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
           ?, ?, ?,
           ?, ?, ?,
           ?, ?,
+          ?, ?, ?, ?,
           ?, ?, ?, ?,
           ?, ?, ?,
           ?, ?, ?,
@@ -141,6 +147,10 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
           tags = excluded.tags,
           summary_input_hash = excluded.summary_input_hash,
           summary_model = excluded.summary_model,
+          outcome = excluded.outcome,
+          category = excluded.category,
+          notable = excluded.notable,
+          topics = excluded.topics,
           first_user_msg = excluded.first_user_msg,
           last_user_msg = excluded.last_user_msg,
           final_assistant_msg = excluded.final_assistant_msg,
@@ -159,6 +169,7 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
             rec.was_interrupted, rec.ended_cleanly,
             summary, tags_csv,
             summary_input_hash, summary_model,
+            outcome, category, notable, topics_json,
             rec.first_user_msg, rec.last_user_msg, rec.final_assistant_msg,
             rec.files_touched, rec.notable_cmds, rec.tool_use_counts,
             int(time.time()), MECHANICAL_VERSION, rec.source_mtime, rec.source_size,
@@ -186,7 +197,7 @@ def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
 
 
 def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
-              force: bool = False) -> dict[str, Any]:
+              force: bool = False, model: str | None = None) -> dict[str, Any]:
     """Index (or re-index) one session. Returns a status dict."""
     p = Path(jsonl_path)
     if not p.is_file():
@@ -198,6 +209,14 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
     rec = extract_record(str(p), events,
                          source_mtime=int(stat.st_mtime),
                          source_size=stat.st_size)
+
+    # periscope's /usage scraper launches a throwaway `claude` that is
+    # screen-scraped and killed — it never produces an assistant turn.
+    # asst_msg_count == 0 means no real work; skip without a DB write.
+    # (The SessionEnd hook fires for these too, so the filter must live
+    # here, not just in backfill.)
+    if rec.asst_msg_count == 0:
+        return {"status": "skipped-scrape", "session_id": rec.session_id}
 
     if not force and _is_live(rec.source_mtime, rec.ended_at):
         return {"status": "skipped-live", "session_id": rec.session_id}
@@ -214,9 +233,10 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
 
     conn = connect(db_path)
     try:
-        target_model = get_meta(conn, "haiku_model") or "claude-haiku-4-5"
+        target_model = model or get_meta(conn, "haiku_model") or "claude-haiku-4-5"
         row = conn.execute(
-            "SELECT summary, tags, summary_input_hash, summary_model FROM sessions WHERE session_id = ?",
+            "SELECT summary, tags, summary_input_hash, summary_model, "
+            "outcome, category, notable, topics FROM sessions WHERE session_id = ?",
             (rec.session_id,),
         ).fetchone()
 
@@ -233,7 +253,9 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
             # Re-extract but reuse existing summary.
             _upsert(conn, rec,
                     summary=row["summary"], tags_csv=row["tags"],
-                    summary_input_hash=new_hash, summary_model=row["summary_model"])
+                    summary_input_hash=new_hash, summary_model=row["summary_model"],
+                    outcome=row["outcome"], category=row["category"],
+                    notable=row["notable"], topics_json=row["topics"])
             conn.commit()
             return {"status": "hash-cache-hit", "session_id": rec.session_id,
                     "source_mtime": rec.source_mtime}
@@ -262,7 +284,10 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
         _upsert(conn, rec,
                 summary=result.summary,
                 tags_csv=",".join(result.tags) if result.tags else None,
-                summary_input_hash=new_hash, summary_model=result.model)
+                summary_input_hash=new_hash, summary_model=result.model,
+                outcome=result.outcome, category=result.category,
+                notable=1 if result.notable else 0,
+                topics_json=json.dumps(result.topics) if result.topics else None)
         conn.commit()
         return {"status": "summarized", "session_id": rec.session_id,
                 "source_mtime": rec.source_mtime}

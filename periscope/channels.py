@@ -153,6 +153,18 @@ def _do_notify_tool(pane: str, arguments: dict):
         _CHANNEL_ALERTS.setdefault(pane, []).append(entry)
         _CHANNEL_UNREAD[pane] = _CHANNEL_UNREAD.get(pane, 0) + 1
 
+    # Durable mirror (survives restart, feeds the modal's merged Activity
+    # stream). _CHANNEL_ALERTS above stays as the write-through cache for
+    # the unread badge. record()'s positional args are
+    # (scope_kind, scope_key, event_kind, text); the alert kind
+    # (done/need_human/info) rides in `detail`.
+    try:
+        from periscope import activity
+        activity.record("pane", pane, "alert", message,
+                        detail=kind, at=entry["ts"])
+    except Exception:
+        log.warning("activity.record failed for notify()", exc_info=True)
+
     body = {"ok": True, "kind": kind, "severity": severity}
     return _tool_result(body)
 

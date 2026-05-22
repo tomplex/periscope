@@ -11,7 +11,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from periscope.channels import channel_state_for
-from periscope.git_pr import cached_git_state, cached_pane_activity, cached_pr_state
+from periscope.git_pr import cached_git_state, cached_pr_state
+from periscope.activity import cached_pane_activity
 from periscope.lgtm import cached_lgtm_state
 from periscope.panes import (
     list_windows, note_action, parse_pane, smooth_is_claude, smooth_spinner,
@@ -57,7 +58,6 @@ def pane(session: str, index: int, lines: int = 200):
     _attach_git_then_resolve_pids(one)
     pid = one[0].get("pid")
     pr = cached_pr_state(cwd, git.get("branch")) or {}
-    activity = cached_pane_activity(target, cwd, git.get("branch"))
     # Shorten $HOME → ~ for display. Done server-side because the browser
     # doesn't know the user's home dir.
     home = os.path.expanduser("~")
@@ -72,6 +72,7 @@ def pane(session: str, index: int, lines: int = 200):
         if w["session"] == session and w["index"] == index:
             pane_id = w.get("pane_id", "")
             break
+    activity = cached_pane_activity(target, pane_id, cwd, git.get("branch"))
     channel = channel_state_for(pane_id)
     # Persisted links — same override semantics as /api/state.
     persisted = get_window(str(pid) if pid else "")
@@ -97,7 +98,6 @@ def pane(session: str, index: int, lines: int = 200):
         "activity": activity,
         "channel_attached": channel["attached"],
         "channel_unread": channel["unread"],
-        "channel_alerts": channel["alerts"],
         "linked_linear": linked_linear,
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,

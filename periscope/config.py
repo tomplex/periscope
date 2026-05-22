@@ -33,3 +33,14 @@ CLAUDE_EXEC = "claude --dangerously-load-development-channels server:periscope"
 # to test-time monkeypatching access this as `config.PORT`, not via
 # `from periscope.config import PORT` (which would snapshot the value).
 PORT = int(os.environ.get("PERISCOPE_PORT", "8765"))
+
+# Activity store (periscope/activity.py). Named generically — periscope.db,
+# not activity.db — because it is the destination for other persistent
+# state (prefs, projects) that may migrate out of state.json later; the
+# generic name avoids a future rename. Path mirrors store.py:_state_path.
+_XDG = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+ACTIVITY_DB = Path(_XDG) / "periscope" / "periscope.db"
+
+# Activity timeline window: git commits + CI runs newer than this many
+# days show in the modal's Activity section. Was a hardcoded 24h.
+ACTIVITY_DAYS = int(os.environ.get("PERISCOPE_ACTIVITY_DAYS", "7"))
