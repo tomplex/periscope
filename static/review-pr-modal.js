@@ -1,7 +1,7 @@
 // Review PR modal. Repo + PR number → POST /api/projects/pr-review.
 
-import { pushEscape, popEscape } from './overlay.js';
 import { escapeHtml } from './util.js';
+import { createModalShell } from './modal-shell.js';
 
 const modal = document.getElementById("review-pr-modal");
 const closeBtn = document.getElementById("review-pr-modal-close");
@@ -14,18 +14,10 @@ const reposListEl = document.getElementById("review-pr-repos");
 const errorEl = document.getElementById("review-pr-error");
 const submitBtn = document.getElementById("review-pr-submit");
 
+const shell = createModalShell({ modal, bodyClass: "review-pr-modal-open", errorEl });
+export const closeReviewPRModal = shell.close;
+
 let cached = { repos: [] };
-let isOpen = false;
-
-function showError(msg) {
-  errorEl.textContent = msg;
-  errorEl.hidden = false;
-}
-
-function clearError() {
-  errorEl.hidden = true;
-  errorEl.textContent = "";
-}
 
 function renderRepoOptions() {
   reposListEl.innerHTML = cached.repos
@@ -34,23 +26,14 @@ function renderRepoOptions() {
 }
 
 async function refresh() {
-  try {
-    const res = await fetch("/api/projects/discoverable");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    cached = await res.json();
-    renderRepoOptions();
-  } catch (e) {
-    showError(`failed to load repos: ${e.message}`);
-  }
+  const data = await shell.request("load repos", "/api/projects/discoverable");
+  if (!data) return;
+  cached = data;
+  renderRepoOptions();
 }
 
 export async function openReviewPRModal() {
-  if (isOpen) return;
-  isOpen = true;
-  clearError();
-  modal.classList.remove("hidden");
-  document.body.classList.add("review-pr-modal-open");
-  pushEscape(closeReviewPRModal);
+  if (!shell.open()) return;
   repoInput.value = "";
   prInput.value = "";
   nameInput.value = "";
@@ -58,46 +41,29 @@ export async function openReviewPRModal() {
   repoInput.focus();
 }
 
-export function closeReviewPRModal() {
-  if (!isOpen) return;
-  isOpen = false;
-  modal.classList.add("hidden");
-  document.body.classList.remove("review-pr-modal-open");
-  popEscape(closeReviewPRModal);
-}
-
 async function handleSubmit(e) {
   e.preventDefault();
-  clearError();
+  shell.clearError();
   const repo = repoInput.value.trim();
   const pr = parseInt(prInput.value, 10);
   const name = nameInput.value.trim();
   if (!repo) {
-    showError("repo is required");
+    shell.showError("repo is required");
     return;
   }
   if (!pr || pr <= 0) {
-    showError("PR number must be a positive integer");
+    shell.showError("PR number must be a positive integer");
     return;
   }
   submitBtn.disabled = true;
-  try {
-    const res = await fetch("/api/projects/pr-review", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repo, pr_number: pr, name: name || undefined }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showError(err.detail || `HTTP ${res.status}`);
-      return;
-    }
-    closeReviewPRModal();
-  } catch (e) {
-    showError(`request failed: ${e.message}`);
-  } finally {
-    submitBtn.disabled = false;
-  }
+  const result = await shell.request("start PR review", "/api/projects/pr-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo, pr_number: pr, name: name || undefined }),
+  });
+  submitBtn.disabled = false;
+  if (!result) return;
+  closeReviewPRModal();
 }
 
 export function initReviewPRModal() {

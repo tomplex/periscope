@@ -405,23 +405,14 @@ export async function addLgtmDocFromTerminal(rawPath) {
   // LGTM doesn't anchor docs to line numbers, and the file path alone
   // is what /api/lgtm/add-doc validates.
   const path = rawPath.replace(/:\d+$/, "");
-  try {
-    const res = await fetch("/api/lgtm/add-doc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, path }),
-    });
-    const payload = await res.json();
-    if (!payload.ok) {
-      console.warn(`add doc: ${payload.error}`);
-      writeTerminalLine(`\r\n\x1b[31m[periscope: add doc failed — ${payload.error}]\x1b[0m`);
-      return;
-    }
-    pendingTabIdAfterAdd = payload.tab_id;
-    refreshModalHeader();
-  } catch (e) {
-    console.warn("add doc error:", e);
-  }
+  const payload = await apiCall("add doc", "/api/lgtm/add-doc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cwd, path }),
+  });
+  if (!payload) return;
+  pendingTabIdAfterAdd = payload.tab_id;
+  refreshModalHeader();
 }
 
 async function refreshModalHeader() {

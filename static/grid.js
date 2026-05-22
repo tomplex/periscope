@@ -824,38 +824,24 @@ async function handlePromote(btn) {
   const index = parseInt(btn.dataset.index, 10);
   if (!session || !Number.isFinite(index)) return;
   btn.disabled = true;
-  try {
-    const res = await fetch("/api/projects/promote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session, index }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showToast(`promote failed: ${err.detail || res.status}`, "bad", 6000);
-    }
-  } finally {
-    btn.disabled = false;
-  }
+  await apiCall("promote", "/api/projects/promote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session, index }),
+  });
+  btn.disabled = false;
 }
 
 async function handleAdopt(btn) {
   const session = btn.dataset.session;
   if (!session) return;
   btn.disabled = true;
-  try {
-    const res = await fetch("/api/projects/adopt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tmux_session: session }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showToast(`adopt failed: ${err.detail || res.status}`, "bad", 6000);
-    }
-  } finally {
-    btn.disabled = false;
-  }
+  await apiCall("adopt", "/api/projects/adopt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tmux_session: session }),
+  });
+  btn.disabled = false;
 }
 
 let openProjectMenu = null;  // module-level: {pinnedDir, panelEl, anchorEl}
@@ -976,23 +962,15 @@ function startProjectRename(pinnedDir) {
     input.replaceWith(restored);
     state.editingTarget = null;  // re-enable poll re-render
     if (!newName || newName === currentName) return;
-    try {
-      const res = await fetch("/api/projects/patch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pinned_dir: pinnedDir,
-          name: newName,
-          tmux_session: newName,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        showToast(`rename failed: ${err.detail || res.status}`, "bad", 6000);
-      }
-    } catch (e) {
-      showToast(`rename request failed: ${e.message}`, "bad", 6000);
-    }
+    await apiCall("rename", "/api/projects/patch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pinned_dir: pinnedDir,
+        name: newName,
+        tmux_session: newName,
+      }),
+    });
   };
   const cancel = () => {
     const restored = document.createElement("h2");
@@ -1014,19 +992,11 @@ function startProjectRename(pinnedDir) {
 }
 
 async function archiveProject(pinnedDir) {
-  try {
-    const res = await fetch("/api/projects/archive", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pinned_dir: pinnedDir }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showToast(`archive failed: ${err.detail || res.status}`, "bad", 6000);
-    }
-  } catch (e) {
-    showToast(`archive request failed: ${e.message}`, "bad", 6000);
-  }
+  await apiCall("archive", "/api/projects/archive", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pinned_dir: pinnedDir }),
+  });
 }
 
 async function handleAutoRename(autoBtn) {

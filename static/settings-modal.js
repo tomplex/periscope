@@ -1,7 +1,7 @@
 // Settings modal: GET /api/settings on open, PATCH /api/settings on save.
 
-import { pushEscape, popEscape } from './overlay.js';
 import { escapeHtml } from './util.js';
+import { createModalShell } from './modal-shell.js';
 
 const modal = document.getElementById("settings-modal");
 const closeBtn = document.getElementById("settings-modal-close");
@@ -13,18 +13,10 @@ const overridesListEl = document.getElementById("settings-overrides-list");
 const errorEl = document.getElementById("settings-modal-error");
 const submitBtn = document.getElementById("settings-submit");
 
+const shell = createModalShell({ modal, bodyClass: "settings-modal-open", errorEl });
+export const closeSettingsModal = shell.close;
+
 let currentSettings = {};
-let isOpen = false;
-
-function showError(msg) {
-  errorEl.textContent = msg;
-  errorEl.hidden = false;
-}
-
-function clearError() {
-  errorEl.hidden = true;
-  errorEl.textContent = "";
-}
 
 function renderOverrides(overrides) {
   const rows = Object.entries(overrides || {});
@@ -47,36 +39,18 @@ function renderOverrides(overrides) {
 }
 
 async function refresh() {
-  clearError();
-  try {
-    const res = await fetch("/api/settings");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = await res.json();
-    currentSettings = body.settings || {};
-    idleInput.value = currentSettings.cleanup_idle_days ?? 14;
-    defaultSelect.value = currentSettings.worktree_layout_default ?? "sibling";
-    renderOverrides(currentSettings.worktree_layout_overrides || {});
-  } catch (e) {
-    showError(`failed to load settings: ${e.message}`);
-  }
+  shell.clearError();
+  const body = await shell.request("load settings", "/api/settings");
+  if (!body) return;
+  currentSettings = body.settings || {};
+  idleInput.value = currentSettings.cleanup_idle_days ?? 14;
+  defaultSelect.value = currentSettings.worktree_layout_default ?? "sibling";
+  renderOverrides(currentSettings.worktree_layout_overrides || {});
 }
 
 export async function openSettingsModal() {
-  if (isOpen) return;
-  isOpen = true;
-  clearError();
-  modal.classList.remove("hidden");
-  document.body.classList.add("settings-modal-open");
-  pushEscape(closeSettingsModal);
+  if (!shell.open()) return;
   await refresh();
-}
-
-export function closeSettingsModal() {
-  if (!isOpen) return;
-  isOpen = false;
-  modal.classList.add("hidden");
-  document.body.classList.remove("settings-modal-open");
-  popEscape(closeSettingsModal);
 }
 
 function collectOverrides() {
@@ -91,10 +65,10 @@ function collectOverrides() {
 
 async function handleSubmit(e) {
   e.preventDefault();
-  clearError();
+  shell.clearError();
   const idle = parseInt(idleInput.value, 10);
   if (!idle || idle < 1) {
-    showError("cleanup idle days must be a positive integer");
+    shell.showError("cleanup idle days must be a positive integer");
     return;
   }
   const patch = {
@@ -103,23 +77,14 @@ async function handleSubmit(e) {
     worktree_layout_overrides: collectOverrides(),
   };
   submitBtn.disabled = true;
-  try {
-    const res = await fetch("/api/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showError(err.detail || `HTTP ${res.status}`);
-      return;
-    }
-    closeSettingsModal();
-  } catch (e) {
-    showError(`save failed: ${e.message}`);
-  } finally {
-    submitBtn.disabled = false;
-  }
+  const body = await shell.request("save settings", "/api/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  submitBtn.disabled = false;
+  if (!body) return;
+  closeSettingsModal();
 }
 
 export function initSettingsModal() {

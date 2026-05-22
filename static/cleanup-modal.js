@@ -1,8 +1,8 @@
 // Cleanup modal. Loads candidates from /api/cleanup/candidates, renders
 // a checklist with signal badges, submits selected to /api/cleanup/archive.
 
-import { pushEscape, popEscape } from './overlay.js';
 import { escapeHtml } from './util.js';
+import { createModalShell } from './modal-shell.js';
 
 const modal = document.getElementById("cleanup-modal");
 const closeBtn = document.getElementById("cleanup-modal-close");
@@ -12,18 +12,10 @@ const listEl = document.getElementById("cleanup-modal-list");
 const errorEl = document.getElementById("cleanup-modal-error");
 const deleteBranchesBox = document.getElementById("cleanup-delete-branches");
 
+const shell = createModalShell({ modal, bodyClass: "cleanup-modal-open", errorEl });
+export const closeCleanupModal = shell.close;
+
 let candidates = [];
-let isOpen = false;
-
-function showError(msg) {
-  errorEl.textContent = msg;
-  errorEl.hidden = false;
-}
-
-function clearError() {
-  errorEl.hidden = true;
-  errorEl.textContent = "";
-}
 
 function renderRow(c, i) {
   const name = c.project_name || `(untracked: ${escapeHtml(c.pinned_dir.split("/").pop())})`;
@@ -55,44 +47,28 @@ function updateSubmitCount() {
 
 async function refresh() {
   listEl.innerHTML = `<div class="cleanup-loading">Walking worktrees…</div>`;
-  try {
-    const res = await fetch("/api/cleanup/candidates");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    candidates = data.candidates;
-    if (candidates.length === 0) {
-      listEl.innerHTML = `<div class="cleanup-empty">No cleanup candidates. 🎉</div>`;
-    } else {
-      listEl.innerHTML = candidates.map(renderRow).join("");
-    }
-    updateSubmitCount();
-  } catch (e) {
-    showError(`failed to load candidates: ${e.message}`);
+  const data = await shell.request("load candidates", "/api/cleanup/candidates");
+  if (!data) {
     listEl.innerHTML = "";
+    return;
   }
+  candidates = data.candidates;
+  if (candidates.length === 0) {
+    listEl.innerHTML = `<div class="cleanup-empty">No cleanup candidates. 🎉</div>`;
+  } else {
+    listEl.innerHTML = candidates.map(renderRow).join("");
+  }
+  updateSubmitCount();
 }
 
 export async function openCleanupModal() {
-  if (isOpen) return;
-  isOpen = true;
-  clearError();
+  if (!shell.open()) return;
   deleteBranchesBox.checked = false;
-  modal.classList.remove("hidden");
-  document.body.classList.add("cleanup-modal-open");
-  pushEscape(closeCleanupModal);
   await refresh();
 }
 
-export function closeCleanupModal() {
-  if (!isOpen) return;
-  isOpen = false;
-  modal.classList.add("hidden");
-  document.body.classList.remove("cleanup-modal-open");
-  popEscape(closeCleanupModal);
-}
-
 async function handleSubmit() {
-  clearError();
+  shell.clearError();
   const selected = [];
   const deleteBranches = deleteBranchesBox.checked;
   listEl.querySelectorAll(".cleanup-row").forEach((row) => {
@@ -107,33 +83,23 @@ async function handleSubmit() {
   });
   if (selected.length === 0) return;
   submitBtn.disabled = true;
-  try {
-    const res = await fetch("/api/cleanup/archive", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ candidates: selected }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showError(err.detail || `HTTP ${res.status}`);
-      return;
-    }
-    const result = await res.json();
-    if (result.failed && result.failed.length > 0) {
-      // Some failed; show error, refresh to show what's left.
-      showError(
-        `Archived ${result.archived.length}, ${result.failed.length} failed: ` +
-        result.failed.map((f) => `${f.pinned_dir.split("/").pop()}: ${f.error}`).join("; ")
-      );
-      await refresh();
-      return;
-    }
-    closeCleanupModal();
-  } catch (e) {
-    showError(`request failed: ${e.message}`);
-  } finally {
-    submitBtn.disabled = false;
+  const result = await shell.request("archive", "/api/cleanup/archive", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidates: selected }),
+  });
+  submitBtn.disabled = false;
+  if (!result) return;
+  if (result.failed && result.failed.length > 0) {
+    // Some failed; show error, refresh to show what's left.
+    shell.showError(
+      `Archived ${result.archived.length}, ${result.failed.length} failed: ` +
+      result.failed.map((f) => `${f.pinned_dir.split("/").pop()}: ${f.error}`).join("; ")
+    );
+    await refresh();
+    return;
   }
+  closeCleanupModal();
 }
 
 export function initCleanupModal() {
