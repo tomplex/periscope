@@ -1052,16 +1052,25 @@ export function initModal() {
     if (e.data?.type === "lgtm-notify-claude") {
       const pane = lastPaneData?.pane_id;
       const content = e.data.content;
-      if (!content) return;
-      if (!pane) {
-        console.warn("lgtm-notify-claude: no pane_id for the open modal; channel event dropped");
+      console.log("[lgtm-notify-claude] received: pane=", pane,
+        "contentLen=", content && content.length, "lastPaneData=", lastPaneData);
+      if (!content) {
+        console.warn("[lgtm-notify-claude] dropped: empty content");
         return;
       }
+      if (!pane) {
+        console.warn("[lgtm-notify-claude] dropped: no pane_id on lastPaneData");
+        return;
+      }
+      console.log("[lgtm-notify-claude] POST /api/channel/push?pane=" + pane);
       fetch(`/api/channel/push?pane=${encodeURIComponent(pane)}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ content }),
-      }).catch(() => {});
+      })
+        .then((r) => r.json())
+        .then((j) => console.log("[lgtm-notify-claude] /api/channel/push ->", j))
+        .catch((err) => console.warn("[lgtm-notify-claude] /api/channel/push failed", err));
     }
   });
 
