@@ -5,6 +5,7 @@ __pycache__/
 .env
 node_modules/
 .private-journal/
+.superpowers/
 
 # Tauri shell build artifacts
 src-tauri/target/
