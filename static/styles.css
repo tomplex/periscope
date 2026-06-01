@@ -2915,3 +2915,20 @@ body[data-alerts="open"][data-view="stream"] main {
 .launcher-empty { padding: 10px; opacity: .6; font-size: 12px; }
 .newtab-row { opacity: .6; }
 .newtab-row:hover { opacity: .9; }
+
+/* --- Split-view rail polish (Phase 12) ---------------------------------- */
+
+.rail-conn { color: var(--fg-4); font-size: 12px; }
+.icon-repo { color: oklch(0.74 0.13 232); }
+.icon-worktree { color: oklch(0.72 0.13 295); }
+.icon-pane { color: oklch(0.78 0.13 320); }
+.icon-review { color: var(--s-shell); }
+
+/* Hover-only handles look more like the reference */
+.rail-row { position: relative; }
+.rail-grip { color: var(--fg-4); }
+.rail-row:hover .rail-grip { opacity: .55; }
+
+/* Truncation in labels keeps row height uniform (already set on rail-label,
+   reaffirmed here for clarity). */
+.rail-label b { font-weight: 600; }
