@@ -7,11 +7,11 @@
 // `.pr-*` / `.tag-*` / `.activity-*` class name carries over.
 //
 // Lifecycle (Task 6 must-not-drop):
-//  - openModal(target, opts) sets the shared `activeTarget` signal (also set by
+//  - openModal(target, opts) sets the shared `modalTarget` signal (also set by
 //    <Detail>.selectPane — coupling #5) and a 1.5s /api/pane header poll runs
 //    while open. The poll does NOT commit while `modalRenaming` /
 //    `modalAutoRenaming` hold.
-//  - <Terminal> is keyed per-open (activeTarget) so it mounts once per open and
+//  - <Terminal> is keyed per-open (modalTarget) so it mounts once per open and
 //    stays mounted across tab switches (CSS hides the terminal pane on the
 //    review tab; we must not unmount it or the WS would churn).
 //  - Sidebar inputs are UNCONTROLLED (refs); the poll re-renders the PR/Linear/
@@ -25,7 +25,7 @@
 import { signal } from "@preact/signals";
 import { useRef, useEffect, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
-import { activeTarget, modalRenaming, modalAutoRenaming } from "../store.js";
+import { modalTarget, modalRenaming, modalAutoRenaming } from "../store.js";
 import { targetQuery, apiCall, escapeHtml, relTime, prUrl, rewriteLgtmHost } from "../util.js";
 import * as prefs from "../prefs.js";
 import { Terminal } from "../terminal/Terminal.jsx";
@@ -37,16 +37,16 @@ const MOUNTED_DOCS_KEY_PREFIX = "periscope-lgtm-mounted:";
 
 // Open request, mirrors the vanilla openModal(target, {tab}) signature. A
 // signal so the singleton <Modal> reacts; the public opener (registered on
-// window so Card/Detail can call it) just writes activeTarget + this.
+// window so Card/Detail can call it) just writes modalTarget + this.
 const openOpts = signal({});
 
 // Public opener. Card.jsx and (later) Detail call this via
 // window.__periscopeOpenModal (see poll.js openModal bridge). Setting
-// activeTarget mounts the modal; opts.tab === "review" auto-switches to the
+// modalTarget mounts the modal; opts.tab === "review" auto-switches to the
 // first LGTM tab once data arrives.
 export function openModal(target, opts = {}) {
   openOpts.value = opts || {};
-  activeTarget.value = target;
+  modalTarget.value = target;
 }
 
 function alertDotColor(kind) {
@@ -521,7 +521,7 @@ function TabStrip({ spec, activeTab, onSwitch, onMount, onUnmount, onRemove }) {
 
 // ── Review pane: idempotent LGTM iframe / Start-review / walkthrough ─────────
 // The iframe is reused; src reassigned only when the (tabId → url) key changes.
-// Keyed by activeTarget at the <Modal> level so a pane switch tears it down.
+// Keyed by modalTarget at the <Modal> level so a pane switch tears it down.
 // Mounted whenever the modal is open (NOT gated on the active tab) so the
 // iframe survives terminal↔review toggles — the vanilla path left the iframe
 // in #modal-review-content and only CSS-hid it on the Terminal tab, so the SSE
@@ -861,7 +861,7 @@ function ModalBody({ target }) {
   }
 
   async function onPaste(e) {
-    if (!activeTarget.value) return;
+    if (!modalTarget.value) return;
     const items = e.clipboardData?.items || [];
     for (const item of items) {
       if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
@@ -870,7 +870,7 @@ function ModalBody({ target }) {
       e.preventDefault();
       e.stopPropagation();
       try {
-        const res = await fetch(`/api/paste-image?${targetQuery(activeTarget.value)}`, {
+        const res = await fetch(`/api/paste-image?${targetQuery(modalTarget.value)}`, {
           method: "POST",
           headers: { "Content-Type": blob.type || "image/png" },
           body: blob,
@@ -974,13 +974,13 @@ function ModalBody({ target }) {
 }
 
 export function closeModal() {
-  activeTarget.value = null;
+  modalTarget.value = null;
   modalRenaming.value = false;
   modalAutoRenaming.value = false;
 }
 
 export function Modal() {
-  const target = activeTarget.value;
+  const target = modalTarget.value;
 
   // Register the public opener so Card/Detail (via poll.js's openModal bridge)
   // route to the Preact modal. Runs once.
@@ -1004,7 +1004,7 @@ export function Modal() {
   // Forwarded Escape + channel push from the embedded LGTM iframe.
   useEffect(() => {
     function onMessage(e) {
-      if (e.data?.type === "lgtm-embedded-escape" && activeTarget.value) {
+      if (e.data?.type === "lgtm-embedded-escape" && modalTarget.value) {
         closeModal();
         return;
       }
