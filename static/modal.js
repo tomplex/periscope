@@ -9,7 +9,8 @@ import { pushEscape, popEscape } from './overlay.js';
 
 import { state } from './state.js';
 import { escapeHtml, targetQuery, apiCall, relTime, prUrl } from './util.js';
-import { setTerminalContainer, setTerminalLinkCallback, startLiveTerminal, stopLiveTerminal, writeTerminalLine } from './terminal.js';
+import { writeTerminalLine } from './terminal.js';
+import { mountTerminal, unmountTerminal } from './terminal-mount.js';
 import { poll } from './grid.js';
 import * as prefs from './prefs.js';
 
@@ -67,9 +68,14 @@ export function openModal(target, opts = {}) {
   mountedDocIds = new Set();
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
-  setTerminalContainer(document.getElementById("modal-xterm"));
-  setTerminalLinkCallback((rawPath) => addLgtmDocFromTerminal(rawPath));
-  startLiveTerminal(target);
+  mountTerminal(
+    document.getElementById("modal-xterm"),
+    target,
+    {
+      onMdLink: (rawPath) => addLgtmDocFromTerminal(rawPath),
+      onPaste: handleModalImagePaste,
+    }
+  );
   // Header poll keeps the subtitle/brief/spinner fresh; the terminal body
   // itself streams live via the WebSocket, no polling needed.
   refreshModalHeader();
@@ -77,7 +83,7 @@ export function openModal(target, opts = {}) {
 }
 
 export function closeModal() {
-  stopLiveTerminal();
+  unmountTerminal();
   // Tear down the dropdown listener before nuking the tab DOM so we
   // don't leave a document-level click handler dangling.
   closeDropdownMenu();
@@ -1014,6 +1020,39 @@ async function handleModalAutoRename(btn) {
   }
 }
 
+// Image paste: when the user pastes a screenshot (or any image) into the
+// modal, upload the bytes to the server, which writes a temp file and
+// bracketed-pastes "@/tmp/foo.png " into the pane so Claude Code reads it as
+// a file reference. Text pastes are ignored here and fall through to xterm's
+// own paste handling. Capture phase so we see the event before xterm's
+// hidden textarea consumes it. Registered via mountTerminal's onPaste so
+// the handler is attached and detached with the terminal lifecycle.
+async function handleModalImagePaste(e) {
+  if (!state.activeTarget) return;
+  const items = e.clipboardData?.items || [];
+  for (const item of items) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const blob = item.getAsFile();
+    if (!blob) continue;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const res = await fetch(`/api/paste-image?${targetQuery(state.activeTarget)}`, {
+        method: "POST",
+        headers: { "Content-Type": blob.type || "image/png" },
+        body: blob,
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        writeTerminalLine(`\r\n\x1b[31m[periscope: image paste failed: ${data.error}]\x1b[0m`);
+      }
+    } catch (err) {
+      writeTerminalLine(`\r\n\x1b[31m[periscope: image paste error: ${err.message}]\x1b[0m`);
+    }
+    return;
+  }
+}
+
 export function initModal() {
   modalClose.addEventListener("click", closeModal);
   modal.addEventListener("click", (e) => {
@@ -1149,35 +1188,4 @@ export function initModal() {
     });
   }
 
-  // Image paste: when the user pastes a screenshot (or any image) into the
-  // modal, upload the bytes to the server, which writes a temp file and
-  // bracketed-pastes "@/tmp/foo.png " into the pane so Claude Code reads it as
-  // a file reference. Text pastes are ignored here and fall through to xterm's
-  // own paste handling. Capture phase so we see the event before xterm's
-  // hidden textarea consumes it.
-  modalXtermEl.addEventListener("paste", async (e) => {
-    if (!state.activeTarget) return;
-    const items = e.clipboardData?.items || [];
-    for (const item of items) {
-      if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
-      const blob = item.getAsFile();
-      if (!blob) continue;
-      e.preventDefault();
-      e.stopPropagation();
-      try {
-        const res = await fetch(`/api/paste-image?${targetQuery(state.activeTarget)}`, {
-          method: "POST",
-          headers: { "Content-Type": blob.type || "image/png" },
-          body: blob,
-        });
-        const data = await res.json();
-        if (!data.ok) {
-          writeTerminalLine(`\r\n\x1b[31m[periscope: image paste failed: ${data.error}]\x1b[0m`);
-        }
-      } catch (err) {
-        writeTerminalLine(`\r\n\x1b[31m[periscope: image paste error: ${err.message}]\x1b[0m`);
-      }
-      return;
-    }
-  }, true);
 }
