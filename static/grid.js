@@ -482,7 +482,10 @@ function renderGrid(windows) {
 
 export function render(windows) {
   if (document.body.dataset.view === "split") {
-    renderRail();
+    // When the split surface is Preact-owned (?preact=split), the Preact
+    // <Rail>/<Detail> render into #rail/#detail off the signals; the vanilla
+    // rail must not also write those nodes. Gate deleted in Task 9 cutover.
+    if (!(window.__PREACT_SURFACES__ || new Set()).has("split")) renderRail();
     return;
   }
   // Dispatch on the view attribute the user toggled via the view-switch.

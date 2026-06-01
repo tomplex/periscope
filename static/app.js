@@ -16,7 +16,7 @@ import { initAlerts } from './alerts.js';
 import { initExternalLinks } from './tauri.js';
 import { initSettingsModal } from './settings-modal.js';
 import { initOpenPicker } from './open-picker-modal.js';
-import { initLauncher } from './launcher-modal.js';
+import { initLauncher, openLauncher } from './launcher-modal.js';
 import { pushEscape, popEscape } from './overlay.js';
 import { confirmDialog, promptDialog, alertDialog } from './dialog.js';
 
@@ -314,7 +314,11 @@ function applyView(view) {
     b.setAttribute("aria-selected", active ? "true" : "false");
   });
 
-  // Add the split branch — defer rail/detail rendering.
+  // Add the split branch — defer rail/detail rendering. Skip the vanilla
+  // rail/detail entirely when the split surface is Preact-owned (?preact=split):
+  // the Preact <Rail>/<Detail> own #rail/#detail off the signals. Gate deleted
+  // in Task 9 cutover.
+  if (PREACT_SURFACES.has("split")) return;
   if (view === "split") {
     renderRail();
     refreshDetail();
@@ -356,6 +360,10 @@ async function bootstrap() {
   initSettingsModal();
   initOpenPicker();
   initLauncher();
+  // Bridge: while the split surface is Preact-owned but the launcher is still
+  // vanilla (Task 8 not yet done), expose the vanilla opener so the Preact
+  // rail's "+ New tab" row can open it. Removed in the final cutover.
+  if (PREACT_SURFACES.has("split")) window.__periscopeOpenLauncher = openLauncher;
   initExternalLinks();
   document.getElementById("open-commands").addEventListener("click", openCommandsModal);
 

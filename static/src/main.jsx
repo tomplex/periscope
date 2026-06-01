@@ -11,8 +11,9 @@ import { Terminal } from "./terminal/Terminal.jsx";
 import { Header } from "./chrome/Header.jsx";
 import { Grid } from "./grid/Grid.jsx";
 import { Modal } from "./modal/Modal.jsx";
-import { loadPrefs, getView } from "./prefs.js";
-import { view } from "./store.js";
+import { Split } from "./split/Split.jsx";
+import { loadPrefs, getView, getLastSelected } from "./prefs.js";
+import { view, railSelection } from "./store.js";
 
 const SURFACES = window.__PREACT_SURFACES__ || new Set();
 
@@ -45,11 +46,13 @@ function App() {
   // Otherwise compose the claimed surfaces additively. Each is independent and
   // mounts only when its flag is present; the vanilla path skips its own
   // equivalent for any claimed surface (app.js consults __PREACT_SURFACES__).
-  const anySurface = SURFACES.has("chrome") || SURFACES.has("grid") || SURFACES.has("modal");
+  const anySurface =
+    SURFACES.has("chrome") || SURFACES.has("grid") || SURFACES.has("modal") || SURFACES.has("split");
   return (
     <>
       {SURFACES.has("chrome") && <Header />}
       {SURFACES.has("grid") && <Grid />}
+      {SURFACES.has("split") && <Split />}
       {SURFACES.has("modal") && <Modal />}
       {!anySurface && <div data-preact-root>periscope (preact scaffold)</div>}
       <Toaster />
@@ -91,6 +94,19 @@ async function boot() {
     // Remove the static `#modal` from index.html so it can't collide (duplicate
     // id) with the Preact modal, which renders its own `#modal` inside #app.
     document.getElementById("modal")?.remove();
+  }
+  // The split surface needs prefs loaded before first render (rail order /
+  // collapse / last_selected). Restore the persisted selection (an OBJECT) into
+  // the railSelection signal (a STRING highlight-key) — the two shapes are
+  // deliberately different and must not be crossed. Remove the static
+  // #split-view from index.html so it can't collide (duplicate ids #rail /
+  // #detail) with the Preact split, which renders its own inside #app.
+  if (SURFACES.has("split")) {
+    await loadPrefs();
+    const sel = getLastSelected();
+    if (sel?.kind === "pane") railSelection.value = `pane:${sel.pid}`;
+    else if (sel?.kind === "review") railSelection.value = `review:${sel.worktree}`;
+    document.getElementById("split-view")?.remove();
   }
   render(<App />, document.getElementById("app"));
 }
