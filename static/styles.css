@@ -2886,6 +2886,8 @@ body[data-alerts="open"][data-view="stream"] main {
 .rail-grip { width: 12px; opacity: 0; font-size: 10px; cursor: grab; transition: opacity .15s; flex-shrink: 0; color: var(--fg-4); }
 .rail-row:hover .rail-grip { opacity: .4; }
 .rail-row.dragging { opacity: .5; }
+.rail-dim { opacity: .35; }
+.rail-row.rail-dim:hover { opacity: .6; }
 
 .open-picker-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .open-picker-modal-overlay.hidden { display: none; }

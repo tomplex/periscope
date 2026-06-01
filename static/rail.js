@@ -8,6 +8,7 @@
 import { state } from './state.js';
 import * as prefs from './prefs.js';
 import { escapeHtml } from './util.js';
+import { passesFilter } from './grid.js';
 
 const railEl = () => document.getElementById("rail");
 
@@ -35,6 +36,28 @@ function indexWindowsByWorktree(windows) {
   return out;
 }
 
+// Two-level filter: a row is shown (full opacity) if it matches the
+// filter, OR if any of its descendants does. Non-matching rows that
+// have no matching descendants are grayed in place.
+//
+// Reuses grid.js's passesFilter — single source of truth for what each
+// filter value means. Don't reinvent the per-pane rule here; the rail's
+// novelty is only the parent-rollup wrapping (worktree/repo).
+
+function paneMatchesFilter(w) {
+  return passesFilter(w);
+}
+
+function worktreeMatchesFilter(worktreeKey, byWorktree) {
+  const windows = byWorktree[worktreeKey] || [];
+  return windows.some(w => passesFilter(w));
+}
+
+function repoMatchesFilter(repoKey, byWorktree, worktreesByRepo) {
+  const wts = worktreesByRepo[repoKey] || [];
+  return wts.some(wt => worktreeMatchesFilter(wt, byWorktree));
+}
+
 // Look up the human-readable repo label for a repo_key. We pull it off
 // any window whose `repo_key` matches; falls back to basename of the
 // repo_key path.
@@ -57,8 +80,9 @@ function statusDotClass(s) {
 function paneRow(w, selectedKey) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey ? " selected" : "";
+  const dim = paneMatchesFilter(w) ? "" : " rail-dim";
   return `
-    <div class="rail-row child-row${sel}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}" draggable="true">
+    <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}" draggable="true">
       <span class="rail-conn">├</span>
       <span class="rail-grip">⋮⋮</span>
       <span class="rail-icon icon-pane">✦</span>
@@ -89,14 +113,15 @@ function newTabRow(worktreeKey) {
     </div>`;
 }
 
-function worktreeRow(worktreeKey, children, collapsed, rolledUp, label) {
+function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktree) {
   const chev = collapsed ? "▸" : "▾";
   const childCountChip = collapsed && children.length > 0
     ? `<span class="rail-count">${children.length}</span>`
     : "";
   const body = collapsed ? "" : children.join("");
+  const dim = worktreeMatchesFilter(worktreeKey, byWorktree) ? "" : " rail-dim";
   return `
-    <div class="rail-row wt-row" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}" draggable="true">
+    <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}" draggable="true">
       <span class="rail-grip">⋮⋮</span>
       <span class="rail-chev">${chev}</span>
       <span class="rail-icon icon-worktree">⎇</span>
@@ -108,11 +133,12 @@ function worktreeRow(worktreeKey, children, collapsed, rolledUp, label) {
   `;
 }
 
-function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp) {
+function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp, byWorktree, worktreesByRepo) {
   const chev = collapsed ? "▸" : "▾";
   const body = collapsed ? "" : worktreeBlocks.join("");
+  const dim = repoMatchesFilter(repoKey, byWorktree, worktreesByRepo) ? "" : " rail-dim";
   return `
-    <div class="rail-row repo-row" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}" draggable="true">
+    <div class="rail-row repo-row${dim}" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}" draggable="true">
       <span class="rail-grip">⋮⋮</span>
       <span class="rail-chev">${chev}</span>
       <span class="rail-icon icon-repo">📚</span>
@@ -183,12 +209,12 @@ export function renderRail() {
       const rolledUp = maxSeverity(childStates);
       // Label: branch from any window in this worktree.
       const label = (wtWindows[0]?.branch) || wtKey;
-      return worktreeRow(wtKey, childMarkup, wtIsCollapsed, rolledUp, label);
+      return worktreeRow(wtKey, childMarkup, wtIsCollapsed, rolledUp, label, byWorktree);
     });
     // Repo rollup = max across worktree rollups.
     const allChildStates = (worktrees.flatMap(wt => (byWorktree[wt] || []).map(w => w.state || "shell")));
     const repoRolledUp = maxSeverity(allChildStates);
-    return repoRow(repoKey, repoLabel, wtBlocks, wtCollapsed, repoRolledUp);
+    return repoRow(repoKey, repoLabel, wtBlocks, wtCollapsed, repoRolledUp, byWorktree, worktreesByRepo);
   });
 
   el.innerHTML = `
