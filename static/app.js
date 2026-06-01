@@ -216,16 +216,21 @@ document.querySelectorAll(".tb-dd-menu").forEach((menu) => {
   });
 });
 
-document.getElementById("new-session").addEventListener("click", async () => {
-  const name = await promptDialog("session name:", { placeholder: "e.g. tc/feature" });
-  if (!name) return;
-  await apiCall("new session", `/api/session/new`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: name.trim() }),
+// `+ session` is part of the `overlays` surface (Task 8) — the Preact
+// <Overlays> wires #new-session itself. Skip the vanilla handler when
+// overlays is Preact-owned so the prompt doesn't fire twice.
+if (!PREACT_SURFACES.has("overlays")) {
+  document.getElementById("new-session").addEventListener("click", async () => {
+    const name = await promptDialog("session name:", { placeholder: "e.g. tc/feature" });
+    if (!name) return;
+    await apiCall("new session", `/api/session/new`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    poll();
   });
-  poll();
-});
+}
 
 // Bulk broadcast — paste the prompted text + Enter into every pane currently
 // shown by the active filter. Two safety guards: (1) the button itself only
@@ -352,20 +357,30 @@ async function bootstrap() {
   if (PREACT_SURFACES.has("grid") && !PREACT_SURFACES.has("modal")) {
     window.__periscopeOpenModal = openModal;
   }
-  initCommandsModal();
-  initNewProjectModal();
-  initReviewPRModal();
-  initCleanupModal();
-  initAlerts();
-  initSettingsModal();
-  initOpenPicker();
-  initLauncher();
-  // Bridge: while the split surface is Preact-owned but the launcher is still
-  // vanilla (Task 8 not yet done), expose the vanilla opener so the Preact
-  // rail's "+ New tab" row can open it. Removed in the final cutover.
-  if (PREACT_SURFACES.has("split")) window.__periscopeOpenLauncher = openLauncher;
-  initExternalLinks();
-  document.getElementById("open-commands").addEventListener("click", openCommandsModal);
+  // Secondary modals + alerts + tauri-links + sw are the `overlays` surface
+  // (Task 8). When that surface is Preact-owned, skip every vanilla init here
+  // — the Preact <Overlays> registers its own openers (header buttons by id +
+  // the launcher/picker window bridges) and runs its own alerts poll. Running
+  // both would double the alerts poll, double-wire the header buttons, and
+  // reference the static modal nodes that main.jsx removes for the overlays
+  // surface. This whole block is deleted with the rest of vanilla in Task 9.
+  const overlaysPreact = PREACT_SURFACES.has("overlays");
+  if (!overlaysPreact) {
+    initCommandsModal();
+    initNewProjectModal();
+    initReviewPRModal();
+    initCleanupModal();
+    initAlerts();
+    initSettingsModal();
+    initOpenPicker();
+    initLauncher();
+    // Bridge: while the split surface is Preact-owned but the launcher is still
+    // vanilla (Task 8 not yet done), expose the vanilla opener so the Preact
+    // rail's "+ New tab" row can open it. Removed in the final cutover.
+    if (PREACT_SURFACES.has("split")) window.__periscopeOpenLauncher = openLauncher;
+    initExternalLinks();
+    document.getElementById("open-commands").addEventListener("click", openCommandsModal);
+  }
 
   // `?modal=<target>` is the handoff signal from /history resume (and any
   // future deep-link). Strip it before opening so a refresh doesn't keep

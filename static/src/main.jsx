@@ -12,6 +12,7 @@ import { Header } from "./chrome/Header.jsx";
 import { Grid } from "./grid/Grid.jsx";
 import { Modal } from "./modal/Modal.jsx";
 import { Split } from "./split/Split.jsx";
+import { Overlays } from "./overlays/Overlays.jsx";
 import { loadPrefs, getView, getLastSelected } from "./prefs.js";
 import { view, railSelection } from "./store.js";
 
@@ -47,13 +48,15 @@ function App() {
   // mounts only when its flag is present; the vanilla path skips its own
   // equivalent for any claimed surface (app.js consults __PREACT_SURFACES__).
   const anySurface =
-    SURFACES.has("chrome") || SURFACES.has("grid") || SURFACES.has("modal") || SURFACES.has("split");
+    SURFACES.has("chrome") || SURFACES.has("grid") || SURFACES.has("modal") ||
+    SURFACES.has("split") || SURFACES.has("overlays");
   return (
     <>
       {SURFACES.has("chrome") && <Header />}
       {SURFACES.has("grid") && <Grid />}
       {SURFACES.has("split") && <Split />}
       {SURFACES.has("modal") && <Modal />}
+      {SURFACES.has("overlays") && <Overlays />}
       {!anySurface && <div data-preact-root>periscope (preact scaffold)</div>}
       <Toaster />
       <DialogHost />
@@ -107,6 +110,29 @@ async function boot() {
     if (sel?.kind === "pane") railSelection.value = `pane:${sel.pid}`;
     else if (sel?.kind === "review") railSelection.value = `review:${sel.worktree}`;
     document.getElementById("split-view")?.remove();
+  }
+  // The overlays surface (Task 8: secondary modals + alerts + tauri + sw)
+  // reads prefs (alerts_open, commands, annotations on modal-open via the
+  // alert→openModal path). Load before first render. Remove the static
+  // equivalents from index.html so the Preact ones — which render their own
+  // nodes carrying the SAME ids (#alerts-rail, #commands-modal, …) — can't
+  // collide. The vanilla path still owns these while only overlays is claimed,
+  // so removing them is only safe once we mount the Preact replacements; that
+  // is exactly the order here (remove, then render).
+  if (SURFACES.has("overlays")) {
+    await loadPrefs();
+    for (const id of [
+      "alerts-rail",
+      "commands-modal",
+      "new-project-modal",
+      "review-pr-modal",
+      "cleanup-modal",
+      "settings-modal",
+      "open-picker-modal",
+      "launcher-modal",
+    ]) {
+      document.getElementById(id)?.remove();
+    }
   }
   render(<App />, document.getElementById("app"));
 }
