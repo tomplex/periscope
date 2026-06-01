@@ -2926,21 +2926,14 @@ body[data-alerts="open"][data-view="stream"] main {
 .review-start-card, .detail-empty-card { text-align: center; color: var(--fg-3); }
 .review-start-btn { margin-top: 10px; padding: 6px 14px; cursor: pointer; }
 
-.rail-grip {
-  width: 14px;
-  opacity: .35;
-  font-size: 14px;
-  line-height: 1;
-  cursor: grab;
-  transition: opacity .12s;
-  flex-shrink: 0;
-  color: var(--fg-3);
-  user-select: none;
-  /* Slightly narrower letter-spacing so the braille glyph hugs the icon. */
-  margin-right: -2px;
-}
-.rail-row:hover .rail-grip { opacity: .85; color: var(--fg-1); }
-.rail-grip:active { cursor: grabbing; opacity: 1; }
+/* Drag affordance lives on the row itself — no explicit grip handle.
+   `cursor: grab` on draggable rows hints that mousedown+move reorders;
+   plain click without movement still fires the click handler (select).
+   The browser's built-in drag threshold (~3-5px) keeps the two from
+   tripping each other up. */
+.rail-row[draggable="true"] { cursor: grab; }
+.rail-row[draggable="true"]:active { cursor: grabbing; }
+.rail-row.newtab-row { cursor: pointer; }   /* not draggable, just click-to-open */
 .rail-row.dragging { opacity: .5; }
 .rail-dim { opacity: .35; }
 .rail-row.rail-dim:hover { opacity: .6; }

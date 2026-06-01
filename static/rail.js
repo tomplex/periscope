@@ -152,8 +152,7 @@ function paneRow(w, selectedKey) {
     ? `<span class="rail-icon icon-claude">✻</span>`
     : `<span class="rail-icon icon-shell">$</span>`;
   return `
-    <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}">
-      <span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>
+    <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}" draggable="true">
       ${icon}
       <span class="rail-label">${escapeHtml(w.name || (w.is_claude ? "claude" : "shell"))}</span>
       <span class="${statusDotClass(w.state)}"></span>
@@ -170,8 +169,7 @@ function reviewRow(worktreeKey, lgtmLive, selectedKey) {
     ? `<span class="rail-icon icon-review">◉</span>`
     : `<span class="rail-icon icon-review-empty">○</span>`;
   return `
-    <div class="rail-row child-row${sel}${empty}" data-row="review" data-worktree="${escapeHtml(worktreeKey)}" data-key="${escapeHtml(k)}">
-      <span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>
+    <div class="rail-row child-row${sel}${empty}" data-row="review" data-worktree="${escapeHtml(worktreeKey)}" data-key="${escapeHtml(k)}" draggable="true">
       ${icon}
       <span class="rail-label">review${lgtmLive ? "" : " <em>start →</em>"}</span>
     </div>`;
@@ -198,8 +196,7 @@ function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktr
     ? `<span class="rail-icon icon-shell">›</span>`
     : `<span class="rail-icon icon-worktree">⎇</span>`;
   return `
-    <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}">
-      <span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>
+    <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}" draggable="true">
       <span class="rail-chev">${chev}</span>
       ${icon}
       <span class="rail-label"><b>${escapeHtml(label)}</b></span>
@@ -215,14 +212,14 @@ function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp, byWorktree
   const body = collapsed ? "" : worktreeBlocks.join("");
   const dim = repoMatchesFilter(repoKey, byWorktree, worktreesByRepo) ? "" : " rail-dim";
   const isOther = repoKey === OTHER_REPO_KEY;
-  // "Other" is always pinned at the bottom — drag is meaningless; omit the grip.
-  const grip = isOther ? "" : `<span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>`;
+  // "Other" is always pinned at the bottom — drag is meaningless. Omit
+  // draggable so dragstart never fires on it.
+  const dragAttr = isOther ? "" : ` draggable="true"`;
   const icon = isOther
     ? `<span class="rail-icon icon-other">◇</span>`
     : `<span class="rail-icon icon-repo">◆</span>`;
   return `
-    <div class="rail-row repo-row${dim}" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}">
-      ${grip}
+    <div class="rail-row repo-row${dim}" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}"${dragAttr}>
       <span class="rail-chev">${chev}</span>
       ${icon}
       <span class="rail-label"><b>${escapeHtml(label)}</b></span>
