@@ -28,6 +28,26 @@ from periscope.tmux import capture
 from periscope.worktrees import affiliation
 
 
+# Cache of the parsed-pane dict, keyed by (target, pane_id). Skips
+# capture()+parse_pane()+smoothing on a poll when tmux reports no new output
+# (window_activity unchanged) AND the cached state is quiet (idle/shell) — the
+# only states where re-running smoothing / record_state_transition would be a
+# no-op. Working/needs-input/error panes are never skipped. Keying on pane_id
+# (not just target) avoids serving a stale parse if a closed window's
+# session:index is reused by a new pane whose activity coincidentally matches.
+# Bounded by pane count; stale entries for closed panes are harmless. Cleared
+# between tests.
+#
+# Known minor staleness: a Claude pane that exits to a shell and then goes
+# silent can stay cached as is_claude=True/idle until its next output (the
+# 120s smooth_is_claude expiry only fires on a recapture). The card still
+# shows idle; only the is_claude coloring lags. Accepted — the next real
+# output recaptures and corrects it.
+_view_cache: dict[tuple[str, str], dict] = {}
+
+_QUIET_STATES = ("idle", "shell")
+
+
 def build_window_view(
     w: dict, now_ts: int,
 ) -> tuple[dict, Optional[tuple[str, int, int]]]:
@@ -42,31 +62,46 @@ def build_window_view(
     target = f"{w['session']}:{w['index']}"
     pid = w.get("pid") or ""
 
-    try:
-        content = capture(target)
-        parsed = parse_pane(content)
-    except Exception as e:
-        parsed = {"error": str(e), "state": "error", "is_claude": False}
-
-    # Hysteresis: smooth out per-poll detection gaps so cards / modal
-    # subtitles don't flicker between "thinking" and idle.
-    parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
-    # is_claude stickiness: dialogs hide the bottom status line; without
-    # this the card would flip to "shell" mid-prompt and lose its state
-    # coloring + needs-input classification.
-    parsed["is_claude"] = smooth_is_claude(target, parsed.get("is_claude", False))
-    if not parsed["is_claude"]:
-        parsed["state"] = "shell"
-    # Spinner hysteresis can promote a momentarily-blank parse back to
-    # "working" — but only if we're not already in a louder state.
-    # needs-input must never be downgraded back to working: the dialog
-    # commonly lingers below a stale spinner glyph in scrollback.
+    activity = w.get("activity", 0)
+    cache_key = (target, w.get("pane_id", ""))
+    cached = _view_cache.get(cache_key)
     if (
-        parsed.get("is_claude")
-        and parsed.get("spinner")
-        and parsed.get("state") not in ("working", "needs-input")
+        cached is not None
+        and cached["activity"] == activity
+        and cached["parsed"].get("state") in _QUIET_STATES
     ):
-        parsed["state"] = "working"
+        # No new output since last poll and the pane is quiet — reuse the
+        # parsed result, skip the capture() subprocess + smoothing. Downstream
+        # assembly (stamps, git, channel) still runs every poll below.
+        parsed = dict(cached["parsed"])
+    else:
+        try:
+            content = capture(target)
+            parsed = parse_pane(content)
+        except Exception as e:
+            parsed = {"error": str(e), "state": "error", "is_claude": False}
+
+        # Hysteresis: smooth out per-poll detection gaps so cards / modal
+        # subtitles don't flicker between "thinking" and idle.
+        parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
+        # is_claude stickiness: dialogs hide the bottom status line; without
+        # this the card would flip to "shell" mid-prompt and lose its state
+        # coloring + needs-input classification.
+        parsed["is_claude"] = smooth_is_claude(target, parsed.get("is_claude", False))
+        if not parsed["is_claude"]:
+            parsed["state"] = "shell"
+        # Spinner hysteresis can promote a momentarily-blank parse back to
+        # "working" — but only if we're not already in a louder state.
+        # needs-input must never be downgraded back to working: the dialog
+        # commonly lingers below a stale spinner glyph in scrollback.
+        if (
+            parsed.get("is_claude")
+            and parsed.get("spinner")
+            and parsed.get("state") not in ("working", "needs-input")
+        ):
+            parsed["state"] = "working"
+
+        _view_cache[cache_key] = {"activity": activity, "parsed": dict(parsed)}
 
     # done-vs-idle refinement. Uses per-pid stamps (persisted via
     # state.json) so a server restart preserves the "Claude finished
