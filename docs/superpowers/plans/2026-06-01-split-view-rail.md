@@ -10,6 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-01-split-view-rail-design.md`
 
+**Note on a spec/plan divergence:** the spec's "Backend modules touched"
+section lists `periscope/window_view.py`. That file consumes the data via
+`cached_git_state(cwd)`; the *producer* is `periscope/git_pr.py:git_state_for`,
+which is what this plan modifies (the cache wrapper transparently passes
+the new fields through). Net effect identical — the spec's file pointer
+is just imprecise. No spec amendment needed.
+
 ---
 
 ## File Structure
@@ -55,15 +62,21 @@
 Append to `tests/test_git_pr.py`:
 
 ```python
-def test_git_state_includes_repo_key_and_label(tmp_path, monkeypatch):
+def test_git_state_includes_repo_key_and_label(tmp_path, mocker):
     """git_state_for() returns repo_key (full path) + repo_label (basename)."""
     import periscope.git_pr as gp
-    # Stub _run to look like a clean repo at /tmp/foo.
+    # git_state_for short-circuits when the path is not a directory, so
+    # build a real worktree-like directory tree under tmp_path.
+    repo_dir = tmp_path / "foo"
+    worktree_dir = repo_dir / "branch-a"
+    worktree_dir.mkdir(parents=True)
+    common_dir = repo_dir / ".git"
+    common_dir.mkdir()
+
     def fake_run(args, cwd=None, timeout=None):
-        if "diff" in args and "--shortstat" in args and "--cached" not in args:
-            return (0, "")  # no unstaged changes
-        if "--cached" in args:
-            return (0, "")  # no staged changes
+        # diff shortstat (unstaged + staged) → clean
+        if "diff" in args and "--shortstat" in args:
+            return (0, "")
         if "rev-parse" in args and "--abbrev-ref" in args:
             return (0, "main")
         if "rev-list" in args:
@@ -71,12 +84,14 @@ def test_git_state_includes_repo_key_and_label(tmp_path, monkeypatch):
         if "remote" in args and "get-url" in args:
             return (1, "")  # no github slug
         if "rev-parse" in args and "--git-common-dir" in args:
-            return (0, "/tmp/foo/.git")
+            return (0, str(common_dir))
         return (0, "")
-    monkeypatch.setattr("periscope.git_pr._run", fake_run)
-    monkeypatch.setattr("periscope.gitutil._run", fake_run)
-    out = gp.git_state_for("/tmp/foo/branch-a")
-    assert out["repo_key"] == "/tmp/foo"
+
+    # Both modules import _run from periscope.tmux at module load — patch both.
+    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
+    mocker.patch("periscope.gitutil._run", side_effect=fake_run)
+    out = gp.git_state_for(str(worktree_dir))
+    assert out["repo_key"] == str(repo_dir)
     assert out["repo_label"] == "foo"
 ```
 
@@ -138,39 +153,23 @@ git commit -m "git_pr: expose repo_key + repo_label on cached_git_state for rail
 - Modify: `periscope/routes/prefs.py`
 - Modify: `tests/routes/test_prefs.py` (check if exists; create otherwise — it doesn't today)
 
-- [ ] **Step 1: Check whether tests/routes/test_prefs.py exists**
+- [ ] **Step 1: Append new tests to existing file**
 
-Run: `ls tests/routes/test_prefs.py 2>/dev/null || echo "MISSING"`
-
-If MISSING, the file needs to be created with a header matching peer route tests.
-
-- [ ] **Step 2: Write the failing test**
-
-Append to (or create) `tests/routes/test_prefs.py`:
+`tests/routes/test_prefs.py` already exists. It uses the `client` fixture from `tests/routes/conftest.py`. Append the three new test functions to the bottom of that file (match the existing style — `def test_...(client, clean_state):`):
 
 ```python
-"""Tests for /api/prefs/ui — UI patch validation and round-trip."""
-
-from fastapi.testclient import TestClient
-
-from periscope.app import app
-
-
-def test_ui_patch_accepts_split_view(clean_state):
-    client = TestClient(app)
+def test_ui_patch_accepts_split_view(client, clean_state):
     r = client.patch("/api/prefs/ui", json={"view": "split"})
     assert r.status_code == 200, r.text
     assert r.json()["ui"]["view"] == "split"
 
 
-def test_ui_patch_rejects_unknown_view(clean_state):
-    client = TestClient(app)
+def test_ui_patch_rejects_unknown_view(client, clean_state):
     r = client.patch("/api/prefs/ui", json={"view": "kanban"})
     assert r.status_code == 400
 
 
-def test_ui_patch_accepts_rail_state_keys(clean_state):
-    client = TestClient(app)
+def test_ui_patch_accepts_rail_state_keys(client, clean_state):
     body = {
         "repo_order": ["/home/tom/dev/foo"],
         "worktrees_by_repo": {"/home/tom/dev/foo": ["session-a"]},
@@ -185,14 +184,12 @@ def test_ui_patch_accepts_rail_state_keys(clean_state):
         assert ui[key] == body[key]
 ```
 
-If creating the file, also create an `__init__.py` next to it (the tests/routes/ dir already has one — confirm).
-
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/routes/test_prefs.py -v`
-Expected: All three FAIL — Pydantic rejects the new keys, view validator rejects "split".
+Expected: All three new tests FAIL — Pydantic rejects the new keys, view validator rejects "split". Pre-existing tests still PASS.
 
-- [ ] **Step 4: Extend `UIPatch` and view validator**
+- [ ] **Step 3: Extend `UIPatch` and view validator**
 
 In `periscope/routes/prefs.py`, replace the `UIPatch` class (lines 32-36):
 
@@ -219,17 +216,17 @@ Update the view validator (around line 44):
         raise HTTPException(400, f"invalid view: {patch['view']!r}")
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/routes/test_prefs.py -v`
-Expected: All three PASS.
+Expected: All three new tests PASS, plus all pre-existing tests.
 
-- [ ] **Step 6: Run full route test suite as smoke check**
+- [ ] **Step 5: Run full route test suite as smoke check**
 
 Run: `uv run pytest tests/routes/ -q`
 Expected: No regressions.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add periscope/routes/prefs.py tests/routes/test_prefs.py
@@ -274,19 +271,21 @@ export function setTerminalContainer(el) {
 
 // Register a callback invoked when an .md link in the terminal is clicked.
 // Replaces the previous hard import of addLgtmDocFromTerminal from modal.js.
-// Callback signature: (mdPath: string, lineNumber: number | null) => void
+// Callback signature: (rawPath: string) => void
+// rawPath includes any trailing ":42" line suffix; callees parse it themselves
+// (see addLgtmDocFromTerminal in modal.js for the original handler).
 export function setTerminalLinkCallback(cb) {
   linkClickCallback = cb;
 }
 ```
 
-Find every reference to `modalXtermEl` in the file and replace with `containerEl`. Then remove the line `import { addLgtmDocFromTerminal } from './modal.js';` and find every call to `addLgtmDocFromTerminal(...)` — replace with:
+Find every reference to `modalXtermEl` in the file and replace with `containerEl`. Then remove the line `import { addLgtmDocFromTerminal } from './modal.js';` and find every call to `addLgtmDocFromTerminal(rawPath)` — replace with:
 
 ```js
-if (linkClickCallback) linkClickCallback(/* same args as before */);
+if (linkClickCallback) linkClickCallback(rawPath);
 ```
 
-Check usages by grep before editing — do `grep -n "addLgtmDocFromTerminal\|modalXtermEl" /Users/tom/dev/periscope/static/terminal.js` to enumerate.
+Check usages by grep before editing — do `grep -n "addLgtmDocFromTerminal\|modalXtermEl" /Users/tom/dev/periscope/static/terminal.js` to enumerate. The reviewer confirmed only one call site at `terminal.js:57`.
 
 - [ ] **Step 2: Update `modal.js` to call the new setters**
 
@@ -297,7 +296,7 @@ import { setTerminalContainer, setTerminalLinkCallback, startLiveTerminal, stopL
 
 // In the modal's open-terminal code path:
 setTerminalContainer(document.getElementById("modal-xterm"));
-setTerminalLinkCallback((mdPath, lineNumber) => addLgtmDocFromTerminal(mdPath, lineNumber));
+setTerminalLinkCallback((rawPath) => addLgtmDocFromTerminal(rawPath));
 startLiveTerminal(target);
 ```
 
@@ -384,28 +383,36 @@ export function unmountTerminal() {
 
 - [ ] **Step 2: Update `modal.js` to use `terminal-mount`**
 
-In `modal.js`, replace the direct `setTerminalContainer + setTerminalLinkCallback + startLiveTerminal` sequence introduced in Task 2.1 with a single `mountTerminal` call. Also move any existing paste-handler `addEventListener("paste", ..., true)` line on `#modal-xterm` into the `onPaste` opts (so it follows the lifecycle).
+In `modal.js`, replace the direct `setTerminalContainer + setTerminalLinkCallback + startLiveTerminal` sequence introduced in Task 2.1 with a single `mountTerminal` call.
 
-Concretely: find the open-terminal code path, replace with:
+**Important: remove the init-time paste listener.** Currently `modal.js:initModal()` (around line 1156) does `modalXtermEl.addEventListener("paste", handler, true)` once at module init. That must be deleted; otherwise the paste handler fires twice (once from init, once from `mountTerminal`'s `onPaste`).
 
-```js
-import { mountTerminal, unmountTerminal } from './terminal-mount.js';
+Concretely:
 
-// open:
-mountTerminal(
-  document.getElementById("modal-xterm"),
-  target,
-  {
-    onMdLink: (mdPath, lineNumber) => addLgtmDocFromTerminal(mdPath, lineNumber),
-    onPaste: handleModalImagePaste,  // existing function in modal.js
-  }
-);
+1. Extract the inline paste closure at `modal.js:1156` into a named function at module scope:
+   ```js
+   function handleModalImagePaste(event) {
+     // existing body of the paste handler
+   }
+   ```
+2. Delete the `modalXtermEl.addEventListener("paste", ..., true)` call from `initModal()` entirely.
+3. Replace the open-terminal code path:
+   ```js
+   import { mountTerminal, unmountTerminal } from './terminal-mount.js';
 
-// close:
-unmountTerminal();
-```
+   // open:
+   mountTerminal(
+     document.getElementById("modal-xterm"),
+     target,
+     {
+       onMdLink: (rawPath) => addLgtmDocFromTerminal(rawPath),
+       onPaste: handleModalImagePaste,
+     }
+   );
 
-Look up the existing paste handler — search `modal.js` for `addEventListener("paste"` — and refactor it to a named function `handleModalImagePaste` if it's currently inline. Otherwise pass it by reference.
+   // close:
+   unmountTerminal();
+   ```
 
 - [ ] **Step 3: Manual verify (same checks as Task 2.1)**
 
@@ -431,15 +438,25 @@ git commit -m "terminal-mount: shared lifecycle helper, modal.js migrated"
 **Files:**
 - Modify: `static/prefs.js`
 
-- [ ] **Step 1: Inspect the existing prefs.js to find the patch-helper pattern**
+- [ ] **Step 1: Export the existing `patchUI` helper**
 
-Run: `grep -n "patch\|update_ui\|/api/prefs/ui\|export function" /Users/tom/dev/periscope/static/prefs.js | head -30`
+`prefs.js` already has an `async function patchUI(patch)` at line 102 — currently module-private. The auto-prune logic in Task 11.2 (and any future rail bulk-write site) needs to call it, so change the declaration:
 
-Identify the existing PATCH helper (something like `patchUI(body)` or inline `apiCall('/api/prefs/ui', 'PATCH', ...)`).
+```js
+async function patchUI(patch) {
+```
+
+to:
+
+```js
+export async function patchUI(patch) {
+```
+
+That's the only change in this step. Existing in-file callers are unaffected because the function name doesn't change.
 
 - [ ] **Step 2: Add rail-state getters and setters**
 
-Append to `static/prefs.js`:
+Append to `static/prefs.js` (calls `patchUI` directly — same module — and uses `apiCall("save prefs", "/api/prefs/ui", {...})` shape internally via `patchUI`, so no apiCall changes needed here):
 
 ```js
 // --- Rail state (split view) -----------------------------------------------
@@ -537,17 +554,7 @@ export async function removeWorktreeFromRail({ repoKey, worktreeKey }) {
 }
 ```
 
-The reference to `patchUI` must exist (or be added). If `prefs.js` already exposes a private patch helper, use it; otherwise add at the top of the new section:
-
-```js
-async function patchUI(body) {
-  await apiCall('/api/prefs/ui', { method: 'PATCH', body });
-  // Re-fetch full prefs to refresh the in-memory `prefs` cache.
-  Object.assign(prefs, await apiCall('/api/prefs'));
-}
-```
-
-Match whatever helper pattern is already in `prefs.js`. Don't duplicate.
+The reference to `patchUI` resolves to the existing function in the same module — no need to define a new one.
 
 - [ ] **Step 3: Verify no JS errors**
 
@@ -658,19 +665,24 @@ Append to `static/styles.css`:
 
 ```css
 /* --- Split view: structural layout (polish in Phase 12) ----------------- */
+/* Periscope's body uses flex column layout — `.periscope-header` first,
+   then the view container fills. We follow the same pattern (no fixed
+   header height). */
 
 #split-view {
   display: grid;
   grid-template-columns: 320px 1fr;
-  height: calc(100vh - var(--header-height, 56px));
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 #split-view.hidden { display: none; }
 
 #rail {
   overflow-y: auto;
-  border-right: 1px solid var(--border, #333);
-  background: var(--bg-1, #1c1c1f);
+  border-right: 1px solid var(--line);
+  background: var(--bg-1);
 }
 
 #detail {
@@ -678,6 +690,7 @@ Append to `static/styles.css`:
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  background: var(--bg-0);
 }
 
 #detail-empty, #detail-pane, #detail-review, #detail-review-start {
@@ -688,17 +701,17 @@ Append to `static/styles.css`:
 
 .detail-pane { display: flex; flex-direction: column; }
 .detail-pane-body { display: grid; grid-template-columns: 1fr 240px; flex: 1; min-height: 0; }
-.detail-xterm { background: #0a0a0a; min-height: 0; overflow: hidden; }
-.detail-side { border-left: 1px solid var(--border, #333); overflow-y: auto; padding: 8px 10px; font-size: 12px; }
+.detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; }
+.detail-side { border-left: 1px solid var(--line); overflow-y: auto; padding: 8px 10px; font-size: 12px; }
 .detail-review { display: flex; flex-direction: column; }
 .detail-review-iframe { flex: 1; border: 0; min-height: 0; }
-.detail-empty { display: flex; align-items: center; justify-content: center; color: var(--muted, #888); }
+.detail-empty { display: flex; align-items: center; justify-content: center; color: var(--fg-3); }
 .detail-review-start { display: flex; align-items: center; justify-content: center; }
 
 .hidden { display: none !important; }
 ```
 
-Note `--header-height` may not exist — if not, replace with the actual header height value (inspect existing CSS first; the header is `.periscope-header`).
+Confirm `body` is already flex-column (it is — `static/styles.css:60` sets `html, body { display: flex; flex-direction: column }`). If not, add it. The `flex: 1; min-height: 0` on `#split-view` makes it fill the remaining vertical space below the header.
 
 - [ ] **Step 4: Manual verify**
 
@@ -721,55 +734,84 @@ git commit -m "split-view: DOM scaffolding + view toggle button"
 **Files:**
 - Modify: `static/app.js`
 
-- [ ] **Step 1: Inspect existing view-switch wiring**
+- [ ] **Step 1: Widen `prefs.getView()` to accept "split"**
 
-Run: `grep -n "view-switch\|data-view\|prefs.getView\|setView\|grid\|stream" /Users/tom/dev/periscope/static/app.js | head -25`
-
-Identify the existing view-switch handler (looks like a click delegate on `.view-switch-btn`).
-
-- [ ] **Step 2: Make view switching three-way**
-
-In `static/app.js`, find the view-switch click handler. The existing pattern (paraphrased) probably looks like:
+In `static/prefs.js`, `getView()` currently coerces anything that isn't `"stream"` to `"grid"`. Update it:
 
 ```js
-const view = btn.dataset.view;  // "grid" | "stream"
-prefs.setView(view);
-applyView(view);
+export function getView() {
+  const v = cache.ui?.view;
+  return (v === "stream" || v === "split") ? v : "grid";
+}
 ```
 
-Extend `applyView()` (or its inline equivalent) to handle `"split"`. Replace whatever shows/hides `#grid` with logic that also shows/hides `#split-view`:
+This keeps `"grid"` as the legacy default for users with prefs already written; new users land on `"split"` via the bootstrap default in Step 4 below.
+
+- [ ] **Step 2: Inspect existing view-switch wiring**
+
+Run: `grep -n "applyView\|view-switch\|data-view\|body\.dataset\.view\|setView\|nextView" /Users/tom/dev/periscope/static/app.js | head -25`
+
+Identify the existing `applyView()` function — it writes `document.body.dataset.view = view`, which is the source of truth `grid.js:render()` reads from.
+
+- [ ] **Step 3: Extend `applyView()` to handle split**
+
+In `static/app.js`, modify the existing `applyView()` function (do **not** rewrite from scratch — preserve whatever stream-specific wiring is already there). Add the split branch and update the dataset-attribute write:
 
 ```js
 function applyView(view) {
+  document.body.dataset.view = view;
   const grid = document.getElementById("grid");
   const split = document.getElementById("split-view");
 
-  grid.classList.toggle("hidden", view !== "grid" && view !== "stream");
+  // Grid container is shared by grid AND stream views (stream renders into #grid).
+  grid.classList.toggle("hidden", view === "split");
   split.classList.toggle("hidden", view !== "split");
 
-  // Update the aria-selected on toggle buttons.
   document.querySelectorAll(".view-switch-btn").forEach(b => {
     b.setAttribute("aria-selected", String(b.dataset.view === view));
   });
 
-  // Stream view rebrands #grid container — preserve existing stream wiring.
-  if (view === "stream") {
-    // grid.js's renderStream handler reuses #grid container — let render() pick it up.
-  }
-
+  // Preserve any existing stream-only or grid-only wiring already in this function.
+  // Add the split branch — defer rail/detail rendering. Use static imports
+  // (added at the top of app.js) so the modules are eagerly loaded; if a
+  // task subagent dispatches this before Phase 5/6 modules exist, the
+  // imports themselves fail at load time and the failure is loud.
   if (view === "split") {
-    // Defer to rail/detail modules (added in Phase 5/6).
-    import('./rail.js').then(m => m.renderRail());
-    import('./detail.js').then(m => m.refreshDetail());
+    renderRail();
+    refreshDetail();
+  } else {
+    // Tear down xterm if we were in split-pane mode (detail.js exports this).
+    if (typeof detailTeardown === "function") detailTeardown();
   }
 }
 ```
 
-Adjust the import-strategy if `app.js` already eagerly imports modules — use a static import in that case. Pattern-match the existing style.
+Add static imports at the top of `app.js`:
 
-- [ ] **Step 3: Update the Tab keybinding to cycle through three views**
+```js
+import { renderRail } from './rail.js';
+import { refreshDetail, detailTeardown } from './detail.js';
+```
 
-Find the existing Tab handler (search `keydown\|Tab`). Update the next-view function:
+These imports will fail at load time until Tasks 5.1 and 6.2 land. **Sub-agent dispatchers: do not run this task until 5.1 and 6.2 are at least stubbed.** A minimal stub is fine (a file that just `export function renderRail() {}`); fill in real bodies in their respective phases. Add the stubs as the first sub-step of Task 4.2 Step 3:
+
+   - Create `static/rail.js` containing `export function renderRail() {}`
+   - Create `static/detail.js` containing:
+     ```js
+     export function refreshDetail() {}
+     export function detailTeardown() {}
+     export function selectPane(_pid) {}
+     export function selectReview(_worktree) {}
+     export function showEmpty() {}
+     ```
+
+These stubs cover every symbol later phases import from `detail.js`. Phase 6.2 replaces them with real bodies.
+
+These stubs let Phase 4 verify in isolation; Phases 5 and 6 fill them in.
+
+- [ ] **Step 4: Update the Tab keybinding to cycle through three views**
+
+Find the existing Tab handler (search `keydown\|Tab`). Update the next-view function to:
 
 ```js
 function nextView(current) {
@@ -779,21 +821,16 @@ function nextView(current) {
 }
 ```
 
-- [ ] **Step 4: Set split as default on cold load**
+- [ ] **Step 5: Set split as default on cold load**
 
-In the bootstrap path of `app.js` (or wherever the initial view is read from prefs), change the default fallback. If today it reads:
+In the bootstrap path of `app.js`, find the call site that reads the initial view. If it reads `prefs.getView()` and falls back to `"grid"`, change the fallback to `"split"`. With Step 1's widening, this gives:
 
-```js
-const view = prefs.getView() || "grid";
-```
+- Existing users with `view: "grid"` saved → keep grid.
+- Existing users with `view: "stream"` saved → keep stream.
+- Existing users with `view: "split"` saved → keep split.
+- New users with no `view` saved → split (the new default).
 
-Change to:
-
-```js
-const view = prefs.getView() || "split";
-```
-
-- [ ] **Step 5: Manual verify**
+- [ ] **Step 6: Manual verify**
 
 Run: `npm run dev`. Reload `http://localhost:5174/`. Confirm:
 - Cold-load shows the split view (empty rail; right pane will be unset — that's fine for now, Phase 5/6 handles it).
@@ -802,13 +839,13 @@ Run: `npm run dev`. Reload `http://localhost:5174/`. Confirm:
 - Tab key cycles through split → grid → stream → split.
 - Reload after switching to grid — grid persists.
 
-The split-view containers will look broken in this phase (empty/black). That's expected; Phase 5 starts filling them.
+The split-view containers will look broken in this phase (empty/black). That's expected; Phase 5 starts filling them. The stub `rail.js` / `detail.js` from Step 3 means no JS errors.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add static/app.js
-git commit -m "app: 3-way view switch with split as default"
+git add static/app.js static/prefs.js static/rail.js static/detail.js
+git commit -m "app: 3-way view switch with split as default + module stubs"
 ```
 
 ---
@@ -852,11 +889,11 @@ function maxSeverity(states) {
 }
 
 // Build a quick { worktreeKey: [windowObj, ...] } map from /api/state.
-// state.lastState is the most recent /api/state poll result, populated
-// by grid.js's poll() — we read it here without re-fetching.
-function indexWindowsByWorktree(lastState) {
+// state.lastWindows is the most recent /api/state windows array,
+// written to by grid.js's poll() at `state.lastWindows = data.windows`.
+function indexWindowsByWorktree(windows) {
   const out = {};
-  for (const w of (lastState?.windows || [])) {
+  for (const w of (windows || [])) {
     const key = w.session;  // worktree_key = session name
     (out[key] = out[key] || []).push(w);
   }
@@ -866,8 +903,8 @@ function indexWindowsByWorktree(lastState) {
 // Look up the human-readable repo label for a repo_key. We pull it off
 // any window whose `repo_key` matches; falls back to basename of the
 // repo_key path.
-function repoLabelFor(repoKey, lastState) {
-  for (const w of (lastState?.windows || [])) {
+function repoLabelFor(repoKey, windows) {
+  for (const w of (windows || [])) {
     if (w.repo_key === repoKey && w.repo_label) return w.repo_label;
   }
   const parts = String(repoKey || "").split("/").filter(Boolean);
@@ -953,7 +990,8 @@ export function renderRail() {
     if (sel.kind === "review") return `review:${sel.worktree}`;
     return null;
   })();
-  const byWorktree = indexWindowsByWorktree(state.lastState);
+  const windows = state.lastWindows;
+  const byWorktree = indexWindowsByWorktree(windows);
 
   if (repoOrder.length === 0) {
     el.innerHTML = `
@@ -968,7 +1006,7 @@ export function renderRail() {
   }
 
   const blocks = repoOrder.map(repoKey => {
-    const repoLabel = repoLabelFor(repoKey, state.lastState);
+    const repoLabel = repoLabelFor(repoKey, windows);
     const worktrees = worktreesByRepo[repoKey] || [];
     const wtCollapsed = collapsed[`repo:${repoKey}`] === true;
     const wtBlocks = worktrees.map(wtKey => {
@@ -980,7 +1018,7 @@ export function renderRail() {
       const childStates = [];
       for (const child of childOrder) {
         if (child === "review") {
-          const lgtmLive = wtWindows.some(w => w.lgtm && w.lgtm.session_slug);
+          const lgtmLive = wtWindows.some(w => w.lgtm && w.lgtm.slug);
           childMarkup.push(reviewRow(wtKey, lgtmLive, selectedKey));
           // Review row doesn't roll up into the worktree dot.
         } else {
@@ -1012,13 +1050,12 @@ export function renderRail() {
 }
 ```
 
-- [ ] **Step 2: Verify `state.lastState` is populated**
+- [ ] **Step 2: Sanity-check the data feed**
 
-`grid.js`'s `poll()` populates state with the last `/api/state` result. Confirm:
+`state.lastWindows` (an array of window dicts) is written by `static/grid.js:1135` on every `/api/state` poll. The rail reads it without re-fetching. Confirm the write site still exists:
 
-Run: `grep -n "lastState\|state\.windows" /Users/tom/dev/periscope/static/grid.js /Users/tom/dev/periscope/static/state.js | head -10`
-
-If `state.lastState` doesn't exist by that exact name, find the field that does (might be `state.windows` directly). Update `rail.js`'s `indexWindowsByWorktree(state.lastState)` to use the right field.
+Run: `grep -n "state\.lastWindows" /Users/tom/dev/periscope/static/grid.js`
+Expected: at least one assignment line.
 
 - [ ] **Step 3: Add minimal rail row styles to `styles.css`**
 
@@ -1029,37 +1066,37 @@ Append:
   display: flex; align-items: center; gap: 6px;
   padding: 6px 10px;
   font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
-  color: var(--muted, #888);
-  border-bottom: 1px solid var(--border, #2a2a2a);
+  color: var(--fg-3);
+  border-bottom: 1px solid var(--line-soft);
 }
 .rail-head .rail-add {
-  margin-left: auto; background: transparent; border: 1px solid var(--border, #333);
-  color: var(--muted, #888); padding: 1px 7px; border-radius: 3px; font-size: 13px; cursor: pointer;
+  margin-left: auto; background: transparent; border: 1px solid var(--line);
+  color: var(--fg-3); padding: 1px 7px; border-radius: 3px; font-size: 13px; cursor: pointer;
 }
-.rail-empty { padding: 14px; font-size: 12px; color: var(--muted, #888); }
+.rail-empty { padding: 14px; font-size: 12px; color: var(--fg-3); }
 
 .rail-row {
   display: flex; align-items: center; gap: 7px;
   padding: 7px 10px; font-size: 13px; position: relative;
   border-left: 2px solid transparent;
 }
-.rail-row.selected { background: rgba(255,255,255,.04); border-left-color: #e89243; }
+.rail-row.selected { background: var(--bg-1-hi); border-left-color: var(--accent); }
 .rail-row .rail-chev { width: 10px; opacity: .5; font-size: 9px; }
 .rail-row .rail-icon { width: 14px; opacity: .85; text-align: center; }
 .rail-row .rail-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rail-row .rail-count { font-size: 10px; opacity: .55; padding: 0 4px; background: #333; border-radius: 2px; }
-.rail-row .rail-conn { width: 14px; color: #444; font-size: 11px; text-align: center; }
+.rail-row .rail-count { font-size: 10px; opacity: .55; padding: 0 4px; background: var(--bg-2); border-radius: 2px; }
+.rail-row .rail-conn { width: 14px; color: var(--fg-4); font-size: 11px; text-align: center; }
 .rail-row.child-row { padding-left: 30px; }
 .rail-row.review-empty .rail-label em { font-style: italic; opacity: .55; font-size: 11px; }
 
-.dot { width: 7px; height: 7px; border-radius: 50%; }
-.dot-green { background: #3a7; }
-.dot-blue { background: #58a; }
-.dot-grey { background: #444; }
-.dot-alert { background: #c44; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.dot-green { background: var(--s-working); }
+.dot-blue { background: var(--s-done); }
+.dot-grey { background: var(--s-idle); }
+.dot-alert { background: var(--s-needs); }
 .dot-none { background: transparent; }
 .dot-pulse { animation: rail-pulse 1.6s ease-in-out infinite; }
-@keyframes rail-pulse { 50% { box-shadow: 0 0 0 4px rgba(204,68,68,.15); } }
+@keyframes rail-pulse { 50% { box-shadow: 0 0 0 4px var(--s-needs-bg); } }
 ```
 
 - [ ] **Step 4: Manual verify (empty state)**
@@ -1115,30 +1152,30 @@ git commit -m "rail: read-only rendering of repos / worktrees / children with st
 **Files:**
 - Modify: `static/grid.js` (the poll loop hooks rail re-render)
 
-- [ ] **Step 1: Find the poll loop's render call**
+- [ ] **Step 1: Find `render()` and confirm its dispatch source**
 
-Run: `grep -n "function poll\|setTimeout.*poll\|render()\|renderStream\|state\.lastState\s*=" /Users/tom/dev/periscope/static/grid.js | head -15`
+Run: `grep -n "function render\|export function render\|body\.dataset\.view\|state\.lastWindows" /Users/tom/dev/periscope/static/grid.js | head -15`
 
-`poll()` should already update `state.lastState` (or its equivalent) and call `render()`. We need it to also trigger rail re-render when the current view is split.
+`render()` already dispatches on `document.body.dataset.view` (see `grid.js:486` — "stream" vs everything-else). We add a third branch.
 
 - [ ] **Step 2: Add rail re-render on poll**
 
-In `static/grid.js`, find `render()` (the function that picks between grid and stream rendering based on view). Add a third branch for split:
+In `static/grid.js`, at the top of `render()`, insert the split branch before the existing stream/grid dispatch:
 
 ```js
 import { renderRail } from './rail.js';
 
 export function render() {
-  const view = prefs.getView() || "split";
+  const view = document.body.dataset.view;
   if (view === "split") {
     renderRail();
     return;
   }
-  // ... existing grid/stream branches ...
+  // ... existing stream/grid branches ...
 }
 ```
 
-Watch out for circular import — `grid.js ↔ stream.js` is already noted in the file's comment header as tolerated. Adding `rail.js` to that cycle should be fine since `rail.js` doesn't import `grid.js` (it imports `state`, `prefs`, `util`).
+No circular-import concern: `rail.js` imports `state`, `prefs`, `util` — none of which import `grid.js`.
 
 - [ ] **Step 3: Manual verify (live updates)**
 
@@ -1170,10 +1207,14 @@ Append to `static/rail.js` (or place at module init):
 ```js
 // One click delegate on the rail container — re-attaches on each render
 // is unnecessary because the listener lives on the static #rail element.
+// The flag is module-scoped (not stored on the DOM node) so it follows
+// the JS lifetime, not the DOM.
+let listenersAttached = false;
 function attachRailListeners() {
+  if (listenersAttached) return;
   const el = railEl();
-  if (!el || el.dataset.listenersAttached === "1") return;
-  el.dataset.listenersAttached = "1";
+  if (!el) return;
+  listenersAttached = true;
 
   el.addEventListener("click", async (e) => {
     const row = e.target.closest(".rail-row");
@@ -1232,8 +1273,35 @@ git commit -m "rail: click handlers for repo/worktree collapse + pane/review sel
 
 **Files:**
 - Create: `static/detail.js`
+- Modify: `static/modal.js` (move `rewriteLgtmHost` to util.js)
+- Modify: `static/util.js` (host `rewriteLgtmHost`)
 
-- [ ] **Step 1: Create `detail.js`**
+- [ ] **Step 1: Move `rewriteLgtmHost` from `modal.js` to `util.js`**
+
+`detail.js` and `modal.js` both need the LGTM URL rewrite. Move it to the shared utility module rather than duplicating or cross-importing from modal.js.
+
+In `static/util.js`, append:
+
+```js
+// Rewrite an LGTM-server URL's hostname to match the parent page's host.
+// The server hands out 127.0.0.1; the parent may be on localhost or LAN
+// IP, and same-host iframes avoid mixed-host browser headaches.
+export function rewriteLgtmHost(url) {
+  try {
+    const u = new URL(url);
+    u.hostname = window.location.hostname;
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+```
+
+In `static/modal.js`:
+- Delete the local `function rewriteLgtmHost(url) {...}` definition (around line 493).
+- Add `import { rewriteLgtmHost } from './util.js';` at the top (extend the existing `util.js` import if there is one).
+
+- [ ] **Step 2: Create `detail.js`**
 
 ```js
 // Right-pane (#detail) rendering for split view. Four states:
@@ -1249,10 +1317,11 @@ git commit -m "rail: click handlers for repo/worktree collapse + pane/review sel
 
 import { state } from './state.js';
 import * as prefs from './prefs.js';
-import { escapeHtml, apiCall } from './util.js';
+import { escapeHtml, apiCall, rewriteLgtmHost } from './util.js';
 import { mountTerminal, unmountTerminal } from './terminal-mount.js';
 
-let currentMount = null;  // "pane" | "review" | "empty"
+let currentMount = null;        // "pane" | "review" | "empty" | null
+let currentMountKey = null;     // pid (when "pane") or worktreeKey (when "review")
 
 function $(id) { return document.getElementById(id); }
 
@@ -1263,12 +1332,12 @@ function show(id) {
 }
 
 function lookupWindow(pid) {
-  return (state.lastState?.windows || []).find(w => w.pid === pid) || null;
+  return (state.lastWindows || []).find(w => w.pid === pid) || null;
 }
 
 function lgtmSessionForWorktree(worktreeKey) {
-  const w = (state.lastState?.windows || []).find(w => w.session === worktreeKey);
-  return w?.lgtm?.session_slug ? w.lgtm : null;
+  const w = (state.lastWindows || []).find(w => w.session === worktreeKey);
+  return w?.lgtm?.slug ? w.lgtm : null;
 }
 
 function paneHeader(w) {
@@ -1290,17 +1359,21 @@ export function selectPane(pid) {
     showEmpty();
     return;
   }
+  // Same-pane no-op: header + side panel still refresh from latest /api/state,
+  // but xterm doesn't re-mount (avoids WS churn on every poll's re-render).
+  const sameMount = currentMount === "pane" && currentMountKey === pid;
   show("detail-pane");
   $("detail-pane-header").innerHTML = paneHeader(w);
-  // Re-mount xterm on the detail container.
-  mountTerminal(
-    $("detail-xterm"),
-    w.target,
-    { onPaste: null }  // image paste lives in modal; split view ships without it (future work)
-  );
-  // Side panel: recap / commits / notes — minimal v1, populated from window fields.
   $("detail-side").innerHTML = renderSidePanel(w);
-  currentMount = "pane";
+  if (!sameMount) {
+    mountTerminal(
+      $("detail-xterm"),
+      w.target,
+      { onPaste: null }  // image paste lives in modal; split view ships without it (future work)
+    );
+    currentMount = "pane";
+    currentMountKey = pid;
+  }
 }
 
 function renderSidePanel(w) {
@@ -1321,22 +1394,34 @@ export function selectReview(worktreeKey) {
       </div>`;
     $("detail-review-start").querySelector("button").addEventListener("click", async (e) => {
       const wt = e.currentTarget.dataset.worktree;
-      const w = (state.lastState?.windows || []).find(x => x.session === wt);
+      const w = (state.lastWindows || []).find(x => x.session === wt);
       if (!w) return;
       // POST /api/lgtm/start with the worktree cwd.
-      const resp = await apiCall("/api/lgtm/start", { method: "POST", body: { cwd: w.cwd } });
-      // After start, switch to the iframe.
-      selectReview(worktreeKey);
+      await apiCall("start review", "/api/lgtm/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: w.cwd }),
+      });
+      // After start, switch to the iframe. Wait for the next /api/state
+      // poll so state.lastWindows[w].lgtm is populated.
+      setTimeout(() => selectReview(worktreeKey), 1500);
     });
     currentMount = "review";
     return;
   }
+  // Same-review no-op: don't reassign iframe src (causes reload on every poll).
+  const sameMount = currentMount === "review" && currentMountKey === worktreeKey;
   show("detail-review");
   $("detail-review-header").innerHTML = `<span><b>review</b></span><span class="hsep">·</span><span>${escapeHtml(worktreeKey)}</span>`;
-  $("detail-review-iframe").src = `http://localhost:9900/project/${session.session_slug}/`;
-  // Tear down xterm if it was mounted.
-  if (currentMount === "pane") unmountTerminal();
-  currentMount = "review";
+  if (!sameMount) {
+    // session.url is what cached_lgtm_state surfaces — same field modal.js
+    // reads. Rewrite its host to match the parent page (Tauri compat).
+    $("detail-review-iframe").src = rewriteLgtmHost(session.url);
+    // Tear down xterm if it was mounted.
+    if (currentMount === "pane") unmountTerminal();
+    currentMount = "review";
+    currentMountKey = worktreeKey;
+  }
 }
 
 export function showEmpty() {
@@ -1347,6 +1432,15 @@ export function showEmpty() {
     </div>`;
   if (currentMount === "pane") unmountTerminal();
   currentMount = "empty";
+  currentMountKey = null;
+}
+
+// Called by applyView() when leaving split view. Tears down xterm to
+// stop polling the WebSocket while user is in another view.
+export function detailTeardown() {
+  if (currentMount === "pane") unmountTerminal();
+  currentMount = null;
+  currentMountKey = null;
 }
 
 // Called on view switch into split. Restores last selection.
@@ -1368,7 +1462,7 @@ Append to `static/styles.css`:
 
 ```css
 .detail-pane-header, .detail-review-header {
-  padding: 8px 14px; border-bottom: 1px solid var(--border, #333);
+  padding: 8px 14px; border-bottom: 1px solid var(--line);
   display: flex; gap: 8px; align-items: baseline; font-size: 12px;
 }
 .detail-pane-header .hsep, .detail-review-header .hsep { opacity: .5; }
@@ -1688,7 +1782,7 @@ function renderList() {
     Object.values(prefs.getWorktreesByRepo()).flat()
   );
   const grouped = {};  // repo_label → [{session, branch, repo_key}, ...]
-  for (const w of (state.lastState?.windows || [])) {
+  for (const w of (state.lastWindows || [])) {
     if (railed.has(w.session)) continue;
     if (!w.repo_key) continue;  // skip non-git sessions for v1
     const k = w.repo_label || w.repo_key;
@@ -1741,7 +1835,7 @@ async function submit() {
     const session = cb.dataset.session;
     const repoKey = cb.dataset.repoKey;
     // Collect ALL panes for this session, not just the pid stored in the checkbox.
-    const sessionPanes = (state.lastState?.windows || [])
+    const sessionPanes = (state.lastWindows || [])
       .filter(w => w.session === session)
       .map(w => w.pid);
     await prefs.addWorktreeToRail({
@@ -1796,7 +1890,7 @@ Append to `static/styles.css`:
 ```css
 .open-picker-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .open-picker-modal-overlay.hidden { display: none; }
-.open-picker-modal-card { background: var(--bg-1, #1c1c1f); border-radius: 6px; padding: 14px 16px; min-width: 480px; max-width: 720px; max-height: 80vh; overflow: auto; }
+.open-picker-modal-card { background: var(--bg-1); border-radius: 6px; padding: 14px 16px; min-width: 480px; max-width: 720px; max-height: 80vh; overflow: auto; }
 .open-picker-modal-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
 .open-picker-modal-head h2 { margin: 0; font-size: 16px; }
 .open-picker-modal-head button { margin-left: auto; background: transparent; border: 0; font-size: 18px; cursor: pointer; }
@@ -1857,6 +1951,10 @@ Insert into `index.html`:
 // Per-worktree "+ New tab" launcher. Reads prefs.getCommands() and lets
 // the user pick one; POSTs to /api/window/new with the worktree's
 // session as the target.
+//
+// /api/window/new takes URL query parameters (not a JSON body): `session`
+// and `exec`. The "label" in prefs is purely UI text; the `exec` field
+// is the actual shell command to run.
 
 import * as prefs from './prefs.js';
 import { escapeHtml, apiCall } from './util.js';
@@ -1866,17 +1964,20 @@ const $ = (id) => document.getElementById(id);
 export function openLauncher(worktreeKey) {
   $("launcher-session-name").textContent = `Add to session: ${worktreeKey}`;
   const commands = prefs.getCommands();
-  $("launcher-list").innerHTML = commands.map(c => `
-    <button class="launcher-row" data-label="${escapeHtml(c.label)}">${escapeHtml(c.label)}</button>
-  `).join("") || `<div class="launcher-empty">No commands configured. Use Commands settings to add some.</div>`;
+  $("launcher-list").innerHTML = commands.length === 0
+    ? `<div class="launcher-empty">No commands configured. Use Commands settings to add some.</div>`
+    : commands.map(c => `
+        <button class="launcher-row" data-label="${escapeHtml(c.label)}">${escapeHtml(c.label)}</button>
+      `).join("");
 
   $("launcher-list").querySelectorAll(".launcher-row").forEach(btn => {
     btn.addEventListener("click", async (e) => {
       const label = e.currentTarget.dataset.label;
-      await apiCall("/api/window/new", {
-        method: "POST",
-        body: { session: worktreeKey, label },
-      });
+      const cmd = (prefs.getCommands() || []).find(c => c.label === label);
+      const exec = cmd?.exec || "";
+      const qs = new URLSearchParams({ session: worktreeKey });
+      if (exec) qs.set("exec", exec);
+      await apiCall("new window", `/api/window/new?${qs.toString()}`, { method: "POST" });
       close();
     });
   });
@@ -1933,7 +2034,7 @@ initLauncher();
 ```css
 .launcher-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .launcher-modal-overlay.hidden { display: none; }
-.launcher-modal-card { background: var(--bg-1, #1c1c1f); border-radius: 6px; padding: 14px 16px; min-width: 360px; }
+.launcher-modal-card { background: var(--bg-1); border-radius: 6px; padding: 14px 16px; min-width: 360px; }
 .launcher-modal-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
 .launcher-modal-head h2 { margin: 0; font-size: 16px; }
 .launcher-modal-sub { font-size: 12px; opacity: .7; margin: 0 0 12px; }
@@ -1971,46 +2072,30 @@ git commit -m "rail: + New tab per-worktree launcher modal"
 
 Run: `cat /Users/tom/dev/periscope/static/new-project-modal.js`
 
-Identify the success-path code after the POST to `/api/project/new` (or wherever it lands).
+Identify the success-path code after the POST to `/api/projects` (note: route is plural, no `/new` suffix). The response includes `tmux_session`, `repo`, `base_branch`, `pinned_dir`, but **not** per-pane pids.
 
 - [ ] **Step 2: Append rail-add on success**
 
-After the project creation succeeds, derive `repo_key`, `worktree_key`, and the new session's pane id from the response, then call `addWorktreeToRail`. Concretely (paraphrased — adapt to actual response shape):
+After the project creation succeeds, the new session exists in tmux but `/api/state`'s next poll hasn't run yet. Use the deferred-poll pattern: wait ~3.5s, then read `state.lastWindows` to find the new session's pane pids.
 
 ```js
 import { addWorktreeToRail } from './prefs.js';
+import { state } from './state.js';
 
-// After successful create:
-const resp = await apiCall("/api/project/new", { method: "POST", body });
-// resp shape (verify against periscope/routes/sessions.py or similar):
-// { ok: true, session: "name", repo_key: "/path", repo_label: "name", pane_pids: ["abc"] }
-if (resp && resp.session) {
-  await addWorktreeToRail({
-    repoKey: resp.repo_key || body.repo,  // fallback to user input
-    worktreeKey: resp.session,
-    paneIds: resp.pane_pids || [],
-    hasReview: true,  // worktree-backed
-  });
-}
-```
-
-If `/api/project/new`'s response doesn't expose `repo_key` / `pane_pids` yet, two options:
-- (a) Extend the response server-side (small change to the route).
-- (b) Re-fetch `/api/state` and find the just-created session there.
-
-Pick (b) if it's a small change — simpler:
-
-```js
-if (resp && resp.session) {
-  // Wait for next /api/state poll to see the new session's pids.
-  // The grid.js poll runs every 3s; wait ~3.5s then add to rail.
+// After the existing successful create:
+//   const resp = await apiCall("create project", "/api/projects", { method: "POST", ... });
+// resp shape (per periscope/routes/projects.py:295):
+//   { ok: true, pinned_dir, name, tmux_session, repo, base_branch, ... }
+if (resp && resp.tmux_session) {
+  // Wait one poll tick (grid.js polls every 3s) so state.lastWindows
+  // reflects the new session.
   setTimeout(async () => {
-    const live = await apiCall("/api/state");
-    const wins = (live?.windows || []).filter(w => w.session === resp.session);
+    const sessionName = resp.tmux_session;
+    const wins = (state.lastWindows || []).filter(w => w.session === sessionName);
     if (wins.length === 0) return;  // race; user can + open later
     await addWorktreeToRail({
-      repoKey: wins[0].repo_key,
-      worktreeKey: resp.session,
+      repoKey: wins[0].repo_key || resp.repo,  // fallback to server-reported repo
+      worktreeKey: sessionName,
       paneIds: wins.map(w => w.pid),
       hasReview: true,
     });
@@ -2018,7 +2103,7 @@ if (resp && resp.session) {
 }
 ```
 
-Match whatever async flow the existing handler already uses.
+Match the existing handler's async flow and place this block right after the existing success-path code (the modal-close + refresh logic stays).
 
 - [ ] **Step 3: Manual verify**
 
@@ -2103,13 +2188,11 @@ function repoMatchesFilter(repoKey, filter, byWorktree, worktreesByRepo) {
 
 - [ ] **Step 2: Apply the predicate at render time**
 
-In `renderRail`, after deriving `byWorktree`, read the current filter:
+In `renderRail`, after deriving `byWorktree`, read the current filter from the transient state (where the filter dropdown writes it; see `state.js:6` `currentFilter: "all"` and the dropdown handler in `app.js`):
 
 ```js
-const filter = prefs.getFilter ? prefs.getFilter() : "all";
+const filter = state.currentFilter || "all";
 ```
-
-(If `prefs.getFilter()` doesn't exist, replicate the pattern that grid.js uses to read the current filter — likely `state.filter` or similar.)
 
 For each row, add a `dim` class when it doesn't match. In `paneRow`, replace the `data-row` line with a conditional dim:
 
@@ -2159,15 +2242,18 @@ Append to `rail.js`:
 
 ```js
 // Remove rail entries for sessions / panes that no longer exist in
-// /api/state. Runs at the top of renderRail() with throttling so it
-// doesn't write prefs on every poll.
+// /api/state. Runs fire-and-forget — does NOT change renderRail's
+// sync contract. If anything is pruned, the next poll re-renders with
+// the updated prefs.
+//
+// patchUI is exported by prefs.js (Task 3.1 Step 1).
 
 let lastPruneAt = 0;
-async function pruneDanglingEntries() {
+function pruneDanglingEntries() {
   if (Date.now() - lastPruneAt < 5000) return;  // throttle to 5s
   lastPruneAt = Date.now();
 
-  const live = state.lastState?.windows || [];
+  const live = state.lastWindows || [];
   const liveSessions = new Set(live.map(w => w.session));
   const livePids = new Set(live.map(w => w.pid));
 
@@ -2199,14 +2285,13 @@ async function pruneDanglingEntries() {
   }
 
   if (changed) {
-    await prefs.patchUI({ repo_order: order, worktrees_by_repo: wts, panes_by_worktree: panes });
+    // Fire and forget — the prefs write will be reflected by the next poll's render.
+    prefs.patchUI({ repo_order: order, worktrees_by_repo: wts, panes_by_worktree: panes });
   }
 }
 ```
 
-(`prefs.patchUI` may need to be exported — adjust `prefs.js` Task 3.1 if it isn't already.)
-
-Insert `await pruneDanglingEntries();` at the very top of `renderRail()`, but make `renderRail` itself synchronous-friendly — read prefs after `await` returns. (Or convert to `async function renderRail()`.)
+Insert `pruneDanglingEntries();` (no await) at the very top of `renderRail()`. `renderRail` stays synchronous.
 
 - [ ] **Step 2: Manual verify**
 
@@ -2236,26 +2321,30 @@ git commit -m "rail: prune dangling entries when their tmux session/pane is gone
 In `static/styles.css`, refine the connectors and icons:
 
 ```css
-.rail-conn { color: #3a3a3d; font-size: 12px; }
-.icon-repo { color: #7aa6e0; }
-.icon-worktree { color: #b07ec5; }
-.icon-pane { color: #d59fe0; }
-.icon-review { color: #6ec089; }
+.rail-conn { color: var(--fg-4); font-size: 12px; }
+.icon-repo { color: oklch(0.74 0.13 232); }
+.icon-worktree { color: oklch(0.72 0.13 295); }
+.icon-pane { color: oklch(0.78 0.13 320); }
+.icon-review { color: var(--s-shell); }
 
 /* Selected accent stripe on the left edge */
-.rail-row.selected { background: rgba(255,255,255,.05); }
+.rail-row.selected { background: var(--bg-1-hi); }
 .rail-row.selected::before {
   content: ""; position: absolute; left: 0; top: 4px; bottom: 4px;
-  width: 2px; background: #e89243; border-radius: 0 2px 2px 0;
+  width: 2px; background: var(--accent); border-radius: 0 2px 2px 0;
 }
 
 /* Hover only handles look more like the reference */
 .rail-row { position: relative; }
-.rail-grip { color: #555; }
+.rail-grip { color: var(--fg-4); }
 .rail-row:hover .rail-grip { opacity: .55; }
 
 /* Truncation in labels keeps row height uniform */
 .rail-label b { font-weight: 600; }
+
+/* Same-row no-op short-circuit for terminal/iframe remounts is handled
+   in detail.js — selectPane/selectReview check currentMount + identifier
+   and bail early if unchanged. (Reviewer item; see detail.js comments.) */
 ```
 
 - [ ] **Step 2: Manual verify**
