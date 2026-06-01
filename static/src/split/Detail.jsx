@@ -165,10 +165,18 @@ function PaneDetail({ w }) {
 // poll (that kills the SSE). Keyed on worktreeKey at the call site so switching
 // worktrees tears down + remounts. activeTarget is cleared (review owns the
 // iframe, no pane target).
-function ReviewDetail({ worktreeKey, session }) {
+function ReviewDetail({ worktreeKey }) {
   const iframeRef = useRef(null);
   const mountedSrc = useRef(null);
-  const url = rewriteLgtmHost(session.url);
+  // Once a session has been seen for this worktree, keep the iframe mounted so
+  // a transient poll gap (no lgtm payload) can't tear it down and reload the
+  // SPA, dropping the user's in-iframe file selection. Keyed per worktreeKey at
+  // the call site, so switching worktrees resets this correctly.
+  const everHadSession = useRef(false);
+  const session = lgtmSessionForWorktree(worktreeKey);
+  const hasSession = !!(session && session.url);
+  if (hasSession) everHadSession.current = true;
+  const url = hasSession ? rewriteLgtmHost(session.url) : null;
 
   useEffect(() => {
     activeTarget.value = null;
@@ -180,6 +188,12 @@ function ReviewDetail({ worktreeKey, session }) {
       mountedSrc.current = url;
     }
   }, [url]);
+
+  // No session yet for this worktree → Start-review CTA. (Once a session has
+  // existed, everHadSession keeps us on the iframe even across a transient gap.)
+  if (!everHadSession.current) {
+    return <ReviewStart worktreeKey={worktreeKey} />;
+  }
 
   return (
     <div id="detail-review" class="detail-review">
@@ -257,11 +271,10 @@ export function Detail() {
 
   if (sel.startsWith("review:")) {
     const worktreeKey = sel.slice("review:".length);
-    const session = lgtmSessionForWorktree(worktreeKey);
-    if (!session) {
-      return <section id="detail"><ReviewStart worktreeKey={worktreeKey} /></section>;
-    }
-    return <section id="detail"><ReviewDetail key={worktreeKey} worktreeKey={worktreeKey} session={session} /></section>;
+    // ReviewDetail owns the session lookup + Start-CTA vs iframe decision so a
+    // transient poll gap (worktree momentarily absent from `windows`) can't
+    // flip this branch and tear down the iframe.
+    return <section id="detail"><ReviewDetail key={worktreeKey} worktreeKey={worktreeKey} /></section>;
   }
 
   return <section id="detail"><EmptyDetail /></section>;

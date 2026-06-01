@@ -530,13 +530,21 @@ function TabStrip({ spec, activeTab, onSwitch, onMount, onUnmount, onRemove }) {
 function ReviewPane({ data, activeTab, onStarted }) {
   const iframeRef = useRef(null);
   const mountedSrc = useRef(null);
+  // Once a session has been seen, keep rendering the iframe (same element type,
+  // stable identity) even if a later poll's lgtm payload is briefly absent.
+  // Flipping the returned root between <iframe> and a "Loading…" <div> makes
+  // Preact tear down + recreate the iframe → a full SPA reload that drops the
+  // user's in-iframe file selection. This ref makes that flip impossible.
+  const everHadSession = useRef(false);
 
   // Compute the iframe URL for the active LGTM tab. When the active tab is the
   // terminal (or lgtm-start), `url` is null — we leave the iframe's last src in
   // place rather than tearing it down.
   let url = null;
   const lgtm = data?.lgtm;
-  if (lgtm?.slug && lgtm?.url) {
+  const hasSession = !!(lgtm?.slug && lgtm?.url);
+  if (hasSession) everHadSession.current = true;
+  if (hasSession) {
     const baseUrl = rewriteLgtmHost(lgtm.url);
     if (activeTab === "lgtm:walkthrough") {
       url = `${baseUrl}?embedded=1&view=walkthrough&host=periscope`;
@@ -555,16 +563,20 @@ function ReviewPane({ data, activeTab, onStarted }) {
     }
   }, [url]);
 
-  // The Start-review CTA replaces the iframe only when there's no session yet.
-  if (activeTab === "lgtm-start") {
+  // Start-review CTA only before a session has ever existed for this pane.
+  if (!everHadSession.current && activeTab === "lgtm-start") {
     return <StartReview data={data} onStarted={onStarted} />;
   }
 
-  // Render the iframe whenever a session exists (so it persists across tab
-  // switches). No loading=lazy: the pane is display:none on the Terminal tab
-  // and some browsers refuse to load lazy iframes whose ancestors aren't shown.
-  if (lgtm?.slug && lgtm?.url) {
+  // Persist the iframe once a session has been seen (so it survives transient
+  // poll gaps + tab switches). No loading=lazy: the pane is display:none on the
+  // Terminal tab and some browsers refuse to load lazy iframes whose ancestors
+  // aren't shown.
+  if (everHadSession.current) {
     return <iframe ref={iframeRef} title="LGTM review" referrerpolicy="no-referrer" />;
+  }
+  if (activeTab === "lgtm-start") {
+    return <StartReview data={data} onStarted={onStarted} />;
   }
   return <div class="modal-review-empty"><p>Loading…</p></div>;
 }
