@@ -153,7 +153,6 @@ function paneRow(w, selectedKey) {
     : `<span class="rail-icon icon-shell">$</span>`;
   return `
     <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}">
-      <span class="rail-conn">├</span>
       <span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>
       ${icon}
       <span class="rail-label">${escapeHtml(w.name || (w.is_claude ? "claude" : "shell"))}</span>
@@ -172,7 +171,6 @@ function reviewRow(worktreeKey, lgtmLive, selectedKey) {
     : `<span class="rail-icon icon-review-empty">○</span>`;
   return `
     <div class="rail-row child-row${sel}${empty}" data-row="review" data-worktree="${escapeHtml(worktreeKey)}" data-key="${escapeHtml(k)}">
-      <span class="rail-conn">├</span>
       <span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>
       ${icon}
       <span class="rail-label">review${lgtmLive ? "" : " <em>start →</em>"}</span>
@@ -181,8 +179,7 @@ function reviewRow(worktreeKey, lgtmLive, selectedKey) {
 
 function newTabRow(worktreeKey) {
   return `
-    <div class="rail-row child-row newtab-row" data-row="newtab" data-worktree="${escapeHtml(worktreeKey)}">
-      <span class="rail-conn">└</span>
+    <div class="rail-row child-row newtab-row last-in-worktree" data-row="newtab" data-worktree="${escapeHtml(worktreeKey)}">
       <span class="rail-icon">+</span>
       <span class="rail-label">New tab</span>
     </div>`;

@@ -2872,9 +2872,38 @@ body[data-alerts="open"][data-view="stream"] main {
 .rail-row .rail-icon { width: 14px; opacity: .85; text-align: center; }
 .rail-row .rail-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-row .rail-count { font-size: 10px; opacity: .55; padding: 0 4px; background: var(--bg-2); border-radius: 2px; }
-.rail-row .rail-conn { width: 14px; color: var(--fg-4); font-size: 11px; text-align: center; }
 .rail-row.wt-row { padding-left: calc(10px + var(--rail-indent)); }
 .rail-row.child-row { padding-left: calc(10px + 2 * var(--rail-indent)); }
+
+/* Continuous tree lines drawn via CSS so adjacent child rows' connectors
+   actually touch. Replaces the per-row ├/└ glyphs, which broke at every
+   row boundary because of vertical padding.
+     ::before  — vertical line in the gutter (full row height for inner
+                 children; top-to-middle for the last-in-worktree row)
+     ::after   — horizontal stub from the vertical line to the icon
+   Positioned at the center of the worktree-level indent column. */
+.rail-row.child-row::before,
+.rail-row.child-row::after {
+  content: "";
+  position: absolute;
+  background: var(--fg-4);
+  opacity: .35;
+}
+.rail-row.child-row::before {
+  left: calc(10px + var(--rail-indent) + 7px);   /* center of worktree column */
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+.rail-row.child-row.last-in-worktree::before {
+  bottom: 50%;                                    /* line stops at the stub */
+}
+.rail-row.child-row::after {
+  left: calc(10px + var(--rail-indent) + 7px);
+  top: 50%;
+  width: calc(var(--rail-indent) - 5px);
+  height: 1px;
+}
 .rail-row.review-empty .rail-label em { font-style: italic; opacity: .55; font-size: 11px; }
 
 .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
