@@ -24,6 +24,64 @@ function maxSeverity(states) {
   return best >= 0 ? SEVERITY[best] : "shell";
 }
 
+// Merge live /api/state windows with persisted ordering prefs to produce
+// the actual rail tree. Live windows ARE the membership; prefs are
+// ordering hints — entries in pref order come first (in their pref
+// position), then new live entries append. Pref entries for repos /
+// worktrees / panes that are no longer live are silently dropped from
+// the rendered output (the pref itself is cleaned up by
+// pruneDanglingEntries elsewhere; here we just don't render them).
+function mergeLiveAndPrefs(windows, prefRepoOrder, prefWtByRepo, prefPanesByWt) {
+  const liveByRepo = {};       // repo_key → ordered list of session names (first-seen wins)
+  const livePanesByWt = {};    // session name → ordered list of pane pids (first-seen)
+  for (const w of (windows || [])) {
+    if (!w.repo_key) continue;  // skip non-worktree-backed sessions
+    const r = w.repo_key;
+    const s = w.session;
+    if (!liveByRepo[r]) liveByRepo[r] = [];
+    if (!liveByRepo[r].includes(s)) liveByRepo[r].push(s);
+    if (!livePanesByWt[s]) livePanesByWt[s] = [];
+    if (!livePanesByWt[s].includes(w.pid)) livePanesByWt[s].push(w.pid);
+  }
+
+  // Repo order: prefs first (filtered to live), then live-new appended.
+  const liveRepoSet = new Set(Object.keys(liveByRepo));
+  const repoOrder = [
+    ...prefRepoOrder.filter(r => liveRepoSet.has(r)),
+    ...Object.keys(liveByRepo).filter(r => !prefRepoOrder.includes(r)),
+  ];
+
+  // Worktree order per repo: same logic.
+  const worktreesByRepo = {};
+  for (const r of repoOrder) {
+    const live = liveByRepo[r] || [];
+    const liveSet = new Set(live);
+    const pref = (prefWtByRepo[r] || []).filter(w => liveSet.has(w));
+    const prefSet = new Set(pref);
+    worktreesByRepo[r] = [...pref, ...live.filter(w => !prefSet.has(w))];
+  }
+
+  // Pane-children order per worktree: prefs first (filtered), then new
+  // live pids. The "review" sentinel is always present (auto-added at
+  // the end if not already in pref).
+  const panesByWorktree = {};
+  for (const r of repoOrder) {
+    for (const w of worktreesByRepo[r]) {
+      const live = livePanesByWt[w] || [];
+      const liveSet = new Set(live);
+      const pref = prefPanesByWt[w] || [];
+      const prefKept = pref.filter(c => c === "review" || liveSet.has(c));
+      const prefSet = new Set(prefKept);
+      const merged = [...prefKept, ...live.filter(p => !prefSet.has(p))];
+      // Auto-add review row if not already in the pref list.
+      if (!merged.includes("review")) merged.push("review");
+      panesByWorktree[w] = merged;
+    }
+  }
+
+  return { repoOrder, worktreesByRepo, panesByWorktree };
+}
+
 // Build a quick { worktreeKey: [windowObj, ...] } map from /api/state.
 // state.lastWindows is the most recent /api/state windows array,
 // written to by grid.js's poll() at `state.lastWindows = data.windows`.
@@ -155,9 +213,9 @@ export function renderRail() {
   pruneDanglingEntries();
   attachRailListeners();
 
-  const repoOrder = prefs.getRepoOrder();
-  const worktreesByRepo = prefs.getWorktreesByRepo();
-  const panesByWorktree = prefs.getPanesByWorktree();
+  const prefRepoOrder = prefs.getRepoOrder();
+  const prefWorktreesByRepo = prefs.getWorktreesByRepo();
+  const prefPanesByWorktree = prefs.getPanesByWorktree();
   const collapsed = prefs.getRailCollapsed();
   const selectedKey = (() => {
     const sel = prefs.getLastSelected();
@@ -169,14 +227,23 @@ export function renderRail() {
   const windows = state.lastWindows;
   const byWorktree = indexWindowsByWorktree(windows);
 
+  // Auto-populate: the rail's membership is derived from live windows
+  // that have a repo_key (worktree-backed). Prefs provide *ordering*
+  // hints only — anything the user has drag-reordered keeps its place;
+  // anything new lands at the end of its level. This replaces the
+  // curated-entry model from the original spec — the friction of "+ open
+  // for every session" wasn't worth it.
+  const { repoOrder, worktreesByRepo, panesByWorktree } = mergeLiveAndPrefs(
+    windows, prefRepoOrder, prefWorktreesByRepo, prefPanesByWorktree
+  );
+
   if (repoOrder.length === 0) {
     el.innerHTML = `
       <div class="rail-head">
         <span>Projects</span>
-        <button class="rail-add" id="rail-add">+</button>
       </div>
       <div class="rail-empty">
-        Empty. Use <code>+ project</code>, <code>review PR</code>, or <code>+ open</code> to add a worktree.
+        No worktree-backed tmux sessions are open. Use <code>+ project</code> or <code>review PR</code> to start one.
       </div>`;
     return;
   }
@@ -221,7 +288,6 @@ export function renderRail() {
   el.innerHTML = `
     <div class="rail-head">
       <span>Projects</span>
-      <button class="rail-add" id="rail-add">+</button>
     </div>
     ${blocks.join("")}
   `;
@@ -239,13 +305,6 @@ function attachRailListeners() {
   listenersAttached = true;
 
   el.addEventListener("click", async (e) => {
-    // + open button (delegated; lives in rail-head)
-    if (e.target.id === "rail-add") {
-      const { openPicker } = await import('./open-picker-modal.js');
-      openPicker();
-      return;
-    }
-
     const row = e.target.closest(".rail-row");
     if (!row) return;
     const kind = row.dataset.row;
