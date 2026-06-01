@@ -2,6 +2,8 @@
 
 import { escapeHtml } from './util.js';
 import { createModalShell } from './modal-shell.js';
+import { addWorktreeToRail } from './prefs.js';
+import { state } from './state.js';
 
 const modal = document.getElementById("review-pr-modal");
 const closeBtn = document.getElementById("review-pr-modal-close");
@@ -64,6 +66,21 @@ async function handleSubmit(e) {
   submitBtn.disabled = false;
   if (!result) return;
   closeReviewPRModal();
+  // Rail auto-add: deferred until the next /api/state poll reflects the new
+  // session's panes. grid.js polls every 3s; wait ~3.5s.
+  if (result.tmux_session) {
+    setTimeout(async () => {
+      const sessionName = result.tmux_session;
+      const wins = (state.lastWindows || []).filter(w => w.session === sessionName);
+      if (wins.length === 0) return;  // race; user can + open later
+      await addWorktreeToRail({
+        repoKey: wins[0].repo_key || result.repo,
+        worktreeKey: sessionName,
+        paneIds: wins.map(w => w.pid),
+        hasReview: true,
+      });
+    }, 3500);
+  }
 }
 
 export function initReviewPRModal() {
