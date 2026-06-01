@@ -80,6 +80,15 @@ function reviewRow(worktreeKey, lgtmLive, selectedKey) {
     </div>`;
 }
 
+function newTabRow(worktreeKey) {
+  return `
+    <div class="rail-row child-row newtab-row" data-row="newtab" data-worktree="${escapeHtml(worktreeKey)}">
+      <span class="rail-conn">└</span>
+      <span class="rail-icon">+</span>
+      <span class="rail-label">New tab</span>
+    </div>`;
+}
+
 function worktreeRow(worktreeKey, children, collapsed, rolledUp, label) {
   const chev = collapsed ? "▸" : "▾";
   const childCountChip = collapsed && children.length > 0
@@ -168,6 +177,8 @@ export function renderRail() {
           childStates.push(w.state || "shell");
         }
       }
+      // Append + New tab affordance
+      childMarkup.push(newTabRow(wtKey));
       const wtIsCollapsed = collapsed[`wt:${wtKey}`] === true;
       const rolledUp = maxSeverity(childStates);
       // Label: branch from any window in this worktree.
@@ -235,6 +246,12 @@ function attachRailListeners() {
       const { selectReview } = await import('./detail.js');
       selectReview(worktree);
       renderRail();
+      return;
+    }
+    if (kind === "newtab") {
+      const wt = row.dataset.worktree;
+      const { openLauncher } = await import('./launcher-modal.js');
+      openLauncher(wt);
       return;
     }
   });

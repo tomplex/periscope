@@ -16,6 +16,7 @@ import { initAlerts } from './alerts.js';
 import { initExternalLinks } from './tauri.js';
 import { initSettingsModal } from './settings-modal.js';
 import { initOpenPicker } from './open-picker-modal.js';
+import { initLauncher } from './launcher-modal.js';
 import { pushEscape, popEscape } from './overlay.js';
 import { confirmDialog, promptDialog, alertDialog } from './dialog.js';
 
@@ -339,6 +340,7 @@ async function bootstrap() {
   initAlerts();
   initSettingsModal();
   initOpenPicker();
+  initLauncher();
   initExternalLinks();
   document.getElementById("open-commands").addEventListener("click", openCommandsModal);
 
