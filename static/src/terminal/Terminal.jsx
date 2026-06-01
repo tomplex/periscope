@@ -21,7 +21,7 @@
 import { useRef, useEffect } from "preact/hooks";
 import { mountTerminal, unmountTerminal } from "./terminalCore.js";
 
-export function Terminal({ target, onMdLink, onPaste, class: className = "modal-xterm" }) {
+export function Terminal({ target, onMdLink, onPaste, class: className = "modal-xterm", id }) {
   const ref = useRef(null);
   useEffect(() => {
     mountTerminal(ref.current, target, { onMdLink, onPaste });
@@ -29,5 +29,7 @@ export function Terminal({ target, onMdLink, onPaste, class: className = "modal-
     // single cleanup here is enough — don't double-tear-down.
     return unmountTerminal;
   }, []); // empty deps: mount ONCE for this component instance (pid-keyed at call site)
-  return <div ref={ref} class={className} />;
+  // `id` lets the modal carry `#modal-xterm` (styles.css keys flex/padding/
+  // background off that id); the split-view <Detail> can omit it.
+  return <div ref={ref} id={id} class={className} />;
 }

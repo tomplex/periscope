@@ -10,6 +10,7 @@ import { DialogHost } from "./overlays/Dialog.jsx";
 import { Terminal } from "./terminal/Terminal.jsx";
 import { Header } from "./chrome/Header.jsx";
 import { Grid } from "./grid/Grid.jsx";
+import { Modal } from "./modal/Modal.jsx";
 import { loadPrefs, getView } from "./prefs.js";
 import { view } from "./store.js";
 
@@ -31,6 +32,7 @@ function TerminalProbe() {
 }
 
 function App() {
+  // The terminal isolation probe is a standalone, full-bleed surface (Task 3).
   if (SURFACES.has("terminal")) {
     return (
       <>
@@ -40,27 +42,16 @@ function App() {
       </>
     );
   }
-  if (SURFACES.has("chrome")) {
-    return (
-      <>
-        <Header />
-        <Toaster />
-        <DialogHost />
-      </>
-    );
-  }
-  if (SURFACES.has("grid")) {
-    return (
-      <>
-        <Grid />
-        <Toaster />
-        <DialogHost />
-      </>
-    );
-  }
+  // Otherwise compose the claimed surfaces additively. Each is independent and
+  // mounts only when its flag is present; the vanilla path skips its own
+  // equivalent for any claimed surface (app.js consults __PREACT_SURFACES__).
+  const anySurface = SURFACES.has("chrome") || SURFACES.has("grid") || SURFACES.has("modal");
   return (
     <>
-      <div data-preact-root>periscope (preact scaffold)</div>
+      {SURFACES.has("chrome") && <Header />}
+      {SURFACES.has("grid") && <Grid />}
+      {SURFACES.has("modal") && <Modal />}
+      {!anySurface && <div data-preact-root>periscope (preact scaffold)</div>}
       <Toaster />
       <DialogHost />
     </>
@@ -90,6 +81,16 @@ async function boot() {
     await loadPrefs();
     const vanillaGrid = document.getElementById("grid");
     if (vanillaGrid) vanillaGrid.style.display = "none";
+  }
+  // The modal surface reads prefs (notes/tags annotations). Load before first
+  // render; the vanilla path already skips initModal when "modal" is claimed,
+  // and the static `#modal` div stays `.hidden`, so the Preact modal (which
+  // renders its own `#modal` inside #app) is the only live one.
+  if (SURFACES.has("modal")) {
+    await loadPrefs();
+    // Remove the static `#modal` from index.html so it can't collide (duplicate
+    // id) with the Preact modal, which renders its own `#modal` inside #app.
+    document.getElementById("modal")?.remove();
   }
   render(<App />, document.getElementById("app"));
 }
