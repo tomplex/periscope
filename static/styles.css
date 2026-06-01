@@ -2788,3 +2788,147 @@ body[data-alerts="open"][data-view="stream"] main {
   outline: none;
   border-color: var(--accent);
 }
+
+/* --- Split view: structural layout (polish in Phase 12) ----------------- */
+/* Periscope's body uses flex column layout — `.periscope-header` first,
+   then the view container fills. We follow the same pattern (no fixed
+   header height). */
+
+#split-view {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#split-view.hidden { display: none; }
+
+#rail {
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: var(--bg-1);
+}
+
+#detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-0);
+}
+
+#detail-empty, #detail-pane, #detail-review, #detail-review-start {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detail-pane { display: flex; flex-direction: column; }
+.detail-pane-body { display: grid; grid-template-columns: 1fr 240px; flex: 1; min-height: 0; }
+.detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; }
+.detail-side { border-left: 1px solid var(--line); overflow-y: auto; padding: 8px 10px; font-size: 12px; }
+.detail-review { display: flex; flex-direction: column; }
+.detail-review-iframe { flex: 1; border: 0; min-height: 0; }
+.detail-empty { display: flex; align-items: center; justify-content: center; color: var(--fg-3); }
+.detail-review-start { display: flex; align-items: center; justify-content: center; }
+
+.hidden { display: none !important; }
+
+/* --- Rail rows --- */
+.rail-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--fg-3);
+  border-bottom: 1px solid var(--line-soft);
+}
+.rail-head .rail-add {
+  margin-left: auto; background: transparent; border: 1px solid var(--line);
+  color: var(--fg-3); padding: 1px 7px; border-radius: 3px; font-size: 13px; cursor: pointer;
+}
+.rail-empty { padding: 14px; font-size: 12px; color: var(--fg-3); }
+
+.rail-row {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 10px; font-size: 13px; position: relative;
+  border-left: 2px solid transparent;
+}
+.rail-row.selected { background: var(--bg-1-hi); border-left-color: var(--accent); }
+.rail-row .rail-chev { width: 10px; opacity: .5; font-size: 9px; }
+.rail-row .rail-icon { width: 14px; opacity: .85; text-align: center; }
+.rail-row .rail-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-row .rail-count { font-size: 10px; opacity: .55; padding: 0 4px; background: var(--bg-2); border-radius: 2px; }
+.rail-row .rail-conn { width: 14px; color: var(--fg-4); font-size: 11px; text-align: center; }
+.rail-row.child-row { padding-left: 30px; }
+.rail-row.review-empty .rail-label em { font-style: italic; opacity: .55; font-size: 11px; }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.dot-green { background: var(--s-working); }
+.dot-blue { background: var(--s-done); }
+.dot-grey { background: var(--s-idle); }
+.dot-alert { background: var(--s-needs); }
+.dot-none { background: transparent; }
+.dot-pulse { animation: rail-pulse 1.6s ease-in-out infinite; }
+@keyframes rail-pulse { 50% { box-shadow: 0 0 0 4px var(--s-needs-bg); } }
+
+.detail-pane-header, .detail-review-header {
+  padding: 8px 14px; border-bottom: 1px solid var(--line);
+  display: flex; gap: 8px; align-items: baseline; font-size: 12px;
+}
+.detail-pane-header .hsep, .detail-review-header .hsep { opacity: .5; }
+.side-section { margin-bottom: 10px; }
+.side-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; opacity: .5; margin-bottom: 3px; }
+.side-mono { font-family: var(--mono); font-size: 11px; opacity: .85; }
+.review-start-card, .detail-empty-card { text-align: center; color: var(--fg-3); }
+.review-start-btn { margin-top: 10px; padding: 6px 14px; cursor: pointer; }
+
+.rail-grip { width: 12px; opacity: 0; font-size: 10px; cursor: grab; transition: opacity .15s; flex-shrink: 0; color: var(--fg-4); }
+.rail-row:hover .rail-grip { opacity: .4; }
+.rail-row.dragging { opacity: .5; }
+.rail-dim { opacity: .35; }
+.rail-row.rail-dim:hover { opacity: .6; }
+
+.open-picker-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.open-picker-modal-overlay.hidden { display: none; }
+.open-picker-modal-card { background: var(--bg-1); border-radius: 6px; padding: 14px 16px; min-width: 480px; max-width: 720px; max-height: 80vh; overflow: auto; }
+.open-picker-modal-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+.open-picker-modal-head h2 { margin: 0; font-size: 16px; }
+.open-picker-modal-head button { margin-left: auto; background: transparent; border: 0; font-size: 18px; cursor: pointer; }
+.open-picker-modal-sub { font-size: 12px; opacity: .7; margin: 0 0 12px; }
+.open-picker-repo-head { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; opacity: .55; margin: 10px 0 4px; }
+.open-picker-row { display: flex; gap: 8px; align-items: center; padding: 4px 6px; cursor: pointer; }
+.open-picker-row:hover { background: rgba(255,255,255,.04); }
+.open-picker-branch { opacity: .6; font-size: 12px; }
+.open-picker-empty { padding: 14px; font-size: 13px; opacity: .7; }
+.open-picker-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
+.launcher-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.launcher-modal-overlay.hidden { display: none; }
+.launcher-modal-card { background: var(--bg-1); border-radius: 6px; padding: 14px 16px; min-width: 360px; }
+.launcher-modal-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+.launcher-modal-head h2 { margin: 0; font-size: 16px; }
+.launcher-modal-head button { margin-left: auto; background: transparent; border: 0; font-size: 18px; cursor: pointer; }
+.launcher-modal-sub { font-size: 12px; opacity: .7; margin: 0 0 12px; }
+.launcher-row { display: block; width: 100%; padding: 8px 10px; text-align: left; background: transparent; border: 0; color: inherit; cursor: pointer; }
+.launcher-row:hover { background: rgba(255,255,255,.05); }
+.launcher-empty { padding: 10px; opacity: .6; font-size: 12px; }
+.newtab-row { opacity: .6; }
+.newtab-row:hover { opacity: .9; }
+
+/* --- Split-view rail polish (Phase 12) ---------------------------------- */
+
+.rail-conn { color: var(--fg-4); font-size: 12px; }
+.icon-repo { color: oklch(0.74 0.13 232); }
+.icon-worktree { color: oklch(0.72 0.13 295); }
+.icon-pane { color: oklch(0.78 0.13 320); }
+.icon-review { color: var(--s-shell); }
+
+/* Hover-only handles look more like the reference */
+.rail-row { position: relative; }
+.rail-grip { color: var(--fg-4); }
+.rail-row:hover .rail-grip { opacity: .55; }
+
+/* Truncation in labels keeps row height uniform (already set on rail-label,
+   reaffirmed here for clarity). */
+.rail-label b { font-weight: 600; }

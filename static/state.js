@@ -19,4 +19,8 @@ export const state = {
   // modal
   activeTarget: null,
   modalRenaming: false,          // pauses modal header refresh during inline rename
+
+  // rail (split view)
+  railDragging: null,             // { kind: "repo"|"worktree"|"child", key: string }
+  railSelected: null,             // mirror of prefs.last_selected for fast read
 };

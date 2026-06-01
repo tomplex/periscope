@@ -76,3 +76,29 @@ def test_reorder_commands(client, clean_state):
     body = r.json()
     assert body["ok"] is True
     assert [c["label"] for c in body["commands"]] == ["c", "a", "b"]
+
+
+def test_ui_patch_accepts_split_view(client, clean_state):
+    r = client.patch("/api/prefs/ui", json={"view": "split"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ui"]["view"] == "split"
+
+
+def test_ui_patch_rejects_unknown_view(client, clean_state):
+    r = client.patch("/api/prefs/ui", json={"view": "kanban"})
+    assert r.status_code == 400
+
+
+def test_ui_patch_accepts_rail_state_keys(client, clean_state):
+    body = {
+        "repo_order": ["/home/tom/dev/foo"],
+        "worktrees_by_repo": {"/home/tom/dev/foo": ["session-a"]},
+        "panes_by_worktree": {"session-a": ["pane:abc", "review"]},
+        "rail_collapsed": {"repo:/home/tom/dev/foo": False},
+        "last_selected": {"kind": "pane", "pid": "abc"},
+    }
+    r = client.patch("/api/prefs/ui", json=body)
+    assert r.status_code == 200, r.text
+    ui = r.json()["ui"]
+    for key in body:
+        assert ui[key] == body[key]

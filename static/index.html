@@ -85,7 +85,8 @@
         <span class="alerts-toggle-label">🔔 notifications</span><span class="alerts-badge" id="alerts-badge" hidden>0</span>
       </button>
       <div class="view-switch" id="view-switch" role="tablist" aria-label="view">
-        <button class="view-switch-btn" data-view="grid" role="tab" aria-selected="true" title="grid view (Tab to toggle)">▦ grid</button>
+        <button class="view-switch-btn" data-view="split" role="tab" aria-selected="true" title="split view — curated rail + persistent detail (Tab to toggle)">▤ split</button>
+        <button class="view-switch-btn" data-view="grid" role="tab" aria-selected="false" title="grid view (Tab to toggle)">▦ grid</button>
         <button class="view-switch-btn" data-view="stream" role="tab" aria-selected="false" title="stream view — tabs you've opened, by recency (Tab to toggle)">≡ stream</button>
       </div>
     </nav>
@@ -189,6 +190,30 @@
       </div>
     </div>
   </div>
+  <div id="launcher-modal" class="hidden launcher-modal-overlay">
+    <div class="launcher-modal-card">
+      <header class="launcher-modal-head">
+        <h2>+ New tab</h2>
+        <button id="launcher-close" title="close">×</button>
+      </header>
+      <p class="launcher-modal-sub" id="launcher-session-name"></p>
+      <div id="launcher-list"></div>
+    </div>
+  </div>
+  <div id="open-picker-modal" class="hidden open-picker-modal-overlay">
+    <div class="open-picker-modal-card">
+      <header class="open-picker-modal-head">
+        <h2>+ open</h2>
+        <button id="open-picker-close" title="close">×</button>
+      </header>
+      <p class="open-picker-modal-sub">Pick tmux sessions to add to the rail. Already-railed sessions are hidden.</p>
+      <div id="open-picker-list"></div>
+      <div class="open-picker-modal-actions">
+        <button type="button" id="open-picker-cancel">cancel</button>
+        <button type="button" id="open-picker-submit" disabled>add (0)</button>
+      </div>
+    </div>
+  </div>
   <div id="settings-modal" class="hidden settings-modal-overlay">
     <div class="settings-modal-card">
       <header class="settings-modal-head">
@@ -221,6 +246,24 @@
     </div>
   </div>
   <main id="grid"></main>
+  <div id="split-view" class="hidden">
+    <aside id="rail" aria-label="projects rail"></aside>
+    <section id="detail">
+      <div id="detail-empty" class="detail-empty"></div>
+      <div id="detail-pane" class="detail-pane hidden">
+        <header id="detail-pane-header" class="detail-pane-header"></header>
+        <div class="detail-pane-body">
+          <div id="detail-xterm" class="detail-xterm"></div>
+          <aside id="detail-side" class="detail-side"></aside>
+        </div>
+      </div>
+      <div id="detail-review" class="detail-review hidden">
+        <header id="detail-review-header" class="detail-review-header"></header>
+        <iframe id="detail-review-iframe" class="detail-review-iframe"></iframe>
+      </div>
+      <div id="detail-review-start" class="detail-review-start hidden"></div>
+    </section>
+  </div>
   <div id="modal" class="hidden" data-tab="terminal">
     <div class="modal-card">
       <div class="modal-head">

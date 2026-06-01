@@ -10,9 +10,6 @@
 // to it through the exported functions.
 
 import { targetQuery } from './util.js';
-import { addLgtmDocFromTerminal } from './modal.js';
-
-const modalXtermEl = document.getElementById("modal-xterm");
 
 let term = null;
 let termWs = null;
@@ -24,6 +21,23 @@ let termReconnectedNotified = false; // only print "reconnecting…" once per ou
 let fitAddon = null;
 let termResizeObserver = null;
 let fitDebounce = null;
+let containerEl = null;          // set by setTerminalContainer() before startLiveTerminal()
+let linkClickCallback = null;    // set by setTerminalLinkCallback()
+
+// Mount target for the live xterm. Must be called before startLiveTerminal().
+// Consumers: modal.js (passes #modal-xterm) and detail.js (passes #detail-xterm).
+export function setTerminalContainer(el) {
+  containerEl = el;
+}
+
+// Register a callback invoked when an .md link in the terminal is clicked.
+// Replaces the previous hard import of addLgtmDocFromTerminal from modal.js.
+// Callback signature: (rawPath: string) => void
+// rawPath includes any trailing ":42" line suffix; callees parse it themselves
+// (see addLgtmDocFromTerminal in modal.js for the original handler).
+export function setTerminalLinkCallback(cb) {
+  linkClickCallback = cb;
+}
 
 // Matches a .md path inside a terminal row. Anchored by negative
 // look-around so `data.md_archive` doesn't fool it into matching
@@ -54,7 +68,7 @@ function registerMarkdownLinkProvider(t) {
             // Require a modifier so reading scrollback doesn't accidentally
             // trigger adds. Cmd on Mac, Ctrl elsewhere.
             if (!event.metaKey && !event.ctrlKey) return;
-            addLgtmDocFromTerminal(linkText);
+            if (linkClickCallback) linkClickCallback(linkText);
           },
           hover() {},
           leave() {},
@@ -72,7 +86,7 @@ export function startLiveTerminal(target) {
     try { term.dispose(); } catch (_) {}
     term = null;
   }
-  modalXtermEl.innerHTML = "";
+  containerEl.innerHTML = "";
 
   term = new Terminal({
     fontFamily: '"SF Mono", "JetBrains Mono", "Menlo", monospace',
@@ -103,7 +117,7 @@ export function startLiveTerminal(target) {
       brightCyan: "#a8e0d8",   brightWhite: "#ffffff",
     },
   });
-  term.open(modalXtermEl);
+  term.open(containerEl);
   term.focus();
 
   // Cmd+click on a `.md` path → add it as a document to the LGTM
@@ -142,7 +156,7 @@ export function startLiveTerminal(target) {
   // ResizeObserver: refit + tell tmux when the modal/window changes size.
   // Debounced so a window-drag doesn't spam tmux with subprocess calls.
   termResizeObserver = new ResizeObserver(scheduleFit);
-  termResizeObserver.observe(modalXtermEl);
+  termResizeObserver.observe(containerEl);
 
   // The browser intercepts Cmd+key combos before xterm sees them. Translate
   // the common ones into readline-style control sequences and forward them
