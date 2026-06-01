@@ -2788,3 +2788,49 @@ body[data-alerts="open"][data-view="stream"] main {
   outline: none;
   border-color: var(--accent);
 }
+
+/* --- Split view: structural layout (polish in Phase 12) ----------------- */
+/* Periscope's body uses flex column layout — `.periscope-header` first,
+   then the view container fills. We follow the same pattern (no fixed
+   header height). */
+
+#split-view {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#split-view.hidden { display: none; }
+
+#rail {
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: var(--bg-1);
+}
+
+#detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-0);
+}
+
+#detail-empty, #detail-pane, #detail-review, #detail-review-start {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detail-pane { display: flex; flex-direction: column; }
+.detail-pane-body { display: grid; grid-template-columns: 1fr 240px; flex: 1; min-height: 0; }
+.detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; }
+.detail-side { border-left: 1px solid var(--line); overflow-y: auto; padding: 8px 10px; font-size: 12px; }
+.detail-review { display: flex; flex-direction: column; }
+.detail-review-iframe { flex: 1; border: 0; min-height: 0; }
+.detail-empty { display: flex; align-items: center; justify-content: center; color: var(--fg-3); }
+.detail-review-start { display: flex; align-items: center; justify-content: center; }
+
+.hidden { display: none !important; }
