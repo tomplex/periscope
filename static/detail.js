@@ -13,6 +13,7 @@ import { state } from './state.js';
 import * as prefs from './prefs.js';
 import { escapeHtml, apiCall, rewriteLgtmHost } from './util.js';
 import { mountTerminal, unmountTerminal } from './terminal-mount.js';
+import { handleModalImagePaste } from './modal.js';
 
 let currentMount = null;        // "pane" | "review" | "empty" | null
 let currentMountKey = null;     // pid (when "pane") or worktreeKey (when "review")
@@ -59,11 +60,18 @@ export function selectPane(pid) {
   show("detail-pane");
   $("detail-pane-header").innerHTML = paneHeader(w);
   $("detail-side").innerHTML = renderSidePanel(w);
+  // state.activeTarget drives the shared paste handler (and any future
+  // active-pane-keyed actions). Set it on every selectPane call so it
+  // tracks the current selection even when sameMount short-circuits.
+  state.activeTarget = w.target;
   if (!sameMount) {
     mountTerminal(
       $("detail-xterm"),
       w.target,
-      { onPaste: null }  // image paste lives in modal; split view ships without it (future work)
+      {
+        onPaste: handleModalImagePaste,
+        // onMdLink: future work — split view doesn't yet wire LGTM doc adds
+      }
     );
     currentMount = "pane";
     currentMountKey = pid;
@@ -114,6 +122,7 @@ export function selectReview(worktreeKey) {
     $("detail-review-iframe").src = rewriteLgtmHost(session.url);
     // Tear down xterm if it was mounted.
     if (currentMount === "pane") unmountTerminal();
+    state.activeTarget = null;  // review mode owns the iframe, no pane target
     currentMount = "review";
     currentMountKey = worktreeKey;
   }
@@ -126,6 +135,7 @@ export function showEmpty() {
       <p>Select a tab on the left, or <button id="detail-empty-add">+ open</button> to add one.</p>
     </div>`;
   if (currentMount === "pane") unmountTerminal();
+  state.activeTarget = null;
   currentMount = "empty";
   currentMountKey = null;
 }
@@ -134,6 +144,7 @@ export function showEmpty() {
 // stop polling the WebSocket while user is in another view.
 export function detailTeardown() {
   if (currentMount === "pane") unmountTerminal();
+  state.activeTarget = null;
   currentMount = null;
   currentMountKey = null;
 }

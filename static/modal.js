@@ -1013,7 +1013,9 @@ async function handleModalAutoRename(btn) {
 // own paste handling. Capture phase so we see the event before xterm's
 // hidden textarea consumes it. Registered via mountTerminal's onPaste so
 // the handler is attached and detached with the terminal lifecycle.
-async function handleModalImagePaste(e) {
+// Exported so detail.js (split view) shares the same paste handler.
+// Uses state.activeTarget — both modal.openModal and detail.selectPane set it.
+export async function handleModalImagePaste(e) {
   if (!state.activeTarget) return;
   const items = e.clipboardData?.items || [];
   for (const item of items) {

@@ -332,3 +332,12 @@ export function stopLiveTerminal() {
 export function writeTerminalLine(line) {
   if (term) term.writeln(line);
 }
+
+// Re-run FitAddon. Used by terminal-mount.js after a deferred frame to
+// catch the case where the container's layout wasn't fully computed
+// when startLiveTerminal called fit() synchronously (common when
+// re-mounting into a container that just became visible via class toggle).
+export function refitTerminal() {
+  if (!term || !fitAddon) return;
+  scheduleFit();
+}

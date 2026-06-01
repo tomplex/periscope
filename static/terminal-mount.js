@@ -10,6 +10,7 @@ import {
   setTerminalLinkCallback,
   startLiveTerminal,
   stopLiveTerminal,
+  refitTerminal,
 } from './terminal.js';
 
 let activePasteHandler = null;
@@ -33,6 +34,13 @@ export function mountTerminal(container, target, opts = {}) {
   }
   activeContainer = container;
   startLiveTerminal(target);
+  // Defensive refit on the next animation frame: when a view-switch just
+  // un-hid the container, layout queries during startLiveTerminal can
+  // race the browser's layout pass and produce stale cols/rows. Asking
+  // the browser to refit on the next frame catches that case. Two rAFs
+  // because the first one fires before the post-paint relayout settles
+  // when transitioning from `display: none` → visible.
+  requestAnimationFrame(() => requestAnimationFrame(refitTerminal));
 }
 
 export function unmountTerminal() {
