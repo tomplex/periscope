@@ -113,6 +113,7 @@ function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp) {
 export function renderRail() {
   const el = railEl();
   if (!el) return;
+  attachRailListeners();
 
   const repoOrder = prefs.getRepoOrder();
   const worktreesByRepo = prefs.getWorktreesByRepo();
@@ -182,4 +183,55 @@ export function renderRail() {
     </div>
     ${blocks.join("")}
   `;
+}
+
+// One click delegate on the rail container — re-attaches on each render
+// is unnecessary because the listener lives on the static #rail element.
+// The flag is module-scoped (not stored on the DOM node) so it follows
+// the JS lifetime, not the DOM.
+let listenersAttached = false;
+function attachRailListeners() {
+  if (listenersAttached) return;
+  const el = railEl();
+  if (!el) return;
+  listenersAttached = true;
+
+  el.addEventListener("click", async (e) => {
+    // + open button (delegated; lives in rail-head)
+    if (e.target.id === "rail-add") {
+      const { openPicker } = await import('./open-picker-modal.js');
+      openPicker();
+      return;
+    }
+
+    const row = e.target.closest(".rail-row");
+    if (!row) return;
+    const kind = row.dataset.row;
+    if (kind === "repo" || kind === "worktree") {
+      // Toggle collapse — persisted.
+      const key = row.dataset.key;
+      const current = prefs.getRailCollapsed()[key] === true;
+      await prefs.setRailCollapsedKey(key, !current);
+      renderRail();
+      return;
+    }
+    if (kind === "pane") {
+      const pid = row.dataset.pid;
+      await prefs.setLastSelected({ kind: "pane", pid });
+      state.railSelected = `pane:${pid}`;
+      const { selectPane } = await import('./detail.js');
+      selectPane(pid);
+      renderRail();
+      return;
+    }
+    if (kind === "review") {
+      const worktree = row.dataset.worktree;
+      await prefs.setLastSelected({ kind: "review", worktree });
+      state.railSelected = `review:${worktree}`;
+      const { selectReview } = await import('./detail.js');
+      selectReview(worktree);
+      renderRail();
+      return;
+    }
+  });
 }
