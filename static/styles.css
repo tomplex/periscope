@@ -2891,8 +2891,9 @@ body[data-alerts="open"][data-view="stream"] main {
 .review-start-card, .detail-empty-card { text-align: center; color: var(--fg-3); }
 .review-start-btn { margin-top: 10px; padding: 6px 14px; cursor: pointer; }
 
-.rail-grip { width: 12px; opacity: 0; font-size: 10px; cursor: grab; transition: opacity .15s; flex-shrink: 0; color: var(--fg-4); }
-.rail-row:hover .rail-grip { opacity: .4; }
+.rail-grip { width: 14px; opacity: .18; font-size: 10px; cursor: grab; transition: opacity .15s; flex-shrink: 0; color: var(--fg-4); user-select: none; }
+.rail-row:hover .rail-grip { opacity: .55; }
+.rail-grip:active { cursor: grabbing; }
 .rail-row.dragging { opacity: .5; }
 .rail-dim { opacity: .35; }
 .rail-row.rail-dim:hover { opacity: .6; }
@@ -2928,6 +2929,8 @@ body[data-alerts="open"][data-view="stream"] main {
 
 .rail-conn { color: var(--fg-4); font-size: 12px; }
 .icon-repo { color: oklch(0.74 0.13 232); }
+.icon-other { color: var(--fg-3); }
+.icon-shell { color: var(--s-shell); font-family: var(--mono); }
 .icon-worktree { color: oklch(0.72 0.13 295); }
 .icon-pane { color: oklch(0.78 0.13 320); }
 .icon-review { color: var(--s-shell); }

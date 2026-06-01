@@ -31,12 +31,16 @@ function maxSeverity(states) {
 // worktrees / panes that are no longer live are silently dropped from
 // the rendered output (the pref itself is cleaned up by
 // pruneDanglingEntries elsewhere; here we just don't render them).
+// Synthetic repo key for non-worktree-backed sessions (bare shells,
+// non-git cwds). Renders as a top-level "Other" group at the bottom of
+// the rail with sessions as direct children (no review row, no branch).
+export const OTHER_REPO_KEY = "__other__";
+
 function mergeLiveAndPrefs(windows, prefRepoOrder, prefWtByRepo, prefPanesByWt) {
   const liveByRepo = {};       // repo_key → ordered list of session names (first-seen wins)
   const livePanesByWt = {};    // session name → ordered list of pane pids (first-seen)
   for (const w of (windows || [])) {
-    if (!w.repo_key) continue;  // skip non-worktree-backed sessions
-    const r = w.repo_key;
+    const r = w.repo_key || OTHER_REPO_KEY;
     const s = w.session;
     if (!liveByRepo[r]) liveByRepo[r] = [];
     if (!liveByRepo[r].includes(s)) liveByRepo[r].push(s);
@@ -45,11 +49,14 @@ function mergeLiveAndPrefs(windows, prefRepoOrder, prefWtByRepo, prefPanesByWt) 
   }
 
   // Repo order: prefs first (filtered to live), then live-new appended.
+  // "Other" always lands at the bottom regardless of pref order — it's a
+  // catch-all bucket, not a peer to real repos.
   const liveRepoSet = new Set(Object.keys(liveByRepo));
-  const repoOrder = [
-    ...prefRepoOrder.filter(r => liveRepoSet.has(r)),
-    ...Object.keys(liveByRepo).filter(r => !prefRepoOrder.includes(r)),
-  ];
+  const realRepos = [...prefRepoOrder.filter(r => liveRepoSet.has(r) && r !== OTHER_REPO_KEY),
+                     ...Object.keys(liveByRepo).filter(r => !prefRepoOrder.includes(r) && r !== OTHER_REPO_KEY)];
+  const repoOrder = liveRepoSet.has(OTHER_REPO_KEY)
+    ? [...realRepos, OTHER_REPO_KEY]
+    : realRepos;
 
   // Worktree order per repo: same logic.
   const worktreesByRepo = {};
@@ -62,19 +69,19 @@ function mergeLiveAndPrefs(windows, prefRepoOrder, prefWtByRepo, prefPanesByWt) 
   }
 
   // Pane-children order per worktree: prefs first (filtered), then new
-  // live pids. The "review" sentinel is always present (auto-added at
-  // the end if not already in pref).
+  // live pids. The "review" sentinel is auto-added for git-backed worktrees
+  // only — non-worktree sessions under "Other" have no review row.
   const panesByWorktree = {};
   for (const r of repoOrder) {
+    const isOther = r === OTHER_REPO_KEY;
     for (const w of worktreesByRepo[r]) {
       const live = livePanesByWt[w] || [];
       const liveSet = new Set(live);
       const pref = prefPanesByWt[w] || [];
-      const prefKept = pref.filter(c => c === "review" || liveSet.has(c));
+      const prefKept = pref.filter(c => (c === "review" && !isOther) || liveSet.has(c));
       const prefSet = new Set(prefKept);
       const merged = [...prefKept, ...live.filter(p => !prefSet.has(p))];
-      // Auto-add review row if not already in the pref list.
-      if (!merged.includes("review")) merged.push("review");
+      if (!isOther && !merged.includes("review")) merged.push("review");
       panesByWorktree[w] = merged;
     }
   }
@@ -118,8 +125,9 @@ function repoMatchesFilter(repoKey, byWorktree, worktreesByRepo) {
 
 // Look up the human-readable repo label for a repo_key. We pull it off
 // any window whose `repo_key` matches; falls back to basename of the
-// repo_key path.
+// repo_key path. The synthetic OTHER_REPO_KEY renders as "Other".
 function repoLabelFor(repoKey, windows) {
+  if (repoKey === OTHER_REPO_KEY) return "Other";
   for (const w of (windows || [])) {
     if (w.repo_key === repoKey && w.repo_label) return w.repo_label;
   }
@@ -140,9 +148,9 @@ function paneRow(w, selectedKey) {
   const sel = k === selectedKey ? " selected" : "";
   const dim = paneMatchesFilter(w) ? "" : " rail-dim";
   return `
-    <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}" draggable="true">
+    <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}">
       <span class="rail-conn">├</span>
-      <span class="rail-grip">⋮⋮</span>
+      <span class="rail-grip" draggable="true" title="drag to reorder">⋮⋮</span>
       <span class="rail-icon icon-pane">✦</span>
       <span class="rail-label">${escapeHtml(w.name || "claude")}</span>
       <span class="${statusDotClass(w.state)}"></span>
@@ -154,9 +162,9 @@ function reviewRow(worktreeKey, lgtmLive, selectedKey) {
   const sel = k === selectedKey ? " selected" : "";
   const empty = lgtmLive ? "" : " review-empty";
   return `
-    <div class="rail-row child-row${sel}${empty}" data-row="review" data-worktree="${escapeHtml(worktreeKey)}" data-key="${escapeHtml(k)}" draggable="true">
+    <div class="rail-row child-row${sel}${empty}" data-row="review" data-worktree="${escapeHtml(worktreeKey)}" data-key="${escapeHtml(k)}">
       <span class="rail-conn">├</span>
-      <span class="rail-grip">⋮⋮</span>
+      <span class="rail-grip" draggable="true" title="drag to reorder">⋮⋮</span>
       <span class="rail-icon icon-review">👁</span>
       <span class="rail-label">review${lgtmLive ? "" : " <em>start →</em>"}</span>
     </div>`;
@@ -171,18 +179,23 @@ function newTabRow(worktreeKey) {
     </div>`;
 }
 
-function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktree) {
+function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktree, repoKey) {
   const chev = collapsed ? "▸" : "▾";
   const childCountChip = collapsed && children.length > 0
     ? `<span class="rail-count">${children.length}</span>`
     : "";
   const body = collapsed ? "" : children.join("");
   const dim = worktreeMatchesFilter(worktreeKey, byWorktree) ? "" : " rail-dim";
+  // Non-worktree sessions (under "Other") aren't branches — show $ instead of ⎇.
+  const isOther = repoKey === OTHER_REPO_KEY;
+  const icon = isOther
+    ? `<span class="rail-icon icon-shell">$</span>`
+    : `<span class="rail-icon icon-worktree">⎇</span>`;
   return `
-    <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}" draggable="true">
-      <span class="rail-grip">⋮⋮</span>
+    <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}">
+      <span class="rail-grip" draggable="true" title="drag to reorder">⋮⋮</span>
       <span class="rail-chev">${chev}</span>
-      <span class="rail-icon icon-worktree">⎇</span>
+      ${icon}
       <span class="rail-label"><b>${escapeHtml(label)}</b></span>
       ${childCountChip}
       <span class="${statusDotClass(rolledUp)}"></span>
@@ -195,11 +208,17 @@ function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp, byWorktree
   const chev = collapsed ? "▸" : "▾";
   const body = collapsed ? "" : worktreeBlocks.join("");
   const dim = repoMatchesFilter(repoKey, byWorktree, worktreesByRepo) ? "" : " rail-dim";
+  const isOther = repoKey === OTHER_REPO_KEY;
+  // "Other" is always pinned at the bottom — drag is meaningless; omit the grip.
+  const grip = isOther ? "" : `<span class="rail-grip" draggable="true" title="drag to reorder">⋮⋮</span>`;
+  const icon = isOther
+    ? `<span class="rail-icon icon-other">📂</span>`
+    : `<span class="rail-icon icon-repo">📚</span>`;
   return `
-    <div class="rail-row repo-row${dim}" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}" draggable="true">
-      <span class="rail-grip">⋮⋮</span>
+    <div class="rail-row repo-row${dim}" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}">
+      ${grip}
       <span class="rail-chev">${chev}</span>
-      <span class="rail-icon icon-repo">📚</span>
+      ${icon}
       <span class="rail-label"><b>${escapeHtml(label)}</b></span>
       <span class="${statusDotClass(rolledUp)}"></span>
     </div>
@@ -275,9 +294,12 @@ export function renderRail() {
       childMarkup.push(newTabRow(wtKey));
       const wtIsCollapsed = collapsed[`wt:${wtKey}`] === true;
       const rolledUp = maxSeverity(childStates);
-      // Label: branch from any window in this worktree.
-      const label = (wtWindows[0]?.branch) || wtKey;
-      return worktreeRow(wtKey, childMarkup, wtIsCollapsed, rolledUp, label, byWorktree);
+      // Label: branch from any window in this worktree for git-backed
+      // sessions; just the session name for "Other" entries (no branch).
+      const label = repoKey === OTHER_REPO_KEY
+        ? wtKey
+        : ((wtWindows[0]?.branch) || wtKey);
+      return worktreeRow(wtKey, childMarkup, wtIsCollapsed, rolledUp, label, byWorktree, repoKey);
     });
     // Repo rollup = max across worktree rollups.
     const allChildStates = (worktrees.flatMap(wt => (byWorktree[wt] || []).map(w => w.state || "shell")));
@@ -386,12 +408,37 @@ function attachRailListeners() {
     state.railDragging = null;
     renderRail();
   });
+
+  // Drop never fires when the user releases outside any valid target —
+  // clean up the dragging class + state regardless.
+  el.addEventListener("dragend", () => {
+    const drag = state.railDragging;
+    if (drag?.row) drag.row.classList.remove("dragging");
+    state.railDragging = null;
+  });
+}
+
+// All three reorder helpers seed their starting order from mergeLiveAndPrefs
+// (the same function renderRail uses) — that's the rendered order the user
+// sees and is dragging within. Plain prefs alone would miss auto-populated
+// entries that haven't been touched yet.
+
+function currentMergedOrder() {
+  return mergeLiveAndPrefs(
+    state.lastWindows,
+    prefs.getRepoOrder(),
+    prefs.getWorktreesByRepo(),
+    prefs.getPanesByWorktree()
+  );
 }
 
 async function reorderRepos(draggedKey, targetKey) {
-  const order = prefs.getRepoOrder();
   const dragged = draggedKey.replace(/^repo:/, "");
   const target = targetKey.replace(/^repo:/, "");
+  // "Other" is always pinned to the bottom; can't reorder around it.
+  if (dragged === OTHER_REPO_KEY || target === OTHER_REPO_KEY) return;
+  const { repoOrder } = currentMergedOrder();
+  const order = repoOrder.filter(r => r !== OTHER_REPO_KEY);
   const from = order.indexOf(dragged);
   const to = order.indexOf(target);
   if (from < 0 || to < 0 || from === to) return;
@@ -403,26 +450,27 @@ async function reorderRepos(draggedKey, targetKey) {
 async function reorderWorktrees(draggedKey, targetKey) {
   const dragged = draggedKey.replace(/^wt:/, "");
   const target = targetKey.replace(/^wt:/, "");
-  const wts = prefs.getWorktreesByRepo();
-  // Find which repo each belongs to; must match (cross-repo drag rejected).
+  const { worktreesByRepo } = currentMergedOrder();
+  // Find which repo the dragged worktree currently belongs to in the
+  // rendered tree; must match the target's repo.
   let repoKey = null;
-  for (const [r, list] of Object.entries(wts)) {
+  for (const [r, list] of Object.entries(worktreesByRepo)) {
     if (list.includes(dragged)) { repoKey = r; break; }
   }
   if (!repoKey) return;
-  const list = wts[repoKey];
-  if (!list.includes(target)) return;  // cross-repo
+  const list = [...worktreesByRepo[repoKey]];
+  if (!list.includes(target)) return;  // cross-repo drag — reject
   const from = list.indexOf(dragged);
   const to = list.indexOf(target);
   if (from < 0 || to < 0 || from === to) return;
   list.splice(from, 1);
   list.splice(to, 0, dragged);
-  wts[repoKey] = list;
-  await prefs.setWorktreesByRepo(wts);
+  // Persist: keep other repos' prefs as-is, overwrite just this repo's list.
+  const next = { ...prefs.getWorktreesByRepo(), [repoKey]: list };
+  await prefs.setWorktreesByRepo(next);
 }
 
 async function reorderChildren(draggedRow, targetRow) {
-  // Both rows must be inside the same worktree's child block.
   const draggedWt = closestWorktreeKey(draggedRow);
   const targetWt = closestWorktreeKey(targetRow);
   if (!draggedWt || draggedWt !== targetWt) return;
@@ -431,15 +479,15 @@ async function reorderChildren(draggedRow, targetRow) {
   const targetKey = childPrefKey(targetRow);
   if (!dragKey || !targetKey) return;
 
-  const panes = prefs.getPanesByWorktree();
-  const list = panes[draggedWt] || [];
+  const { panesByWorktree } = currentMergedOrder();
+  const list = [...(panesByWorktree[draggedWt] || [])];
   const from = list.indexOf(dragKey);
   const to = list.indexOf(targetKey);
   if (from < 0 || to < 0 || from === to) return;
   list.splice(from, 1);
   list.splice(to, 0, dragKey);
-  panes[draggedWt] = list;
-  await prefs.setPanesByWorktree(panes);
+  const next = { ...prefs.getPanesByWorktree(), [draggedWt]: list };
+  await prefs.setPanesByWorktree(next);
 }
 
 function closestWorktreeKey(row) {
