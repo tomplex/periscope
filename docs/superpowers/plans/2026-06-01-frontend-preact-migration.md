@@ -62,7 +62,10 @@ static/
 ## Migration mechanism (per-surface cutover, revertible)
 
 - All work happens in the worktree branch; prod stays on `main`/:8765 untouched until a single final merge.
-- `main.jsx` reads a `?preact=<surface,...>` flag (or a `localStorage.preact` set) and mounts the Preact component for each cut-over surface, leaving the rest to the vanilla path. This lets each surface land + be browser-verified independently, and reverted by a single commit if wrong.
+- **Shared surface flag.** `index.html` sets `window.__PREACT_SURFACES__ = new Set((new URLSearchParams(location.search).get("preact")||"").split(",").filter(Boolean))` BEFORE either script runs. Both `main.jsx` and vanilla `app.js` consult it.
+- **`main.jsx`** mounts the Preact component for each surface in `__PREACT_SURFACES__`, leaving the rest to the vanilla path.
+- **Vanilla `app.js` must be gated** (see Must-fix from plan-reviewer): vanilla `app.js` calls `bootstrap()` at module top-level (`app.js:370`) which starts `initGrid()`'s 3s poll, `initModal()`, the global `keydown` listener (`app.js:31`), and the `viewSwitch`→`applyView`→`body[data-view]` writer (`app.js:360-368`). When a surface is Preact-owned, the vanilla equivalent MUST skip its init — otherwise you get two concurrent `/api/state` polls (doubling the fork storm), two keydown handlers fighting over Tab/Escape, and two writers to `body[data-view]`. Task 1 adds the gate.
+- This lets each surface land + be browser-verified independently, and reverted by a single commit if wrong.
 - The vanilla modules and the mount switch are **deleted in the final task** once every surface is verified; the end state is all-Preact with no flag.
 - Commit after each surface (atomic, bisectable). The dev instance on :8766 stays runnable at every commit.
 
@@ -76,7 +79,9 @@ static/
 
 - [ ] **Step 1: Add Preact deps + build script**
 
-`package.json` gains `dependencies`: `preact`, `@preact/signals`; `devDependencies`: `@preact/preset-vite`; and `scripts`: `"build": "vite build"`. Vite config gets a `build` section emitting to `static/dist/` with `@preact/preset-vite` and a single entry `static/src/main.jsx`; alias `react`→`preact/compat` is NOT needed (we use Preact directly).
+`package.json` gains `dependencies`: `preact`, `@preact/signals`; `devDependencies`: `@preact/preset-vite`; and `scripts`: `"build": "vite build"`.
+
+**Vite config mechanics (pin these — the existing `vite.config.js` has `root: "static"`):** keep `root: "static"` (so `index.html` stays where it is and the existing `/api`+`/ws` dev proxy is unchanged); add `plugins: [preact()]`; set `build: { outDir: "dist", emptyOutDir: false, rollupOptions: { input: "static/src/main.jsx", output: { entryFileNames: "app.js", assetFileNames: "[name][extname]" } } }` so the build emits a stable `static/dist/app.js` (no content hash → `index.html` references a fixed path, no churn). The `.jsx` sources under `static/src/` are reachable via the StaticFiles mount but unreferenced — acceptable for a single-user localhost tool (don't move `root` to `src/` just to hide them). No `react`→`preact/compat` alias needed.
 
 - [ ] **Step 2: Minimal entry that mounts an empty `<App>`**
 
@@ -87,7 +92,11 @@ function App() { return <div data-preact-root>periscope (preact scaffold)</div>;
 render(<App />, document.getElementById("app"));
 ```
 
-`static/index.html`: add `<div id="app"></div>` and `<script type="module" src="/static/dist/<built-entry>.js">` (reference the hashed build output; or configure Vite `build.rollupOptions.output.entryFileNames` to a stable name like `app.js` to avoid hash churn in `index.html`). Keep the existing `styles.css` link and `vendor/xterm.js` `<script>` tags. The vanilla `app.js` `<script>` stays for now (mount switch in a later task).
+`static/index.html`: add `<div id="app"></div>`, the `window.__PREACT_SURFACES__` initializer `<script>` (see Migration mechanism — must run before both app scripts), and `<script type="module" src="/static/dist/app.js">`. Keep the existing `styles.css` link and `vendor/xterm.js` `<script>` tags. The vanilla `app.js` `<script>` stays for now.
+
+- [ ] **Step 2b: Gate vanilla `app.js` bootstrap (Must-fix)**
+
+In `static/app.js`, wrap the top-level `bootstrap()` call (`app.js:370`) and the parts of bootstrap that own a Preact-claimed surface so they no-op when that surface is Preact-owned. Concretely: read `const P = window.__PREACT_SURFACES__ || new Set()`. Skip `initGrid()` (and its poll) when `P.has("grid")`; skip the global `keydown` registration + `viewSwitch`/`applyView` wiring when `P.has("chrome")`; skip `initModal()` when `P.has("modal")`; etc. The goal: exactly one `/api/state` poll, one keydown handler, one `body[data-view]` writer at all times. This gating code is deleted with the rest of vanilla in Task 9.
 
 - [ ] **Step 3: dev + install wiring**
 
@@ -96,7 +105,7 @@ render(<App />, document.getElementById("app"));
 - [ ] **Step 4: Build gate**
 
 Run: `npm install && npm run build`
-Expected: `static/dist/` is produced with the entry bundle. Then `git add -f static/dist/` (it must be committed — confirm it is not gitignored; if a `dist/` ignore rule exists, scope it to not cover `static/dist/`).
+Expected: `static/dist/app.js` is produced. Then `git add static/dist/` (no `dist/` rule exists in `.gitignore`, verified by plan-reviewer — no `-f` needed; the bundle is committed so `bin/periscope restart` needs no build step).
 
 - [ ] **Step 5: Manual smoke gate**
 
@@ -200,14 +209,22 @@ export function Terminal({ target, onMdLink, onPaste }) {
   const ref = useRef(null);
   useEffect(() => {
     mountTerminal(ref.current, target, { onMdLink, onPaste });
-    return () => unmountTerminal();
-  }, [target]);                 // re-run ONLY when target changes → reconnect, not remount
+    return unmountTerminal;      // mountTerminal self-unmounts too — don't double-tear-down
+  }, []);                        // empty deps: mount ONCE for this component instance
   return <div ref={ref} class="modal-xterm" />;
 }
 ```
 
+Call sites **key on pid** so re-selecting the same pane preserves this instance (reproduces `detail.js:86`'s `sameMount` pid-keyed skip) and selecting a different pane unmounts+remounts → reconnect:
+
+```jsx
+<Terminal key={pid} target={target} onPaste={handlePaste} />
+```
+
+(For the modal, which is keyed per-open, the empty-deps effect already mounts once per open.) This matches the structure proposal §4; the earlier `[target]`-deps form is wrong — it would double-tear-down (since `mountTerminal` self-unmounts) and wouldn't reproduce pid-keyed `sameMount`.
+
 **Must-not-drop (synthesis):**
-- **Singleton xterm**: created once per `target` in the effect, disposed in cleanup — NOT recreated on render ticks. `useEffect` deps `[target]` enforce this.
+- **Singleton xterm**: created once per component instance in the empty-deps effect, disposed in cleanup — NOT recreated on render ticks. Pid-keying at the call site is what makes re-selection reconnect-not-remount.
 - **Initial-paint ordering** (invariant #3): `open → focus → fit → connect(cols,rows)` in the same tick before the WS connects — already in `terminalCore`, must not be reordered.
 - **Reconnect FSM as refs**: `termIntentionalClose`, `termReconnectAttempt`, `termWsTarget`, the `[250,500,1000,2000]→4000` backoff, and the `ws !== termWs` stale-socket guard — these live in `terminalCore` module state (already ref-like), so the `onclose` closure reads live values. Cleanup suppresses-reconnect BEFORE close.
 - **`\n`→`\r\n`** (invariant #4) and the capture-phase paste handler stay in the core.
@@ -293,7 +310,7 @@ Port `mergeLiveAndPrefs` exactly (coupling #9/#10): live windows are membership 
 
 - [ ] **Step 2: `<Rail>` + `<RailRows>`**
 
-Repo→Worktree→Pane+review tree. Status-dot rollup (`needs-input > working > done > idle > shell`). **Two-level filter** (`paneMatchesFilter` wraps `filter.passesFilter`; a repo/worktree shows if any child matches — grays non-matching in place, preserves layout). Selection writes `prefs.last_selected` with the exact key format `pane:${pid}` / `review:${worktree}`; `railSelection` signal mirrors it. **Rail DnD carries reorder identity on the drag payload/props — NOT `previousElementSibling` DOM walks** (coupling #6 — those break under a component tree). PR/Linear anchors: real `onClick` stopPropagation.
+Repo→Worktree→Pane+review tree. Status-dot rollup (`needs-input > working > done > idle > shell`). **Two-level filter** (`paneMatchesFilter` wraps `filter.passesFilter`; a repo/worktree shows if any child matches — grays non-matching in place via `rail-dim`, preserves layout). **Two deliberately-different selection shapes — do not cross them** (`rail.js:422-432`, `prefs.js:286`): the **persisted** `prefs.last_selected` is an OBJECT (`{kind:"pane",pid}` / `{kind:"review",worktree}`); the **highlight-key** the rows compare against is a STRING (`pane:${pid}` / `review:${worktree}`). The `railSelection` signal mirrors the string key for fast highlight; persistence stores the object. Storing the string into the pref (or the object into the signal) silently breaks restore/highlight. **Rail DnD carries reorder identity on the drag payload/props — NOT `previousElementSibling` DOM walks** (coupling #6 — those break under a component tree). PR/Linear anchors: real `onClick` stopPropagation.
 
 - [ ] **Step 3: `<Detail>` — pane / review / empty**
 
