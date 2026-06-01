@@ -152,6 +152,7 @@ function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp, byWorktree
 export function renderRail() {
   const el = railEl();
   if (!el) return;
+  pruneDanglingEntries();
   attachRailListeners();
 
   const repoOrder = prefs.getRepoOrder();
@@ -398,4 +399,53 @@ function childPrefKey(row) {
   if (row.dataset.row === "pane") return row.dataset.pid;
   if (row.dataset.row === "review") return "review";
   return null;
+}
+
+// Remove rail entries for sessions / panes that no longer exist in
+// /api/state. Runs fire-and-forget — does NOT change renderRail's
+// sync contract. If anything is pruned, the next poll re-renders with
+// the updated prefs.
+//
+// patchUI is exported by prefs.js.
+
+let lastPruneAt = 0;
+function pruneDanglingEntries() {
+  if (Date.now() - lastPruneAt < 5000) return;  // throttle to 5s
+  lastPruneAt = Date.now();
+
+  const live = state.lastWindows || [];
+  const liveSessions = new Set(live.map(w => w.session));
+  const livePids = new Set(live.map(w => w.pid));
+
+  const wts = prefs.getWorktreesByRepo();
+  const panes = prefs.getPanesByWorktree();
+  const order = prefs.getRepoOrder();
+  let changed = false;
+
+  // Remove worktrees whose session is gone.
+  for (const [repo, list] of Object.entries(wts)) {
+    const kept = list.filter(wt => liveSessions.has(wt));
+    if (kept.length !== list.length) {
+      changed = true;
+      if (kept.length === 0) {
+        delete wts[repo];
+        const idx = order.indexOf(repo);
+        if (idx >= 0) order.splice(idx, 1);
+      } else {
+        wts[repo] = kept;
+      }
+    }
+  }
+
+  // Remove pane ids that aren't in livePids (keep "review" sentinels).
+  for (const [wt, children] of Object.entries(panes)) {
+    if (!liveSessions.has(wt)) { delete panes[wt]; changed = true; continue; }
+    const kept = children.filter(c => c === "review" || livePids.has(c));
+    if (kept.length !== children.length) { panes[wt] = kept; changed = true; }
+  }
+
+  if (changed) {
+    // Fire and forget — the prefs write will be reflected by the next poll's render.
+    prefs.patchUI({ repo_order: order, worktrees_by_repo: wts, panes_by_worktree: panes });
+  }
 }
