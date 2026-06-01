@@ -134,3 +134,39 @@ def test_github_origin_none_for_non_github(tmp_path):
 def test_github_origin_none_when_no_remote(tmp_path):
     _git(tmp_path, "init")
     assert github_origin(str(tmp_path)) is None
+
+
+def test_git_state_includes_repo_key_and_label(tmp_path, mocker):
+    """git_state_for() returns repo_key (full path) + repo_label (basename)."""
+    import periscope.git_pr as gp
+    # git_state_for short-circuits when the path is not a directory, so
+    # build a real worktree-like directory tree under tmp_path.
+    repo_dir = tmp_path / "foo"
+    worktree_dir = repo_dir / "branch-a"
+    worktree_dir.mkdir(parents=True)
+    common_dir = repo_dir / ".git"
+    common_dir.mkdir()
+
+    def fake_run(args, cwd=None, timeout=None):
+        # git_state_for first probes --git-dir; return ".git" to satisfy it.
+        if "rev-parse" in args and "--git-dir" in args:
+            return (0, ".git")
+        # diff shortstat (unstaged + staged) → clean
+        if "diff" in args and "--shortstat" in args:
+            return (0, "")
+        if "rev-parse" in args and "--abbrev-ref" in args:
+            return (0, "main")
+        if "rev-list" in args:
+            return (0, "0")
+        if "remote" in args and "get-url" in args:
+            return (1, "")  # no github slug
+        if "rev-parse" in args and "--git-common-dir" in args:
+            return (0, str(common_dir))
+        return (0, "")
+
+    # Both modules import _run from periscope.tmux at module load — patch both.
+    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
+    mocker.patch("periscope.gitutil._run", side_effect=fake_run)
+    out = gp.git_state_for(str(worktree_dir))
+    assert out["repo_key"] == str(repo_dir)
+    assert out["repo_label"] == "foo"

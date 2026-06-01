@@ -63,7 +63,19 @@ def git_state_for(path: str) -> dict | None:
         state += " *"
     # `repo_slug` (owner/repo) lets the frontend build PR URLs without
     # hardcoding a repo — periscope watches panes across many repos.
-    return {"branch": branch, "git": state, "repo_slug": github_slug(path)}
+    # repo_key is the full repo path (handles both sibling and inline
+    # worktree layouts via gitutil.resolve_repo). repo_label is the
+    # basename for human-readable display in the rail.
+    from periscope.gitutil import resolve_repo
+    repo_key = resolve_repo(path)
+    repo_label = os.path.basename(repo_key.rstrip("/")) if repo_key else ""
+    return {
+        "branch": branch,
+        "git": state,
+        "repo_slug": github_slug(path),
+        "repo_key": repo_key,
+        "repo_label": repo_label,
+    }
 
 
 def cached_git_state(path: str) -> dict | None:
