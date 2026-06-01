@@ -23,6 +23,7 @@ import * as prefs from "../prefs.js";
 import { editingTarget } from "../store.js";
 import { poll, openModal } from "./poll.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
+import { CARD_MIME } from "./dnd.js";
 
 function CiSpan({ ci }) {
   if (!ci) return null;
@@ -353,6 +354,15 @@ export function Card({ w }) {
       data-target={w.target}
       data-kind={kind}
       draggable
+      onDragStart={(e) => {
+        // Card move: carry the source target on CARD_MIME ONLY (omit
+        // text/plain) so the session-reorder branch ignores it (coupling #6).
+        // Identity rides the payload — no DOM-sibling walks.
+        e.stopPropagation();
+        e.dataTransfer.setData(CARD_MIME, w.target);
+        e.dataTransfer.effectAllowed = "move";
+        e.currentTarget.classList.add("dragging");
+      }}
       onClick={onCardClick}
     >
       <header class="card-head">

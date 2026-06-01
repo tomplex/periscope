@@ -17,8 +17,7 @@ import { confirmDialog } from "../overlays/Dialog.jsx";
 import { startPolling, poll } from "./poll.js";
 import { Card } from "./Card.jsx";
 import { NewTile } from "./NewTile.jsx";
-
-const CARD_MIME = "application/periscope-card";
+import { CARD_MIME } from "./dnd.js";
 
 // tmux_session → project lookup, rebuilt from the latest /api/state.
 function indexProjects(projs) {
@@ -341,9 +340,9 @@ function SessionHeader({ session, ws, total, project, onToggleCollapse, dnd }) {
       data-session={session}
       onClick={onToggleCollapse}
       onDragStart={(e) => dnd.onHeaderDragStart(session, e)}
-      onDragOver={(e) => dnd.onGroupDragOver(session, e)}
+      onDragOver={(e) => dnd.onHeaderDragOver(session, e)}
       onDragLeave={dnd.onHeaderDragLeave}
-      onDrop={(e) => dnd.onGroupDrop(session, e)}
+      onDrop={(e) => dnd.onHeaderDrop(session, e)}
     >
       <span class="chevron">▾</span>
       <EditableSessionName
@@ -392,7 +391,13 @@ function SessionGroup({ session, ws, total, project, collapsed, onToggleCollapse
   const alertClass = alert.kind ? ` session-has-channel session-has-channel-${alert.kind}` : "";
 
   return (
-    <section class={`session-group${collapsed ? " collapsed" : ""}${alertClass}`} data-session={session}>
+    <section
+      class={`session-group${collapsed ? " collapsed" : ""}${alertClass}`}
+      data-session={session}
+      onDragOver={(e) => dnd.onCardDragOver(session, e)}
+      onDragLeave={dnd.onCardDragLeave}
+      onDrop={(e) => dnd.onCardDrop(session, e)}
+    >
       <SessionHeader
         session={session}
         ws={ws}
@@ -517,17 +522,10 @@ export function Grid() {
     e.dataTransfer.effectAllowed = "move";
   }
 
-  function onGroupDragOver(session, e) {
-    if (e.dataTransfer.types.includes(CARD_MIME)) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      // single active card-drop highlight
-      document.querySelectorAll(".card-drop-target").forEach((g) => {
-        if (g.dataset.session !== session) g.classList.remove("card-drop-target");
-      });
-      e.currentTarget.closest(".session-group")?.classList.add("card-drop-target");
-      return;
-    }
+  // ── Header handlers: session reorder (text/plain) ONLY. A card drag
+  //    (CARD_MIME) is ignored here and left to bubble to the section. ──
+  function onHeaderDragOver(session, e) {
+    if (e.dataTransfer.types.includes(CARD_MIME)) return; // section handles it
     const header = e.currentTarget;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -541,19 +539,11 @@ export function Grid() {
     e.currentTarget.classList.remove("drag-over-top", "drag-over-bottom");
   }
 
-  function onGroupDrop(session, e) {
-    // Clear the pause flag here too: the drop re-renders, which detaches the
-    // dragged element — a subsequent dragend isn't guaranteed.
-    dragState.value = null;
-    if (e.dataTransfer.types.includes(CARD_MIME)) {
-      e.preventDefault();
-      const src = e.dataTransfer.getData(CARD_MIME);
-      moveCard(src, session);
-      clearDragArtifacts();
-      return;
-    }
+  function onHeaderDrop(session, e) {
+    if (e.dataTransfer.types.includes(CARD_MIME)) return; // section handles it
     const header = e.currentTarget;
     e.preventDefault();
+    dragState.value = null;
     const src = e.dataTransfer.getData("text/plain");
     if (src === session) {
       clearDragArtifacts();
@@ -562,6 +552,36 @@ export function Grid() {
     const rect = header.getBoundingClientRect();
     const before = e.clientY < rect.top + rect.height / 2;
     reorderSessions(src, session, before);
+    clearDragArtifacts();
+  }
+
+  // ── Section (whole .session-group) handlers: card move (CARD_MIME) ONLY,
+  //    so a card can be dropped anywhere over the group, not just the header
+  //    (vanilla grid.js used e.target.closest('.session-group')). ──
+  function onCardDragOver(session, e) {
+    if (!e.dataTransfer.types.includes(CARD_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    document.querySelectorAll(".card-drop-target").forEach((g) => {
+      if (g.dataset.session !== session) g.classList.remove("card-drop-target");
+    });
+    e.currentTarget.classList.add("card-drop-target");
+  }
+
+  function onCardDragLeave(e) {
+    // Only clear when the pointer actually left the section (not just moved
+    // onto a child) — relatedTarget is where it's heading.
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      e.currentTarget.classList.remove("card-drop-target");
+    }
+  }
+
+  function onCardDrop(session, e) {
+    if (!e.dataTransfer.types.includes(CARD_MIME)) return;
+    e.preventDefault();
+    dragState.value = null;
+    const src = e.dataTransfer.getData(CARD_MIME);
+    moveCard(src, session);
     clearDragArtifacts();
   }
 
@@ -593,7 +613,10 @@ export function Grid() {
     if (data) poll();
   }
 
-  const dnd = { onHeaderDragStart, onGroupDragOver, onHeaderDragLeave, onGroupDrop };
+  const dnd = {
+    onHeaderDragStart, onHeaderDragOver, onHeaderDragLeave, onHeaderDrop,
+    onCardDragOver, onCardDragLeave, onCardDrop,
+  };
 
   if (filtered.length === 0) {
     return (

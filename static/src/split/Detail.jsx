@@ -221,10 +221,20 @@ function ReviewStart({ worktreeKey }) {
 }
 
 function EmptyDetail() {
+  // Markup matches vanilla detail.js:showEmpty verbatim, incl. the
+  // #detail-empty-add button. It opens the + open picker via the same window
+  // bridge the rail's "+ open" uses (registered by OpenPickerModal when the
+  // overlays surface is mounted; a no-op if it isn't).
   return (
     <div id="detail-empty" class="detail-empty">
       <div class="detail-empty-card">
-        <p>Select a tab on the left to mirror its terminal here.</p>
+        <p>
+          Select a tab on the left, or{" "}
+          <button id="detail-empty-add" onClick={() => window.__periscopeOpenPicker?.()}>
+            + open
+          </button>{" "}
+          to add one.
+        </p>
       </div>
     </div>
   );

@@ -47,14 +47,23 @@ function App() {
   // Otherwise compose the claimed surfaces additively. Each is independent and
   // mounts only when its flag is present; the vanilla path skips its own
   // equivalent for any claimed surface (app.js consults __PREACT_SURFACES__).
+  // Reading view.value subscribes App to view changes. Grid and split are the
+  // two views (stream is cut) — when BOTH surfaces are claimed they're mutually
+  // exclusive by view, so switching away from split UNMOUNTS <Split> → <Detail>
+  // → <Terminal>, whose cleanup closes the /ws/pane WebSocket (vanilla's
+  // detailTeardown). A surface claimed alone (no sibling view) always shows so
+  // single-surface isolation tests still work.
+  const v = view.value;
+  const showGrid = SURFACES.has("grid") && (!SURFACES.has("split") || v !== "split");
+  const showSplit = SURFACES.has("split") && (!SURFACES.has("grid") || v === "split");
   const anySurface =
     SURFACES.has("chrome") || SURFACES.has("grid") || SURFACES.has("modal") ||
     SURFACES.has("split") || SURFACES.has("overlays");
   return (
     <>
       {SURFACES.has("chrome") && <Header />}
-      {SURFACES.has("grid") && <Grid />}
-      {SURFACES.has("split") && <Split />}
+      {showGrid && <Grid />}
+      {showSplit && <Split />}
       {SURFACES.has("modal") && <Modal />}
       {SURFACES.has("overlays") && <Overlays />}
       {!anySurface && <div data-preact-root>periscope (preact scaffold)</div>}
