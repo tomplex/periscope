@@ -528,18 +528,18 @@ function TabStrip({ spec, activeTab, onSwitch, onMount, onUnmount, onRemove }) {
 // connection stayed up across tab switches. We mirror that: the iframe element
 // persists; its src is reassigned ONLY when the (review) tab/doc key changes.
 function ReviewPane({ data, activeTab, onStarted }) {
+  // The LGTM iframe is created imperatively ONCE and parked inside a host div
+  // that Preact owns. Preact never reconciles the iframe node itself, so the
+  // 1.5s poll re-render can't move/recreate it — moving an iframe in the DOM
+  // reloads it in a browser (WKWebView tolerated it, which is why the Tauri
+  // app looked fine; Chromium/WebKit-in-browser don't). This mirrors vanilla's
+  // static iframe that JS only ever set .src on. `display:contents` on the host
+  // keeps the iframe laid out exactly as a direct child of #modal-review-content.
+  const hostRef = useRef(null);
   const iframeRef = useRef(null);
   const mountedSrc = useRef(null);
-  // Once a session has been seen, keep rendering the iframe (same element type,
-  // stable identity) even if a later poll's lgtm payload is briefly absent.
-  // Flipping the returned root between <iframe> and a "Loading…" <div> makes
-  // Preact tear down + recreate the iframe → a full SPA reload that drops the
-  // user's in-iframe file selection. This ref makes that flip impossible.
   const everHadSession = useRef(false);
 
-  // Compute the iframe URL for the active LGTM tab. When the active tab is the
-  // terminal (or lgtm-start), `url` is null — we leave the iframe's last src in
-  // place rather than tearing it down.
   let url = null;
   const lgtm = data?.lgtm;
   const hasSession = !!(lgtm?.slug && lgtm?.url);
@@ -554,8 +554,18 @@ function ReviewPane({ data, activeTab, onStarted }) {
     }
   }
 
-  // Reassign src ONLY when the review url changes — never per poll, and never
-  // back to null on a terminal switch (that would kill the SSE).
+  // Create + append the iframe once the host div exists (guarded; runs every
+  // commit but only builds the node a single time).
+  useEffect(() => {
+    if (!hostRef.current || iframeRef.current) return;
+    const f = document.createElement("iframe");
+    f.title = "LGTM review";
+    f.setAttribute("referrerpolicy", "no-referrer");
+    hostRef.current.appendChild(f);
+    iframeRef.current = f;
+  });
+
+  // Reassign src ONLY when the review url changes — never per poll.
   useEffect(() => {
     if (url && iframeRef.current && mountedSrc.current !== url) {
       iframeRef.current.src = url;
@@ -563,17 +573,13 @@ function ReviewPane({ data, activeTab, onStarted }) {
     }
   }, [url]);
 
-  // Start-review CTA only before a session has ever existed for this pane.
   if (!everHadSession.current && activeTab === "lgtm-start") {
     return <StartReview data={data} onStarted={onStarted} />;
   }
-
-  // Persist the iframe once a session has been seen (so it survives transient
-  // poll gaps + tab switches). No loading=lazy: the pane is display:none on the
-  // Terminal tab and some browsers refuse to load lazy iframes whose ancestors
-  // aren't shown.
+  // Once a session has been seen, render the stable host (so the iframe inside
+  // is never torn down by a transient poll gap or a tab switch).
   if (everHadSession.current) {
-    return <iframe ref={iframeRef} title="LGTM review" referrerpolicy="no-referrer" />;
+    return <div ref={hostRef} class="modal-review-iframe-host" style="display:contents" />;
   }
   if (activeTab === "lgtm-start") {
     return <StartReview data={data} onStarted={onStarted} />;

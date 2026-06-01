@@ -166,12 +166,14 @@ function PaneDetail({ w }) {
 // worktrees tears down + remounts. activeTarget is cleared (review owns the
 // iframe, no pane target).
 function ReviewDetail({ worktreeKey }) {
+  // The LGTM iframe is created imperatively ONCE and parked inside a host div
+  // Preact owns; Preact never reconciles the iframe node, so the 1.5s/3s poll
+  // re-render can't move/recreate it (which reloads an iframe in a browser and
+  // drops the user's in-iframe file selection). Mirrors vanilla's static
+  // iframe. `display:contents` keeps it laid out as a flex child of #detail-review.
+  const hostRef = useRef(null);
   const iframeRef = useRef(null);
   const mountedSrc = useRef(null);
-  // Once a session has been seen for this worktree, keep the iframe mounted so
-  // a transient poll gap (no lgtm payload) can't tear it down and reload the
-  // SPA, dropping the user's in-iframe file selection. Keyed per worktreeKey at
-  // the call site, so switching worktrees resets this correctly.
   const everHadSession = useRef(false);
   const session = lgtmSessionForWorktree(worktreeKey);
   const hasSession = !!(session && session.url);
@@ -181,6 +183,16 @@ function ReviewDetail({ worktreeKey }) {
   useEffect(() => {
     activeTarget.value = null;
   }, [worktreeKey]);
+
+  useEffect(() => {
+    if (!hostRef.current || iframeRef.current) return;
+    const f = document.createElement("iframe");
+    f.id = "detail-review-iframe";
+    f.className = "detail-review-iframe";
+    f.setAttribute("referrerpolicy", "no-referrer");
+    hostRef.current.appendChild(f);
+    iframeRef.current = f;
+  });
 
   useEffect(() => {
     if (url && iframeRef.current && mountedSrc.current !== url) {
@@ -202,8 +214,7 @@ function ReviewDetail({ worktreeKey }) {
         <span class="hsep">·</span>
         <span>{worktreeKey}</span>
       </header>
-      {/* No loading=lazy — the pane may be display:none on some browsers. */}
-      <iframe ref={iframeRef} id="detail-review-iframe" class="detail-review-iframe" referrerpolicy="no-referrer" />
+      <div ref={hostRef} class="detail-review-iframe-host" style="display:contents" />
     </div>
   );
 }
