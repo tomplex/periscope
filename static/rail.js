@@ -7,7 +7,7 @@
 
 import { state } from './state.js';
 import * as prefs from './prefs.js';
-import { escapeHtml } from './util.js';
+import { escapeHtml, prUrl } from './util.js';
 import { passesFilter } from './grid.js';
 
 const railEl = () => document.getElementById("rail");
@@ -183,7 +183,51 @@ function newTabRow(worktreeKey) {
     </div>`;
 }
 
-function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktree, repoKey) {
+// Compact per-worktree metadata strip: PR badge + CI glyph, Linear chip,
+// git dirty indicator. Drawn from `wtWindows[0]` (all panes in a worktree
+// share these — same branch, same repo). Returns "" when there's nothing
+// to show, so the second line collapses entirely on bare worktrees.
+function worktreeMetaLine(wtWindows) {
+  const w = wtWindows[0];
+  if (!w) return "";
+  const parts = [];
+
+  if (w.pr) {
+    const href = prUrl(w.repo_slug, w.pr);
+    const ciGlyph = w.ci ? `<span class="wt-meta-ci wt-meta-ci-${ciClass(w.ci)}">${escapeHtml(w.ci)}</span>` : "";
+    const inner = `#${w.pr}${ciGlyph ? " " + ciGlyph : ""}`;
+    parts.push(href
+      ? `<a class="wt-meta-chip wt-meta-pr" href="${href}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="PR #${w.pr}">${inner}</a>`
+      : `<span class="wt-meta-chip wt-meta-pr" title="PR #${w.pr}">${inner}</span>`);
+  }
+
+  if (w.linked_linear) {
+    const lid = escapeHtml(w.linked_linear);
+    const ltitle = w.linked_linear_title ? `: ${escapeHtml(w.linked_linear_title)}` : "";
+    const lstatus = w.linked_linear_status ? ` [${escapeHtml(w.linked_linear_status)}]` : "";
+    parts.push(
+      `<a class="wt-meta-chip wt-meta-linear" href="https://linear.app/issue/${lid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Linear ${lid}${ltitle}${lstatus}">${lid}</a>`
+    );
+  }
+
+  // Show git-dirty when there are uncommitted changes (`git` is "clean" or
+  // "+N -M" or includes "*" for ahead-of-upstream). Surfaced as a tiny
+  // chip; absent when clean+pushed.
+  if (w.git && w.git !== "clean") {
+    parts.push(`<span class="wt-meta-chip wt-meta-git" title="git status">${escapeHtml(w.git)}</span>`);
+  }
+
+  return parts.length ? `<div class="wt-meta">${parts.join("")}</div>` : "";
+}
+
+function ciClass(ci) {
+  if (ci === "✓") return "ok";
+  if (ci === "✗") return "bad";
+  if (ci === "⟳") return "running";
+  return "neutral";
+}
+
+function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktree, repoKey, wtWindows) {
   const chev = collapsed ? "▸" : "▾";
   const childCountChip = collapsed && children.length > 0
     ? `<span class="rail-count">${children.length}</span>`
@@ -195,6 +239,9 @@ function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktr
   const icon = isOther
     ? `<span class="rail-icon icon-shell">›</span>`
     : `<span class="rail-icon icon-worktree">⎇</span>`;
+  // Skip the metadata strip for "Other" — those sessions are bare shells
+  // without PR/Linear/branch context.
+  const meta = isOther ? "" : worktreeMetaLine(wtWindows);
   return `
     <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}" draggable="true">
       <span class="rail-chev">${chev}</span>
@@ -203,6 +250,7 @@ function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktr
       ${childCountChip}
       <span class="${statusDotClass(rolledUp)}"></span>
     </div>
+    ${meta}
     ${body}
   `;
 }
@@ -302,7 +350,7 @@ export function renderRail() {
       const label = repoKey === OTHER_REPO_KEY
         ? wtKey
         : ((wtWindows[0]?.branch) || wtKey);
-      return worktreeRow(wtKey, childMarkup, wtIsCollapsed, rolledUp, label, byWorktree, repoKey);
+      return worktreeRow(wtKey, childMarkup, wtIsCollapsed, rolledUp, label, byWorktree, repoKey, wtWindows);
     });
     // Repo rollup = max across worktree rollups.
     const allChildStates = (worktrees.flatMap(wt => (byWorktree[wt] || []).map(w => w.state || "shell")));

@@ -2875,6 +2875,43 @@ body[data-alerts="open"][data-view="stream"] main {
 .rail-row.wt-row { padding-left: calc(10px + var(--rail-indent)); }
 .rail-row.child-row { padding-left: calc(10px + 2 * var(--rail-indent)); }
 
+/* Worktree metadata strip — appears below the worktree label, aligned
+   with the icon column so it visually nests with the parent. PR/CI/Linear
+   chips stay quiet (muted color, small font) so they don't compete with
+   the branch name. */
+.wt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  padding: 0 10px 5px calc(10px + var(--rail-indent) + 24px);
+  font-size: 11px;
+  margin-top: -3px;
+}
+.wt-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  text-decoration: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wt-meta-chip:hover { background: var(--bg-3); color: var(--fg-1); }
+.wt-meta-pr { color: var(--fg-1); }
+.wt-meta-linear { color: oklch(0.7 0.13 280); }
+.wt-meta-git { color: var(--s-needs); }
+.wt-meta-ci-ok { color: var(--s-success); }
+.wt-meta-ci-bad { color: var(--s-danger); }
+.wt-meta-ci-running { color: var(--s-working); }
+.wt-meta-ci-neutral { color: var(--fg-3); }
+
 /* Continuous tree lines drawn via CSS so adjacent child rows' connectors
    actually touch. Replaces the per-row ├/└ glyphs, which broke at every
    row boundary because of vertical padding.
@@ -2918,11 +2955,27 @@ body[data-alerts="open"][data-view="stream"] main {
 .detail-pane-header, .detail-review-header {
   padding: 8px 14px; border-bottom: 1px solid var(--line);
   display: flex; gap: 8px; align-items: baseline; font-size: 12px;
+  flex-wrap: wrap;
 }
 .detail-pane-header .hsep, .detail-review-header .hsep { opacity: .5; }
+.detail-pane-header .header-pr, .detail-pane-header .header-linear {
+  color: var(--fg-1); text-decoration: none; font-family: var(--mono);
+}
+.detail-pane-header .header-pr:hover, .detail-pane-header .header-linear:hover {
+  text-decoration: underline;
+}
+.detail-pane-header .header-linear { color: oklch(0.7 0.13 280); }
+.detail-pane-header .header-ci { font-family: var(--mono); }
+.detail-pane-header .header-ci.ci-ok { color: var(--s-success); }
+.detail-pane-header .header-ci.ci-bad { color: var(--s-danger); }
+.detail-pane-header .header-ci.ci-running { color: var(--s-working); }
+.detail-pane-header .header-git { color: var(--s-needs); font-family: var(--mono); }
+.detail-pane-header .header-api-error { color: var(--s-danger); }
 .side-section { margin-bottom: 10px; }
 .side-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; opacity: .5; margin-bottom: 3px; }
 .side-mono { font-family: var(--mono); font-size: 11px; opacity: .85; }
+.side-pending { color: var(--s-needs); }
+.side-prompt { color: var(--s-needs); margin-right: 4px; }
 .review-start-card, .detail-empty-card { text-align: center; color: var(--fg-3); }
 .review-start-btn { margin-top: 10px; padding: 6px 14px; cursor: pointer; }
 

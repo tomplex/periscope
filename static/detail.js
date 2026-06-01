@@ -11,7 +11,7 @@
 
 import { state } from './state.js';
 import * as prefs from './prefs.js';
-import { escapeHtml, apiCall, rewriteLgtmHost } from './util.js';
+import { escapeHtml, apiCall, rewriteLgtmHost, prUrl } from './util.js';
 import { mountTerminal, unmountTerminal } from './terminal-mount.js';
 import { handleModalImagePaste } from './modal.js';
 
@@ -36,16 +36,43 @@ function lgtmSessionForWorktree(worktreeKey) {
 }
 
 function paneHeader(w) {
-  const ctx = (w.is_claude && w.context_pct != null)
-    ? `${escapeHtml((w.model || "").replace(/\s*\(.*\)/, ""))} · ${w.context_pct}%`
-    : "";
-  return `
-    <span><b>${escapeHtml(w.session || "")}</b></span>
-    <span class="hsep">·</span>
-    <span>${escapeHtml(w.branch || "")}</span>
-    ${w.pr ? `<span class="hsep">·</span><span>#${escapeHtml(String(w.pr))} ${w.ci || ""}</span>` : ""}
-    ${ctx ? `<span class="hsep">·</span><span>${ctx}</span>` : ""}
-  `;
+  const parts = [
+    `<span><b>${escapeHtml(w.session || "")}</b></span>`,
+  ];
+  if (w.branch) {
+    parts.push(`<span class="hsep">·</span><span>${escapeHtml(w.branch)}</span>`);
+  }
+  if (w.pr) {
+    const href = prUrl(w.repo_slug, w.pr);
+    const ciCls = w.ci === "✓" ? "ci-ok" : w.ci === "✗" ? "ci-bad" : w.ci === "⟳" ? "ci-running" : "";
+    const ciSpan = w.ci ? ` <span class="header-ci ${ciCls}">${escapeHtml(w.ci)}</span>` : "";
+    const inner = `#${escapeHtml(String(w.pr))}${ciSpan}`;
+    const prLink = href
+      ? `<a class="header-pr" href="${href}" target="_blank" rel="noopener">${inner}</a>`
+      : `<span class="header-pr">${inner}</span>`;
+    parts.push(`<span class="hsep">·</span>${prLink}`);
+  }
+  if (w.linked_linear) {
+    const lid = escapeHtml(w.linked_linear);
+    const ltitle = w.linked_linear_title ? `: ${escapeHtml(w.linked_linear_title)}` : "";
+    const lstatus = w.linked_linear_status ? ` [${escapeHtml(w.linked_linear_status)}]` : "";
+    parts.push(
+      `<span class="hsep">·</span><a class="header-linear" href="https://linear.app/issue/${lid}" target="_blank" rel="noopener" title="Linear ${lid}${ltitle}${lstatus}">${lid}</a>`
+    );
+  }
+  if (w.git && w.git !== "clean") {
+    parts.push(`<span class="hsep">·</span><span class="header-git">${escapeHtml(w.git)}</span>`);
+  }
+  if (w.is_claude && w.model) {
+    parts.push(`<span class="hsep">·</span><span>${escapeHtml(w.model.replace(/\s*\(.*\)/, ""))}</span>`);
+  }
+  if (w.is_claude && w.context_pct != null) {
+    parts.push(`<span class="hsep">·</span><span>${w.context_pct}%</span>`);
+  }
+  if (w.api_error) {
+    parts.push(`<span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span>`);
+  }
+  return parts.join("");
 }
 
 export function selectPane(pid) {
@@ -79,9 +106,17 @@ export function selectPane(pid) {
 }
 
 function renderSidePanel(w) {
-  const recap = w.recap ? `<div class="side-section"><div class="side-label">Recap</div><div>${escapeHtml(w.recap)}</div></div>` : "";
-  const last = w.last_line ? `<div class="side-section"><div class="side-label">Last line</div><div class="side-mono">${escapeHtml(w.last_line)}</div></div>` : "";
-  return recap + last;
+  const sections = [];
+  if (w.pending_input) {
+    sections.push(`<div class="side-section"><div class="side-label">Pending input</div><div class="side-pending"><span class="side-prompt">›</span>${escapeHtml(w.pending_input)}</div></div>`);
+  }
+  if (w.recap) {
+    sections.push(`<div class="side-section"><div class="side-label">Recap</div><div>${escapeHtml(w.recap)}</div></div>`);
+  }
+  if (w.last_line) {
+    sections.push(`<div class="side-section"><div class="side-label">Last line</div><div class="side-mono">${escapeHtml(w.last_line)}</div></div>`);
+  }
+  return sections.join("");
 }
 
 export function selectReview(worktreeKey) {
