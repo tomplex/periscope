@@ -42,7 +42,8 @@ export function getCollapsed() {
 }
 
 export function getView() {
-  return cache.ui.view === "stream" ? "stream" : "grid";
+  const v = cache.ui?.view;
+  return (v === "stream" || v === "split") ? v : "grid";
 }
 
 export function getAlertsOpen() {
@@ -99,7 +100,7 @@ export async function reorderCommands(labels) {
   return true;
 }
 
-async function patchUI(patch) {
+export async function patchUI(patch) {
   if (!cache.loaded) {
     // Try to load first; refuse the write if that still fails so we don't
     // clobber real server state with empty defaults.
@@ -236,4 +237,100 @@ async function migrateLocalStorage() {
   // Always delete legacy keys on a successful load. Once the server has
   // authoritative state the client copies are noise.
   for (const k of Object.keys(LEGACY)) localStorage.removeItem(k);
+}
+
+// --- Rail state (split view) -----------------------------------------------
+// All five fields default to empty / null when the prefs blob hasn't seen
+// them yet. Mutators write through the existing PATCH /api/prefs/ui endpoint.
+// Note: `cache` is the module-private object declared at the top of this
+// file; these getters read from it, the setters merge into it via patchUI().
+
+export function getRepoOrder() {
+  return [...(cache.ui?.repo_order || [])];
+}
+
+export function setRepoOrder(order) {
+  return patchUI({ repo_order: order });
+}
+
+export function getWorktreesByRepo() {
+  return { ...(cache.ui?.worktrees_by_repo || {}) };
+}
+
+export function setWorktreesByRepo(map) {
+  return patchUI({ worktrees_by_repo: map });
+}
+
+export function getPanesByWorktree() {
+  return { ...(cache.ui?.panes_by_worktree || {}) };
+}
+
+export function setPanesByWorktree(map) {
+  return patchUI({ panes_by_worktree: map });
+}
+
+export function getRailCollapsed() {
+  return { ...(cache.ui?.rail_collapsed || {}) };
+}
+
+export function setRailCollapsedKey(key, collapsed) {
+  const next = getRailCollapsed();
+  next[key] = collapsed;
+  return patchUI({ rail_collapsed: next });
+}
+
+export function getLastSelected() {
+  return cache.ui?.last_selected || null;
+}
+
+export function setLastSelected(sel) {
+  return patchUI({ last_selected: sel });
+}
+
+// Add a worktree to the rail. If its repo isn't railed yet, append to
+// repo_order. Idempotent — re-adding the same worktree is a no-op.
+//
+// Used by + project / + review PR / + open flows.
+export async function addWorktreeToRail({ repoKey, worktreeKey, paneIds, hasReview }) {
+  const order = getRepoOrder();
+  const wts = getWorktreesByRepo();
+  const panes = getPanesByWorktree();
+
+  if (!order.includes(repoKey)) order.push(repoKey);
+  const wtList = wts[repoKey] || [];
+  if (!wtList.includes(worktreeKey)) wtList.push(worktreeKey);
+  wts[repoKey] = wtList;
+
+  if (!panes[worktreeKey]) {
+    panes[worktreeKey] = [...paneIds];
+    if (hasReview) panes[worktreeKey].push("review");
+  }
+
+  await patchUI({
+    repo_order: order,
+    worktrees_by_repo: wts,
+    panes_by_worktree: panes,
+  });
+}
+
+export async function removeWorktreeFromRail({ repoKey, worktreeKey }) {
+  const wts = getWorktreesByRepo();
+  const panes = getPanesByWorktree();
+  const order = getRepoOrder();
+
+  if (wts[repoKey]) {
+    wts[repoKey] = wts[repoKey].filter(w => w !== worktreeKey);
+    if (wts[repoKey].length === 0) {
+      delete wts[repoKey];
+      const idx = order.indexOf(repoKey);
+      if (idx >= 0) order.splice(idx, 1);
+    }
+  }
+  delete panes[worktreeKey];
+
+  await patchUI({
+    repo_order: order,
+    worktrees_by_repo: wts,
+    panes_by_worktree: panes,
+  });
 }
