@@ -7,7 +7,7 @@
 
 import { state } from './state.js';
 import * as prefs from './prefs.js';
-import { escapeHtml, prUrl } from './util.js';
+import { escapeHtml, prUrl, apiCall, targetQuery } from './util.js';
 import { passesFilter } from './grid.js';
 
 const railEl = () => document.getElementById("rail");
@@ -152,10 +152,11 @@ function paneRow(w, selectedKey) {
     ? `<span class="rail-icon icon-claude">✻</span>`
     : `<span class="rail-icon icon-shell">$</span>`;
   return `
-    <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}" draggable="true">
+    <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}" data-target="${escapeHtml(w.target || "")}" draggable="true">
       ${icon}
       <span class="rail-label">${escapeHtml(w.name || (w.is_claude ? "claude" : "shell"))}</span>
       <span class="${statusDotClass(w.state)}"></span>
+      <button class="rail-close" data-action="close-pane" title="kill this tab">×</button>
     </div>`;
 }
 
@@ -242,13 +243,19 @@ function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktr
   // Skip the metadata strip for "Other" — those sessions are bare shells
   // without PR/Linear/branch context.
   const meta = isOther ? "" : worktreeMetaLine(wtWindows);
+  // Close button only on git-backed worktrees — closing an "Other"
+  // session is per-pane (use the pane-row × instead).
+  const closeBtn = isOther
+    ? ""
+    : `<button class="rail-close" data-action="close-worktree" title="kill this session">×</button>`;
   return `
-    <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}" draggable="true">
+    <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}" data-session="${escapeHtml(worktreeKey)}" draggable="true">
       <span class="rail-chev">${chev}</span>
       ${icon}
       <span class="rail-label"><b>${escapeHtml(label)}</b></span>
       ${childCountChip}
       <span class="${statusDotClass(rolledUp)}"></span>
+      ${closeBtn}
     </div>
     ${meta}
     ${body}
@@ -280,7 +287,7 @@ function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp, byWorktree
 export function renderRail() {
   const el = railEl();
   if (!el) return;
-  pruneDanglingEntries();
+  syncRailPrefs();
   attachRailListeners();
 
   const prefRepoOrder = prefs.getRepoOrder();
@@ -378,6 +385,14 @@ function attachRailListeners() {
   listenersAttached = true;
 
   el.addEventListener("click", async (e) => {
+    // Close-button is a sibling of the row's click target — intercept
+    // it BEFORE the row-level select fires.
+    const closeBtn = e.target.closest("[data-action]");
+    if (closeBtn) {
+      e.stopPropagation();
+      await handleRailAction(closeBtn);
+      return;
+    }
     const row = e.target.closest(".rail-row");
     if (!row) return;
     const kind = row.dataset.row;
@@ -524,6 +539,35 @@ function isValidDropTarget(drag, row) {
   return closestWorktreeKey(drag.row) === closestWorktreeKey(row);
 }
 
+// Close-action handler. `data-action` is "close-pane" (kills the tmux
+// window for a single pane) or "close-worktree" (kills the entire tmux
+// session — every pane in the worktree). Both prompt for confirmation;
+// killing the worktree is destructive enough to warrant a deliberate
+// extra click. The worktree directory on disk is NOT removed — that's
+// the existing cleanup flow's job.
+async function handleRailAction(btn) {
+  const row = btn.closest(".rail-row");
+  if (!row) return;
+  const action = btn.dataset.action;
+  if (action === "close-pane") {
+    const target = row.dataset.target;
+    const label = row.querySelector(".rail-label")?.textContent || "tab";
+    if (!window.confirm(`Close tab "${label}"?\n\nThis kills its tmux window.`)) return;
+    await apiCall("close tab", `/api/window?${targetQuery(target)}`, { method: "DELETE" });
+    // /api/state polls will reflect the deletion on the next tick (~3s);
+    // proactively re-render so the row disappears immediately.
+    renderRail();
+    return;
+  }
+  if (action === "close-worktree") {
+    const session = row.dataset.session;
+    if (!window.confirm(`Close session "${session}"?\n\nThis kills every tmux window in this worktree.\nThe worktree directory on disk is not removed.`)) return;
+    await apiCall("close session", `/api/session?session=${encodeURIComponent(session)}`, { method: "DELETE" });
+    renderRail();
+    return;
+  }
+}
+
 function closestRepoKey(row) {
   // Walk back through DOM siblings to find the closest preceding repo-row.
   let n = row.previousElementSibling;
@@ -636,51 +680,58 @@ function childPrefKey(row) {
   return null;
 }
 
-// Remove rail entries for sessions / panes that no longer exist in
-// /api/state. Runs fire-and-forget — does NOT change renderRail's
-// sync contract. If anything is pruned, the next poll re-renders with
-// the updated prefs.
+// Reconcile prefs with live state so ordering is sticky across restarts
+// regardless of whether the user has explicitly drag-reordered anything.
 //
-// patchUI is exported by prefs.js.
+// Two directions:
+//   - Prune: remove pref entries whose live session/pid is gone.
+//   - Extend: persist any NEW live entries at the position the merge
+//     gave them. Without this, repo_order/etc stay empty until the user
+//     drags, and the live-order from /api/state (which can shuffle) is
+//     the perceived order on every reload.
+//
+// Throttled to 5s to avoid spamming /api/prefs on every poll.
 
 let lastPruneAt = 0;
-function pruneDanglingEntries() {
-  if (Date.now() - lastPruneAt < 5000) return;  // throttle to 5s
+function syncRailPrefs() {
+  if (Date.now() - lastPruneAt < 5000) return;
   lastPruneAt = Date.now();
 
   const live = state.lastWindows || [];
-  const liveSessions = new Set(live.map(w => w.session));
-  const livePids = new Set(live.map(w => w.pid));
+  if (live.length === 0) return;   // /api/state hasn't loaded yet — don't write empty
 
-  const wts = prefs.getWorktreesByRepo();
-  const panes = prefs.getPanesByWorktree();
-  const order = prefs.getRepoOrder();
-  let changed = false;
+  const merged = currentMergedOrder();
+  const prefRepoOrder = prefs.getRepoOrder();
+  const prefWtByRepo = prefs.getWorktreesByRepo();
+  const prefPanesByWt = prefs.getPanesByWorktree();
 
-  // Remove worktrees whose session is gone.
-  for (const [repo, list] of Object.entries(wts)) {
-    const kept = list.filter(wt => liveSessions.has(wt));
-    if (kept.length !== list.length) {
-      changed = true;
-      if (kept.length === 0) {
-        delete wts[repo];
-        const idx = order.indexOf(repo);
-        if (idx >= 0) order.splice(idx, 1);
-      } else {
-        wts[repo] = kept;
-      }
+  // The merged result already strips dead entries (mergeLiveAndPrefs
+  // filters pref by liveSet) and appends new live ones. Stripping the
+  // synthetic OTHER bucket before persisting — that's derived, not user
+  // intent. Repo order excludes Other (always pinned at render-time).
+  const nextRepoOrder = merged.repoOrder.filter(r => r !== OTHER_REPO_KEY);
+  const nextWtByRepo = { ...merged.worktreesByRepo };
+  delete nextWtByRepo[OTHER_REPO_KEY];
+  // panesByWorktree: only persist worktrees that are git-backed (skip
+  // Other's children — they're transient and don't need ordering).
+  const nextPanesByWt = {};
+  for (const r of nextRepoOrder) {
+    for (const wt of (nextWtByRepo[r] || [])) {
+      nextPanesByWt[wt] = merged.panesByWorktree[wt] || [];
     }
   }
 
-  // Remove pane ids that aren't in livePids (keep "review" sentinels).
-  for (const [wt, children] of Object.entries(panes)) {
-    if (!liveSessions.has(wt)) { delete panes[wt]; changed = true; continue; }
-    const kept = children.filter(c => c === "review" || livePids.has(c));
-    if (kept.length !== children.length) { panes[wt] = kept; changed = true; }
-  }
+  // Cheap deep-equal via JSON. Short-circuits the write when nothing
+  // actually changed since the last sync.
+  if (
+    JSON.stringify(nextRepoOrder) === JSON.stringify(prefRepoOrder) &&
+    JSON.stringify(nextWtByRepo) === JSON.stringify(prefWtByRepo) &&
+    JSON.stringify(nextPanesByWt) === JSON.stringify(prefPanesByWt)
+  ) return;
 
-  if (changed) {
-    // Fire and forget — the prefs write will be reflected by the next poll's render.
-    prefs.patchUI({ repo_order: order, worktrees_by_repo: wts, panes_by_worktree: panes });
-  }
+  prefs.patchUI({
+    repo_order: nextRepoOrder,
+    worktrees_by_repo: nextWtByRepo,
+    panes_by_worktree: nextPanesByWt,
+  });
 }

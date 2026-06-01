@@ -2989,6 +2989,27 @@ body[data-alerts="open"][data-view="stream"] main {
 .rail-row.newtab-row { cursor: pointer; }   /* not draggable, just click-to-open */
 .rail-row.dragging { opacity: .35; }
 
+/* Hover-reveal close × on pane + worktree rows. Sits at the right edge
+   of the row (after the status dot) and only appears on row hover so
+   it doesn't compete with the dot when scanning the rail. */
+.rail-close {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--fg-3);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  flex-shrink: 0;
+  margin-left: 2px;
+  transition: opacity .12s, background .12s;
+}
+.rail-row:hover .rail-close { opacity: .7; }
+.rail-close:hover { opacity: 1 !important; background: var(--bg-2); color: var(--s-danger); }
+
 /* Drop-indicator line — top or bottom of the row the cursor is over.
    data-drop-pos="before" → line at top; "after" → line at bottom.
    Box-shadow (inset) avoids conflicting with the tree-connector
