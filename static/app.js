@@ -342,6 +342,12 @@ async function bootstrap() {
   if (!PREACT_SURFACES.has("chrome")) applyView(prefs.getView());
   if (!PREACT_SURFACES.has("modal")) initModal();
   if (!PREACT_SURFACES.has("grid")) initGrid();
+  // Bridge: while the grid surface is Preact-owned but the modal is still
+  // vanilla (Task 6 not yet done), expose the vanilla opener so the Preact
+  // grid's card clicks can open the modal. Removed in the final cutover.
+  if (PREACT_SURFACES.has("grid") && !PREACT_SURFACES.has("modal")) {
+    window.__periscopeOpenModal = openModal;
+  }
   initCommandsModal();
   initNewProjectModal();
   initReviewPRModal();

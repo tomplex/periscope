@@ -9,6 +9,7 @@ import { Toaster } from "./overlays/Toast.jsx";
 import { DialogHost } from "./overlays/Dialog.jsx";
 import { Terminal } from "./terminal/Terminal.jsx";
 import { Header } from "./chrome/Header.jsx";
+import { Grid } from "./grid/Grid.jsx";
 import { loadPrefs, getView } from "./prefs.js";
 import { view } from "./store.js";
 
@@ -48,6 +49,15 @@ function App() {
       </>
     );
   }
+  if (SURFACES.has("grid")) {
+    return (
+      <>
+        <Grid />
+        <Toaster />
+        <DialogHost />
+      </>
+    );
+  }
   return (
     <>
       <div data-preact-root>periscope (preact scaffold)</div>
@@ -69,6 +79,17 @@ async function boot() {
     view.value = v === "stream" ? "split" : v; // stream is cut → fall back to split
     const vanillaHeader = document.querySelector("header.periscope-header");
     if (vanillaHeader) vanillaHeader.style.display = "none";
+  }
+  // The grid surface needs prefs loaded before first render so collapsed /
+  // session_order / commands are honored. Hide the vanilla <main id="grid">
+  // (the vanilla path already skips initGrid when this surface is claimed) so
+  // it doesn't sit empty beside the Preact grid; the Preact <Grid> renders its
+  // own <main>. The grid drives the still-vanilla modal (Task 6) through a
+  // window bridge that vanilla app.js installs.
+  if (SURFACES.has("grid")) {
+    await loadPrefs();
+    const vanillaGrid = document.getElementById("grid");
+    if (vanillaGrid) vanillaGrid.style.display = "none";
   }
   render(<App />, document.getElementById("app"));
 }
