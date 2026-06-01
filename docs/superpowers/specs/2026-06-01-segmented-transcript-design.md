@@ -3,7 +3,7 @@
 **Date:** 2026-06-01
 **Status:** exploration captured — **queued after** the frontend
 re-architecture (`2026-06-01-frontend-architecture-design.md`). Depends on the
-Preact + control-mode foundation.
+Preact foundation.
 **Author:** Tom + Claude (brainstorm session)
 
 ---
@@ -63,7 +63,7 @@ bespoke things, and it's the right home now that split view (persistent
 ## Non-goals
 
 - **Not in the foundation milestone.** This spec is the *next* one; it builds on
-  the Preact + control-mode foundation.
+  the Preact foundation.
 - **No bespoke terminal reimplementation beyond block output.** We render block
   *output* with a vt emulator; we do not rebuild a full multiplexer.
 - **No editing/branching from a past segment.** Read-only navigation.
@@ -98,10 +98,14 @@ the captured byte stream.
   zsh/bash rc snippet the user sources (the iTerm2/VSCode shell-integration
   pattern). Without it: no block boundaries, raw-grid fallback.
 
-The byte stream that carries these is the **same stream the foundation's
-control-mode `%output` (and `/ws/pane` pipe-pane) already captures** — the block
-parser lives where that feed is consumed. (The foundation spec's Phase 0 spike
-includes confirming OSC 133 survives the tmux layer to `%output`.)
+The byte stream that carries these is the **existing `/ws/pane` feed** — the
+per-pane `pipe-pane`/FIFO stream periscope already opens for the selected pane
+(`ws.py:23-232`), plus the `capture-pane` scrollback snapshot on connect (which
+carries *past* OSC 133 markers). This view is per-selected-pane (like today's
+detail terminal), so no all-panes feed is needed — the block parser lives where
+`/ws/pane` is consumed. **Spike requirement:** confirm OSC 133 sequences survive
+the tmux layer intact into `pipe-pane` output (tmux interprets some OSC itself;
+recent tmux has passthrough, unverified for 133).
 
 Each block: `{ command, cwd, exit_code, start_ts, duration, output }`,
 independently selectable / collapsible / copyable / re-runnable.
@@ -124,7 +128,7 @@ bars, alt-screen. So:
 
 Claude turns need **none** of this — JSONL is already structured segments.
 
-## Cost (all on top of the Preact + control-mode foundation)
+## Cost (all on top of the Preact foundation)
 
 | Piece | Estimate | Risk |
 |---|---|---|
@@ -151,8 +155,10 @@ needs no emulation.
 ## Dependencies & relationship to other specs
 
 - **Depends on** `2026-06-01-frontend-architecture-design.md`: the Preact
-  `<Detail>` pane (renderer home), the control-mode `%output` feed (block-source
-  stream), and the OSC-133-passthrough spike result.
+  `<Detail>` pane (renderer home). The block-source stream is the **existing
+  `/ws/pane` feed** (per selected pane), not a control-mode feed — the
+  foundation milestone deferred control-mode push, and segmented-transcript
+  doesn't need an all-panes feed anyway.
 - **Supersedes the UI half** of `2026-06-01-claude-turns-overlay-design.md`. The
   turns server half (`messages_from_jsonl` + parse cache) carries over; the
   "xterm gutter overlay + modal-side tab" UI is replaced by the segment
