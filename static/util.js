@@ -46,6 +46,19 @@ export function prUrl(slug, pr) {
 // silently no-ops in WKWebView/Tauri, so it was wrong on both fronts.
 // Toasts give the user a 6-second window to read the failure without
 // stealing focus from whatever they're typing into.
+// Rewrite an LGTM-server URL's hostname to match the parent page's host.
+// The server hands out 127.0.0.1; the parent may be on localhost or LAN
+// IP, and same-host iframes avoid mixed-host browser headaches.
+export function rewriteLgtmHost(url) {
+  try {
+    const u = new URL(url);
+    u.hostname = window.location.hostname;
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 export async function apiCall(label, path, opts = {}) {
   let res;
   try {

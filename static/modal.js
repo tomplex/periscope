@@ -8,7 +8,7 @@
 import { pushEscape, popEscape } from './overlay.js';
 
 import { state } from './state.js';
-import { escapeHtml, targetQuery, apiCall, relTime, prUrl } from './util.js';
+import { escapeHtml, targetQuery, apiCall, relTime, prUrl, rewriteLgtmHost } from './util.js';
 import { writeTerminalLine } from './terminal.js';
 import { mountTerminal, unmountTerminal } from './terminal-mount.js';
 import { poll } from './grid.js';
@@ -496,20 +496,6 @@ function updateModalHeader(data) {
   // Render the review pane only when actually viewing it; saves us from
   // churning DOM on every poll for users sitting on the Terminal tab.
   if (modal.dataset.tab === "review") renderReviewPane(data);
-}
-
-function rewriteLgtmHost(url) {
-  // Replace the URL's hostname with whatever the parent page is on. The
-  // server hands out 127.0.0.1 by default, but the user may be on
-  // localhost or a LAN IP; matching the parent's host keeps the iframe
-  // and parent on the same hostname (port still differs).
-  try {
-    const u = new URL(url);
-    u.hostname = window.location.hostname;
-    return u.toString();
-  } catch {
-    return url;
-  }
 }
 
 function renderReviewPane(data) {
