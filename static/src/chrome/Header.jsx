@@ -125,8 +125,24 @@ export function Header() {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  // Keep --header-h synced to THIS (visible, Preact) header's height. The
+  // vanilla header is display:none in Preact mode, so querySelector(".periscope-
+  // header") in Alerts would measure 0 and collapse #split-view to top:0
+  // (overlapping the header). Owning it here from a ref is authoritative.
+  const headerRef = useRef(null);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const apply = () =>
+      document.documentElement.style.setProperty("--header-h", el.offsetHeight + "px");
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <header class="periscope-header">
+    <header class="periscope-header" ref={headerRef}>
       <div class="topbar">
         <span class="brand">
           periscope<i class="brand-cursor"></i>

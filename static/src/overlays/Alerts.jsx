@@ -50,7 +50,13 @@ function alertKey(r) {
 // under the sticky header instead of sliding up over it. The filter row can
 // wrap on narrow widths, which is why we observe rather than measure once.
 function trackHeaderHeight() {
-  const header = document.querySelector(".periscope-header");
+  // Prefer the Preact header (inside #app); the vanilla one is display:none in
+  // Preact mode and would measure 0, collapsing #split-view to top:0. When the
+  // chrome surface is Preact-owned, <Header> also sets --header-h from its ref
+  // (authoritative); both agree on the visible header's height.
+  const header =
+    document.querySelector("#app .periscope-header") ||
+    document.querySelector(".periscope-header");
   if (!header) return () => {};
   const apply = () => {
     document.documentElement.style.setProperty("--header-h", header.offsetHeight + "px");
