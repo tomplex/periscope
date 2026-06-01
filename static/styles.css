@@ -2891,9 +2891,21 @@ body[data-alerts="open"][data-view="stream"] main {
 .review-start-card, .detail-empty-card { text-align: center; color: var(--fg-3); }
 .review-start-btn { margin-top: 10px; padding: 6px 14px; cursor: pointer; }
 
-.rail-grip { width: 14px; opacity: .18; font-size: 10px; cursor: grab; transition: opacity .15s; flex-shrink: 0; color: var(--fg-4); user-select: none; }
-.rail-row:hover .rail-grip { opacity: .55; }
-.rail-grip:active { cursor: grabbing; }
+.rail-grip {
+  width: 14px;
+  opacity: .35;
+  font-size: 14px;
+  line-height: 1;
+  cursor: grab;
+  transition: opacity .12s;
+  flex-shrink: 0;
+  color: var(--fg-3);
+  user-select: none;
+  /* Slightly narrower letter-spacing so the braille glyph hugs the icon. */
+  margin-right: -2px;
+}
+.rail-row:hover .rail-grip { opacity: .85; color: var(--fg-1); }
+.rail-grip:active { cursor: grabbing; opacity: 1; }
 .rail-row.dragging { opacity: .5; }
 .rail-dim { opacity: .35; }
 .rail-row.rail-dim:hover { opacity: .6; }
@@ -2928,17 +2940,15 @@ body[data-alerts="open"][data-view="stream"] main {
 /* --- Split-view rail polish (Phase 12) ---------------------------------- */
 
 .rail-conn { color: var(--fg-4); font-size: 12px; }
-.icon-repo { color: oklch(0.74 0.13 232); }
-.icon-other { color: var(--fg-3); }
-.icon-shell { color: var(--s-shell); font-family: var(--mono); }
-.icon-worktree { color: oklch(0.72 0.13 295); }
-.icon-pane { color: oklch(0.78 0.13 320); }
-.icon-review { color: var(--s-shell); }
+.icon-repo { color: oklch(0.74 0.13 232); }      /* solid diamond ◆ — repos */
+.icon-other { color: var(--fg-3); }              /* outline diamond ◇ — Other */
+.icon-shell { color: var(--s-shell); font-family: var(--mono); }  /* $ — shells */
+.icon-claude { color: oklch(0.74 0.12 38); font-size: 13px; }     /* ✻ — Claude brand-orange */
+.icon-review { color: var(--s-shell); font-size: 11px; }          /* ◉ — live LGTM */
+.icon-review-empty { color: var(--fg-4); font-size: 11px; }        /* ○ — start CTA */
+.icon-worktree { color: oklch(0.72 0.13 295); }                    /* ⎇ — branch glyph */
 
-/* Hover-only handles look more like the reference */
 .rail-row { position: relative; }
-.rail-grip { color: var(--fg-4); }
-.rail-row:hover .rail-grip { opacity: .55; }
 
 /* Truncation in labels keeps row height uniform (already set on rail-label,
    reaffirmed here for clarity). */

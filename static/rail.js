@@ -147,12 +147,16 @@ function paneRow(w, selectedKey) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey ? " selected" : "";
   const dim = paneMatchesFilter(w) ? "" : " rail-dim";
+  // ✻ for Claude panes (Claude's splash/thinking glyph), $ for everything else.
+  const icon = w.is_claude
+    ? `<span class="rail-icon icon-claude">✻</span>`
+    : `<span class="rail-icon icon-shell">$</span>`;
   return `
     <div class="rail-row child-row${sel}${dim}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}">
       <span class="rail-conn">├</span>
-      <span class="rail-grip" draggable="true" title="drag to reorder">⋮⋮</span>
-      <span class="rail-icon icon-pane">✦</span>
-      <span class="rail-label">${escapeHtml(w.name || "claude")}</span>
+      <span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>
+      ${icon}
+      <span class="rail-label">${escapeHtml(w.name || (w.is_claude ? "claude" : "shell"))}</span>
       <span class="${statusDotClass(w.state)}"></span>
     </div>`;
 }
@@ -161,11 +165,16 @@ function reviewRow(worktreeKey, lgtmLive, selectedKey) {
   const k = `review:${worktreeKey}`;
   const sel = k === selectedKey ? " selected" : "";
   const empty = lgtmLive ? "" : " review-empty";
+  // ◉ for live LGTM sessions, ○ for "start →" CTAs — monochrome circle pair
+  // reads cleaner than the colored eye emoji and matches periscope's glyph style.
+  const icon = lgtmLive
+    ? `<span class="rail-icon icon-review">◉</span>`
+    : `<span class="rail-icon icon-review-empty">○</span>`;
   return `
     <div class="rail-row child-row${sel}${empty}" data-row="review" data-worktree="${escapeHtml(worktreeKey)}" data-key="${escapeHtml(k)}">
       <span class="rail-conn">├</span>
-      <span class="rail-grip" draggable="true" title="drag to reorder">⋮⋮</span>
-      <span class="rail-icon icon-review">👁</span>
+      <span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>
+      ${icon}
       <span class="rail-label">review${lgtmLive ? "" : " <em>start →</em>"}</span>
     </div>`;
 }
@@ -186,14 +195,14 @@ function worktreeRow(worktreeKey, children, collapsed, rolledUp, label, byWorktr
     : "";
   const body = collapsed ? "" : children.join("");
   const dim = worktreeMatchesFilter(worktreeKey, byWorktree) ? "" : " rail-dim";
-  // Non-worktree sessions (under "Other") aren't branches — show $ instead of ⎇.
+  // Non-worktree sessions (under "Other") aren't branches — show ▸ instead of ⎇.
   const isOther = repoKey === OTHER_REPO_KEY;
   const icon = isOther
-    ? `<span class="rail-icon icon-shell">$</span>`
+    ? `<span class="rail-icon icon-shell">›</span>`
     : `<span class="rail-icon icon-worktree">⎇</span>`;
   return `
     <div class="rail-row wt-row${dim}" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}">
-      <span class="rail-grip" draggable="true" title="drag to reorder">⋮⋮</span>
+      <span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>
       <span class="rail-chev">${chev}</span>
       ${icon}
       <span class="rail-label"><b>${escapeHtml(label)}</b></span>
@@ -210,10 +219,10 @@ function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp, byWorktree
   const dim = repoMatchesFilter(repoKey, byWorktree, worktreesByRepo) ? "" : " rail-dim";
   const isOther = repoKey === OTHER_REPO_KEY;
   // "Other" is always pinned at the bottom — drag is meaningless; omit the grip.
-  const grip = isOther ? "" : `<span class="rail-grip" draggable="true" title="drag to reorder">⋮⋮</span>`;
+  const grip = isOther ? "" : `<span class="rail-grip" draggable="true" title="drag to reorder">⠿</span>`;
   const icon = isOther
-    ? `<span class="rail-icon icon-other">📂</span>`
-    : `<span class="rail-icon icon-repo">📚</span>`;
+    ? `<span class="rail-icon icon-other">◇</span>`
+    : `<span class="rail-icon icon-repo">◆</span>`;
   return `
     <div class="rail-row repo-row${dim}" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}">
       ${grip}
