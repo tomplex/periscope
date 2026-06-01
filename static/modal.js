@@ -9,7 +9,7 @@ import { pushEscape, popEscape } from './overlay.js';
 
 import { state } from './state.js';
 import { escapeHtml, targetQuery, apiCall, relTime, prUrl } from './util.js';
-import { startLiveTerminal, stopLiveTerminal, writeTerminalLine } from './terminal.js';
+import { setTerminalContainer, setTerminalLinkCallback, startLiveTerminal, stopLiveTerminal, writeTerminalLine } from './terminal.js';
 import { poll } from './grid.js';
 import * as prefs from './prefs.js';
 
@@ -67,6 +67,8 @@ export function openModal(target, opts = {}) {
   mountedDocIds = new Set();
   modal.classList.remove("hidden");
   document.body.classList.add("modal-open");
+  setTerminalContainer(document.getElementById("modal-xterm"));
+  setTerminalLinkCallback((rawPath) => addLgtmDocFromTerminal(rawPath));
   startLiveTerminal(target);
   // Header poll keeps the subtitle/brief/spinner fresh; the terminal body
   // itself streams live via the WebSocket, no polling needed.
