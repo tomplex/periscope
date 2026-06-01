@@ -24,8 +24,27 @@ import { relTime } from "../util.js";
 import { showToast } from "./Toast.jsx";
 import { openModal } from "../modal/Modal.jsx";
 import { setBadgeCount, notify, onNotificationClick, inTauri } from "../tauri.js";
+import { view, windows, railSelection } from "../store.js";
 
 const POLL_MS = 3000;
+
+// Reveal a pane (from an alert row or a native-notification click). In split
+// view the detail pane IS the surface, so select the pane inline (set
+// railSelection, like the rail's own click) instead of popping the modal over
+// it. In grid view (or if the pane can't be resolved to a pid) fall back to the
+// modal — the vanilla behavior.
+function revealPane(target) {
+  if (!target) return;
+  if (view.value === "split") {
+    const w = (windows.value || []).find((x) => x.target === target);
+    if (w?.pid) {
+      railSelection.value = `pane:${w.pid}`;            // STRING highlight-key (signal)
+      prefs.setLastSelected({ kind: "pane", pid: w.pid }); // OBJECT (pref)
+      return;
+    }
+  }
+  openModal(target);
+}
 
 // Feed items (poll-fed) + open state, as signals so the rail re-renders.
 const items = signal([]);
@@ -159,7 +178,7 @@ function AlertRow({ r }) {
   return (
     <div
       class={`alerts-row alerts-row-${kind}`}
-      onClick={() => { if (r.target) openModal(r.target); }}
+      onClick={() => revealPane(r.target)}
     >
       <div class="alerts-row-head">
         <span class="alerts-row-icon">{rowIcon(kind)}</span>
@@ -189,7 +208,7 @@ export function Alerts() {
     // bridge — open the modal for the pane that fired the banner. No-op
     // outside the Tauri shell.
     onNotificationClick((target) => {
-      if (target) openModal(target);
+      revealPane(target);
     });
 
     const stopHeaderTrack = trackHeaderHeight();
