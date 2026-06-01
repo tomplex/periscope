@@ -74,6 +74,9 @@ def test_git_state_includes_repo_key_and_label(tmp_path, mocker):
     common_dir.mkdir()
 
     def fake_run(args, cwd=None, timeout=None):
+        # git_state_for first probes --git-dir; return ".git" to satisfy it.
+        if "rev-parse" in args and "--git-dir" in args:
+            return (0, ".git")
         # diff shortstat (unstaged + staged) → clean
         if "diff" in args and "--shortstat" in args:
             return (0, "")
@@ -462,9 +465,11 @@ Append to `static/prefs.js` (calls `patchUI` directly — same module — and us
 // --- Rail state (split view) -----------------------------------------------
 // All five fields default to empty / null when the prefs blob hasn't seen
 // them yet. Mutators write through the existing PATCH /api/prefs/ui endpoint.
+// Note: `cache` is the module-private object declared at the top of this
+// file; these getters read from it, the setters merge into it via patchUI().
 
 export function getRepoOrder() {
-  return [...(prefs.ui?.repo_order || [])];
+  return [...(cache.ui?.repo_order || [])];
 }
 
 export function setRepoOrder(order) {
@@ -472,7 +477,7 @@ export function setRepoOrder(order) {
 }
 
 export function getWorktreesByRepo() {
-  return { ...(prefs.ui?.worktrees_by_repo || {}) };
+  return { ...(cache.ui?.worktrees_by_repo || {}) };
 }
 
 export function setWorktreesByRepo(map) {
@@ -480,7 +485,7 @@ export function setWorktreesByRepo(map) {
 }
 
 export function getPanesByWorktree() {
-  return { ...(prefs.ui?.panes_by_worktree || {}) };
+  return { ...(cache.ui?.panes_by_worktree || {}) };
 }
 
 export function setPanesByWorktree(map) {
@@ -488,7 +493,7 @@ export function setPanesByWorktree(map) {
 }
 
 export function getRailCollapsed() {
-  return { ...(prefs.ui?.rail_collapsed || {}) };
+  return { ...(cache.ui?.rail_collapsed || {}) };
 }
 
 export function setRailCollapsedKey(key, collapsed) {
@@ -498,7 +503,7 @@ export function setRailCollapsedKey(key, collapsed) {
 }
 
 export function getLastSelected() {
-  return prefs.ui?.last_selected || null;
+  return cache.ui?.last_selected || null;
 }
 
 export function setLastSelected(sel) {
@@ -1160,18 +1165,19 @@ Run: `grep -n "function render\|export function render\|body\.dataset\.view\|sta
 
 - [ ] **Step 2: Add rail re-render on poll**
 
-In `static/grid.js`, at the top of `render()`, insert the split branch before the existing stream/grid dispatch:
+In `static/grid.js`, add the import at the top and prepend a split-view early-return to the existing `render(windows)` body:
 
 ```js
 import { renderRail } from './rail.js';
 
-export function render() {
-  const view = document.body.dataset.view;
-  if (view === "split") {
+// Existing signature is `export function render(windows)` (grid.js:482) —
+// preserve the param so downstream renderGrid/renderStream still receive it.
+export function render(windows) {
+  if (document.body.dataset.view === "split") {
     renderRail();
     return;
   }
-  // ... existing stream/grid branches ...
+  // ... existing body (renderStream(windows) or renderGrid(windows)) ...
 }
 ```
 
@@ -2159,50 +2165,44 @@ Append to `rail.js`:
 // Two-level filter: a row is shown (full opacity) if it matches the
 // filter, OR if any of its descendants does. Non-matching rows that
 // have no matching descendants are grayed in place.
+//
+// Reuses grid.js's passesFilter — single source of truth for what each
+// filter value means. Don't reinvent the per-pane rule here; the rail's
+// novelty is only the parent-rollup wrapping (worktree/repo).
+
+import { passesFilter } from './grid.js';
 
 function paneMatchesFilter(w, filter) {
-  if (!filter || filter === "all") return true;
-  // Reuse the same rule as grid.js:passesFilter (state-based filtering).
-  if (filter === "needs-input") return w.state === "needs-input";
-  if (filter === "working") return w.state === "working";
-  if (filter === "done") return w.state === "done";
-  if (filter === "idle") return w.state === "idle";
-  if (filter === "claude") return !!w.is_claude;
-  if (filter === "shell") return !w.is_claude;
-  if (filter === "ci-bad") return w.ci === "✗";
-  return true;
+  // passesFilter consults state.currentFilter internally — wrap to also
+  // accept a passed-in filter value for clarity and unit-testability.
+  // Temporarily override + restore is overkill; just call directly.
+  return passesFilter(w);
 }
 
-function worktreeMatchesFilter(worktreeKey, filter, byWorktree) {
-  if (!filter || filter === "all") return true;
+function worktreeMatchesFilter(worktreeKey, byWorktree) {
   const windows = byWorktree[worktreeKey] || [];
-  return windows.some(w => paneMatchesFilter(w, filter));
+  return windows.some(w => passesFilter(w));
 }
 
-function repoMatchesFilter(repoKey, filter, byWorktree, worktreesByRepo) {
-  if (!filter || filter === "all") return true;
+function repoMatchesFilter(repoKey, byWorktree, worktreesByRepo) {
   const wts = worktreesByRepo[repoKey] || [];
-  return wts.some(wt => worktreeMatchesFilter(wt, filter, byWorktree));
+  return wts.some(wt => worktreeMatchesFilter(wt, byWorktree));
 }
 ```
+
+`passesFilter` short-circuits to `true` when `state.currentFilter` is `"all"`, so each helper returns `true` in that case without an explicit `filter === "all"` check.
 
 - [ ] **Step 2: Apply the predicate at render time**
 
-In `renderRail`, after deriving `byWorktree`, read the current filter from the transient state (where the filter dropdown writes it; see `state.js:6` `currentFilter: "all"` and the dropdown handler in `app.js`):
+For each row, add a `rail-dim` class when it doesn't match. In `paneRow`:
 
 ```js
-const filter = state.currentFilter || "all";
-```
-
-For each row, add a `dim` class when it doesn't match. In `paneRow`, replace the `data-row` line with a conditional dim:
-
-```js
-const dim = paneMatchesFilter(w, filter) ? "" : " rail-dim";
+const dim = paneMatchesFilter(w) ? "" : " rail-dim";
 return `
   <div class="rail-row child-row${sel}${dim}" ...>`;
 ```
 
-Apply analogously to `worktreeRow` (use `worktreeMatchesFilter`) and `repoRow`.
+Apply analogously to `worktreeRow` (use `worktreeMatchesFilter(wtKey, byWorktree)`) and `repoRow` (use `repoMatchesFilter(repoKey, byWorktree, worktreesByRepo)`).
 
 - [ ] **Step 3: Add `.rail-dim` CSS**
 
