@@ -384,6 +384,19 @@ function attachRailListeners() {
   if (!el) return;
   listenersAttached = true;
 
+  // Double-click the label of a pane or worktree row → inline rename.
+  // Mirrors the modal's existing dblclick-to-rename convention.
+  el.addEventListener("dblclick", (e) => {
+    const label = e.target.closest(".rail-label");
+    if (!label) return;
+    const row = label.closest(".rail-row");
+    const kind = row?.dataset.row;
+    if (kind !== "pane" && kind !== "worktree") return;
+    e.preventDefault();
+    e.stopPropagation();
+    startInlineRename(row, label, kind);
+  });
+
   el.addEventListener("click", async (e) => {
     // Close-button is a sibling of the row's click target — intercept
     // it BEFORE the row-level select fires.
@@ -537,6 +550,69 @@ function isValidDropTarget(drag, row) {
   // pane / review
   if (targetKind !== "pane" && targetKind !== "review") return false;
   return closestWorktreeKey(drag.row) === closestWorktreeKey(row);
+}
+
+// Inline rename: swap the label for an <input>, focus + select all,
+// commit on Enter / blur, cancel on Escape. For pane rows we POST to
+// /api/rename (renames the tmux window); for worktree rows we POST to
+// /api/session/rename (renames the tmux session — every pane's
+// `session` field changes on the next /api/state poll, and prefs that
+// key on session name get reconciled by syncRailPrefs).
+function startInlineRename(row, labelEl, kind) {
+  // Strip any rich child markup (e.g. the `<b>` wrapper on worktree
+  // labels) and use plain text as the editable value.
+  const current = labelEl.textContent.trim();
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "rail-rename-input";
+  input.value = current;
+  input.spellcheck = false;
+  // Stash original innerHTML so cancel can restore the bold-wrapped
+  // worktree label without re-rendering the whole rail.
+  const original = labelEl.innerHTML;
+  labelEl.innerHTML = "";
+  labelEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const cancel = () => {
+    if (settled) return;
+    settled = true;
+    labelEl.innerHTML = original;
+  };
+  const commit = async () => {
+    if (settled) return;
+    settled = true;
+    const next = input.value.trim();
+    if (!next || next === current) { labelEl.innerHTML = original; return; }
+    if (kind === "pane") {
+      const target = row.dataset.target;
+      if (!target) { labelEl.innerHTML = original; return; }
+      await apiCall("rename tab", `/api/rename?${targetQuery(target)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: next }),
+      });
+    } else {
+      const session = row.dataset.session;
+      if (!session) { labelEl.innerHTML = original; return; }
+      await apiCall("rename session", `/api/session/rename?session=${encodeURIComponent(session)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: next }),
+      });
+    }
+    // Force a fresh /api/state poll to pick up the new name immediately
+    // instead of waiting up to 3s for the regular tick.
+    renderRail();
+  };
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener("blur", () => { commit(); });
 }
 
 // Close-action handler. `data-action` is "close-pane" (kills the tmux

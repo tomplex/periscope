@@ -51,6 +51,33 @@ def session_new(body: NewSessionBody):
     return {"ok": True, "session": name}
 
 
+class RenameSessionBody(BaseModel):
+    name: str
+
+
+@router.post("/api/session/rename")
+def session_rename(session: str, body: RenameSessionBody):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "empty name")
+    if name == session:
+        return {"ok": True, "session": name}
+    ok, msg = _tmux_mutate("rename-session", "-t", session, name)
+    if not ok:
+        raise HTTPException(500, msg)
+    # Rebind focus/acted timestamps from the old name to the new one so the
+    # session's history doesn't get orphaned by the rename.
+    old_prefix = f"{session}:"
+    new_prefix = f"{name}:"
+    for store in (_focused_at, _acted_at):
+        for old_t in list(store.keys()):
+            if old_t.startswith(old_prefix):
+                store[new_prefix + old_t[len(old_prefix):]] = store.pop(old_t)
+    if session in _active_per_session:
+        _active_per_session[name] = _active_per_session.pop(session)
+    return {"ok": True, "session": name}
+
+
 @router.delete("/api/session")
 def session_delete(session: str):
     ok, msg = _tmux_mutate("kill-session", "-t", session)

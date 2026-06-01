@@ -2989,6 +2989,21 @@ body[data-alerts="open"][data-view="stream"] main {
 .rail-row.newtab-row { cursor: pointer; }   /* not draggable, just click-to-open */
 .rail-row.dragging { opacity: .35; }
 
+/* Inline-rename input: replaces .rail-label's contents on dblclick.
+   Sized to fill the label's flex slot so the rest of the row's layout
+   (icon, status dot, close ×) stays put while editing. */
+.rail-rename-input {
+  width: 100%;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  font: inherit;
+  font-family: var(--mono);
+  padding: 1px 4px;
+  outline: none;
+}
+
 /* Hover-reveal close × on pane + worktree rows. Sits at the right edge
    of the row (after the status dot) and only appears on row hover so
    it doesn't compete with the dot when scanning the rail. */
