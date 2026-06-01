@@ -2,11 +2,19 @@
 
 ## What this is
 
-A FastAPI server (`server.py`) plus a vanilla-JS ES-module frontend
-(`static/`) that gives a browser dashboard over the host's tmux sessions.
-No bundling step in production — `uv run server.py` reads its dependencies
-from the PEP-723 inline metadata at the top of the file and serves
-`static/` as-is.
+A FastAPI server (`server.py`) plus a browser frontend (`static/`) that
+gives a dashboard over the host's tmux sessions. `uv run server.py` reads
+its dependencies from the PEP-723 inline metadata at the top of the file
+and serves `static/` as-is.
+
+The frontend is mid-migration from vanilla ES modules to Preact +
+`@preact/signals`. The committed `static/dist/` bundle (built by
+`npm run build` from `static/src/`) is the one build artifact — rebuild
+and commit it whenever `static/src/` changes; `bin/periscope restart`
+needs no build step because the bundle is already in the tree. During the
+migration the Preact app mounts behind the `?preact=<surface>` switch in
+`index.html`; the vanilla modules under `static/` stay the fallback until
+the final cutover.
 
 Bolted on alongside the dashboard:
 - **`history/`** — Python package that indexes every Claude Code
@@ -375,11 +383,12 @@ the dashboard keeps working unchanged in a regular browser.
 
 ## Conventions
 
-- No frontend framework; vanilla ES modules are part of the value prop.
-  Vite is a dev-only HMR convenience — anything that requires the build
-  step to run (npm-imported deps, JSX, TypeScript) breaks the "just
-  `uv run server.py`" promise and shouldn't land without a deliberate
-  conversation.
+- The frontend is migrating to Preact (`static/src/`, built to the
+  committed `static/dist/app.js` by `npm run build`). Rebuild + commit
+  `static/dist/` when `static/src/` changes — `uv run server.py` serves
+  the committed bundle with no build step at boot. The remaining vanilla
+  ES modules under `static/` are the migration fallback and are deleted
+  in the final cutover.
 - Comments explain *why*, not what. The existing comments around
   pipe-pane, the cursor sync, and the bracketed-paste delay are the
   template — terse, point at the failure that motivated the code.

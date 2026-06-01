@@ -13,13 +13,14 @@ Code agents running, and I want a single pane of glass" workflow.
 
 - `tmux` (any reasonably modern version)
 - [`uv`](https://docs.astral.sh/uv/) for running the single-file script
-- A modern browser (uses WebSockets + vanilla JS)
+- Node 20+ + `npm` — the frontend is a Vite-built bundle (`static/dist/`)
+- A modern browser (uses WebSockets)
 - Optional: `ANTHROPIC_API_KEY` for the ✨ auto-rename feature
-- Optional: Node 20+ if you want HMR while iterating on the frontend
 
 ## Run
 
 ```sh
+npm install && npm run build   # one-time / whenever static/src/ changes
 uv run server.py
 ```
 

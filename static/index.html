@@ -289,8 +289,20 @@
       </div>
     </div>
   </div>
+  <!-- Preact mount target. Empty until main.jsx mounts a surface into it. -->
+  <div id="app"></div>
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/addon-fit.js"></script>
+  <!-- Per-surface mount switch. MUST run before both app scripts: vanilla
+       app.js skips any surface listed here, main.jsx mounts only those. -->
+  <script>
+    window.__PREACT_SURFACES__ = new Set(
+      (new URLSearchParams(location.search).get("preact") || "")
+        .split(",")
+        .filter(Boolean)
+    );
+  </script>
+  <script type="module" src="/dist/app.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

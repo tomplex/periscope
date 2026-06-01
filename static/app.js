@@ -20,6 +20,13 @@ import { initLauncher } from './launcher-modal.js';
 import { pushEscape, popEscape } from './overlay.js';
 import { confirmDialog, promptDialog, alertDialog } from './dialog.js';
 
+// Per-surface mount switch (set in index.html before this script runs).
+// When a surface is Preact-owned, the vanilla equivalent must no-op so we
+// never run two /api/state polls, two keydown handlers, or two
+// body[data-view] writers at once. Deleted with the rest of vanilla in the
+// final cutover task.
+const PREACT_SURFACES = window.__PREACT_SURFACES__ || new Set();
+
 // ⌘/ from anywhere on the dashboard → /history. (On the history page itself,
 // the same shortcut focuses the search input — handled in history.js.)
 //
@@ -28,7 +35,7 @@ import { confirmDialog, promptDialog, alertDialog } from './dialog.js';
 //   ↑ / ↓       step the focused row (works while the filter has focus too —
 //               single-line inputs swallow nothing useful from vertical arrows)
 //   Enter       open the modal for the focused row
-document.addEventListener("keydown", (e) => {
+if (!PREACT_SURFACES.has("chrome")) document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "/") {
     e.preventDefault();
     window.location.href = "/history";
@@ -330,9 +337,11 @@ async function bootstrap() {
   // Seed the in-memory collapsed set from server state. Subsequent toggles
   // mutate `state.collapsedSessions` directly and call prefs.setCollapsed.
   state.collapsedSessions = prefs.getCollapsed();
-  applyView(prefs.getView());
-  initModal();
-  initGrid();
+  // applyView writes body[data-view] (chrome surface) and kicks the
+  // grid/split render path; skip both when those surfaces are Preact-owned.
+  if (!PREACT_SURFACES.has("chrome")) applyView(prefs.getView());
+  if (!PREACT_SURFACES.has("modal")) initModal();
+  if (!PREACT_SURFACES.has("grid")) initGrid();
   initCommandsModal();
   initNewProjectModal();
   initReviewPRModal();
@@ -357,7 +366,7 @@ async function bootstrap() {
   }
 }
 
-viewSwitch.addEventListener("click", (e) => {
+if (!PREACT_SURFACES.has("chrome")) viewSwitch.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-view]");
   if (!btn) return;
   const v = btn.dataset.view;

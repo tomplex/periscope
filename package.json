@@ -3,9 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "./dev.sh"
+    "dev": "./dev.sh",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "preact": "^10.24.0",
+    "@preact/signals": "^1.3.0"
   },
   "devDependencies": {
+    "@preact/preset-vite": "^2.9.0",
     "vite": "^5.4.0"
   }
 }
