@@ -12,6 +12,7 @@ import { confirmDialog } from './dialog.js';
 import { showToast } from './toast.js';
 import { renderStream } from './stream.js';
 import { updateUsagePill } from './usage-pill.js';
+import { renderRail } from './rail.js';
 
 const POLL_MS = 3000;
 
@@ -480,6 +481,10 @@ function renderGrid(windows) {
 }
 
 export function render(windows) {
+  if (document.body.dataset.view === "split") {
+    renderRail();
+    return;
+  }
   // Dispatch on the view attribute the user toggled via the view-switch.
   // Defaults to grid when unset (first paint, or no localStorage entry).
   state.projectsByTmux = indexProjects(state.lastProjects || []);
