@@ -382,32 +382,44 @@ function attachRailListeners() {
     const drag = state.railDragging;
     if (!drag) return;
     const row = e.target.closest(".rail-row");
-    if (!row || row === drag.row) return;
-    // Reject cross-level drops; allow pane <-> review interchange (they're siblings).
-    const same = row.dataset.row === drag.kind;
-    const paneReviewMix = (drag.kind === "pane" && row.dataset.row === "review")
-      || (drag.kind === "review" && row.dataset.row === "pane");
-    if (!same && !paneReviewMix) return;
+    if (!row || row === drag.row) { clearDropTarget(); return; }
+    if (!isValidDropTarget(drag, row)) { clearDropTarget(); return; }
+    // Insert before/after target based on which half of the row the
+    // pointer is in. Bottom half = insert AFTER (visualize as line at row's bottom).
+    const rect = row.getBoundingClientRect();
+    const insertAfter = (e.clientY - rect.top) > rect.height / 2;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    setDropTarget(row, insertAfter);
+  });
+
+  // Clear the indicator when the pointer leaves the rail entirely — the
+  // dragover handler keeps it set as long as we're over a valid target.
+  el.addEventListener("dragleave", (e) => {
+    // dragleave fires for child elements too; only clear when leaving the
+    // whole rail (relatedTarget is null or outside #rail).
+    if (!e.relatedTarget || !el.contains(e.relatedTarget)) clearDropTarget();
   });
 
   el.addEventListener("drop", async (e) => {
     e.preventDefault();
     const drag = state.railDragging;
-    if (!drag) return;
+    if (!drag) { clearDropTarget(); return; }
     const targetRow = e.target.closest(".rail-row");
-    if (!targetRow) { state.railDragging = null; return; }
+    if (!targetRow) { clearDropTarget(); state.railDragging = null; return; }
+
+    const rect = targetRow.getBoundingClientRect();
+    const insertAfter = (e.clientY - rect.top) > rect.height / 2;
 
     if (drag.kind === "repo") {
-      await reorderRepos(drag.key, targetRow.dataset.key);
+      await reorderRepos(drag.key, targetRow.dataset.key, insertAfter);
     } else if (drag.kind === "worktree") {
-      await reorderWorktrees(drag.key, targetRow.dataset.key);
+      await reorderWorktrees(drag.key, targetRow.dataset.key, insertAfter);
     } else {
-      // pane / review: reorder within their worktree.
-      await reorderChildren(drag.row, targetRow);
+      await reorderChildren(drag.row, targetRow, insertAfter);
     }
     drag.row.classList.remove("dragging");
+    clearDropTarget();
     state.railDragging = null;
     renderRail();
   });
@@ -417,8 +429,63 @@ function attachRailListeners() {
   el.addEventListener("dragend", () => {
     const drag = state.railDragging;
     if (drag?.row) drag.row.classList.remove("dragging");
+    clearDropTarget();
     state.railDragging = null;
   });
+}
+
+// --- Drop-target indicator -------------------------------------------------
+//
+// Visual feedback during drag: a colored line at top (insert before) or
+// bottom (insert after) of the row the pointer is over. Drives both the
+// visual hint and the actual splice position on drop.
+
+let dropTargetRow = null;
+function setDropTarget(row, insertAfter) {
+  if (dropTargetRow === row && row.dataset.dropPos === (insertAfter ? "after" : "before")) return;
+  clearDropTarget();
+  row.classList.add("drop-target");
+  row.dataset.dropPos = insertAfter ? "after" : "before";
+  dropTargetRow = row;
+}
+function clearDropTarget() {
+  if (!dropTargetRow) return;
+  dropTargetRow.classList.remove("drop-target");
+  delete dropTargetRow.dataset.dropPos;
+  dropTargetRow = null;
+}
+
+// Same-kind, same-parent rule:
+//   repo → any other repo (except Other, which is pinned)
+//   worktree → another worktree in the same repo
+//   pane/review → another pane/review in the same worktree
+function isValidDropTarget(drag, row) {
+  const targetKind = row.dataset.row;
+  if (drag.kind === "repo") {
+    if (targetKind !== "repo") return false;
+    if (row.dataset.key === `repo:${OTHER_REPO_KEY}`) return false;
+    if (drag.key === `repo:${OTHER_REPO_KEY}`) return false;
+    return true;
+  }
+  if (drag.kind === "worktree") {
+    if (targetKind !== "worktree") return false;
+    return closestRepoKey(drag.row) === closestRepoKey(row);
+  }
+  // pane / review
+  if (targetKind !== "pane" && targetKind !== "review") return false;
+  return closestWorktreeKey(drag.row) === closestWorktreeKey(row);
+}
+
+function closestRepoKey(row) {
+  // Walk back through DOM siblings to find the closest preceding repo-row.
+  let n = row.previousElementSibling;
+  while (n) {
+    if (n.classList?.contains("repo-row")) {
+      return n.dataset.key.replace(/^repo:/, "");
+    }
+    n = n.previousElementSibling;
+  }
+  return null;
 }
 
 // All three reorder helpers seed their starting order from mergeLiveAndPrefs
@@ -435,7 +502,21 @@ function currentMergedOrder() {
   );
 }
 
-async function reorderRepos(draggedKey, targetKey) {
+// Splice helper used by all reorder functions. Moves `from`-index entry
+// to land either before or after the target index, keeping the list's
+// length invariant.
+function spliceMove(list, fromIdx, toIdx, insertAfter) {
+  if (fromIdx < 0 || toIdx < 0) return list;
+  const [val] = list.splice(fromIdx, 1);
+  // After removal, the target index shifts down by 1 if the removed
+  // entry was earlier in the list.
+  let landing = toIdx - (fromIdx < toIdx ? 1 : 0);
+  if (insertAfter) landing += 1;
+  list.splice(landing, 0, val);
+  return list;
+}
+
+async function reorderRepos(draggedKey, targetKey, insertAfter = false) {
   const dragged = draggedKey.replace(/^repo:/, "");
   const target = targetKey.replace(/^repo:/, "");
   // "Other" is always pinned to the bottom; can't reorder around it.
@@ -444,13 +525,12 @@ async function reorderRepos(draggedKey, targetKey) {
   const order = repoOrder.filter(r => r !== OTHER_REPO_KEY);
   const from = order.indexOf(dragged);
   const to = order.indexOf(target);
-  if (from < 0 || to < 0 || from === to) return;
-  order.splice(from, 1);
-  order.splice(to, 0, dragged);
+  if (from < 0 || to < 0) return;
+  spliceMove(order, from, to, insertAfter);
   await prefs.setRepoOrder(order);
 }
 
-async function reorderWorktrees(draggedKey, targetKey) {
+async function reorderWorktrees(draggedKey, targetKey, insertAfter = false) {
   const dragged = draggedKey.replace(/^wt:/, "");
   const target = targetKey.replace(/^wt:/, "");
   const { worktreesByRepo } = currentMergedOrder();
@@ -465,15 +545,13 @@ async function reorderWorktrees(draggedKey, targetKey) {
   if (!list.includes(target)) return;  // cross-repo drag — reject
   const from = list.indexOf(dragged);
   const to = list.indexOf(target);
-  if (from < 0 || to < 0 || from === to) return;
-  list.splice(from, 1);
-  list.splice(to, 0, dragged);
-  // Persist: keep other repos' prefs as-is, overwrite just this repo's list.
+  if (from < 0 || to < 0) return;
+  spliceMove(list, from, to, insertAfter);
   const next = { ...prefs.getWorktreesByRepo(), [repoKey]: list };
   await prefs.setWorktreesByRepo(next);
 }
 
-async function reorderChildren(draggedRow, targetRow) {
+async function reorderChildren(draggedRow, targetRow, insertAfter = false) {
   const draggedWt = closestWorktreeKey(draggedRow);
   const targetWt = closestWorktreeKey(targetRow);
   if (!draggedWt || draggedWt !== targetWt) return;
@@ -486,9 +564,8 @@ async function reorderChildren(draggedRow, targetRow) {
   const list = [...(panesByWorktree[draggedWt] || [])];
   const from = list.indexOf(dragKey);
   const to = list.indexOf(targetKey);
-  if (from < 0 || to < 0 || from === to) return;
-  list.splice(from, 1);
-  list.splice(to, 0, dragKey);
+  if (from < 0 || to < 0) return;
+  spliceMove(list, from, to, insertAfter);
   const next = { ...prefs.getPanesByWorktree(), [draggedWt]: list };
   await prefs.setPanesByWorktree(next);
 }
