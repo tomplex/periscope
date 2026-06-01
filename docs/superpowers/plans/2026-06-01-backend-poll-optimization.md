@@ -195,14 +195,22 @@ Expected: FAIL — `test_idle_pane_skips_recapture_when_activity_unchanged` fail
 In `periscope/window_view.py`, add a module-level cache near the top (after imports, ~line 29):
 
 ```python
-# Per-target cache of the parsed-pane dict, keyed by "session:index".
-# Skips capture()+parse_pane()+smoothing on a poll when tmux reports no new
-# output (activity unchanged) AND the cached state is quiet (idle/shell) —
-# the only states where re-running smoothing / record_state_transition would
-# be a no-op. Working/needs-input/error panes are never skipped. Bounded by
-# pane count; stale entries for closed targets are harmless (a reused target
-# gets a fresh activity → cache miss). Cleared between tests.
-_view_cache: dict[str, dict] = {}
+# Cache of the parsed-pane dict, keyed by (target, pane_id). Skips
+# capture()+parse_pane()+smoothing on a poll when tmux reports no new output
+# (window_activity unchanged) AND the cached state is quiet (idle/shell) — the
+# only states where re-running smoothing / record_state_transition would be a
+# no-op. Working/needs-input/error panes are never skipped. Keying on pane_id
+# (not just target) avoids serving a stale parse if a closed window's
+# session:index is reused by a new pane whose activity coincidentally matches.
+# Bounded by pane count; stale entries for closed panes are harmless. Cleared
+# between tests.
+#
+# Known minor staleness: a Claude pane that exits to a shell and then goes
+# silent can stay cached as is_claude=True/idle until its next output (the
+# 120s smooth_is_claude expiry only fires on a recapture). The card still
+# shows idle; only the is_claude coloring lags. Accepted — the next real
+# output recaptures and corrects it.
+_view_cache: dict[tuple[str, str], dict] = {}
 
 _QUIET_STATES = ("idle", "shell")
 ```
@@ -232,7 +240,8 @@ Replace it with:
 
 ```python
     activity = w.get("activity", 0)
-    cached = _view_cache.get(target)
+    cache_key = (target, w.get("pane_id", ""))
+    cached = _view_cache.get(cache_key)
     if (
         cached is not None
         and cached["activity"] == activity
@@ -260,21 +269,16 @@ Replace it with:
         ):
             parsed["state"] = "working"
 
-        _view_cache[target] = {"activity": activity, "parsed": dict(parsed)}
+        _view_cache[cache_key] = {"activity": activity, "parsed": dict(parsed)}
 ```
 
 Everything from `cur = parsed.get("state")` (current line 74) onward is unchanged — `record_state_transition`, recency stamps, git/PR/LGTM/channel, affiliation, and view assembly all keep running every poll.
 
-- [ ] **Step 4: Wire the cache into the test-reset fixtures**
+- [ ] **Step 4: Wire the cache into the test-reset fixture**
 
-In `tests/conftest.py`, find the `clean_state` fixture and add a clear for the new cache (alongside the existing `_STATE` / panes resets). Add this line in both the setup and teardown halves:
+`tests/test_window_view.py` is the only suite that exercises the real cache path (the route tests in `tests/routes/test_state.py` mock `build_window_view` wholesale, so the cache is never touched there). `clean_state` in `tests/conftest.py` is setup-only (it returns `fresh`, no `yield`/teardown), so it is NOT the right place.
 
-```python
-    from periscope import window_view
-    window_view._view_cache.clear()
-```
-
-In `tests/test_window_view.py`, the `reset_panes_and_channels` autouse fixture (top of file) clears `panes._*` dicts — add the same two lines in both its setup and teardown halves:
+Edit the `reset_panes_and_channels` autouse fixture at the top of `tests/test_window_view.py` (it already has both a setup half and a post-`yield` teardown half clearing `panes._*`). Add this import + clear in **both** halves, right after the `panes._claude_last_seen.clear()` line:
 
 ```python
     from periscope import window_view
@@ -303,80 +307,73 @@ git commit -m "poll-opt: cache parsed pane, skip recapture for quiet unchanged p
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/routes/test_state.py` (the file already builds the FastAPI app + TestClient — match its existing setup; these patch the orchestration seams):
+Add to `tests/routes/test_state.py`. The file provides a `_patch(mocker, name, **kwargs)` helper (top of file) that patches `periscope.routes.state.<name>` — use it for consistency with the existing tests; `client` and `clean_state` are auto-discovered fixtures (`tests/routes/conftest.py`):
 
 ```python
-def test_state_preserves_window_order_across_fanout(mocker, client):
+def test_state_preserves_window_order_across_fanout(client, mocker, clean_state):
     """The parallel fan-out must return views in the same order as list_windows."""
-    import periscope.routes.state as state_mod
     windows = [
         {"session": "s", "index": i, "active": i == 0, "activity": 0, "pane_id": f"%{i}", "cwd": ""}
         for i in range(5)
     ]
-    mocker.patch.object(state_mod, "list_windows", return_value=windows)
-    mocker.patch.object(state_mod, "update_focus_from_windows")
-    mocker.patch.object(state_mod, "_attach_git_then_resolve_pids")
-    mocker.patch.object(state_mod, "all_projects", return_value={})
-    mocker.patch.object(
-        state_mod, "build_window_view",
-        side_effect=lambda w, now_ts: ({"index": w["index"]}, None),
-    )
+    _patch(mocker, "list_windows", return_value=windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "all_projects", return_value={})
+    _patch(mocker, "build_window_view",
+           side_effect=lambda w, now_ts: ({"index": w["index"]}, None))
     resp = client.get("/api/state")
     assert [v["index"] for v in resp.json()["windows"]] == [0, 1, 2, 3, 4]
 
 
-def test_state_writes_stamps_once_after_join(mocker, client):
+def test_state_writes_stamps_once_after_join(client, mocker, clean_state):
     """All _STATE mutation stays single-threaded post-join: set_window_fields_bulk
     is called exactly once with every pane's stamp."""
-    import periscope.routes.state as state_mod
     windows = [
         {"session": "s", "index": i, "active": False, "activity": 0, "pane_id": f"%{i}", "cwd": ""}
         for i in range(3)
     ]
-    mocker.patch.object(state_mod, "list_windows", return_value=windows)
-    mocker.patch.object(state_mod, "update_focus_from_windows")
-    mocker.patch.object(state_mod, "_attach_git_then_resolve_pids")
-    mocker.patch.object(state_mod, "all_projects", return_value={})
-    mocker.patch.object(
-        state_mod, "build_window_view",
-        side_effect=lambda w, now_ts: ({"index": w["index"]}, (f"pid{w['index']}", 10, 5)),
-    )
-    bulk = mocker.patch.object(state_mod, "set_window_fields_bulk")
+    _patch(mocker, "list_windows", return_value=windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "all_projects", return_value={})
+    _patch(mocker, "build_window_view",
+           side_effect=lambda w, now_ts: ({"index": w["index"]}, (f"pid{w['index']}", 10, 5)))
+    bulk = _patch(mocker, "set_window_fields_bulk")
     client.get("/api/state")
     assert bulk.call_count == 1
     written = bulk.call_args[0][0]
     assert set(written.keys()) == {"pid0", "pid1", "pid2"}
 
 
-def test_state_isolates_one_pane_capture_failure(mocker, client):
-    """One pane's capture exception yields an error view without sinking the
-    rest of the response (exception isolation survives the fan-out)."""
-    import periscope.routes.state as state_mod
+def test_state_isolates_one_pane_build_failure(client, mocker, clean_state):
+    """A worker RAISING must not sink the response: _safe_build converts it to
+    an error view, the other panes build normally, order is preserved."""
     windows = [
         {"session": "s", "index": 0, "active": True, "activity": 0, "pane_id": "%0", "cwd": ""},
         {"session": "s", "index": 1, "active": False, "activity": 0, "pane_id": "%1", "cwd": ""},
     ]
-    mocker.patch.object(state_mod, "list_windows", return_value=windows)
-    mocker.patch.object(state_mod, "update_focus_from_windows")
-    mocker.patch.object(state_mod, "_attach_git_then_resolve_pids")
-    mocker.patch.object(state_mod, "all_projects", return_value={})
+    _patch(mocker, "list_windows", return_value=windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "all_projects", return_value={})
 
     def fake_build(w, now_ts):
         if w["index"] == 0:
-            return ({"index": 0, "state": "error"}, None)  # build_window_view caught capture internally
+            raise RuntimeError("git blew up mid-build")  # NOT a capture error
         return ({"index": 1, "state": "idle"}, None)
 
-    mocker.patch.object(state_mod, "build_window_view", side_effect=fake_build)
+    _patch(mocker, "build_window_view", side_effect=fake_build)
     resp = client.get("/api/state")
     views = {v["index"]: v for v in resp.json()["windows"]}
-    assert views[0]["state"] == "error"
+    assert views[0]["state"] == "error"   # _safe_build caught the raise
     assert views[1]["state"] == "idle"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail or pass-by-accident**
+- [ ] **Step 2: Run tests to verify the isolation test fails**
 
-Run: `uv run pytest tests/routes/test_state.py -k "preserves_window_order or writes_stamps_once or isolates_one_pane" -v`
-Expected: `test_state_writes_stamps_once` and `test_state_isolates_one_pane_capture_failure` likely PASS against the current serial loop (behavior is preserved); `test_state_preserves_window_order_across_fanout` PASSES too. These tests pin behavior that the parallelization must not break — they are the regression net for Step 3, so run them now and confirm green, then keep them green after the edit.
+Run: `uv run pytest tests/routes/test_state.py -k "preserves_window_order or writes_stamps_once or isolates_one_pane_build_failure" -v`
+Expected: `test_state_preserves_window_order_across_fanout` and `test_state_writes_stamps_once_after_join` PASS against the current serial loop (it already preserves order + single-write — they're the regression net for the parallelization). `test_state_isolates_one_pane_build_failure` FAILS — the current serial loop has no `_safe_build`, so a raising worker propagates and the request 500s. Step 3 makes it green.
 
 - [ ] **Step 3: Replace the serial loop with a ThreadPoolExecutor fan-out**
 
@@ -384,6 +381,28 @@ In `periscope/routes/state.py`, add the import at the top (after `import time`):
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
+```
+
+Add a module-level `_safe_build` helper above the `state()` function (after the imports):
+
+```python
+def _safe_build(w: dict, now_ts: int) -> tuple[dict, tuple[str, int, int] | None]:
+    """Per-worker exception isolation for the parallel fan-out.
+
+    build_window_view already catches capture()/parse_pane() failures, but the
+    git / PR / LGTM / affiliation calls run outside that guard. In executor.map
+    one worker raising would re-raise on the join and 500 the whole /api/state
+    response. Convert any per-pane exception into an error view so one bad pane
+    can't sink the board.
+    """
+    try:
+        return build_window_view(w, now_ts)
+    except Exception as e:
+        target = f"{w['session']}:{w['index']}"
+        return (
+            {**w, "target": target, "state": "error", "is_claude": False, "error": str(e)},
+            None,
+        )
 ```
 
 Replace the per-window loop (current lines 35-41):
@@ -406,11 +425,11 @@ with:
     # above (_attach_git_then_resolve_pids — writes state.json + tmux options)
     # is NOT thread-safe and stays before this pool; the stamp write below
     # stays single-threaded after the join. executor.map preserves input
-    # order, so `result` matches `windows`. build_window_view isolates its
-    # own capture exceptions internally (state="error").
+    # order, so `result` matches `windows`. _safe_build isolates any per-pane
+    # exception (capture, git, affiliation) into an error view.
     if windows:
         with ThreadPoolExecutor(max_workers=min(32, len(windows))) as pool:
-            built = list(pool.map(lambda w: build_window_view(w, now_ts), windows))
+            built = list(pool.map(lambda w: _safe_build(w, now_ts), windows))
     else:
         built = []
 
