@@ -338,15 +338,13 @@ existing modules** are the spec. Verified before merge:
 - **Phase 5 — Invariant verification, drop `stream.js`, build + commit bundle,
   merge.**
 
-## Open questions for spec review
+## Resolved decisions (spec review)
 
-1. **Bundle commit vs. build-on-restart.** Spec picks "commit `static/dist/`."
-   Confirm Tom is fine committing a build artifact to `main` (the alternative —
-   build during `restart` — adds an npm dependency to the prod restart path).
-2. **Poll cadence.** With captures parallelized + idle panes skipped, the poll
-   is much cheaper; keep 3s or tighten? Lean keep 3s, tunable.
-3. **Signals vs. a thin custom store.** `@preact/signals` is the default; the
-   corpus argument favors the real library over a hand-rolled primitive.
-4. **Stream cut confirmation.** Removing stream view also removes its Tab-cycle
-   position and the `prefs.view === "stream"` migration path (existing users on
-   stream fall back to split). Confirm acceptable.
+1. **Bundle: commit `static/dist/` to `main`.** ✅ `bin/periscope restart` stays
+   build-free; a fresh `uv run server.py` works without an npm step.
+2. **State: `@preact/signals` (the library), not a hand-rolled primitive.** ✅
+   The corpus-fluency criterion favors the real library.
+3. **Poll cadence: keep 3s for now.** ✅ Cheaper post-optimization but unchanged;
+   tunable later.
+4. **Stream view cut.** ✅ Removes its Tab-cycle position and the
+   `prefs.view === "stream"` path (existing stream users fall back to split).
