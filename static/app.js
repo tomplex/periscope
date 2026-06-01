@@ -6,6 +6,8 @@ import * as prefs from './prefs.js';
 import { apiCall } from './util.js';
 import { initModal, openModal } from './modal.js';
 import { initGrid, poll, render } from './grid.js';
+import { renderRail } from './rail.js';
+import { refreshDetail, detailTeardown } from './detail.js';
 import { initCommandsModal, openCommandsModal } from './commands-modal.js';
 import { initNewProjectModal } from './new-project-modal.js';
 import { initReviewPRModal } from './review-pr-modal.js';
@@ -52,7 +54,7 @@ document.addEventListener("keydown", (e) => {
     !modalOpen
   ) {
     e.preventDefault();
-    const next = document.body.dataset.view === "stream" ? "grid" : "stream";
+    const next = nextView(document.body.dataset.view);
     const btn = document.querySelector(`[data-view="${next}"]`);
     if (btn) btn.click();
     return;
@@ -276,18 +278,40 @@ sendBulkBtn.addEventListener("click", async () => {
   }
 });
 
-// View switch (grid ↔ stream). Persisted via prefs.js. Applied via
+// View switch (split / grid / stream). Persisted via prefs.js. Applied via
 // body.dataset.view; the renderer dispatches on the attribute, and CSS keys
 // off it to hide grid-only chrome (collapse-all toggle) in stream view.
 const viewSwitch = document.getElementById("view-switch");
 const viewButtons = viewSwitch.querySelectorAll("[data-view]");
+
+function nextView(current) {
+  const order = ["split", "grid", "stream"];
+  const i = order.indexOf(current);
+  return order[(i + 1) % order.length];
+}
+
 function applyView(view) {
   document.body.dataset.view = view;
+  const grid = document.getElementById("grid");
+  const split = document.getElementById("split-view");
+
+  // Grid container is shared by grid AND stream views (stream renders into #grid).
+  grid.classList.toggle("hidden", view === "split");
+  split.classList.toggle("hidden", view !== "split");
+
   viewButtons.forEach((b) => {
     const active = b.dataset.view === view;
     b.classList.toggle("active", active);
     b.setAttribute("aria-selected", active ? "true" : "false");
   });
+
+  // Add the split branch — defer rail/detail rendering.
+  if (view === "split") {
+    renderRail();
+    refreshDetail();
+  } else {
+    detailTeardown();
+  }
 }
 
 // Register the service worker. Required for PWA install eligibility

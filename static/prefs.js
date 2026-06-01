@@ -43,7 +43,7 @@ export function getCollapsed() {
 
 export function getView() {
   const v = cache.ui?.view;
-  return (v === "stream" || v === "split") ? v : "grid";
+  return (v === "grid" || v === "stream" || v === "split") ? v : "split";
 }
 
 export function getAlertsOpen() {
