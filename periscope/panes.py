@@ -46,7 +46,7 @@ _completed_at: dict[str, int] = {}
 # Previous parsed state per pid, used to detect the working/needs-input →
 # idle edge that drives `_completed_at`. Keyed by pid (not target) so a
 # session rename doesn't lose the prior state and refire the transition.
-_prev_state: dict[str, str] = {}
+_prev_state: dict[str, str | None] = {}
 _active_per_session: dict[str, str] = {}
 
 # Active resume operations, keyed by session_id. Each entry tracks where a

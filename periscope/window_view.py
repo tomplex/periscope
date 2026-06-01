@@ -65,6 +65,7 @@ def build_window_view(
     activity = w.get("activity", 0)
     cache_key = (target, w.get("pane_id", ""))
     cached = _view_cache.get(cache_key)
+    parsed: dict  # unify the cache-hit (dict copy) and capture/error branches
     if (
         cached is not None
         and cached["activity"] == activity
