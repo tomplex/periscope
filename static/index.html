@@ -190,6 +190,20 @@
       </div>
     </div>
   </div>
+  <div id="open-picker-modal" class="hidden open-picker-modal-overlay">
+    <div class="open-picker-modal-card">
+      <header class="open-picker-modal-head">
+        <h2>+ open</h2>
+        <button id="open-picker-close" title="close">×</button>
+      </header>
+      <p class="open-picker-modal-sub">Pick tmux sessions to add to the rail. Already-railed sessions are hidden.</p>
+      <div id="open-picker-list"></div>
+      <div class="open-picker-modal-actions">
+        <button type="button" id="open-picker-cancel">cancel</button>
+        <button type="button" id="open-picker-submit" disabled>add (0)</button>
+      </div>
+    </div>
+  </div>
   <div id="settings-modal" class="hidden settings-modal-overlay">
     <div class="settings-modal-card">
       <header class="settings-modal-head">

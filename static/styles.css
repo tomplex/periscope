@@ -2886,3 +2886,17 @@ body[data-alerts="open"][data-view="stream"] main {
 .rail-grip { width: 12px; opacity: 0; font-size: 10px; cursor: grab; transition: opacity .15s; flex-shrink: 0; color: var(--fg-4); }
 .rail-row:hover .rail-grip { opacity: .4; }
 .rail-row.dragging { opacity: .5; }
+
+.open-picker-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.open-picker-modal-overlay.hidden { display: none; }
+.open-picker-modal-card { background: var(--bg-1); border-radius: 6px; padding: 14px 16px; min-width: 480px; max-width: 720px; max-height: 80vh; overflow: auto; }
+.open-picker-modal-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+.open-picker-modal-head h2 { margin: 0; font-size: 16px; }
+.open-picker-modal-head button { margin-left: auto; background: transparent; border: 0; font-size: 18px; cursor: pointer; }
+.open-picker-modal-sub { font-size: 12px; opacity: .7; margin: 0 0 12px; }
+.open-picker-repo-head { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; opacity: .55; margin: 10px 0 4px; }
+.open-picker-row { display: flex; gap: 8px; align-items: center; padding: 4px 6px; cursor: pointer; }
+.open-picker-row:hover { background: rgba(255,255,255,.04); }
+.open-picker-branch { opacity: .6; font-size: 12px; }
+.open-picker-empty { padding: 14px; font-size: 13px; opacity: .7; }
+.open-picker-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }

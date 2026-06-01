@@ -15,6 +15,7 @@ import { initCleanupModal } from './cleanup-modal.js';
 import { initAlerts } from './alerts.js';
 import { initExternalLinks } from './tauri.js';
 import { initSettingsModal } from './settings-modal.js';
+import { initOpenPicker } from './open-picker-modal.js';
 import { pushEscape, popEscape } from './overlay.js';
 import { confirmDialog, promptDialog, alertDialog } from './dialog.js';
 
@@ -337,6 +338,7 @@ async function bootstrap() {
   initCleanupModal();
   initAlerts();
   initSettingsModal();
+  initOpenPicker();
   initExternalLinks();
   document.getElementById("open-commands").addEventListener("click", openCommandsModal);
 
