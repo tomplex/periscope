@@ -58,8 +58,9 @@ function paneRow(w, selectedKey) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey ? " selected" : "";
   return `
-    <div class="rail-row child-row${sel}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}">
+    <div class="rail-row child-row${sel}" data-row="pane" data-pid="${escapeHtml(w.pid)}" data-key="${escapeHtml(k)}" draggable="true">
       <span class="rail-conn">├</span>
+      <span class="rail-grip">⋮⋮</span>
       <span class="rail-icon icon-pane">✦</span>
       <span class="rail-label">${escapeHtml(w.name || "claude")}</span>
       <span class="${statusDotClass(w.state)}"></span>
@@ -71,8 +72,9 @@ function reviewRow(worktreeKey, lgtmLive, selectedKey) {
   const sel = k === selectedKey ? " selected" : "";
   const empty = lgtmLive ? "" : " review-empty";
   return `
-    <div class="rail-row child-row${sel}${empty}" data-row="review" data-worktree="${escapeHtml(worktreeKey)}" data-key="${escapeHtml(k)}">
+    <div class="rail-row child-row${sel}${empty}" data-row="review" data-worktree="${escapeHtml(worktreeKey)}" data-key="${escapeHtml(k)}" draggable="true">
       <span class="rail-conn">├</span>
+      <span class="rail-grip">⋮⋮</span>
       <span class="rail-icon icon-review">👁</span>
       <span class="rail-label">review${lgtmLive ? "" : " <em>start →</em>"}</span>
     </div>`;
@@ -85,7 +87,8 @@ function worktreeRow(worktreeKey, children, collapsed, rolledUp, label) {
     : "";
   const body = collapsed ? "" : children.join("");
   return `
-    <div class="rail-row wt-row" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}">
+    <div class="rail-row wt-row" data-row="worktree" data-key="${escapeHtml(`wt:${worktreeKey}`)}" draggable="true">
+      <span class="rail-grip">⋮⋮</span>
       <span class="rail-chev">${chev}</span>
       <span class="rail-icon icon-worktree">⎇</span>
       <span class="rail-label"><b>${escapeHtml(label)}</b></span>
@@ -100,7 +103,8 @@ function repoRow(repoKey, label, worktreeBlocks, collapsed, rolledUp) {
   const chev = collapsed ? "▸" : "▾";
   const body = collapsed ? "" : worktreeBlocks.join("");
   return `
-    <div class="rail-row repo-row" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}">
+    <div class="rail-row repo-row" data-row="repo" data-key="${escapeHtml(`repo:${repoKey}`)}" draggable="true">
+      <span class="rail-grip">⋮⋮</span>
       <span class="rail-chev">${chev}</span>
       <span class="rail-icon icon-repo">📚</span>
       <span class="rail-label"><b>${escapeHtml(label)}</b></span>
@@ -234,4 +238,121 @@ function attachRailListeners() {
       return;
     }
   });
+
+  el.addEventListener("dragstart", (e) => {
+    const row = e.target.closest(".rail-row");
+    if (!row) return;
+    const kind = row.dataset.row;
+    const key = row.dataset.key;
+    state.railDragging = { kind, key, row };
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", key);  // for cross-window compat — unused
+    row.classList.add("dragging");
+  });
+
+  el.addEventListener("dragover", (e) => {
+    const drag = state.railDragging;
+    if (!drag) return;
+    const row = e.target.closest(".rail-row");
+    if (!row || row === drag.row) return;
+    // Reject cross-level drops; allow pane <-> review interchange (they're siblings).
+    const same = row.dataset.row === drag.kind;
+    const paneReviewMix = (drag.kind === "pane" && row.dataset.row === "review")
+      || (drag.kind === "review" && row.dataset.row === "pane");
+    if (!same && !paneReviewMix) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  });
+
+  el.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    const drag = state.railDragging;
+    if (!drag) return;
+    const targetRow = e.target.closest(".rail-row");
+    if (!targetRow) { state.railDragging = null; return; }
+
+    if (drag.kind === "repo") {
+      await reorderRepos(drag.key, targetRow.dataset.key);
+    } else if (drag.kind === "worktree") {
+      await reorderWorktrees(drag.key, targetRow.dataset.key);
+    } else {
+      // pane / review: reorder within their worktree.
+      await reorderChildren(drag.row, targetRow);
+    }
+    drag.row.classList.remove("dragging");
+    state.railDragging = null;
+    renderRail();
+  });
+}
+
+async function reorderRepos(draggedKey, targetKey) {
+  const order = prefs.getRepoOrder();
+  const dragged = draggedKey.replace(/^repo:/, "");
+  const target = targetKey.replace(/^repo:/, "");
+  const from = order.indexOf(dragged);
+  const to = order.indexOf(target);
+  if (from < 0 || to < 0 || from === to) return;
+  order.splice(from, 1);
+  order.splice(to, 0, dragged);
+  await prefs.setRepoOrder(order);
+}
+
+async function reorderWorktrees(draggedKey, targetKey) {
+  const dragged = draggedKey.replace(/^wt:/, "");
+  const target = targetKey.replace(/^wt:/, "");
+  const wts = prefs.getWorktreesByRepo();
+  // Find which repo each belongs to; must match (cross-repo drag rejected).
+  let repoKey = null;
+  for (const [r, list] of Object.entries(wts)) {
+    if (list.includes(dragged)) { repoKey = r; break; }
+  }
+  if (!repoKey) return;
+  const list = wts[repoKey];
+  if (!list.includes(target)) return;  // cross-repo
+  const from = list.indexOf(dragged);
+  const to = list.indexOf(target);
+  if (from < 0 || to < 0 || from === to) return;
+  list.splice(from, 1);
+  list.splice(to, 0, dragged);
+  wts[repoKey] = list;
+  await prefs.setWorktreesByRepo(wts);
+}
+
+async function reorderChildren(draggedRow, targetRow) {
+  // Both rows must be inside the same worktree's child block.
+  const draggedWt = closestWorktreeKey(draggedRow);
+  const targetWt = closestWorktreeKey(targetRow);
+  if (!draggedWt || draggedWt !== targetWt) return;
+
+  const dragKey = childPrefKey(draggedRow);
+  const targetKey = childPrefKey(targetRow);
+  if (!dragKey || !targetKey) return;
+
+  const panes = prefs.getPanesByWorktree();
+  const list = panes[draggedWt] || [];
+  const from = list.indexOf(dragKey);
+  const to = list.indexOf(targetKey);
+  if (from < 0 || to < 0 || from === to) return;
+  list.splice(from, 1);
+  list.splice(to, 0, dragKey);
+  panes[draggedWt] = list;
+  await prefs.setPanesByWorktree(panes);
+}
+
+function closestWorktreeKey(row) {
+  // Walk back through siblings to find the prior wt-row; its data-key is "wt:<key>".
+  let n = row.previousElementSibling;
+  while (n) {
+    if (n.classList.contains("wt-row")) {
+      return n.dataset.key.replace(/^wt:/, "");
+    }
+    n = n.previousElementSibling;
+  }
+  return null;
+}
+
+function childPrefKey(row) {
+  if (row.dataset.row === "pane") return row.dataset.pid;
+  if (row.dataset.row === "review") return "review";
+  return null;
 }
