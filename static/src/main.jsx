@@ -8,6 +8,9 @@ import { render } from "preact";
 import { Toaster } from "./overlays/Toast.jsx";
 import { DialogHost } from "./overlays/Dialog.jsx";
 import { Terminal } from "./terminal/Terminal.jsx";
+import { Header } from "./chrome/Header.jsx";
+import { loadPrefs, getView } from "./prefs.js";
+import { view } from "./store.js";
 
 const SURFACES = window.__PREACT_SURFACES__ || new Set();
 
@@ -36,6 +39,15 @@ function App() {
       </>
     );
   }
+  if (SURFACES.has("chrome")) {
+    return (
+      <>
+        <Header />
+        <Toaster />
+        <DialogHost />
+      </>
+    );
+  }
   return (
     <>
       <div data-preact-root>periscope (preact scaffold)</div>
@@ -45,4 +57,20 @@ function App() {
   );
 }
 
-render(<App />, document.getElementById("app"));
+async function boot() {
+  // The chrome surface needs prefs loaded before first render so the view
+  // switch reflects the persisted view (and the body[data-view] mirror effect
+  // lands on the right value). Hide the vanilla <header> so the Preact one
+  // doesn't double up — the vanilla path already skips its chrome wiring when
+  // this surface is claimed (app.js consults __PREACT_SURFACES__).
+  if (SURFACES.has("chrome")) {
+    await loadPrefs();
+    const v = getView();
+    view.value = v === "stream" ? "split" : v; // stream is cut → fall back to split
+    const vanillaHeader = document.querySelector("header.periscope-header");
+    if (vanillaHeader) vanillaHeader.style.display = "none";
+  }
+  render(<App />, document.getElementById("app"));
+}
+
+boot();
