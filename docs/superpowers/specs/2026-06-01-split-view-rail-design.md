@@ -92,20 +92,26 @@ aside#rail (~320px)        │  section#detail
 
 | Entity   | Identity rule                                                                                                |
 | -------- | ------------------------------------------------------------------------------------------------------------ |
-| Repo     | `basename(parent(git_common_dir))` of any worktree of the repo. All worktrees of one repo share this key.    |
-| Worktree | The tmux session name (one session per worktree, the `+ project` convention). Worktree cwd is the join key.  |
+| Repo     | `repo_key` = the full repo path returned by `periscope.gitutil.resolve_repo(worktree_cwd)`. `repo_label` = `basename(repo_key)`. All worktrees of one repo share `repo_key`. |
+| Worktree | `worktree_key` = the tmux session name (one session per worktree, the `+ project` convention). The worktree cwd is the join key for LGTM lookups. |
 | Pane     | Existing `@periscope_id` minted by `periscope/pids.py`.                                                      |
-| Review   | Identified by the worktree it belongs to (1:1). In persisted state, encoded as the literal string `"review"` inside `panesByWorktree[<worktree_key>]`. At most one review per worktree (matches LGTM's per-repo-path session model). |
+| Review   | Identified by the worktree it belongs to (1:1). In persisted state, encoded as the literal string `"review"` inside `panesByWorktree[<worktree_key>]`. LGTM session is keyed by the *worktree cwd* (see below), so two worktrees of the same repo get two independent LGTM sessions — exactly the v1 semantics. |
 
 Repo grouping is *derived*: a repo appears in the rail iff ≥1 of its
-worktree-sessions is in the rail. Repo identity uses `git rev-parse
---git-common-dir`, then `basename(dirname(common_dir))`. This is robust to
-sibling worktrees (the standard `~/dev/worktrees/<repo>/<branch>/`
-layout) because all of them share a common dir. For inline worktrees
-(`<repo>/.worktrees/<branch>`) the common dir is `<repo>/.git`, so the
-basename also resolves to the repo. Edge cases (worktree dir renamed
-manually outside periscope) are accepted: the auto-label may drift, the
-override settings UI (deferred) is the fix.
+worktree-sessions is in the rail. `gitutil.resolve_repo()` already exists
+— it does `os.path.realpath(os.path.dirname(common_abs))` on the
+worktree's git-common-dir, returning the main checkout path. Sibling
+worktree layout (`~/dev/worktrees/<repo>/<branch>/`) and inline layout
+(`<repo>/.worktrees/<branch>/`) both resolve to the repo path. Using the
+full path as `repo_key` (not the basename) prevents collisions across
+`~/dev/foo` vs `~/work/foo`. Edge cases (repo dir renamed outside
+periscope) are accepted; the deferred override-settings UI is the fix.
+
+**LGTM mapping note.** `periscope/lgtm.py` keys sessions by the
+`repoPath` that was POSTed when the session was created. Periscope's
+existing convention is to POST a worktree cwd (not the repo root), so
+two worktrees of the same repo get two LGTM sessions — which is what we
+want: each rail `review` row binds to its own worktree's LGTM session.
 
 ### Persisted state (extends `prefs.js`)
 
@@ -148,10 +154,12 @@ repo rows.
 
 A worktree-session enters the rail in exactly three ways:
 
-1. **`+ project`** creates one and auto-adds it (today the flow ends with
-   the new session opened in a new tmux window; that's the natural moment to
-   add the rail entry).
-2. **`review PR`** creates a worktree and auto-adds it (same reasoning).
+1. **`+ project`** creates one and auto-adds it. The submit handler in
+   `static/new-project-modal.js` must be patched to write the new worktree
+   into `worktreesByRepo[repo]` and seed `panesByWorktree[worktree]`
+   with the Claude pane id + `"review"` sentinel.
+2. **`review PR`** creates a worktree and auto-adds it (same patch in
+   `static/review-pr-modal.js`).
 3. **`+ open` picker** explicitly added by the user. The picker (a new
    modal) lists every tmux session whose worktree isn't already railed,
    grouped by repo, multi-select.
@@ -182,7 +190,7 @@ The user's drag-order is preserved for everything else.
 | Pane row                 | Select → right pane shows terminal + side. Updates `lastSelected`.              |
 | Review row (LGTM live)   | Select → right pane shows LGTM iframe. Updates `lastSelected`.                  |
 | Review row (no LGTM)     | Select → right pane shows "Start review" CTA (one-click POST). Updates last.    |
-| `+ New tab` row          | Opens the existing `commands-modal` palette, scoped to "add to this session".   |
+| `+ New tab` row          | Opens a **new** launcher modal (see Files below) scoped to this worktree's session. |
 | `+ open` (rail top)      | Opens the new picker modal.                                                     |
 
 Selection is exclusive — at most one row selected. `lastSelected` is
@@ -213,6 +221,11 @@ built. A row whose worktree has any matching child remains fully visible
 (so a filter doesn't hide a worktree that has a needs-input pane buried
 inside a collapsed group — its rolled-up status dot still shows).
 
+Implementation note: `static/grid.js:passesFilter` is a flat per-window
+predicate. The rail needs a *two-level* predicate ("is this row a match
+OR a parent of a match"). That's a parallel function — not a reuse of
+`passesFilter`. The plan should budget for it.
+
 ## Right pane behavior
 
 | Selected row     | Header                                              | Body                                                                                |
@@ -230,8 +243,9 @@ the previous mount.
 A single xterm instance is reused — when selection changes from pane A to
 pane B, the existing xterm reconnects its `/ws/pane` to B's pane and
 re-issues the alt-screen + cursor-sync prefix described in `CLAUDE.md` key
-invariant #3. This matches what `modal.js` does today on first open;
-moving it into `#detail` is mostly relocation, not redesign.
+invariant #3. `terminal.js:startLiveTerminal` already handles the
+reconnect+prefix on every call; the work is wiring it up to a new
+container element.
 
 ## Chrome (top bar)
 
@@ -249,22 +263,60 @@ moving it into `#detail` is mostly relocation, not redesign.
 ## Modal coexistence
 
 The `#modal` element stays. Grid and stream views continue to open it on
-card/row click — unchanged. Split view never opens the modal. The
-xterm-attachment code currently inside `modal.js` is extracted into a
-shared module (`terminal-mount.js`) consumed by both `modal.js` and the
-new `detail.js`.
+card/row click — unchanged. Split view never opens the modal.
+
+The xterm lifecycle already lives in `static/terminal.js`
+(`startLiveTerminal` / `stopLiveTerminal` / `writeTerminalLine`); what
+needs extraction is the parts of `modal.js` that *configure* the xterm
+and the side ecosystem around it. Three concrete coupling points to
+address:
+
+1. **Container element parameterization.** `terminal.js` currently does
+   `document.getElementById("modal-xterm")` at module load. Change to
+   accept a container element (or selector) per `startLiveTerminal` call;
+   `modal.js` passes `#modal-xterm`, `detail.js` passes `#detail-xterm`.
+2. **Link provider callback decoupling.** `terminal.js:13` imports
+   `addLgtmDocFromTerminal` from `modal.js`. The callback assumes a modal
+   context with `lastPaneData.cwd_raw`. Refactor to a registerable hook
+   so `detail.js` can register its own equivalent (initially identical
+   behavior; later could differ).
+3. **Paste handler placement.** `modal.js:1156`'s capture-phase image
+   paste handler needs to be a per-container concern, not tied to the
+   modal. Move into a helper invoked by both modal and detail mounts.
+
+The new `terminal-mount.js` is the home for these three concerns —
+basically a thin wrapper that mounts the live terminal into a passed
+container, registers the per-mount link provider hook, and attaches the
+paste handler. `modal.js` and the new `detail.js` both call it.
+
+### Feature scope of the rail's review row
+
+The rail's `review` row opens LGTM at its *root URL for the worktree*.
+Today's modal review tab is richer — it has a per-LGTM-item tab strip,
+a Documents dropdown, doc-pinning state (`MOUNTED_DOCS_KEY_PREFIX` in
+localStorage), and walkthrough handling. v1 explicitly **does not**
+duplicate that into the rail; per-item navigation stays modal-only.
+This is a deliberate scope choice: the rail's job is fast switching
+between "code" and "review at the worktree level," not deep navigation
+inside a review. Per-item navigation in split view is future work.
 
 ## Files added & touched (overview, not exhaustive)
 
 New frontend modules:
 
 - `static/rail.js` — left-rail rendering, drag/drop, selection state, click
-  handlers.
+  handlers, two-level filter predicate, frontend status rollup.
 - `static/detail.js` — right-pane rendering for the four states (pane,
   review-live, review-empty, empty).
-- `static/terminal-mount.js` — extracted from `modal.js`; owns the single
-  xterm instance and its reconnect-on-target-change behavior.
+- `static/terminal-mount.js` — thin wrapper around `terminal.js` that
+  parameterizes the container element, registers the per-mount link
+  provider hook, and attaches the paste handler. Consumed by both
+  `modal.js` and `detail.js`.
 - `static/open-picker-modal.js` — the `+ open` picker.
+- `static/launcher-modal.js` — the `+ New tab` per-worktree launcher.
+  Reads `prefs.getCommands()` and posts to `/api/window/new` with
+  session context (mirrors `grid.js:renderNewTile`'s click behavior but
+  as a modal instead of an inline tile).
 
 Frontend modules touched:
 
@@ -273,8 +325,16 @@ Frontend modules touched:
   `rail`/`detail` when in split.
 - `static/grid.js` — hidden when split is active; unchanged otherwise.
 - `static/stream.js` — same.
-- `static/modal.js` — terminal-mount extraction; LGTM tab logic stays
-  scoped to modal (still used by grid/stream).
+- `static/modal.js` — calls `terminal-mount` instead of mounting xterm
+  directly; LGTM tab logic stays scoped to modal (still used by
+  grid/stream).
+- `static/terminal.js` — accept a container element (or selector) per
+  `startLiveTerminal` call instead of looking up `#modal-xterm` at
+  module load; replace the hard import of `addLgtmDocFromTerminal` with
+  a registerable hook.
+- `static/new-project-modal.js` — submit handler appends the new
+  worktree to `worktreesByRepo` + seeds `panesByWorktree`.
+- `static/review-pr-modal.js` — same.
 - `static/prefs.js` — new `RailState` keys; loaders/setters.
 - `static/state.js` — adds rail's transient state (drag-in-progress,
   current selection mirrored for fast read).
@@ -283,16 +343,24 @@ Frontend modules touched:
 
 Backend modules touched:
 
-- `periscope/routes/prefs.py` — accepts the new rail keys (the prefs route
-  is schema-light today, so this is largely a documentation update).
-- `periscope/git_pr.py` (or a new `periscope/repos.py`) — adds a function
-  to resolve `(session_name) → {repo_key, worktree_key, repo_label}` so
-  the frontend doesn't have to shell out. Cached per session.
-- `periscope/routes/state.py` — `/api/state` response gains `repo_key`,
-  `repo_label`, `worktree_key` fields per window. (Or a sibling
-  `/api/state/rail` view; chosen at implementation time.)
+- `periscope/routes/prefs.py` — extends `UIPatch` and the `view`
+  validator to accept `"split"` plus the new `RailState` keys.
+  `store.update_ui` already does generic merge; no store changes.
+- `periscope/window_view.py` (where `affiliation` + `cached_git_state`
+  live) — extend `cached_git_state(cwd)` to also return `repo_key` (the
+  full path from `gitutil.resolve_repo`) and `repo_label`
+  (`basename(repo_key)`). The `/api/state` response gains these fields
+  per window automatically because they flow through the same path.
+  No new endpoint, no new resolver — piggyback on what's already running
+  per pane per poll.
 - `periscope/routes/lgtm.py` — already has session-create; the
   `start →` button reuses the existing `POST /api/lgtm/start` endpoint.
+
+**Rollup ownership.** Status-dot rollup
+(`needs-input > working > done > idle > shell`) is computed
+**frontend-only** in `rail.js`. Per-pane `state` and per-worktree LGTM
+state are already attached to every window in `/api/state`. No backend
+rail-shape leak.
 
 No backend routes are removed or renamed.
 
@@ -314,9 +382,6 @@ not design questions:
 - Does the `xterm` instance literally reattach across selections, or is a
   fresh instance per-selection cheap enough that we don't bother? (Today
   the modal does mount-on-open; either is acceptable.)
-- Where exactly does the `repo_key` / `worktree_key` derivation live —
-  per-window field on `/api/state`, or a sidecar `/api/repos` map? (The
-  spec is agnostic; the plan picks.)
 - LGTM events SSE: when a review row's LGTM state changes, the rail row's
   status dot updates. Today the LGTM mirror polls every 30s; the rail
   doesn't need a tighter loop, but live SSE per-session would be nicer.
