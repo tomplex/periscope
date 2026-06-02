@@ -57,41 +57,100 @@ export function setTerminalLinkCallback(cb) {
   linkClickCallback = cb;
 }
 
-// Matches a .md path inside a terminal row. Anchored by negative
-// look-around so `data.md_archive` doesn't fool it into matching
-// `data.md`, and a leading word/`/`/`.`/`-` doesn't claim more than
-// the path's first char. Trailing `:42` line numbers are captured
-// so Cmd+click in compiler-style output works.
+let fileLinkCallback = null;
+let urlLinkCallback = null;
+
+// Register a callback for absolute/relative file path clicks (no .md
+// special case). Callback signature: (rawPath: string) => void.
+// Parents (Detail.jsx) register this to open the preview overlay.
+export function setTerminalFileCallback(cb) {
+  fileLinkCallback = cb;
+}
+
+// Register a callback for URL clicks. Callback signature: (url: string)
+// => void. Default unwired — terminalCore handles URLs via window.open
+// directly when no callback is registered (see registerRoutingLinkProvider).
+export function setTerminalUrlCallback(cb) {
+  urlLinkCallback = cb;
+}
+
+// URL: http/https/ws/wss with no embedded whitespace; conservative on what
+// terminates — most CLI URLs don't include trailing punctuation we'd want
+// to strip, so we eat as much as possible up to whitespace or quote/paren.
+const URL_RE = /\b(?:https?|wss?):\/\/[^\s)"'`<>]+/g;
+
+// Absolute file path: starts with /, followed by path chars. Excludes
+// trailing punctuation (.,)";:) — common in prose. Bounded on the left by
+// a word boundary or start-of-line.
+const ABS_PATH_RE = /(?<![\w./-])\/[\w./-]+\b(?::\d+)?/g;
+
+// Relative path with a known extension. The ext list intentionally errs
+// toward false negatives — Cmd+click on garbage in scrollback is worse
+// than a missed click. Expand cautiously when concrete misses surface.
+const REL_PATH_RE = /(?<![\w./-])\.{0,2}\/[\w./-]+\.(?:md|py|ts|tsx|js|jsx|json|html|css|rs|go|toml|yaml|yml|sh|sql|txt|rb)\b(?::\d+)?/g;
+
+// .md special-case for LGTM routing (legacy behavior preserved). Same
+// shape as the prior MD_PATH_RE but renamed for clarity.
 const MD_PATH_RE = /(?<![\w./-])[\w./~-]*[\w-]+\.md(?::\d+)?(?!\w)/g;
 
-function registerMarkdownLinkProvider(t) {
+// One routing link provider. xterm supports N providers but a single
+// routing provider keeps the regex passes minimal (one per row) and routing
+// decisions in one place. Precedence:
+//   1. URL — always handled by urlLinkCallback if registered, else
+//      window.open with noopener.
+//   2. .md AND a markdown handler is registered (LGTM session for this
+//      cwd) → markdown handler.
+//   3. File path — handled by fileLinkCallback if registered (Phase 3 wires
+//      this to the preview overlay). Until then it's a no-op.
+function registerRoutingLinkProvider(t) {
   t.registerLinkProvider({
     provideLinks(rowNumber, callback) {
       const line = t.buffer.active.getLine(rowNumber - 1)?.translateToString(true);
       if (!line) return callback(undefined);
       const links = [];
-      let m;
-      MD_PATH_RE.lastIndex = 0;
-      while ((m = MD_PATH_RE.exec(line)) !== null) {
-        const text = m[0];
-        const start = m.index + 1;       // xterm columns are 1-indexed
-        const end = start + text.length - 1;
-        links.push({
-          text,
-          range: {
-            start: { x: start, y: rowNumber },
-            end:   { x: end,   y: rowNumber },
-          },
-          activate(event, linkText) {
-            // Require a modifier so reading scrollback doesn't accidentally
-            // trigger adds. Cmd on Mac, Ctrl elsewhere.
-            if (!event.metaKey && !event.ctrlKey) return;
-            if (linkClickCallback) linkClickCallback(linkText);
-          },
-          hover() {},
-          leave() {},
-        });
+
+      function pushMatch(re, kind) {
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(line)) !== null) {
+          const text = m[0];
+          const start = m.index + 1;       // xterm columns are 1-indexed
+          const end = start + text.length - 1;
+          links.push({
+            text,
+            range: {
+              start: { x: start, y: rowNumber },
+              end:   { x: end,   y: rowNumber },
+            },
+            activate(event, linkText) {
+              // Cmd/Ctrl is required for ALL routes — reading scrollback
+              // can't accidentally trigger a file open or URL.
+              if (!event.metaKey && !event.ctrlKey) return;
+              if (kind === "url") {
+                if (urlLinkCallback) urlLinkCallback(linkText);
+                else window.open(linkText, "_blank", "noopener");
+                return;
+              }
+              if (kind === "md" && linkClickCallback) {
+                linkClickCallback(linkText);
+                return;
+              }
+              if (kind === "file" && fileLinkCallback) {
+                fileLinkCallback(linkText);
+              }
+            },
+            hover() {},
+            leave() {},
+          });
+        }
       }
+
+      // Order matters: URLs first so http://foo.md isn't claimed as .md.
+      pushMatch(URL_RE, "url");
+      pushMatch(MD_PATH_RE, "md");
+      pushMatch(ABS_PATH_RE, "file");
+      pushMatch(REL_PATH_RE, "file");
+
       callback(links);
     },
   });
@@ -158,7 +217,7 @@ export function startLiveTerminal(target) {
   //
   // The link provider runs per-rendered-row on demand. Underline-on-
   // hover comes for free from xterm's default link styling.
-  registerMarkdownLinkProvider(term);
+  registerRoutingLinkProvider(term);
 
   // Fit xterm to the modal container's actual pixel size (so we never clip
   // the bottom rows) and ask tmux to resize the underlying pane to match.
