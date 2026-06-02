@@ -5,18 +5,20 @@
 // collapsible `⎿` output, Edit diffs. No xterm/emulation — JSONL is already
 // structured. See the segmented-transcript design spec.
 import { useEffect, useState, useRef } from "preact/hooks";
-import { transcriptSeen } from "../store.js";
+import { transcriptSeen, paneTranscript } from "../store.js";
 import { targetQuery, apiCall } from "../util.js";
 import { renderMarkdown } from "./markdown.jsx";
 
 const TURNS_POLL_MS = 2000;
 
-// Poll while this pane is the current selection — in EITHER sub-mode, so a
-// Terminal-mode pane still discovers its transcript and auto-promotes. Fires
-// once immediately on becoming selected, then every TURNS_POLL_MS. On the first
-// non-empty response, flips transcriptSeen[pid] (drives the auto-promote).
+// Poll /api/pane/turns while THIS pane is the current selection. Writes
+// the response to the shared `paneTranscript` signal (one entry per pid)
+// so both TranscriptView (rendered messages) and Sidebar's Files section
+// (selected pane's messages) read from the same store. Also flips
+// transcriptSeen[pid] on first non-empty response — load-bearing for the
+// auto-promote toggle (see computeMode in Detail.jsx). Eviction lives in
+// Detail.jsx's openedTr pruning path.
 function useTranscriptPoll(target, pid, selected) {
-  const [messages, setMessages] = useState([]);
   useEffect(() => {
     if (!selected || !target) return;
     let alive = true;
@@ -27,7 +29,11 @@ function useTranscriptPoll(target, pid, selected) {
         const data = await res.json();
         if (!alive) return;
         const msgs = data && data.turns === null ? [] : (data.messages || []);
-        setMessages(msgs);                       // full-replace (resume-safe)
+        const sessionId = data?.session_id || null;
+        paneTranscript.value = {
+          ...paneTranscript.value,
+          [pid]: { messages: msgs, sessionId },
+        };
         if (msgs.length && !transcriptSeen.value[pid]) {
           transcriptSeen.value = { ...transcriptSeen.value, [pid]: true };
         }
@@ -39,7 +45,7 @@ function useTranscriptPoll(target, pid, selected) {
     tick();
     return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [target, pid, selected]);
-  return messages;
+  // No return — consumers read from the signal directly.
 }
 
 // A short human-readable arg for a tool call, by tool name — the bit Claude's
@@ -238,7 +244,8 @@ function Composer({ target, composerRef }) {
 }
 
 export function TranscriptView({ target, pid, selected }) {
-  const messages = useTranscriptPoll(target, pid, selected);
+  useTranscriptPoll(target, pid, selected);
+  const messages = paneTranscript.value[pid]?.messages || [];
   const scrollRef = useRef(null);
   const composerRef = useRef(null);
   // Follow the conversation: open at the bottom and stay pinned as new turns
