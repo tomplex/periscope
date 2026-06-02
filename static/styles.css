@@ -3139,10 +3139,17 @@ body[data-alerts="open"][data-view="stream"] main {
   top: var(--detail-header-h, 40px);
   left: 0; right: 280px; bottom: 0;
   z-index: 1;
-  display: flex; flex-direction: column;
   overflow: hidden;
   background: var(--bg-0);
   border-right: 1px solid var(--line);
+}
+/* Transcript fills the whole host; the composer overlays its bottom edge. Its
+   bottom padding (set in JS to the composer's height) keeps the last message
+   clear of the box, so growing the composer reflows padding rather than
+   resizing the scroll viewport — no scroll "bounce". */
+.detail-transcript-host .transcript { position: absolute; inset: 0; }
+.transcript-composer {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
 }
 
 /* Transcript / Terminal toggle in the pane header */
@@ -3172,7 +3179,8 @@ body[data-alerts="open"][data-view="stream"] main {
   padding: 10px 14px; border-top: 1px solid var(--line); background: var(--bg-0);
 }
 .transcript-composer-input {
-  flex: 1; resize: none; min-height: 38px; max-height: 160px; overflow-y: auto;
+  flex: 1; resize: none; box-sizing: border-box;
+  min-height: 38px; max-height: 140px; overflow-y: auto;
   font-family: var(--sans); font-size: 13px; line-height: 1.45;
   color: var(--fg-0); background: var(--bg-1);
   border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 11px;

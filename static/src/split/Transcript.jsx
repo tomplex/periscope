@@ -136,7 +136,7 @@ function Turn({ m }) {
 // terminal is hidden). Sends multi-line text via /api/send's paste-buffer path
 // then Enter; the new turn shows up on the next poll. Enter submits,
 // Shift+Enter inserts a newline (chat convention, matches Claude's own input).
-function Composer({ target }) {
+function Composer({ target, composerRef }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const inputRef = useRef(null);
@@ -152,7 +152,7 @@ function Composer({ target }) {
     });
     if (ok) {
       setText("");
-      if (inputRef.current) inputRef.current.style.height = "auto";  // snap back from auto-grow
+      if (inputRef.current) inputRef.current.style.height = "";  // back to CSS min-height
     }
     setSending(false);
   }
@@ -167,8 +167,10 @@ function Composer({ target }) {
   function onInput(e) {
     const el = e.currentTarget;
     setText(el.value);
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+    // Collapse to 0 before measuring so the box tracks content both ways
+    // (grows and shrinks); cap matches CSS max-height.
+    el.style.height = "0px";
+    el.style.height = Math.min(el.scrollHeight, 140) + "px";
   }
 
   // Paste a screenshot: upload it (deliver=false so it lands in THIS message,
@@ -193,7 +195,7 @@ function Composer({ target }) {
   }
 
   return (
-    <div class="transcript-composer">
+    <div class="transcript-composer" ref={composerRef}>
       <textarea
         ref={inputRef}
         class="transcript-composer-input"
@@ -218,25 +220,45 @@ function Composer({ target }) {
 export function TranscriptView({ target, pid, selected }) {
   const messages = useTranscriptPoll(target, pid, selected);
   const scrollRef = useRef(null);
+  const composerRef = useRef(null);
   // Follow the conversation: open at the bottom and stay pinned as new turns
   // arrive — UNLESS the user has scrolled up to read, then leave them be.
   const stick = useRef(true);
+  const lastKey = useRef("");
 
   const pin = () => {
     const el = scrollRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   };
 
-  useEffect(pin, [messages]);
-
-  // Re-pin when the scroll area resizes — e.g. the composer auto-grows as you
-  // type a long message, shrinking the transcript; without this the bottom
-  // would slide out of view and snap back on the next poll (the "bounce").
+  // Pin ONLY when the content actually changed — not on every 2s poll (the
+  // message list is replaced each poll even when identical). Re-pinning on an
+  // unchanged poll is what yanked the view to the bottom while you were typing.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(pin);
-    ro.observe(el);
+    const last = messages[messages.length - 1];
+    const key = `${messages.length}:${last ? last.uuid : ""}:${last ? (last.tool_uses || []).length : 0}`;
+    if (key !== lastKey.current) {
+      lastKey.current = key;
+      pin();
+    }
+  }, [messages]);
+
+  // The composer overlays the bottom of the (full-height) transcript. Keep the
+  // transcript's bottom padding equal to the composer's height so the last
+  // message always clears the box, and re-pin if we're stuck — so growing the
+  // composer just reflows padding instead of resizing the scroll viewport (no
+  // bounce). rAF: measure after layout settles.
+  useEffect(() => {
+    const box = composerRef.current;
+    const scroll = scrollRef.current;
+    if (!box || !scroll) return;
+    const sync = () => {
+      scroll.style.paddingBottom = box.offsetHeight + 14 + "px";
+      requestAnimationFrame(pin);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(box);
     return () => ro.disconnect();
   }, []);
 
@@ -256,7 +278,7 @@ export function TranscriptView({ target, pid, selected }) {
                 : <Turn key={m.uuid} m={m} />
             )}
       </div>
-      <Composer target={target} />
+      <Composer target={target} composerRef={composerRef} />
     </>
   );
 }
