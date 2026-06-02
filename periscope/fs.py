@@ -15,6 +15,8 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from periscope.tmux import tmux
+
 
 _MAX_BYTES_DEFAULT = 1_000_000
 
@@ -151,3 +153,28 @@ def safe_reveal(cwd: str, raw_path: str) -> None:
     # closed, etc.). Logging level is debug because this is user-visible
     # and the failure mode is benign.
     subprocess.run(["open", "-R", str(resolved)], check=False)
+
+
+def _cwd_for_target(target: str) -> str:
+    """Resolve the pane's cwd via `tmux display-message`. Same one-shot
+    pattern as periscope/turns.py:get_turns_for_pane."""
+    try:
+        out = tmux(
+            "display-message", "-t", target, "-p", "#{pane_current_path}"
+        ).strip()
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"unknown pane: {target}")
+    if not out:
+        raise HTTPException(status_code=404, detail=f"pane has no cwd: {target}")
+    return out
+
+
+def safe_read_for_pane(target: str, raw_path: str,
+                       max_bytes: int = _MAX_BYTES_DEFAULT) -> tuple[str, str]:
+    """tmux-resolves cwd from `target`, then calls safe_read."""
+    return safe_read(_cwd_for_target(target), raw_path, max_bytes)
+
+
+def safe_reveal_for_pane(target: str, raw_path: str) -> None:
+    """tmux-resolves cwd from `target`, then calls safe_reveal."""
+    safe_reveal(_cwd_for_target(target), raw_path)

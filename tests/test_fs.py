@@ -87,3 +87,58 @@ def test_safe_read_prefix_confusion_guard(tmp_path):
     with pytest.raises(HTTPException) as exc:
         fs.safe_read(str(cwd), str(sibling / "secret"))
     assert exc.value.status_code == 403
+
+
+def test_safe_read_for_pane_uses_tmux_cwd(tmp_path, monkeypatch):
+    f = tmp_path / "x.txt"
+    f.write_text("ok\n")
+
+    def fake_tmux(*args):
+        # display-message resolves the pane's cwd
+        if args[:1] == ("display-message",):
+            return str(tmp_path) + "\n"
+        raise AssertionError(f"unexpected tmux call: {args}")
+
+    monkeypatch.setattr("periscope.fs.tmux", fake_tmux)
+    resolved, contents = fs.safe_read_for_pane("sess:1", "x.txt")
+    assert contents == "ok\n"
+    assert resolved == str(f.resolve())
+
+
+def test_safe_read_for_pane_404_on_empty_tmux_output(monkeypatch):
+    # `tmux()` doesn't raise on non-zero exit — returns "" instead
+    # (verified at periscope/tmux.py:21-25). Production 404 path is the
+    # `if not out:` branch in _cwd_for_target, not the except.
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: "")
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_read_for_pane("sess:1", "x.txt")
+    assert exc.value.status_code == 404
+
+
+def test_safe_read_for_pane_404_when_tmux_binary_missing(monkeypatch):
+    # Defensive: if tmux itself can't run (binary not found, timeout), the
+    # except branch still gives 404 — that's the safety net.
+    def boom(*a):
+        raise FileNotFoundError("tmux")
+    monkeypatch.setattr("periscope.fs.tmux", boom)
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_read_for_pane("sess:1", "x.txt")
+    assert exc.value.status_code == 404
+
+
+def test_safe_reveal_for_pane_invokes_open_R(tmp_path, monkeypatch):
+    f = tmp_path / "x.txt"
+    f.write_text("ok\n")
+    called = []
+
+    def fake_tmux(*args):
+        if args[:1] == ("display-message",):
+            return str(tmp_path) + "\n"
+        raise AssertionError(f"unexpected tmux call: {args}")
+
+    def fake_run(cmd, **kw):
+        called.append(cmd)
+    monkeypatch.setattr("periscope.fs.tmux", fake_tmux)
+    monkeypatch.setattr("periscope.fs.subprocess.run", fake_run)
+    fs.safe_reveal_for_pane("sess:1", "x.txt")
+    assert called == [["open", "-R", str(f.resolve())]]
