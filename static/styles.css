@@ -1569,6 +1569,7 @@ body.modal-open { overflow: hidden; }
      visible as a darker frame. */
   background: var(--bg-term);
   overflow: hidden;
+  font-feature-settings: "liga" 1, "calt" 1;
 }
 .modal-xterm .xterm { height: 100%; }
 .modal-xterm .xterm-viewport {
@@ -2845,7 +2846,7 @@ body[data-alerts="open"][data-view="stream"] main {
 }
 .term-scroll-bottom:hover { opacity: 1; background: var(--bg-3); }
 .detail-pane-body { display: grid; grid-template-columns: 1fr 280px; flex: 1; min-height: 0; }
-.detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; padding: 8px; }
+.detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; padding: 8px; font-feature-settings: "liga" 1, "calt" 1; }
 .detail-xterm .xterm { height: 100%; }
 .detail-xterm .xterm-viewport { background: var(--bg-term) !important; }
 /* Detail-side reuses the modal's sidebar classes (.modal-side-section,

@@ -17,6 +17,7 @@
 // to it through the exported functions.
 
 import { targetQuery } from "../util.js";
+import { terminalTheme } from "./theme.js";
 
 let term = null;
 let termWs = null;
@@ -119,20 +120,12 @@ export function startLiveTerminal(target) {
     // readline word-back-delete sequence (ESC + DEL), Option+Left becomes
     // ESC + b (word back), etc. Claude Code's input box honors these.
     macOptionIsMeta: true,
-    theme: {
-      background: "#282c34",
-      foreground: "#e6edf3",
-      cursor: "#58a6ff",
-      cursorAccent: "#282c34",
-      selectionBackground: "rgba(88,166,255,0.35)",
-      black: "#1d1f21",        red: "#cc6666",  green: "#b5bd68",
-      yellow: "#f0c674",       blue: "#81a2be", magenta: "#b294bb",
-      cyan: "#8abeb7",         white: "#c5c8c6",
-      brightBlack: "#969896",  brightRed: "#ff7373",
-      brightGreen: "#c8e094",  brightYellow: "#ffd47b",
-      brightBlue: "#9ec5fe",   brightMagenta: "#d8b6db",
-      brightCyan: "#a8e0d8",   brightWhite: "#ffffff",
-    },
+    theme: terminalTheme,
+    cursorStyle: "block",
+    fontWeight: "400",
+    // CSS ligatures aren't a runtime xterm setting in the vendored bundle,
+    // but the parent container's CSS sets font-feature-settings so JetBrains
+    // Mono / SF Mono show their ligatures when present.
   });
   term.open(containerEl);
   term.focus();
