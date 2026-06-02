@@ -20,6 +20,7 @@ from periscope.panes import (
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.store import get_window
 from periscope.tmux import tmux
+from periscope.turns import get_turns_for_pane
 
 router = APIRouter()
 
@@ -106,6 +107,23 @@ def pane(session: str, index: int, lines: int = 200):
         **git,
         **pr,
     }
+
+
+@router.get("/api/pane/turns")
+def pane_turns(session: str, index: int):
+    """Structured turn transcript for a Claude pane. Full message list per call
+    (stateless; the client reconciles by uuid). Returns {turns: null} when the
+    pane's cwd resolves to no live transcript. Session/index are query params so
+    slash-bearing session names don't collide with path routing (invariant 6)."""
+    target = f"{session}:{index}"
+    try:
+        cwd = tmux("display-message", "-t", target, "-p", "#{pane_current_path}").strip()
+    except Exception:
+        raise HTTPException(500, "tmux display-message failed")
+    if not cwd:
+        return {"turns": None}
+    out = get_turns_for_pane(cwd)
+    return out if out is not None else {"turns": None}
 
 
 @router.post("/api/rename")
