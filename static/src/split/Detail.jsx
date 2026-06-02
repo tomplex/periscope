@@ -189,7 +189,11 @@ function ReviewDetail({ worktreeKey }) {
     const f = document.createElement("iframe");
     f.id = "detail-review-iframe";
     f.className = "detail-review-iframe";
-    f.setAttribute("referrerpolicy", "no-referrer");
+    // No referrerpolicy: vanilla's static #detail-review-iframe (index.html) had
+    // none, so the default Referer is sent. LGTM's standalone /events SSE needs
+    // it — a "no-referrer" iframe gets the SSE rejected and LGTM self-reloads on
+    // the failure. (The modal iframe DOES set no-referrer, matching vanilla
+    // modal.js + embedded mode; only the bare/standalone detail iframe must not.)
     hostRef.current.appendChild(f);
     iframeRef.current = f;
   });
