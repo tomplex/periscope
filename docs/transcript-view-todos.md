@@ -98,12 +98,46 @@ sampling both the resolved JSONL and `/api/pane/turns`) showed the question
   (one clear sighting), i.e. Claude Code's flush timing isn't 100% — but it's
   not dependable.
 
-**Implication for this item:** a trustworthy "what is Claude doing / waiting on
-you" indicator must read **live pane state** (capture-pane / the status-line
-periscope already parses, the spinner, the alt-screen question box), NOT the
-transcript JSONL. The JSONL-derived task list and per-turn timing are still fine
-to surface — those are about *completed* state — but the live "now" signal is a
-live-pane concern. Don't build the activity header purely off `/api/pane/turns`.
+A second contamination-free probe (`/tmp/askprobe3.sh`, watch which files change
+during a pending question, no marker) confirmed the stronger claim: across ~96s
+of a pending `AskUserQuestion`, the **only** disk write caused by it was
+`~/.claude/sessions/<pid>.json` flipping `status`→`waiting`. The session JSONL
+never changed; **the question's content is nowhere on disk** until answered —
+it's in the Claude process's memory, shipped to the TUI over IPC
+(`peerProtocol`). So rendering the pending question's *content* in the transcript
+is impossible, not just hard.
+
+### LIVE-STATE SOURCES — two structured stores under `~/.claude/` (not the JSONL)
+
+Discovered while chasing the above; periscope reads **neither** today. Both
+update live. These are Claude Code internals (undocumented, version-tagged —
+saw 2.1.159/2.1.161 in the wild) — read defensively, degrade silently if the
+shape changes (LGTM-integration philosophy).
+
+- **`~/.claude/sessions/<pid>.json` — live session status.** Event-driven
+  (`updatedAt` = last *transition*, not a heartbeat). Fields: `status`
+  (`busy` = thinking/working · `waiting` = needs you · `idle` = done, awaiting
+  prompt · `shell` = dropped to shell), `waitingFor` (best-effort string —
+  `"approve AskUserQuestion"`, `"dialog open"`, `"permission prompt"`; value
+  varies, so key off `status`), plus `sessionId`, `cwd`, `pid`, `name`, `agent`.
+  Match to a pane via the `sessionId` `turns.py` already resolves (scan the ~30
+  small files, or index by sessionId). Filename is the pid; a crashed session
+  leaves a stale file — disambiguate with pid-liveness (periscope tracks pids).
+- **`~/.claude/tasks/<sessionId>/<n>.json` — live todo list.** One file per
+  task: `{id, subject, description, activeForm, status: pending|in_progress|
+  completed, blocks, blockedBy}`. Keyed by `sessionId`. This is the live task
+  list *directly* — cleaner than replaying `TaskCreate`/`TaskUpdate` out of the
+  JSONL. (Only present when the session has used tasks.)
+
+**Implication for this item:** the live "now" signal does **not** need
+capture-pane scraping. Source it from `sessions/<pid>.json` (`status` +
+`waitingFor`) and the task list from `tasks/<sessionId>/`. The transcript can
+then show a real-time header — `thinking…` / `⏸ waiting for you` / `idle` —
+even though the pending question's content stays invisible until answered.
+JSONL-derived per-turn timing is still fine (completed state). The activity
+panel is thus **two sources**: live state from `sessions/`+`tasks/`, history
+from the JSONL — design that split deliberately, don't build it off
+`/api/pane/turns` alone.
 
 ---
 
