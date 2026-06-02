@@ -3382,3 +3382,14 @@ body[data-alerts="open"][data-view="stream"] main {
 .term-search-btn:hover {
   background: rgba(255,255,255,0.06);
 }
+
+@keyframes terminal-bell-pulse {
+  0%   { box-shadow: 0 0 0 2px rgba(255, 213, 79, 0); }
+  20%  { box-shadow: 0 0 0 2px rgba(255, 213, 79, 0.85); }
+  100% { box-shadow: 0 0 0 2px rgba(255, 213, 79, 0); }
+}
+.detail-xterm.bell-pulse,
+.modal-xterm.bell-pulse,
+#modal-xterm.bell-pulse {
+  animation: terminal-bell-pulse 400ms ease-out;
+}

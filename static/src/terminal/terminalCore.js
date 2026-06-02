@@ -303,6 +303,15 @@ export function startLiveTerminal(target) {
     }
   });
 
+  // BEL (\x07) — flash the container border. Triggered by `printf '\a'` and
+  // many CLI tools' notification hooks.
+  term.onBell(() => {
+    if (containerEl) {
+      containerEl.classList.add("bell-pulse");
+      setTimeout(() => containerEl.classList.remove("bell-pulse"), 400);
+    }
+  });
+
   termWsTarget = target;
   termIntentionalClose = false;
   termReconnectAttempt = 0;

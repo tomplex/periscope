@@ -247,6 +247,24 @@ function PaneDetail({ w }) {
     return () => clearInterval(h);
   }, [mode, w.pid]);
 
+  // Working → (idle | done) transition pulse for Claude panes. The server
+  // refines idle → done when there's an unacknowledged completion stamp
+  // (window_view.py:120-121), so the visible-to-client transition is
+  // almost always working → done. Watching both is correct.
+  const prevState = useRef(w.state);
+  useEffect(() => {
+    const wasWorking = prevState.current === "working";
+    const isFinished = w.state === "idle" || w.state === "done";
+    if (wasWorking && isFinished && w.is_claude) {
+      const el = document.getElementById("detail-xterm");
+      if (el) {
+        el.classList.add("bell-pulse");
+        setTimeout(() => el.classList.remove("bell-pulse"), 400);
+      }
+    }
+    prevState.current = w.state;
+  }, [w.state, w.is_claude]);
+
   return (
     <div id="detail-pane" class="detail-pane">
       <PaneHeader w={w} mode={mode} onMode={(next) => setTranscriptMode(w.pid, next)} />
