@@ -3393,3 +3393,36 @@ body[data-alerts="open"][data-view="stream"] main {
 #modal-xterm.bell-pulse {
   animation: terminal-bell-pulse 400ms ease-out;
 }
+.modal-side-files .files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+}
+.files-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.files-row:last-child { border-bottom: none; }
+.files-row:hover { background: rgba(255,255,255,0.04); color: var(--fg-1); }
+.files-op {
+  flex: 0 0 16px;
+  text-align: center;
+  opacity: 0.8;
+}
+.files-path {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -18,6 +18,8 @@
 import { useRef, useEffect } from "preact/hooks";
 import { relTime, prUrl } from "../util.js";
 import * as prefs from "../prefs.js";
+import { paneTranscript, transcriptSeen, previewPath } from "../store.js";
+import { filesTouched } from "../split/filesTouched.js";
 
 function alertDotColor(kind) {
   if (kind === "need_human") return "var(--s-danger)";
@@ -299,6 +301,43 @@ function NotesEditor({ pid, onRefresh, idPrefix }) {
   );
 }
 
+function FilesSection({ pid }) {
+  if (!pid || !transcriptSeen.value[pid]) return null;
+  const entry = paneTranscript.value[pid];
+  if (!entry || !entry.messages) return null;
+  const items = filesTouched(entry.messages);
+  if (!items.length) return null;
+  return (
+    <section class="modal-side-section modal-side-files">
+      <h4>Files</h4>
+      <ul class="files-list">
+        {items.map((it) => (
+          <li
+            key={it.path}
+            class="files-row"
+            onClick={() => { previewPath.value = { path: it.path, line: null }; }}
+            title={`Open ${it.path} in preview overlay`}
+          >
+            <span class="files-op">{opGlyph(it.op)}</span>
+            <span class="files-path">{it.path}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function opGlyph(op) {
+  switch (op) {
+    case "Read": return "👁";
+    case "Write": return "+";
+    case "Edit":
+    case "MultiEdit":
+    case "NotebookEdit": return "✎";
+    default: return "·";
+  }
+}
+
 // Top-level wrapper. `containerId` / `containerClass` pick the host element so
 // the modal can render `#modal-side.modal-side` and the detail pane can render
 // `#detail-side.detail-side`. The activity-stream scrollTop is captured during
@@ -348,6 +387,7 @@ export function Sidebar({ data, onRefresh, containerId, containerClass, idPrefix
         <h4>Notes</h4>
         <NotesEditor key={pid} pid={pid} idPrefix={idPrefix} onRefresh={onRefresh} />
       </section>
+      <FilesSection pid={pid} />
       <section class="modal-side-section modal-side-activity">
         <h4>Activity</h4>
         <ActivitySection data={data} streamRef={streamRef} />
