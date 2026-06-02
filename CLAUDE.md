@@ -313,6 +313,34 @@ and most lifespan-cycle blips without needing `/clear`. The non-zero-
 exit invariant (item 10 below) still holds — the shim only exits 0,
 just rarely now.
 
+### Pane → session mapping (the transcript view)
+
+`periscope/turns.py` renders a pane's Claude conversation as a structured
+transcript (the split-view "Transcript" mode + `GET /api/pane/turns`). It must
+map a tmux pane to its *specific* session JSONL — **cwd alone collides** when
+several Claude panes run in one directory (newest-mtime returns the same file
+for all of them). The mapping is a directory of tiny files,
+`~/.config/periscope/pane_sessions/<tmux-pane-id>` containing that pane's
+`CLAUDE_CODE_SESSION_ID` (the JSONL stem); `turns.py` reads it and globs for
+`<id>.jsonl` (glob, not cwd-encode — a pane that `cd`'d into a worktree has its
+JSONL under the *start* dir's encoding).
+
+Two producers write that file, both periscope-owned:
+
+- **`channel_shim.py`** records at spawn (`_record_pane_session`) — instant, but
+  its `CLAUDE_CODE_SESSION_ID` is frozen at spawn, so it goes **stale after a
+  `/clear`** (which mints a new session id without respawning the shim).
+- **`pane_session_hook.py`** — a Claude `UserPromptSubmit` hook installed by
+  `bin/periscope install-hook` (and `install`). It fires on *every* prompt and
+  re-records, reading `session_id` from the hook **payload** (current, not
+  env) and `TMUX_PANE` from a direct child of the pane's Claude (the real pane
+  id — a deep `ps` env scan is useless here: inherited env from tool/subagent
+  subprocesses cross-contaminates). This is what makes `/clear` and pre-hook
+  panes self-correct on their next message. `uninstall-hook` removes it.
+
+Resolution falls back to newest-mtime-in-cwd when a pane has no recorded
+session (channel off / brand-new pane mid-first-prompt).
+
 ## LGTM integration
 
 `# --- LGTM integration ---` block in `server.py`. Periscope mirrors

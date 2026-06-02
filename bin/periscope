@@ -65,10 +65,58 @@ case "$1" in
 </plist>
 EOF
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
+    "$0" install-hook
     ;;
   uninstall)
     launchctl bootout "$LABEL" 2>/dev/null
     rm -f "$PLIST_DST"
+    "$0" uninstall-hook
+    ;;
+  install-hook)
+    # Register pane_session_hook.py as a Claude UserPromptSubmit hook so each
+    # pane records its CURRENT session id (periscope.turns maps pane -> session;
+    # the channel_shim records only at spawn and goes stale on /clear). Idempotent
+    # merge into ~/.claude/settings.json — preserves any existing hooks.
+    python3 - "$REPO" <<'PY'
+import json, os, sys
+repo = sys.argv[1]
+cmd = f"python3 {repo}/pane_session_hook.py"
+p = os.path.expanduser("~/.claude/settings.json")
+try:
+    with open(p) as f: d = json.load(f)
+except FileNotFoundError:
+    d = {}
+ups = d.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+present = any(h.get("command", "").endswith("pane_session_hook.py")
+              for g in ups for h in g.get("hooks", []))
+if present:
+    print("periscope pane-session hook already installed")
+else:
+    ups.append({"matcher": "", "hooks": [{"type": "command", "command": cmd, "timeout": 5}]})
+    with open(p, "w") as f: json.dump(d, f, indent=2)
+    print(f"installed UserPromptSubmit hook -> {cmd}")
+PY
+    ;;
+  uninstall-hook)
+    python3 - <<'PY'
+import json, os
+p = os.path.expanduser("~/.claude/settings.json")
+try:
+    with open(p) as f: d = json.load(f)
+except FileNotFoundError:
+    raise SystemExit(0)
+h = d.get("hooks", {})
+ups = h.get("UserPromptSubmit", [])
+for g in ups:
+    g["hooks"] = [x for x in g.get("hooks", []) if not x.get("command", "").endswith("pane_session_hook.py")]
+ups = [g for g in ups if g.get("hooks")]
+if ups:
+    h["UserPromptSubmit"] = ups
+else:
+    h.pop("UserPromptSubmit", None)
+with open(p, "w") as f: json.dump(d, f, indent=2)
+print("removed periscope pane-session hook")
+PY
     ;;
   start)
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
@@ -86,7 +134,7 @@ EOF
     tail -F "$LOG"
     ;;
   *)
-    echo "usage: $0 {install|uninstall|start|stop|restart|status|tail}"
+    echo "usage: $0 {install|uninstall|install-hook|uninstall-hook|start|stop|restart|status|tail}"
     exit 1
     ;;
 esac
