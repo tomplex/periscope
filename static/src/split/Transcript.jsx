@@ -80,13 +80,27 @@ function EditDiff({ input }) {
   );
 }
 
+// The full input worth showing verbatim on expand (preserving newlines/&&),
+// distinct from the one-line header preview. Mostly the Bash command; for a
+// Write it's the file content. Other tools' inputs are fully shown in the header.
+function fullInput(t) {
+  const inp = t.input || {};
+  switch (t.name) {
+    case "Bash": return inp.command || "";
+    case "Write": return inp.content || "";
+    default: return "";
+  }
+}
+
 function ToolCall({ t }) {
   const [open, setOpen] = useState(false);
   const running = t.result == null;
   const isEdit = t.name === "Edit";
   const isAgent = t.name === "Agent" || t.name === "Task";
-  // Something to expand: an Edit (shows the diff) or a non-empty result.
-  const expandable = isEdit || (!running && t.result !== "" && t.result != null);
+  const detail = fullInput(t);
+  const hasResult = !running && t.result != null && t.result !== "";
+  // Expandable if there's a full command/content, an Edit diff, or output.
+  const expandable = isEdit || !!detail || hasResult;
   const arg = toolArg(t);
   const subtype = isAgent ? (t.input?.subagent_type || "") : "";
   return (
@@ -102,9 +116,13 @@ function ToolCall({ t }) {
         {running && <span class="tc-running">running…</span>}
         {expandable && <span class="tc-caret">{open ? "▾" : "▸"}</span>}
       </button>
-      {open && isEdit && <EditDiff input={t.input || {}} />}
-      {open && !isEdit && expandable && (
-        <pre class="tc-out"><span class="tc-elbow">⎿ </span>{t.result}</pre>
+      {open && (
+        <div class="tc-detail">
+          {isEdit
+            ? <EditDiff input={t.input || {}} />
+            : detail && <pre class="tc-cmd">{detail}</pre>}
+          {hasResult && <pre class="tc-out">{t.result}</pre>}
+        </div>
       )}
     </div>
   );
@@ -145,12 +163,21 @@ function Composer({ target, composerRef }) {
     const body = text;
     if (!body.trim() || sending) return;
     setSending(true);
-    const ok = await apiCall("send", `/api/send?${targetQuery(target)}`, {
+    // Paste first, THEN submit as a separate Enter after a beat — a long paste
+    // can still be rendering when a same-call Enter lands, leaving the message
+    // staged-but-unsent in Claude's input. The delay lets the paste settle.
+    const pasted = await apiCall("send", `/api/send?${targetQuery(target)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paste: body, keys: ["Enter"] }),
+      body: JSON.stringify({ paste: body }),
     });
-    if (ok) {
+    if (pasted) {
+      await new Promise((r) => setTimeout(r, 250));
+      await apiCall("send", `/api/send?${targetQuery(target)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keys: ["Enter"] }),
+      });
       setText("");
       if (inputRef.current) inputRef.current.style.height = "";  // back to CSS min-height
     }
@@ -206,13 +233,6 @@ function Composer({ target, composerRef }) {
         onKeyDown={onKeyDown}
         onPaste={onPaste}
       />
-      <button
-        class="transcript-composer-send"
-        disabled={!text.trim() || sending}
-        onClick={send}
-      >
-        Send
-      </button>
     </div>
   );
 }

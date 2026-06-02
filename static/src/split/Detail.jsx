@@ -22,7 +22,7 @@ import { useRef, useEffect, useState } from "preact/hooks";
 import { windows, activeTarget, railSelection, transcriptMode, transcriptSeen } from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
-import { writeTerminalLine } from "../terminal/terminalCore.js";
+import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom } from "../terminal/terminalCore.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
 import { TranscriptView } from "./Transcript.jsx";
 
@@ -228,6 +228,25 @@ function PaneDetail({ w }) {
     return () => ro.disconnect();
   }, [w.target]);
 
+  // Switching to terminal mode un-hides the xterm; pin it to the live bottom
+  // (it otherwise shows wherever it was last scrolled — often the top).
+  useEffect(() => {
+    if (mode !== "terminal") return;
+    const r = requestAnimationFrame(() => requestAnimationFrame(scrollTerminalToBottom));
+    return () => cancelAnimationFrame(r);
+  }, [mode]);
+
+  // Show the scroll-to-bottom button only when scrolled up. Poll the terminal's
+  // position while it's the visible mode (cheap buffer read; ~instant feel).
+  const [atBottom, setAtBottom] = useState(true);
+  useEffect(() => {
+    if (mode !== "terminal") return;
+    const tick = () => setAtBottom(isTerminalAtBottom());
+    tick();
+    const h = setInterval(tick, 250);
+    return () => clearInterval(h);
+  }, [mode, w.pid]);
+
   return (
     <div id="detail-pane" class="detail-pane">
       <PaneHeader w={w} mode={mode} onMode={(next) => setTranscriptMode(w.pid, next)} />
@@ -246,6 +265,15 @@ function PaneDetail({ w }) {
             lands. SidePanel takes `target`, NOT `w`. */}
         <SidePanel key={w.target} target={w.target} />
       </div>
+      {mode === "terminal" && !atBottom && (
+        <button
+          class="term-scroll-bottom"
+          title="Scroll to latest"
+          onClick={scrollTerminalToBottom}
+        >
+          ⤓
+        </button>
+      )}
     </div>
   );
 }

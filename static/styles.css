@@ -2830,7 +2830,20 @@ body[data-alerts="open"][data-view="stream"] main {
   overflow: hidden;
 }
 
-.detail-pane { display: flex; flex-direction: column; }
+.detail-pane { display: flex; flex-direction: column; position: relative; }
+/* Floating "scroll to latest" for the terminal — sits over the terminal area
+   (clear of the 280px sidebar). xterm's scrollbar is hard to drag to the very
+   bottom; this is the reliable way down. */
+.term-scroll-bottom {
+  position: absolute; bottom: 14px; right: 312px;   /* clear of sidebar + xterm scrollbar */
+  width: 30px; height: 30px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; line-height: 1; cursor: pointer; z-index: 5;
+  color: var(--fg-1); background: var(--bg-2); border: 1px solid var(--line);
+  box-shadow: 0 2px 8px oklch(0 0 0 / 0.32);
+  opacity: 0.7; transition: opacity 0.12s, background 0.12s;
+}
+.term-scroll-bottom:hover { opacity: 1; background: var(--bg-3); }
 .detail-pane-body { display: grid; grid-template-columns: 1fr 280px; flex: 1; min-height: 0; }
 .detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; padding: 8px; }
 .detail-xterm .xterm { height: 100%; }
@@ -3187,12 +3200,6 @@ body[data-alerts="open"][data-view="stream"] main {
 }
 .transcript-composer-input::placeholder { color: var(--fg-4); }
 .transcript-composer-input:focus { outline: none; border-color: var(--accent); }
-.transcript-composer-send {
-  flex: none; height: 38px; padding: 0 16px; cursor: pointer;
-  font-family: var(--sans); font-size: 12px; font-weight: 600;
-  color: #fff; background: var(--accent); border: 0; border-radius: var(--r-md);
-}
-.transcript-composer-send:disabled { opacity: 0.45; cursor: default; }
 
 .transcript-compact {
   display: flex; align-items: center; gap: 12px;
@@ -3206,14 +3213,14 @@ body[data-alerts="open"][data-view="stream"] main {
 /* ── turns ── */
 .turn { margin: 0 0 17px; }
 
+/* User message — understated `› text`, not a boxed callout; top-aligned. */
 .turn-user {
-  display: flex; gap: 9px;
-  padding: 9px 12px; margin-bottom: 14px;
-  background: var(--bg-1); border-left: 2px solid var(--accent);
-  border-radius: var(--r-sm);
+  display: flex; gap: 9px; align-items: baseline;
+  margin-bottom: 15px;
 }
-.turn-user-mark { color: var(--accent); font-weight: 700; line-height: 1.55; }
+.turn-user-mark { color: var(--fg-3); font-weight: 600; flex: none; }
 .turn-user-body { color: var(--fg-0); min-width: 0; }
+.turn-user-body .md-p { font-size: 13.5px; line-height: 1.55; }
 
 .turn-prose { color: var(--fg-1); font-family: var(--sans); font-size: 13.5px; line-height: 1.58; }
 .turn-tools { margin-top: 7px; display: flex; flex-direction: column; gap: 2px; }
@@ -3233,16 +3240,24 @@ body[data-alerts="open"][data-view="stream"] main {
 .tc-running { color: var(--s-working); font-style: italic; flex: none; }
 .tc-caret { color: var(--fg-4); margin-left: auto; font-size: 9px; flex: none; padding-left: 6px; }
 
+/* Expanded tool detail: full command/content block, then output. */
+.tc-detail { margin: 3px 0 9px 16px; }
+.tc-cmd {
+  margin: 0; padding: 8px 11px;
+  background: var(--bg-term); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  color: var(--fg-1); white-space: pre-wrap; word-break: break-word; overflow-x: auto;
+  max-height: 300px; font-size: 11.5px; line-height: 1.55;
+}
 .tc-out {
-  margin: 2px 0 7px 16px; padding: 8px 10px;
+  margin: 5px 0 0; padding: 8px 11px;
   background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
-  color: var(--fg-2); white-space: pre-wrap; overflow-x: auto;
+  color: var(--fg-2); white-space: pre-wrap; word-break: break-word; overflow-x: auto;
   max-height: 360px; font-size: 11.5px; line-height: 1.5;
 }
-.tc-elbow { color: var(--fg-4); user-select: none; }
+.tc-detail .tc-out:first-child { margin-top: 0; }   /* output-only (no command block) */
 
 .tc-diff {
-  margin: 2px 0 7px 16px; border-radius: var(--r-sm); overflow: hidden;
+  margin: 0; border-radius: var(--r-sm); overflow: hidden;
   font-size: 11.5px; line-height: 1.5; border: 1px solid var(--line-soft);
 }
 .tc-diff-del { background: color-mix(in oklch, var(--s-danger) 15%, transparent); color: var(--fg-1); padding: 0 9px; white-space: pre-wrap; }
