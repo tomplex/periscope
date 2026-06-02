@@ -1,35 +1,85 @@
 // Thin ref+useEffect wrapper over the imperative xterm/WS core
-// (terminalCore.js). This is the ONLY Preact-aware part of the terminal — the
-// xterm instance, WebSocket, reconnect FSM, fit/resize, and paste/link
-// handlers all live in the core and stay imperative (CLAUDE.md invariants
-// #3/#4). Do not move that logic here.
+// (terminalCore.js). This is the ONLY Preact-aware part of the terminal —
+// the xterm instance, WebSocket, reconnect FSM, fit/resize, paste, and
+// link handlers all live in the core and stay imperative.
 //
-// Lifecycle: the empty-deps effect mounts the live terminal ONCE per component
-// instance and tears it down on unmount. Call sites KEY this component on the
-// pane's pid:
+// Lifecycle: the empty-deps effect mounts the live terminal ONCE per
+// component instance and tears it down on unmount. Call sites KEY this
+// component on the pane's pid so re-selecting the same pane preserves
+// this instance.
 //
-//   <Terminal key={pid} target={target} onPaste={handlePaste} />
-//
-// so re-selecting the same pane preserves this instance (reproduces
-// detail.js's `sameMount` pid-keyed skip — reconnect, not remount) and
-// selecting a different pane unmounts+remounts → a fresh connect. The modal,
-// which is keyed per-open, mounts once per open via the same empty-deps effect.
-//
-// The default class is `modal-xterm` (matches the modal's styles.css contract);
-// the split-view <Detail> passes `class="detail-xterm"`. Neither class is
-// renamed — both already exist in styles.css.
-import { useRef, useEffect } from "preact/hooks";
-import { mountTerminal, unmountTerminal } from "./terminalCore.js";
+// Cmd+F opens a search bar overlay above the terminal. The bar is
+// rendered here (Preact) but the actual search work is in terminalCore
+// (xterm.js addon-search). Esc closes the bar via useEscape (LIFO).
+import { useRef, useEffect, useState, useCallback } from "preact/hooks";
+import {
+  mountTerminal, unmountTerminal,
+  searchNext, searchPrev, clearSearch,
+} from "./terminalCore.js";
+import { useEscape } from "../hooks/useEscape.js";
 
 export function Terminal({ target, onMdLink, onPaste, class: className = "modal-xterm", id }) {
-  const ref = useRef(null);
+  const hostRef = useRef(null);
+  const inputRef = useRef(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
   useEffect(() => {
-    mountTerminal(ref.current, target, { onMdLink, onPaste });
-    // mountTerminal self-unmounts the prior mount on its next call, so the
-    // single cleanup here is enough — don't double-tear-down.
+    mountTerminal(hostRef.current, target, { onMdLink, onPaste });
     return unmountTerminal;
-  }, []); // empty deps: mount ONCE for this component instance (pid-keyed at call site)
-  // `id` lets the modal carry `#modal-xterm` (styles.css keys flex/padding/
-  // background off that id); the split-view <Detail> can omit it.
-  return <div ref={ref} id={id} class={className} />;
+  }, []); // empty deps — mount ONCE per component instance (pid-keyed at call site)
+
+  // Cmd+F opens the search bar. Use a window-level listener so the user
+  // doesn't have to focus the terminal first.
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        setSearchOpen(true);
+        requestAnimationFrame(() => inputRef.current?.focus());
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const close = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+    clearSearch();
+  }, []);
+
+  useEscape(close, searchOpen);
+
+  function onSubmit(e) {
+    e.preventDefault();
+    if (!query) return;
+    if (e.shiftKey) searchPrev(query); else searchNext(query);
+  }
+
+  return (
+    <div class="terminal-wrap">
+      {searchOpen && (
+        <form class="term-search" onSubmit={onSubmit}>
+          <input
+            ref={inputRef}
+            class="term-search-input"
+            value={query}
+            placeholder="find in terminal"
+            onInput={(e) => { setQuery(e.currentTarget.value); }}
+          />
+          <button type="button" class="term-search-btn"
+                  title="Previous (Shift+Enter)"
+                  onClick={() => query && searchPrev(query)}>‹</button>
+          <button type="button" class="term-search-btn"
+                  title="Next (Enter)"
+                  onClick={() => query && searchNext(query)}>›</button>
+          <button type="button" class="term-search-btn"
+                  title="Close (Esc)"
+                  onClick={close}>✕</button>
+        </form>
+      )}
+      <div ref={hostRef} id={id} class={className} />
+    </div>
+  );
 }

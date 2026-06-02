@@ -3328,3 +3328,57 @@ body[data-alerts="open"][data-view="stream"] main {
   font-weight: 600; color: var(--fg-0);
   background: var(--bg-2); border-radius: 3px; padding: 0 6px; flex: none;
 }
+
+/* .terminal-wrap must be a positioned containing block (NOT display:contents,
+   which generates no box and ignores position) so .term-search anchors here
+   instead of floating to whichever ancestor is positioned. flex+column lets
+   the terminal host fill the remaining space without margin from the search
+   bar (the bar is absolute, doesn't take flex space). */
+.terminal-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+/* The host inside the wrap fills the wrap so xterm's FitAddon sees the
+   real container height. */
+.terminal-wrap > .detail-xterm,
+.terminal-wrap > .modal-xterm {
+  flex: 1;
+  min-height: 0;
+}
+.term-search {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  background: rgba(28, 30, 36, 0.95);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 4px 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.term-search-input {
+  width: 220px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg-1);
+  font: inherit;
+  padding: 2px 4px;
+}
+.term-search-btn {
+  background: transparent;
+  border: none;
+  color: var(--fg-2);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.term-search-btn:hover {
+  background: rgba(255,255,255,0.06);
+}
