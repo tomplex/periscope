@@ -26,6 +26,7 @@ let termReconnectTimer = null;
 let termReconnectAttempt = 0;
 let termReconnectedNotified = false; // only print "reconnecting…" once per outage
 let fitAddon = null;
+let webglAddon = null;
 let termResizeObserver = null;
 let fitDebounce = null;
 let containerEl = null;          // set by setTerminalContainer() before startLiveTerminal()
@@ -140,11 +141,12 @@ export function startLiveTerminal(target) {
   // own canvas inside xterm's element tree, so failure is silent on success
   // paths but we log it once for diagnosis.
   try {
-    const webgl = new WebglAddon.WebglAddon();
-    webgl.onContextLoss(() => {
-      try { webgl.dispose(); } catch (_) {}
+    webglAddon = new WebglAddon.WebglAddon();
+    webglAddon.onContextLoss(() => {
+      try { webglAddon?.dispose(); } catch (_) {}
+      webglAddon = null;
     });
-    term.loadAddon(webgl);
+    term.loadAddon(webglAddon);
   } catch (e) {
     console.warn("[periscope] WebGL terminal renderer unavailable; falling back to canvas:", e);
   }
@@ -345,6 +347,10 @@ export function stopLiveTerminal() {
   if (termResizeObserver) {
     try { termResizeObserver.disconnect(); } catch (_) {}
     termResizeObserver = null;
+  }
+  if (webglAddon) {
+    try { webglAddon.dispose(); } catch (_) {}
+    webglAddon = null;
   }
   fitAddon = null;
   if (termWs) {
