@@ -18,11 +18,15 @@
 // detail-side, detail-review/-header/-iframe, detail-empty, review-start-card,
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
-import { useRef, useEffect } from "preact/hooks";
+import { useRef, useEffect, useState } from "preact/hooks";
 import { windows, activeTarget, railSelection } from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { writeTerminalLine } from "../terminal/terminalCore.js";
+import { Sidebar } from "../sidebar/Sidebar.jsx";
+
+// Match the modal's /api/pane cadence so the two views feel identical.
+const DETAIL_POLL_MS = 1500;
 
 function lookupWindow(pid) {
   return (windows.value || []).find((w) => w.pid === pid) || null;
@@ -104,33 +108,47 @@ function PaneHeader({ w }) {
   return <header id="detail-pane-header" class="detail-pane-header">{parts.map((p, i) => <>{p}</>)}</header>;
 }
 
-function SidePanel({ w }) {
-  const sections = [];
-  if (w.pending_input) {
-    sections.push(
-      <div class="side-section">
-        <div class="side-label">Pending input</div>
-        <div class="side-pending"><span class="side-prompt">›</span>{w.pending_input}</div>
-      </div>
-    );
-  }
-  if (w.recap) {
-    sections.push(
-      <div class="side-section">
-        <div class="side-label">Recap</div>
-        <div>{w.recap}</div>
-      </div>
-    );
-  }
-  if (w.last_line) {
-    sections.push(
-      <div class="side-section">
-        <div class="side-label">Last line</div>
-        <div class="side-mono">{w.last_line}</div>
-      </div>
-    );
-  }
-  return <aside id="detail-side" class="detail-side">{sections}</aside>;
+// Rich per-pane sidebar — Linked / Notes / Activity, fed by a 1.5s poll of
+// /api/pane (the same endpoint the modal sidebar uses). The poll restarts on
+// `target` change and tears down when the pane is deselected or the user
+// switches to a review row (Detail unmounts <PaneDetail>, killing this).
+//
+// Pitfall: the inner <Sidebar> mounts <NotesEditor> uncontrolled + keyed on
+// pid, and the activity-stream scrollTop is preserved across renders. Both
+// behaviors are coupling-#5 lessons from the modal port; the shared module
+// preserves them so we don't have to re-derive here.
+function SidePanel({ target }) {
+  const [paneData, setPaneData] = useState(null);
+
+  useEffect(() => {
+    if (!target) return;
+    let alive = true;
+    async function tick() {
+      try {
+        const res = await fetch(`/api/pane?${targetQuery(target)}&lines=80`);
+        if (!res.ok) return;
+        const d = await res.json();
+        if (alive) setPaneData(d);
+      } catch (_) {}
+    }
+    tick();
+    const h = setInterval(tick, DETAIL_POLL_MS);
+    return () => { alive = false; clearInterval(h); };
+  }, [target]);
+
+  // While the first /api/pane response is in flight, render the bare aside so
+  // the grid track keeps its 240px column (no width-jump when data lands).
+  if (!paneData) return <aside id="detail-side" class="detail-side" />;
+
+  return (
+    <Sidebar
+      data={paneData}
+      onRefresh={() => {}}
+      containerId="detail-side"
+      containerClass="detail-side"
+      idPrefix="detail"
+    />
+  );
 }
 
 // Pane state. The <Terminal> is keyed on pid: re-selecting the same pid keeps
@@ -154,7 +172,10 @@ function PaneDetail({ w }) {
           target={w.target}
           onPaste={handleDetailPaste}
         />
-        <SidePanel w={w} />
+        {/* Keyed on target so switching panes wipes paneData rather than
+            showing the previous pane's PR/notes for ~1.5s until the new tick
+            lands. */}
+        <SidePanel key={w.target} target={w.target} />
       </div>
     </div>
   );
