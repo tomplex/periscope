@@ -277,22 +277,31 @@ export function Detail() {
   // side panel refresh; review live↔empty transition).
   const _ws = windows.value;
 
-  if (!sel) return <section id="detail"><EmptyDetail /></section>;
+  const isReview = !!sel && sel.startsWith("review:");
+  const isPane = !!sel && sel.startsWith("pane:");
 
-  if (sel.startsWith("pane:")) {
-    const pid = sel.slice("pane:".length);
-    const w = lookupWindow(pid);
-    if (!w) return <section id="detail"><EmptyDetail /></section>;
-    return <section id="detail"><PaneDetail w={w} /></section>;
-  }
+  // Persist the most-recently-opened review's iframe: keep its <ReviewDetail>
+  // mounted but CSS-hidden when you flip to a pane / another tab, so navigating
+  // BACK to the review does NOT recreate + reload the LGTM iframe (it stays in
+  // the DOM; display toggling never reloads an iframe). Mirrors how the modal
+  // keeps its review iframe mounted across tab switches. Switching to a
+  // DIFFERENT review swaps it (key change) — one persistent review at a time,
+  // which covers the common review↔pane flip.
+  const reviewWt = useRef(null);
+  if (isReview) reviewWt.current = sel.slice("review:".length);
+  const persistWt = reviewWt.current;
 
-  if (sel.startsWith("review:")) {
-    const worktreeKey = sel.slice("review:".length);
-    // ReviewDetail owns the session lookup + Start-CTA vs iframe decision so a
-    // transient poll gap (worktree momentarily absent from `windows`) can't
-    // flip this branch and tear down the iframe.
-    return <section id="detail"><ReviewDetail key={worktreeKey} worktreeKey={worktreeKey} /></section>;
-  }
+  const paneW = isPane ? lookupWindow(sel.slice("pane:".length)) : null;
 
-  return <section id="detail"><EmptyDetail /></section>;
+  return (
+    <section id="detail">
+      {!sel && <EmptyDetail />}
+      {isPane && (paneW ? <PaneDetail w={paneW} /> : <EmptyDetail />)}
+      {persistWt && (
+        <div style={isReview ? "display:contents" : "display:none"}>
+          <ReviewDetail key={persistWt} worktreeKey={persistWt} />
+        </div>
+      )}
+    </section>
+  );
 }
