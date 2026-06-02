@@ -22,6 +22,8 @@ def reset_panes_and_channels():
     panes._prev_state.clear()
     panes._spinner_last_seen.clear()
     panes._claude_last_seen.clear()
+    from periscope import window_view
+    window_view._view_cache.clear()
     with _CHANNELS_LOCK:
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
@@ -33,6 +35,8 @@ def reset_panes_and_channels():
     panes._prev_state.clear()
     panes._spinner_last_seen.clear()
     panes._claude_last_seen.clear()
+    from periscope import window_view
+    window_view._view_cache.clear()
     with _CHANNELS_LOCK:
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
@@ -244,3 +248,65 @@ def test_view_persisted_acked_at_suppresses_done_state(mocker, clean_state):
 
     view, _ = build_window_view(_window(pid=pid), now_ts=7000)
     assert view["state"] == "idle"  # NOT promoted to "done"
+
+
+def test_idle_pane_skips_recapture_when_activity_unchanged(mocker, clean_state):
+    from periscope import window_view
+    cap = mocker.patch("periscope.window_view.capture", return_value="")  # parses to shell/idle
+    w = _window()
+    w["activity"] = 500
+    window_view.build_window_view(w, now_ts=1000)
+    assert cap.call_count == 1
+    # Second poll, same activity, cached state is quiet → capture NOT called again.
+    window_view.build_window_view(w, now_ts=1001)
+    assert cap.call_count == 1
+
+
+def test_pane_recaptures_when_activity_advances(mocker, clean_state):
+    from periscope import window_view
+    cap = mocker.patch("periscope.window_view.capture", return_value="")
+    w = _window()
+    w["activity"] = 500
+    window_view.build_window_view(w, now_ts=1000)
+    w2 = _window()
+    w2["activity"] = 700  # tmux saw new output
+    window_view.build_window_view(w2, now_ts=1001)
+    assert cap.call_count == 2
+
+
+def test_working_pane_always_recaptures_even_if_activity_unchanged(mocker, clean_state):
+    """Spinner grace + done-edge are non-idempotent, so a working pane is never
+    skipped even when activity is stale."""
+    from periscope import window_view
+    cap = mocker.patch(
+        "periscope.window_view.capture",
+        # Real Claude status block (status line present) so parse_pane returns
+        # is_claude + spinner → working. A bare "⠋ thinking…" line has no status
+        # line and parses to shell, which would never exercise the working path.
+        return_value=(
+            "some output\n⠋ Thinking…\n"
+            "  fdy | master | clean\n"
+            "  24% | ↑235k ↓479 | $17.04 | Opus 4.7 (1M context)"
+        ),  # parses is_claude + spinner → working
+    )
+    w = _window()
+    w["activity"] = 500
+    view, _ = window_view.build_window_view(w, now_ts=1000)
+    assert view["state"] == "working"
+    window_view.build_window_view(w, now_ts=1001)  # same activity
+    assert cap.call_count == 2  # working pane re-captured
+
+
+def test_skipped_pane_still_reflects_fresh_focus(mocker, clean_state):
+    """A skipped (quiet) pane still gets fresh focused_at — only capture+parse
+    is skipped, not the recency assembly."""
+    from periscope import window_view
+    from periscope import panes
+    mocker.patch("periscope.window_view.capture", return_value="")
+    w = _window()
+    w["activity"] = 500
+    window_view.build_window_view(w, now_ts=1000)
+    panes.note_focus(f"{w['session']}:{w['index']}")  # focus shifts to this pane
+    expected = panes._focused_at[f"{w['session']}:{w['index']}"]
+    view, _ = window_view.build_window_view(w, now_ts=1001)  # activity unchanged → skip capture
+    assert view["focused_at"] == expected

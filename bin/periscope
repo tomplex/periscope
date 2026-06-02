@@ -18,6 +18,16 @@ case "$1" in
       echo "uv not found on PATH — install it: https://docs.astral.sh/uv/" >&2
       exit 1
     }
+    command -v npm >/dev/null 2>&1 || {
+      echo "npm not found on PATH — install Node.js: https://nodejs.org/" >&2
+      exit 1
+    }
+    # The frontend is a committed Vite bundle (static/dist/app.js). Build it
+    # at install time so the launchd-managed server has a fresh artifact.
+    ( cd "$REPO" && npm install && npm run build ) || {
+      echo "npm install && npm run build failed" >&2
+      exit 1
+    }
     mkdir -p "$CONFIG_DIR"
     cat > "$PLIST_DST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

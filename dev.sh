@@ -13,4 +13,7 @@ trap 'kill 0' EXIT INT TERM
 # process so it's easy to kill and leaves no orphans.
 PERISCOPE_DEV=1 uv run server.py &
 vite &
+# Rebuild the committed static/dist/ bundle on every static/src/ change.
+# --emptyOutDir false mirrors vite.config.js: never wipe the committed dist.
+vite build --watch --emptyOutDir false &
 wait

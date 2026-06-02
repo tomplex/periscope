@@ -103,8 +103,22 @@ for r in (
 ):
     app.include_router(r.router)
 
+# Serve static with `Cache-Control: no-cache` so the browser always
+# revalidates against the ETag StaticFiles already sends — a cheap 304 when
+# unchanged, a fresh 200 when the file changed. The committed frontend bundle
+# has a STABLE filename (`/dist/app.js`), so without this a `bin/periscope
+# restart` (or any rebuild) would serve a stale cached bundle until a manual
+# hard-refresh — in the browser AND the Tauri/WKWebView shell. no-cache means
+# "revalidate", not "don't store", so localhost overhead is negligible.
+class _RevalidateStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 # Mounted last so the API/WS routes above take precedence. `html=True`
 # serves index.html for `/` (and any directory request) without needing
 # a separate route. Asset paths in index.html are root-relative so they
 # resolve identically here and under Vite's dev server on :5174.
-app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+app.mount("/", _RevalidateStaticFiles(directory=STATIC, html=True), name="static")

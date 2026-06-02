@@ -8,6 +8,7 @@ its own clock, so this handler is mostly orchestration.
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 
@@ -25,6 +26,25 @@ from periscope.window_view import build_window_view
 router = APIRouter()
 
 
+def _safe_build(w: dict, now_ts: int) -> tuple[dict, tuple[str, int, int] | None]:
+    """Per-worker exception isolation for the parallel fan-out.
+
+    build_window_view already catches capture()/parse_pane() failures, but the
+    git / PR / LGTM / affiliation calls run outside that guard. In executor.map
+    one worker raising would re-raise on the join and 500 the whole /api/state
+    response. Convert any per-pane exception into an error view so one bad pane
+    can't sink the board.
+    """
+    try:
+        return build_window_view(w, now_ts)
+    except Exception as e:
+        target = f"{w['session']}:{w['index']}"
+        return (
+            {**w, "target": target, "state": "error", "is_claude": False, "error": str(e)},
+            None,
+        )
+
+
 @router.get("/api/state")
 def state():
     windows = list_windows()
@@ -32,13 +52,23 @@ def state():
     _attach_git_then_resolve_pids(windows)
     now_ts = int(time.time())
 
-    result = []
-    stamp_updates: list[tuple[str, int, int]] = []
-    for w in windows:
-        view, stamp_update = build_window_view(w, now_ts)
-        result.append(view)
-        if stamp_update is not None:
-            stamp_updates.append(stamp_update)
+    # Parallel fan-out: capture()+parse per pane is the only per-poll
+    # subprocess and dominates wall-clock. The serial git-warm + pid mint
+    # above (_attach_git_then_resolve_pids — writes state.json + tmux options)
+    # is NOT thread-safe and stays before this pool; the stamp write below
+    # stays single-threaded after the join. executor.map preserves input
+    # order, so `result` matches `windows`. _safe_build isolates any per-pane
+    # exception (capture, git, affiliation) into an error view.
+    if windows:
+        with ThreadPoolExecutor(max_workers=min(32, len(windows))) as pool:
+            built = list(pool.map(lambda w: _safe_build(w, now_ts), windows))
+    else:
+        built = []
+
+    result = [view for view, _ in built]
+    stamp_updates: list[tuple[str, int, int]] = [
+        stamp for _, stamp in built if stamp is not None
+    ]
 
     _channel_gc({w["pane_id"] for w in windows if w.get("pane_id")})
 

@@ -674,6 +674,43 @@ def test_list_windows_parses_tmux_list_output(mocker):
     assert out[1]["active"] is False
 
 
+def test_list_windows_parses_window_activity(mocker):
+    """list_windows surfaces #{window_activity} as an int `activity` field."""
+    from periscope import panes
+    mocker.patch(
+        "periscope.panes.tmux",
+        return_value="sess\t0\twin\t1\t/cwd\tpid-abc\t%5\t1717250000\n",
+    )
+    rows = panes.list_windows()
+    assert rows[0]["activity"] == 1717250000
+
+
+def test_list_windows_activity_defaults_zero_when_absent(mocker):
+    """A short row (no activity column) defaults activity to 0, not a crash."""
+    from periscope import panes
+    mocker.patch(
+        "periscope.panes.tmux",
+        return_value="sess\t0\twin\t1\t/cwd\tpid-abc\t%5\n",
+    )
+    rows = panes.list_windows()
+    assert rows[0]["activity"] == 0
+
+
+def test_update_focus_ignores_window_activity(mocker):
+    """Invariant #1 regression: focus is keyed on window_active, never activity.
+    Two polls where only `activity` changes (same active window) must NOT
+    re-stamp focus."""
+    from periscope import panes
+    panes._focused_at.clear()
+    panes._active_per_session.clear()
+    windows_t1 = [{"session": "s", "index": 0, "active": True, "activity": 100}]
+    windows_t2 = [{"session": "s", "index": 0, "active": True, "activity": 999}]
+    panes.update_focus_from_windows(windows_t1)
+    first = panes._focused_at["s:0"]
+    panes.update_focus_from_windows(windows_t2)
+    assert panes._focused_at["s:0"] == first  # activity bump did not touch focus
+
+
 def test_list_windows_filters_usage_scrape_sessions(mocker):
     sample = (
         "main\t0\tshell\t1\t/home/tom\t\t%5\n"

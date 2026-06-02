@@ -70,3 +70,63 @@ def test_state_resume_gc_drops_stale(client, mocker, clean_state):
 
     client.get("/api/state")
     assert "sid-1" not in _resuming
+
+
+def test_state_preserves_window_order_across_fanout(client, mocker, clean_state):
+    """The parallel fan-out must return views in the same order as list_windows."""
+    windows = [
+        {"session": "s", "index": i, "active": i == 0, "activity": 0, "pane_id": f"%{i}", "cwd": ""}
+        for i in range(5)
+    ]
+    _patch(mocker, "list_windows", return_value=windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "all_projects", return_value={})
+    _patch(mocker, "build_window_view",
+           side_effect=lambda w, now_ts: ({"index": w["index"]}, None))
+    resp = client.get("/api/state")
+    assert [v["index"] for v in resp.json()["windows"]] == [0, 1, 2, 3, 4]
+
+
+def test_state_writes_stamps_once_after_join(client, mocker, clean_state):
+    """All _STATE mutation stays single-threaded post-join: set_window_fields_bulk
+    is called exactly once with every pane's stamp."""
+    windows = [
+        {"session": "s", "index": i, "active": False, "activity": 0, "pane_id": f"%{i}", "cwd": ""}
+        for i in range(3)
+    ]
+    _patch(mocker, "list_windows", return_value=windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "all_projects", return_value={})
+    _patch(mocker, "build_window_view",
+           side_effect=lambda w, now_ts: ({"index": w["index"]}, (f"pid{w['index']}", 10, 5)))
+    bulk = _patch(mocker, "set_window_fields_bulk")
+    client.get("/api/state")
+    assert bulk.call_count == 1
+    written = bulk.call_args[0][0]
+    assert set(written.keys()) == {"pid0", "pid1", "pid2"}
+
+
+def test_state_isolates_one_pane_build_failure(client, mocker, clean_state):
+    """A worker RAISING must not sink the response: _safe_build converts it to
+    an error view, the other panes build normally, order is preserved."""
+    windows = [
+        {"session": "s", "index": 0, "active": True, "activity": 0, "pane_id": "%0", "cwd": ""},
+        {"session": "s", "index": 1, "active": False, "activity": 0, "pane_id": "%1", "cwd": ""},
+    ]
+    _patch(mocker, "list_windows", return_value=windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "all_projects", return_value={})
+
+    def fake_build(w, now_ts):
+        if w["index"] == 0:
+            raise RuntimeError("git blew up mid-build")  # NOT a capture error
+        return ({"index": 1, "state": "idle"}, None)
+
+    _patch(mocker, "build_window_view", side_effect=fake_build)
+    resp = client.get("/api/state")
+    views = {v["index"]: v for v in resp.json()["windows"]}
+    assert views[0]["state"] == "error"   # _safe_build caught the raise
+    assert views[1]["state"] == "idle"
