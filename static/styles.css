@@ -3503,3 +3503,11 @@ body[data-alerts="open"][data-view="stream"] main {
   border-radius: 4px;
   cursor: pointer;
 }
+.tc-arg-clickable {
+  cursor: pointer;
+  text-decoration: underline dotted rgba(255,255,255,0.3);
+  text-underline-offset: 2px;
+}
+.tc-arg-clickable:hover {
+  text-decoration-color: rgba(255,255,255,0.7);
+}

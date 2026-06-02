@@ -5,7 +5,7 @@
 // collapsible `⎿` output, Edit diffs. No xterm/emulation — JSONL is already
 // structured. See the segmented-transcript design spec.
 import { useEffect, useState, useRef } from "preact/hooks";
-import { transcriptSeen, paneTranscript } from "../store.js";
+import { transcriptSeen, paneTranscript, previewPath } from "../store.js";
 import { targetQuery, apiCall } from "../util.js";
 import { renderMarkdown } from "./markdown.jsx";
 
@@ -118,7 +118,24 @@ function ToolCall({ t }) {
         <span class="tc-dot">{isAgent ? "⚇" : "⏺"}</span>
         <span class="tc-name">{t.name}</span>
         {subtype && <span class="tc-agent-type">{subtype}</span>}
-        {arg && <span class="tc-arg">{arg}</span>}
+        {arg && (() => {
+          const isFileTool =
+            t.name === "Read" || t.name === "Edit" || t.name === "Write" ||
+            t.name === "MultiEdit" || t.name === "NotebookEdit";
+          if (!isFileTool) {
+            return <span class="tc-arg">{arg}</span>;
+          }
+          return (
+            <span
+              class="tc-arg tc-arg-clickable"
+              title="Open preview"
+              onClick={(e) => {
+                e.stopPropagation();
+                previewPath.value = { path: arg, line: null };
+              }}
+            >{arg}</span>
+          );
+        })()}
         {running && <span class="tc-running">running…</span>}
         {expandable && <span class="tc-caret">{open ? "▾" : "▸"}</span>}
       </button>
