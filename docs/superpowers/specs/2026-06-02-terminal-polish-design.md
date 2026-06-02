@@ -83,6 +83,10 @@ it's mounted, including the modal — but no new modal UI is built.
 - **Cross-pane scrollback search.** Separate project.
 - **Configurable theme / font UI.** No SettingsModal entries; better
   hardcoded defaults only.
+- **Linux / Windows portability of reveal-in-Finder.** Periscope is
+  macOS-only today (launchd integration, Tauri shell, `open -R`
+  shell-out); cross-platform support is out of scope. New code
+  should not pretend otherwise.
 
 ## Existing invariants — audit
 
@@ -225,12 +229,16 @@ Refinements relative to the current theme:
 - `\x07` in the byte stream → xterm fires its `onBell` event → we add
   a `.bell` class to the terminal container for 400ms (CSS animation
   pulses the border).
-- Claude pane `state` transition from `"working"` to `"idle"` →
-  emit the same pulse from `<Detail>` when the `windows` signal's
-  pane data shows the change. The state machine is the one in
-  `periscope/panes.py:_resolve_state` (`shell` / `idle` / `working`
-  / `needs-input`); we watch the polled `windows` signal, not a new
-  field. Throttled per-pane.
+- Claude pane `state` transition from `"working"` → `"idle"` *or*
+  `"working"` → `"done"`. **Both states matter**: the raw four-state
+  machine is in `periscope/panes.py:_resolve_state` (`shell` /
+  `idle` / `working` / `needs-input`), but `periscope/window_view.py`
+  lines 120-121 refine `idle → done` when Claude has an
+  unacknowledged completion stamp (`completed > acked`). The
+  client-side `windows` signal almost always sees `working → done`
+  on the normal "Claude just finished a turn" case, and
+  `working → idle` only in the rarer un-stamped path. Trigger on
+  either. Emitted from `<Detail>`, throttled per-pane.
 
 **Click dispatcher.** Replace the single-purpose
 `registerMarkdownLinkProvider` with a routing link provider that:
@@ -257,9 +265,11 @@ Lives in `<Detail>`, the shared `<Sidebar>` component, the existing
 `<PaneHeader>`, plus a new `static/src/preview/` module for the
 overlay, plus new server code.
 
-**Files-touched panel.** New section in `<Sidebar>` — a new tab
-joining Linked / Notes / Activity, labeled "Files". Renders a
-scrollable list:
+**Files-touched panel.** New stacked section in `<Sidebar>` —
+joining the existing Linked / Notes / Activity sections (the
+current Sidebar uses `<section>` blocks stacked vertically,
+not a tab strip; this spec preserves that). Labeled "Files".
+Renders a scrollable list:
 
 ```
 ✎ src/lib/foo.ts
@@ -332,14 +342,25 @@ Errors are surfaced inline, never silently swallowed.
 **Focus + Esc contract.** On overlay open, focus moves to the
 overlay container (the close button is the focus target; CodeMirror
 read-only views do not autograb focus). This routes keystrokes away
-from xterm. Esc still works even if focus is somehow on xterm,
-because `terminalCore.js` (around the Esc handler at line ~188)
-returns `false` for plain Esc without `stopPropagation()` — so the
-event bubbles to `useEscape`'s capture-phase listener. **That line
-is now load-bearing for two features (Esc-closes-modal *and*
-Esc-closes-preview); call it out in a code comment when implementing
-so a future "tighten the Esc handler" refactor doesn't break the
-preview overlay.**
+from xterm.
+
+Esc handling already works correctly for the overlay because
+`useEscape` (`static/src/hooks/useEscape.js:20`) registers a
+**window-level capture-phase** listener — it sees the Esc event
+*before* xterm's `attachCustomKeyEventHandler`, regardless of where
+DOM focus is. The overlay's `useEscape(...)` registration pushes
+onto the LIFO stack and pops dismissed first. No new wiring needed
+in `terminalCore.js` for the overlay path.
+
+**What `terminalCore.js` line ~188 IS load-bearing for:** the
+"empty stack" case. When no overlay or modal is open, plain Esc
+must NOT emit `\x1b` to the pane (that would collapse Claude's Ink
+dialogs and confuse the user). The line returns `false` so xterm
+skips its default Esc emission. This is the *one* load-bearing job
+of that line; the preview overlay does not rely on it. Call this
+out in a code comment when implementing — a future "tighten the
+Esc handler" refactor that removes the `return false` would break
+the empty-stack case (plain Esc would start poking Claude).
 
 CodeMirror 6 deps: `@codemirror/state`, `@codemirror/view`,
 `@codemirror/language` for core; `@codemirror/lang-javascript`,
@@ -386,12 +407,20 @@ def safe_reveal(target: str, raw_path: str) -> None:
 ```
 
 **Resolution rules.** `target` is the standard `session:index` tmux
-target. Cwd lookup **prefers the cached value** from
-`list_windows()` / the polled `windows` state (`w.cwd`, populated in
-`panes.py:288`) — no fresh `tmux display-message` round-trip. Each
-tmux subprocess costs ~20-80ms (see `ws.py` comment about
-keystroke batching for the same reason); the cached value is
-always fresh enough for a click-to-preview interaction.
+target.
+
+Cwd lookup: **the client passes its already-known cwd as a request
+parameter**. The client renders the polled `windows` signal where
+each pane carries `w.cwd` (propagated from `panes.py:list_windows()`
+via `window_view.py:165`). The `/api/fs/read` and `/api/fs/open`
+routes accept `cwd` as a query string parameter; `fs.safe_read`
+validates the supplied cwd is a real path and uses it for relative
+resolution. The route does NOT re-derive cwd server-side — there's
+no cached `_STATE.windows` to consult, and re-running `list_windows`
+just to recover a value the client already has is a wasted
+subprocess. Trade-off: a malicious client could lie about cwd, but
+the safe-roots check below (cwd + repo root + allowlist) still
+applies after path resolution, so the attack surface is bounded.
 
 `raw_path` is then:
 1. If absolute, used directly.
@@ -417,15 +446,26 @@ Anything else → 403. The check is `os.path.commonpath` based; reject
 prefix-only matches (`/foo` vs `/foobar`).
 
 **`periscope/routes/fs.py`.** Two routes:
-- `GET /api/fs/read?session=...&index=...&path=...` →
+- `GET /api/fs/read?session=...&index=...&cwd=...&path=...` →
   `{path, content, language}`. `language` is the CodeMirror language
   id ("javascript", "python", etc.), derived from the extension.
-- `POST /api/fs/open?session=...&index=...&path=...&action=reveal`
+- `POST /api/fs/open?session=...&index=...&cwd=...&path=...&action=reveal`
   → `{ok: true}`. Only `action=reveal` is supported in v1 (single
-  shell-out path: `open -R <path>`). Returns 400 for unknown action.
+  shell-out path: `open -R <path>` — macOS-only; see Non-goals).
+  Returns 400 for unknown action.
 
 Both use safe-path resolution from `fs.py`. Errors follow the
 project-wide convention (`raise HTTPException(...)`).
+
+**Binary file handling.** `safe_read` reads the file as bytes and
+attempts UTF-8 decode. On `UnicodeDecodeError`, the route returns
+**415 Unsupported Media Type** with `{detail: "binary file"}`. The
+overlay surfaces this as a "Binary file — open in Finder?"
+message with the Reveal button still wired. Image rendering
+(inline preview for `.png`/`.jpg`/etc.) is a follow-up; for v1,
+click on an image row in files-touched can route directly to
+reveal-in-Finder instead of opening the overlay (small UX shortcut,
+implementer's call).
 
 Register the router in `periscope/app.py` next to the others.
 
@@ -495,12 +535,16 @@ share code. Suggested order optimizes for impact per hour:
 - WebGL addon vendored + loaded with fallback.
 - Search addon vendored + Cmd+F bar.
 - Theme module extracted + tuned.
-- Visual bell / idle ping.
+- Visual bell / `working → idle|done` ping.
 - Click dispatcher router + regex tests.
+- **URL handler wired in Phase 1** (`window.open(url, "_blank",
+  "noopener")` — no server needed). File handler stays unwired
+  until Phase 3; clicking a file path in Phase 1 is a no-op
+  (handler not registered).
 - Padding + cursor refinements.
 
-Visible after Phase 1: search-in-buffer + WebGL + better theme. Big
-felt improvement, zero server changes.
+Visible after Phase 1: search-in-buffer + WebGL + better theme +
+URL Cmd+click. Big felt improvement, zero server changes.
 
 **Phase 2 — Server fs (Half B, server-only, ~half day).**
 - `periscope/fs.py` + `periscope/routes/fs.py`.
@@ -527,9 +571,11 @@ Visible after Phase 3: full file-context shell.
 - `static/src/terminal/__tests__/clickRouter.test.js` — regex
   matching + dispatcher precedence.
 - `static/src/transcript/__tests__/filesTouched.test.js` — selector
-  collapses events correctly (dedup, latest-op-wins, deletes shown
-  as ✗). Path matches the home of the segmented-transcript parser
-  the selector lives next to.
+  collapses events correctly: dedup + latest-op-wins over
+  `{Read, Edit, Write, MultiEdit, NotebookEdit}` only (matches the
+  narrowed tool scope in the Files-touched section; no Bash-derived
+  delete handling in v1). Path matches the home of the
+  segmented-transcript parser the selector lives next to.
 - `tests/test_fs.py` — safe-path resolver edge cases.
 - `tests/routes/test_fs.py` — endpoint happy paths + error mapping.
 
@@ -622,3 +668,9 @@ starts. Not blockers for the spec itself.
    suppress cwd when it's a suffix of session, (c) always show
    just session + a separate cwd icon-tooltip. Default (a) — easy
    to refine later.
+
+   Click-target ambiguity follow-up: only the cwd-tail span
+   triggers reveal-in-Finder, never the session span. If (a) lands,
+   the cwd-tail span needs its own distinct CSS class
+   (`.header-cwd-reveal` or similar) and pointer cursor so the
+   click target is unambiguous in hover.
