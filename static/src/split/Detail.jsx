@@ -19,7 +19,7 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useRef, useEffect, useState } from "preact/hooks";
-import { windows, activeTarget, railSelection, transcriptMode, transcriptSeen } from "../store.js";
+import { windows, activeTarget, railSelection, transcriptMode, transcriptSeen, paneTranscript } from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom } from "../terminal/terminalCore.js";
@@ -440,7 +440,15 @@ export function Detail() {
   const selMode = computeMode(paneW);
   for (const pid of [...openedTr.current]) {
     const isSelected = isPane && paneW?.pid === pid;
-    if (!isSelected && !livePids.has(pid)) openedTr.current.delete(pid);
+    if (!isSelected && !livePids.has(pid)) {
+      openedTr.current.delete(pid);
+      // Evict from the shared transcript store to bound memory across
+      // long sessions where many panes have been opened.
+      if (paneTranscript.value[pid]) {
+        const { [pid]: _drop, ...rest } = paneTranscript.value;
+        paneTranscript.value = rest;
+      }
+    }
   }
   const trPids = [...openedTr.current];
 
