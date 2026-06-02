@@ -82,12 +82,17 @@ const URL_RE = /\b(?:https?|wss?):\/\/[^\s)"'`<>]+/g;
 // Absolute file path: starts with /, followed by path chars. Excludes
 // trailing punctuation (.,)";:) — common in prose. Bounded on the left by
 // a word boundary or start-of-line.
-const ABS_PATH_RE = /(?<![\w./-])\/[\w./-]+\b(?::\d+)?/g;
+// Note the look-behind excludes ':' — without it, the regex eats the
+// `//host/path` portion of URLs like `http://foo.com/bar.md`, producing
+// a spurious overlapping link. URL_RE's match still wins via push order
+// today, but tightening the regex removes that order dependency.
+const ABS_PATH_RE = /(?<![:\w./-])\/[\w./-]+\b(?::\d+)?/g;
 
 // Relative path with a known extension. The ext list intentionally errs
 // toward false negatives — Cmd+click on garbage in scrollback is worse
 // than a missed click. Expand cautiously when concrete misses surface.
-const REL_PATH_RE = /(?<![\w./-])\.{0,2}\/[\w./-]+\.(?:md|py|ts|tsx|js|jsx|json|html|css|rs|go|toml|yaml|yml|sh|sql|txt|rb)\b(?::\d+)?/g;
+// Same ':' exclusion as ABS_PATH_RE for the same URL-overlap reason.
+const REL_PATH_RE = /(?<![:\w./-])\.{0,2}\/[\w./-]+\.(?:md|py|ts|tsx|js|jsx|json|html|css|rs|go|toml|yaml|yml|sh|sql|txt|rb)\b(?::\d+)?/g;
 
 // .md special-case for LGTM routing (legacy behavior preserved). Same
 // shape as the prior MD_PATH_RE but renamed for clarity.
