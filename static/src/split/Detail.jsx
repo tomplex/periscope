@@ -178,7 +178,14 @@ function ReviewDetail({ worktreeKey }) {
   const session = lgtmSessionForWorktree(worktreeKey);
   const hasSession = !!(session && session.url);
   if (hasSession) everHadSession.current = true;
-  const url = hasSession ? rewriteLgtmHost(session.url) : null;
+  // Use LGTM's EMBEDDING contract (?embedded=1&host=periscope), same as the
+  // modal review — NOT the bare standalone URL. The bare URL boots LGTM's full
+  // standalone app whose /events SSE fails when iframed, making LGTM reload
+  // itself in a loop. Embedded mode is the iframe-designed path and is stable
+  // (the modal review proves it).
+  const url = hasSession
+    ? `${rewriteLgtmHost(session.url)}?embedded=1&host=periscope`
+    : null;
 
   useEffect(() => {
     activeTarget.value = null;
@@ -189,11 +196,6 @@ function ReviewDetail({ worktreeKey }) {
     const f = document.createElement("iframe");
     f.id = "detail-review-iframe";
     f.className = "detail-review-iframe";
-    // No referrerpolicy: vanilla's static #detail-review-iframe (index.html) had
-    // none, so the default Referer is sent. LGTM's standalone /events SSE needs
-    // it — a "no-referrer" iframe gets the SSE rejected and LGTM self-reloads on
-    // the failure. (The modal iframe DOES set no-referrer, matching vanilla
-    // modal.js + embedded mode; only the bare/standalone detail iframe must not.)
     hostRef.current.appendChild(f);
     iframeRef.current = f;
   });
