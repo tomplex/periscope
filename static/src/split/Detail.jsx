@@ -273,23 +273,25 @@ function EmptyDetail() {
 
 export function Detail() {
   const sel = railSelection.value;       // string highlight-key, or null
-  // windows.value is read so the component re-renders on each poll (header /
-  // side panel refresh; review live↔empty transition).
-  const _ws = windows.value;
+  const ws = windows.value || [];        // read so Detail re-renders each poll
 
   const isReview = !!sel && sel.startsWith("review:");
   const isPane = !!sel && sel.startsWith("pane:");
+  const activeReviewWt = isReview ? sel.slice("review:".length) : null;
 
-  // Persist the most-recently-opened review's iframe: keep its <ReviewDetail>
-  // mounted but CSS-hidden when you flip to a pane / another tab, so navigating
-  // BACK to the review does NOT recreate + reload the LGTM iframe (it stays in
-  // the DOM; display toggling never reloads an iframe). Mirrors how the modal
-  // keeps its review iframe mounted across tab switches. Switching to a
-  // DIFFERENT review swaps it (key change) — one persistent review at a time,
-  // which covers the common review↔pane flip.
-  const reviewWt = useRef(null);
-  if (isReview) reviewWt.current = sel.slice("review:".length);
-  const persistWt = reviewWt.current;
+  // Keep EVERY opened review's iframe mounted (CSS-hidden when not active), so
+  // switching among reviews/panes never reloads a review — each loads exactly
+  // once. Display toggling never reloads an iframe (it stays in the DOM).
+  // Mirrors how the modal keeps its review iframe alive across tab switches.
+  // The opened set is pruned to worktrees still live in /api/state, so a
+  // closed worktree's iframe is torn down rather than leaking.
+  const opened = useRef(new Set());
+  if (activeReviewWt) opened.current.add(activeReviewWt);
+  const liveSessions = new Set(ws.map((w) => w.session));
+  for (const wt of [...opened.current]) {
+    if (wt !== activeReviewWt && !liveSessions.has(wt)) opened.current.delete(wt);
+  }
+  const reviewWts = [...opened.current];
 
   const paneW = isPane ? lookupWindow(sel.slice("pane:".length)) : null;
 
@@ -297,11 +299,11 @@ export function Detail() {
     <section id="detail">
       {!sel && <EmptyDetail />}
       {isPane && (paneW ? <PaneDetail w={paneW} /> : <EmptyDetail />)}
-      {persistWt && (
-        <div style={isReview ? "display:contents" : "display:none"}>
-          <ReviewDetail key={persistWt} worktreeKey={persistWt} />
+      {reviewWts.map((wt) => (
+        <div key={wt} style={activeReviewWt === wt ? "display:contents" : "display:none"}>
+          <ReviewDetail key={wt} worktreeKey={wt} />
         </div>
-      )}
+      ))}
     </section>
   );
 }
