@@ -57,6 +57,7 @@ function toolArg(t) {
     case "Read":
     case "Edit":
     case "Write":
+    case "MultiEdit":
     case "NotebookEdit": return inp.file_path || inp.notebook_path || "";
     case "Grep": return inp.pattern || "";
     case "Glob": return inp.pattern || "";
