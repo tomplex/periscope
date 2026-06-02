@@ -287,7 +287,9 @@ header — those live only in `<Detail>`). Acknowledging it here so
 joining the existing Linked / Notes / Activity sections (the
 current Sidebar uses `<section>` blocks stacked vertically,
 not a tab strip; this spec preserves that). Labeled "Files".
-Renders a scrollable list:
+**Slot:** inserted between Notes and Activity (visual hierarchy:
+context cards on top, transient activity on bottom; Files is a
+project-context surface like Notes). Renders a scrollable list:
 
 ```
 ✎ src/lib/foo.ts
@@ -296,19 +298,36 @@ Renders a scrollable list:
 👁 README.md
 ```
 
-**Source — single poll, two readers.** The transcript view already
-polls `/api/pane/turns` every 2s (`useTranscriptPoll` inside
-`static/src/split/Transcript.jsx`) and holds `messages` in
-component-local state. The Files section needs the same data without
-a second 2s poll.
+**Source — one poll, two readers, kept-mount preserved.** The
+transcript view already polls `/api/pane/turns` every 2s
+(`useTranscriptPoll` inside `static/src/split/Transcript.jsx`) and
+holds `messages` in component-local state. The Files section needs
+the same data without a second 2s poll.
 
-The revision: **lift `messages` to a shared `paneTranscript:
-{ [pid]: { messages, sessionId } }` signal in `store.js`,** owned by
-a single poll loop hoisted into `<PaneDetail>` (or a hook called
-there). `<TranscriptView>` reads its messages from the signal via
-prop / direct subscription; the Sidebar's Files section reads the
-same. One poll, two consumers, no duplicated network or parser
-work.
+The revision: **keep `useTranscriptPoll` where it is** (inside
+`<TranscriptView>`, one mount per opened Claude pid — the kept-mount
+pattern at `Detail.jsx:438-448`), but **change its write target from
+local `useState` to a shared `paneTranscript: { [pid]: { messages,
+sessionId } }` signal in `store.js`.** The existing `selected` gate
+(`Transcript.jsx:21`) is preserved: only the currently-selected pane
+polls. `<TranscriptView>` reads its rendered messages from
+`paneTranscript[pid]` instead of local state; the Sidebar's Files
+section reads `paneTranscript[selectedPid]` for the active pane.
+One poll per selected pid, two readers, kept-mount discipline
+unchanged.
+
+**Preserve `transcriptSeen` flip.** The current
+`useTranscriptPoll` flips `transcriptSeen[pid] = true` on first
+non-empty response (drives auto-promote via `computeMode` in
+`Detail.jsx:40`). After the lift, the *same hook* still does this
+flip — load-bearing for auto-promote, do not lose it during the
+refactor.
+
+**Lifecycle.** Evict `paneTranscript[pid]` when the pid is pruned
+from `openedTr` in `Detail.jsx:419-426` (the existing kept-mount
+pruning path: pid no longer in `/api/state` and not currently
+selected). Avoids unbounded growth across long sessions where many
+panes have been opened.
 
 A new pure selector function `filesTouched(messages)` in
 `static/src/split/filesTouched.js` collapses the message stream into
@@ -325,8 +344,12 @@ Deletes-via-Bash are not shown; that's an accepted v1 limitation.
 Click on a row → opens the preview overlay for that path.
 
 When no Claude JSONL is resolvable for the pane (shell pane), the
-section is hidden — same pattern as the segmented-transcript
-auto-promote (driven by `transcriptSeen[pid]`).
+section is hidden — gated by `transcriptSeen[pid]` (same flag the
+auto-promote uses). Note: `transcriptSeen` is sticky-forever per
+pid by design — a pane that briefly ran Claude and is now a shell
+would still satisfy the gate. Accepted v1 behavior. In practice
+pids are window-scoped: when Claude exits, the window typically
+closes and the pid is pruned, so this rarely materializes.
 
 **Cwd + git breadcrumb.** Extend `<PaneHeader>` (`Detail.jsx:71`)
 with a cwd segment:
@@ -350,7 +373,7 @@ null, the overlay covers the `.detail-pane-body` area — *over* the
 terminal-or-transcript content, not in flow (see Invariant *never
 resizes terminal*).
 
-**Two entry points, one overlay.** The same preview is opened from:
+**Three entry points, one overlay.** The same preview is opened from:
 1. **Terminal Cmd+click** on a path (dispatched by the routing link
    provider in `terminalCore.js`).
 2. **Transcript tool-call file_path chip** — `<Transcript>` already
@@ -365,6 +388,12 @@ resizes terminal*).
 
 All three set `previewPath.value = {path, line}`; the overlay
 doesn't care about origin.
+
+**Re-open while open: swap in place.** If the overlay is showing
+path A and any entry point sets `previewPath` to path B,
+CodeMirror re-initializes for B. No animated transition, no
+refuse-and-flash. The overlay treats `previewPath` as a single
+source of truth and re-renders on change.
 
 Structure:
 ```
@@ -439,21 +468,37 @@ the regex match + handler-registered checks.
 **`periscope/fs.py`.** Single new module. Exports:
 
 ```python
-def safe_read(target: str, raw_path: str, max_bytes: int = 1_000_000) -> tuple[str, str]:
-    """Read `raw_path` resolved against the pane's cwd.
+def safe_read(cwd: str, raw_path: str, max_bytes: int = 1_000_000) -> tuple[str, str]:
+    """Pure: resolve `raw_path` against `cwd`, enforce safe roots, read.
 
     Returns (resolved_abs_path, contents).
 
     Raises:
-      HTTPException(400) — path empty, not utf-8 decodable, etc.
+      HTTPException(400) — path empty, etc.
       HTTPException(403) — resolved path escapes the safe roots.
-      HTTPException(404) — pane unknown or file missing.
+      HTTPException(404) — file missing.
       HTTPException(413) — file exceeds max_bytes.
+      HTTPException(415) — file is not UTF-8 (binary).
+
+    No tmux dependency — unit-testable with a fixture cwd.
     """
 
-def safe_reveal(target: str, raw_path: str) -> None:
-    """Run `open -R <resolved_path>` (macOS reveal-in-Finder)."""
+def safe_reveal(cwd: str, raw_path: str) -> None:
+    """Pure: resolve, enforce, then `open -R <resolved_path>` (macOS)."""
+
+def safe_read_for_pane(target: str, raw_path: str,
+                       max_bytes: int = 1_000_000) -> tuple[str, str]:
+    """Thin wrapper: tmux-resolves cwd from `target`, calls safe_read."""
+
+def safe_reveal_for_pane(target: str, raw_path: str) -> None:
+    """Thin wrapper: tmux-resolves cwd from `target`, calls safe_reveal."""
 ```
+
+The split keeps the unit tests pure (`test_fs.py` exercises
+`safe_read(cwd, …)` with a fixture cwd — no tmux mocking) while
+the route handlers call the `_for_pane` variants for the
+production tmux path. `_for_pane` raises `HTTPException(404)` if
+the target is unknown.
 
 **Resolution rules.** `target` is the standard `session:index` tmux
 target.
@@ -500,10 +545,12 @@ prefix-only matches (`/foo` vs `/foobar`).
   shell-out path: `open -R <path>` — macOS-only; see Non-goals).
   Returns 400 for unknown action.
 
-Server-side cwd resolution: each route runs one
-`tmux display-message -t {session}:{index} -p '#{pane_current_path}'`
-to get the pane's cwd before calling `fs.safe_read(target, path)`.
-Same pattern as `routes/pane.py:pane_turns` → `turns.get_turns_for_pane`.
+Server-side cwd resolution happens inside the `_for_pane` wrappers
+in `fs.py`: one `tmux display-message -t {session}:{index} -p
+'#{pane_current_path}'` per request, same pattern as
+`routes/pane.py:pane_turns` → `turns.get_turns_for_pane`. Route
+handlers just call `safe_read_for_pane(target, path)` and surface
+the `HTTPException` if it raises.
 
 Both use safe-path resolution from `fs.py`. Errors follow the
 project-wide convention (`raise HTTPException(...)`).
