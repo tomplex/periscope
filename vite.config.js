@@ -22,6 +22,18 @@ export default defineConfig({
         // Stable filenames → index.html references fixed paths, no churn.
         entryFileNames: "app.js",
         assetFileNames: "[name][extname]",
+        // Dynamic-import chunks land at static/dist/chunks/<name>.js with
+        // stable hash-free names so they can be committed alongside app.js.
+        // PreviewOverlayInner (CodeMirror) is the only such chunk today.
+        chunkFileNames: "chunks/[name].js",
+        // Roll every CodeMirror dep + the lazy inner component into a single
+        // chunk. Without this Vite splits each lang pack out separately and
+        // we end up committing ~10 hash-named files.
+        manualChunks(id) {
+          if (id.includes("/@codemirror/") || id.includes("/preview/PreviewOverlayInner")) {
+            return "preview";
+          }
+        },
       },
     },
   },

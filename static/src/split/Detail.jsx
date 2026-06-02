@@ -25,6 +25,7 @@ import { Terminal } from "../terminal/Terminal.jsx";
 import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom } from "../terminal/terminalCore.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
 import { TranscriptView } from "./Transcript.jsx";
+import { PreviewOverlay } from "../preview/PreviewOverlay.jsx";
 
 // Match the modal's /api/pane cadence so the two views feel identical.
 const DETAIL_POLL_MS = 1500;
@@ -493,6 +494,7 @@ export function Detail() {
           </div>
         );
       })}
+      <PreviewOverlay />
     </section>
   );
 }

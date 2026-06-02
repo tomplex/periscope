@@ -2845,7 +2845,7 @@ body[data-alerts="open"][data-view="stream"] main {
   opacity: 0.7; transition: opacity 0.12s, background 0.12s;
 }
 .term-scroll-bottom:hover { opacity: 1; background: var(--bg-3); }
-.detail-pane-body { display: grid; grid-template-columns: 1fr 280px; flex: 1; min-height: 0; }
+.detail-pane-body { display: grid; grid-template-columns: 1fr 280px; flex: 1; min-height: 0; position: relative; }
 .detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; padding: 8px; font-feature-settings: "liga" 1, "calt" 1; }
 .detail-xterm .xterm { height: 100%; }
 .detail-xterm .xterm-viewport { background: var(--bg-term) !important; }
@@ -3434,4 +3434,69 @@ body[data-alerts="open"][data-view="stream"] main {
 .header-cwd-reveal:hover {
   color: var(--fg-1);
   text-decoration-color: rgba(255,255,255,0.6);
+}
+
+.preview-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.preview-path {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preview-btn {
+  background: transparent;
+  border: none;
+  color: var(--fg-2);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.preview-btn:hover { background: rgba(255,255,255,0.06); }
+.preview-body {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+.preview-cm-host {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+.preview-cm-host .cm-editor { height: 100%; }
+.preview-loading,
+.preview-error {
+  padding: 20px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg-2);
+}
+.preview-error-code { opacity: 0.6; margin-top: 6px; }
+.preview-btn-large {
+  margin-top: 12px;
+  padding: 6px 12px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--line-soft);
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
 }
