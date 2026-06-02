@@ -52,7 +52,7 @@ it's mounted, including the modal — but no new modal UI is built.
   `<PaneHeader>` with a cwd segment (and refine the git/PR layout). The
   goal is "you can see at a glance which working tree you're inside."
 - **Visual bell / idle ping.** Terminal frame border pulses once on
-  `\x07` (BEL) and once on `streaming=true → false` transitions for
+  `\x07` (BEL) and once on `working → idle` transitions for
   Claude panes.
 - **Safe filesystem API.** One new module — `periscope/fs.py` — is the
   only filesystem access seam. Safe-path resolver scoped to a pane's
@@ -100,7 +100,12 @@ explicitly. None are blindly inherited.
    alt-screen).** Still applies. The pipe-pane FIFO + capture-pane
    bootstrap pattern is unchanged; the prefix/body/suffix dance in
    `ws.py` remains the contract. WebGL renderer + theme changes are
-   client-side after the initial paint lands.
+   client-side after the initial paint lands. Caveat: the preview
+   overlay obscures terminal content (including the inline
+   `[periscope: reconnecting…]` notice written by `terminalCore.js`
+   on WS drop). Acceptable — reconnects are silent on success and
+   the overlay is always user-dismissed; the user will see the
+   notice on close if anything was wrong.
 
 **4. `capture-pane` separates rows with bare `\n`; xterm needs `\r\n`.**
    Still applies. Pure correctness invariant of the existing
@@ -155,6 +160,11 @@ understand the contract.
   1. Absolute URL → `window.open`.
   2. `.md` AND LGTM session exists for this cwd → LGTM add.
   3. File path → preview overlay.
+
+  Note: xterm's `registerLinkProvider` supports N providers — this
+  single-routing-provider choice is style, not a workaround. One
+  provider keeps regex passes minimal (one per row) and routing
+  decisions in a single readable place.
 
 - **Files-touched is a pure derivation from JSONL.** No server-side
   state. The parser already running for segmented transcript
@@ -215,9 +225,12 @@ Refinements relative to the current theme:
 - `\x07` in the byte stream → xterm fires its `onBell` event → we add
   a `.bell` class to the terminal container for 400ms (CSS animation
   pulses the border).
-- Claude pane streaming → idle transition → emit a same pulse from
-  `<Detail>` when the `windows` signal's pane data shows the change.
-  Throttled per-pane.
+- Claude pane `state` transition from `"working"` to `"idle"` →
+  emit the same pulse from `<Detail>` when the `windows` signal's
+  pane data shows the change. The state machine is the one in
+  `periscope/panes.py:_resolve_state` (`shell` / `idle` / `working`
+  / `needs-input`); we watch the polled `windows` signal, not a new
+  field. Throttled per-pane.
 
 **Click dispatcher.** Replace the single-purpose
 `registerMarkdownLinkProvider` with a routing link provider that:
@@ -260,6 +273,13 @@ A new selector function `filesTouched(events)` in
 `static/src/transcript/` (or wherever the segmented-transcript code
 lands) collapses the event stream into a per-path ordered list with
 the latest op as the icon. Pure function; trivially testable.
+
+**Tool scope.** The selector reads `input.file_path` from these
+tools only: `Read` (👁), `Edit` (✎), `Write` (+), `MultiEdit` (✎),
+`NotebookEdit` (✎). Bash invocations are NOT parsed for `rm` / `mv`
+/ etc. — Claude's official tool surface has no `Delete`, and
+parsing Bash command strings to infer file mutations is brittle.
+Deletes-via-Bash are not shown; that's an accepted v1 limitation.
 
 Click on a row → opens the preview overlay for that path.
 
@@ -309,6 +329,18 @@ the overlay shows the error message + status code in place of the
 CodeMirror body (small monospace block, same dismiss controls).
 Errors are surfaced inline, never silently swallowed.
 
+**Focus + Esc contract.** On overlay open, focus moves to the
+overlay container (the close button is the focus target; CodeMirror
+read-only views do not autograb focus). This routes keystrokes away
+from xterm. Esc still works even if focus is somehow on xterm,
+because `terminalCore.js` (around the Esc handler at line ~188)
+returns `false` for plain Esc without `stopPropagation()` — so the
+event bubbles to `useEscape`'s capture-phase listener. **That line
+is now load-bearing for two features (Esc-closes-modal *and*
+Esc-closes-preview); call it out in a code comment when implementing
+so a future "tighten the Esc handler" refactor doesn't break the
+preview overlay.**
+
 CodeMirror 6 deps: `@codemirror/state`, `@codemirror/view`,
 `@codemirror/language` for core; `@codemirror/lang-javascript`,
 `-python`, `-markdown`, `-html`, `-css`, `-json`, `-rust` for
@@ -316,8 +348,12 @@ languages we'll see most often in Tom's panes. Bundled via Vite into
 `static/dist/app.js` (no separate chunks for v1; revisit if bundle
 gets fat).
 
-Total CodeMirror weight: ~150KB minified + gzipped for the curated
-set above. Acceptable.
+Estimated CodeMirror weight: **150-200KB minified + gzipped** for
+the curated set above (core ~80-100KB, lang packs ~10-20KB each ×
+~7 langs). **Measure during Phase 3.** If the actual delta exceeds
+**250KB**, fall back to lazy-loading language packs on first use,
+or trim the curated set. Acceptable up to that threshold given the
+"never edit, sometimes preview" v1 usage shape.
 
 **Click router wiring.** `<Detail>` registers handlers on mount:
 - `setTerminalFileHandler((path, line) => previewPath.value = {path, line})`
@@ -350,13 +386,26 @@ def safe_reveal(target: str, raw_path: str) -> None:
 ```
 
 **Resolution rules.** `target` is the standard `session:index` tmux
-target. We look up the pane's cwd via existing
-`tmux("display-message", ..., "#{pane_current_path}")` or the cached
-window payload. `raw_path` is then:
+target. Cwd lookup **prefers the cached value** from
+`list_windows()` / the polled `windows` state (`w.cwd`, populated in
+`panes.py:288`) — no fresh `tmux display-message` round-trip. Each
+tmux subprocess costs ~20-80ms (see `ws.py` comment about
+keystroke batching for the same reason); the cached value is
+always fresh enough for a click-to-preview interaction.
+
+`raw_path` is then:
 1. If absolute, used directly.
 2. If relative, joined against cwd.
 3. Tilde-expanded (`~/...`).
 4. Realpath'd to resolve symlinks and `..` segments.
+
+Note: `pane_current_path` reflects the cwd of the pane's
+foreground process group. While Claude is running, that's Claude's
+launch cwd (Claude doesn't `chdir`). If Tom launched Claude from a
+non-project directory, `w.cwd` won't be the project root — almost
+always still what you want (the launch context), but worth knowing
+when debugging a "why does the preview look at the wrong place"
+report.
 
 **Safe roots.** The resolved path must be inside one of:
 - The pane's cwd (and its descendants).
@@ -556,7 +605,7 @@ starts. Not blockers for the spec itself.
    Default is just `.detail-xterm`.
 
 4. **Bell pulse intensity.** A single 400ms border pulse, or a
-   double-pulse for `streaming → idle` (to distinguish from raw
+   double-pulse for `working → idle` (to distinguish from raw
    BEL)? Default single, identical for both — visual bell is "look
    here," differentiating gets cluttered.
 
