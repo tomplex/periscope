@@ -7,14 +7,14 @@ gives a dashboard over the host's tmux sessions. `uv run server.py` reads
 its dependencies from the PEP-723 inline metadata at the top of the file
 and serves `static/` as-is.
 
-The frontend is mid-migration from vanilla ES modules to Preact +
-`@preact/signals`. The committed `static/dist/` bundle (built by
-`npm run build` from `static/src/`) is the one build artifact — rebuild
-and commit it whenever `static/src/` changes; `bin/periscope restart`
-needs no build step because the bundle is already in the tree. During the
-migration the Preact app mounts behind the `?preact=<surface>` switch in
-`index.html`; the vanilla modules under `static/` stay the fallback until
-the final cutover.
+The frontend is a **Preact + `@preact/signals`** app. Source lives in
+`static/src/`; `npm run build` (Vite) bundles it to the committed
+`static/dist/app.js` — the one build artifact. Rebuild and commit it
+whenever `static/src/` changes; `bin/periscope restart` needs no build
+step because the bundle is already in the tree. `index.html` is a thin
+shell that mounts `<App>` into `#app`. The only non-Preact JS left under
+`static/` is the `/history` SPA (`history.js` + `util.js`), the no-op
+`sw.js`, and vendored xterm.
 
 Bolted on alongside the dashboard:
 - **`history/`** — Python package that indexes every Claude Code
@@ -44,9 +44,10 @@ npm run dev                     # http://127.0.0.1:5174/
 under a single shell with `trap 'kill 0' EXIT INT TERM` — ctrl+c kills the
 whole process group at once, so uvicorn's reload-worker child never gets
 orphaned regardless of how each intermediate layer forwards signals.
-`vite.config.js` proxies `/api/*` and `/ws/*` to FastAPI on :8765. Vite is
-purely a dev convenience — production keeps loading the modules in
-`static/` directly from FastAPI with no build artifact.
+`vite.config.js` proxies `/api/*` and `/ws/*` to FastAPI on :8765. Vite
+builds the committed `static/dist/app.js`; production serves that bundle
+from FastAPI with no build step at boot (`bin/periscope restart` just
+respawns the daemon against the already-built, already-committed bundle).
 
 `dev.sh` exports `PERISCOPE_DEV=1` so uvicorn runs with `--reload`. The
 pidfile reclaim path (see below) treats a reloader child as the same
@@ -57,7 +58,7 @@ instance.
 There IS a test suite — small, surgical, run with `uv run`:
 
 ```sh
-uv run test_parse_pane.py            # spinner / status-line regex regressions
+uv run pytest -q                     # full suite (incl. parse_pane / status-line regex regressions in tests/test_panes.py)
 uv run tests/test_channel_smoke.py   # MCP wire-format compat against pinned mcp==1.27.*
 ```
 
@@ -71,9 +72,9 @@ variation, don't open a parallel framework.
 
 ```
 browser
- ├── /            → static/index.html + app.js (grid dashboard)
- │       polls /api/state every 3s, renders cards, opens modal on click
- │       modal opens WS /ws/pane → xterm.js mirror of the live tmux pane
+ ├── /            → static/index.html → Preact app (static/dist/app.js)
+ │       grid + split views; polls /api/state every 3s into a signals store
+ │       terminals open WS /ws/pane → xterm.js mirror of the live tmux pane
  └── /history     → static/history.html + history.js (search UI)
          hits /api/history/{search,session/:id,stats}
 
@@ -116,7 +117,7 @@ One file per subsystem:
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
-`tests/routes/test_<route>.py` per route). 222 pytest tests on a
+`tests/routes/test_<route>.py` per route). 353 pytest tests on a
 clean run. Run with `uv run pytest -q`.
 
 Five modules deviate from the one-test-per-module mirror.
@@ -146,28 +147,37 @@ directly with `uv run tests/test_channel_smoke.py` if needed.
   The `clean_state` fixture in `tests/conftest.py` must re-bind in every
   consumer module so test mutations are seen consistently.
 
-### Frontend (`static/`)
+### Frontend (`static/src/` → `static/dist/`)
 
-Plain ES modules, no bundler. Files are small, single-purpose, and
-import each other directly:
+A Preact + `@preact/signals` app, built by Vite from `static/src/` to the
+committed `static/dist/app.js`. `index.html` is a shell that mounts `<App>`
+into `#app`. Components grouped by area:
 
-| Module | Role |
+| Area | Modules |
 |---|---|
-| `app.js` | Entry point — wires header buttons, view switch, bootstraps grid + modal |
-| `state.js` | Cross-module mutable in-flight state (no persistence) |
-| `prefs.js` | Cache of `/api/prefs` + mutators; the persistence boundary |
-| `grid.js` | Card rendering, `/api/state` polling, drag-reorder, event delegation |
-| `modal.js` | Pane modal lifecycle, header, rename, image paste |
-| `terminal.js` | xterm.js + `/ws/pane` lifecycle, reconnect logic |
-| `commands-modal.js` | "+ command" palette editor |
-| `overlay.js` | Shared Escape-handler registry so multiple modals don't fight |
-| `history.js` | `/history` SPA — search, results list, detail pane |
-| `util.js` | Pure helpers (escapeHtml, apiCall, …) |
-| `sw.js` | No-op service worker — exists only as a PWA installability gate |
-| `vendor/xterm.{js,css}` | Vendored upstream; loaded as plain `<script>` so `Terminal`/`FitAddon` land on `window`. Don't edit; replace wholesale to upgrade. |
+| entry / state | `src/main.jsx` (mount + boot), `src/store.js` (transient signals — the read model), `src/prefs.js` (server-prefs cache as a signal — the persistence boundary) |
+| chrome | `src/chrome/{Header,FilterBar,ViewSwitch,UsagePill}.jsx` |
+| grid view | `src/grid/{Grid,Card,NewTile}.jsx` + `src/grid/poll.js` (the single `/api/state` poll loop; `openModal` bridge) |
+| split view | `src/split/{Split,Rail,RailRows,Detail}.jsx` + `src/split/railTree.js` (`mergeLiveAndPrefs`) |
+| modal | `src/modal/Modal.jsx` (tab strip + sidebar + review pane) |
+| terminal | `src/terminal/Terminal.jsx` (ref+effect wrapper) + `src/terminal/terminalCore.js` (imperative xterm + `/ws/pane`, ported ~verbatim) |
+| overlays | `src/overlays/{Dialog,Toast,Alerts,Overlays,CommandsModal,NewProjectModal,ReviewPrModal,CleanupModal,SettingsModal,OpenPickerModal,LauncherModal}.jsx` + `src/hooks/useEscape.js` (LIFO escape stack) |
+| util | `src/util.js` (`targetQuery` last-colon split, `apiCall`, `relTime`, `prUrl`, `rewriteLgtmHost`) |
 
-`grid.js` ↔ `modal.js` is a tolerated circular import (modal needs to
-trigger a poll after rename; grid needs to open the modal on click).
+Still vanilla under `static/`: `history.js` + `util.js` (the `/history` SPA —
+its own `history.html` entry, untouched by the migration), `sw.js` (no-op PWA
+gate), `vendor/xterm.{js,css}` (plain `<script>` so `Terminal`/`FitAddon` land
+on `window` — don't edit, replace wholesale). `connection-banner` stays in
+`index.html` (read by `src/grid/poll.js`, not rendered by any component).
+
+Migration notes worth knowing:
+- **Stream view was cut.** The view switch is grid ↔ split only.
+- **LGTM review iframes** (modal + detail) are created imperatively and parked
+  in a Preact-owned host so reconciliation never reloads them; `<Detail>` keeps
+  every opened review's iframe mounted (CSS-hidden) so switching never reloads.
+- **Static is served `Cache-Control: no-cache`** (`_RevalidateStaticFiles` in
+  `app.py`) — ETag revalidation, so a rebuild/restart never serves a stale
+  bundle (the stable `app.js` filename would otherwise cache hard).
 
 ## Key invariants (the things that broke and we fixed)
 
@@ -204,7 +214,8 @@ These are the non-obvious behaviors worth preserving:
 
 7. **Spinner has hysteresis at the data layer.** `capture-pane` runs
    mid-redraw drop the spinner line; without smoothing, the "thinking"
-   indicator flickers. Done in `app.js`, not the server.
+   indicator flickers. Done server-side in `smooth_spinner` (panes.py),
+   applied per-pane in `build_window_view`.
 
 8. **Background-thread crashes must surface.** Every `threading.Thread`
    and `asyncio.create_task` call goes through `_bg` / `_task`. A naked
@@ -235,7 +246,7 @@ the line above (project, branch, git state, PR URL). `PR_RE` pulls the PR
 number and CI glyph (⟳ ✓ ✗) out of the URL field. If Claude changes its
 status format, these regexes break and `is_claude` returns false for every
 window — fix the regexes first when triaging "everything looks like a
-shell." Add a case to `test_parse_pane.py` for any new variation.
+shell." Add a case to `tests/test_panes.py` for any new variation.
 
 ## History (`history/`)
 
@@ -378,17 +389,16 @@ to `src-tauri/src/*.rs` or config need a rebuild.
 The shell stays minimal on purpose: single-instance, window-state
 persistence, notification plugin available. Native badge + native
 notifications routing from the JS side via `window.__TAURI__` is
-the next layer up (`static/tauri.js`), additive to existing UI —
+the next layer up (`static/src/tauri.js`), additive to existing UI —
 the dashboard keeps working unchanged in a regular browser.
 
 ## Conventions
 
-- The frontend is migrating to Preact (`static/src/`, built to the
-  committed `static/dist/app.js` by `npm run build`). Rebuild + commit
-  `static/dist/` when `static/src/` changes — `uv run server.py` serves
-  the committed bundle with no build step at boot. The remaining vanilla
-  ES modules under `static/` are the migration fallback and are deleted
-  in the final cutover.
+- The frontend is Preact (`static/src/`, bundled to the committed
+  `static/dist/app.js` by `npm run build`). Rebuild + commit `static/dist/`
+  when `static/src/` changes — `uv run server.py` / `bin/periscope restart`
+  serve the committed bundle with no build step at boot. Node is a dev/build
+  prerequisite (`npm install && npm run build`), not a runtime one.
 - Comments explain *why*, not what. The existing comments around
   pipe-pane, the cursor sync, and the bracketed-paste delay are the
   template — terse, point at the failure that motivated the code.
