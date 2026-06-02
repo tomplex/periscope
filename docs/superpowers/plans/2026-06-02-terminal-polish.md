@@ -230,22 +230,14 @@ Also add three new options on the same `Terminal` constructor call:
 
 (Note: `cursorBlink: true` is already in the existing literal — keep it.)
 
-- [ ] **Step 3: Add CSS padding + ligature settings.**
+- [ ] **Step 3: Extend `.detail-xterm` / `.modal-xterm` with ligature settings.**
 
-Open `static/styles.css` and locate `.detail-xterm` (the host class — search for `detail-xterm`). Add or extend its rules:
-
-```css
-.detail-xterm {
-  padding: 8px;
-  font-feature-settings: "liga" 1, "calt" 1;
-}
-.modal-xterm {
-  padding: 8px;
-  font-feature-settings: "liga" 1, "calt" 1;
-}
-```
-
-(If those classes exist already, merge the rules; don't duplicate selectors.)
+Open `static/styles.css` and search for `.detail-xterm {` and `.modal-xterm {`.
+**Existing rules already have `padding: 8px` — extend in place, don't add
+sibling selectors** (CSS specificity is the same but a duplicated rule
+later in the file silently overrides, which is harder to spot when
+debugging). Append `font-feature-settings: "liga" 1, "calt" 1;` to each
+existing rule block.
 
 - [ ] **Step 4: Build + visual smoke-test.**
 
@@ -516,9 +508,24 @@ export function Terminal({ target, onMdLink, onPaste, class: className = "modal-
 Append to `static/styles.css`:
 
 ```css
+/* .terminal-wrap must be a positioned containing block (NOT display:contents,
+   which generates no box and ignores position) so .term-search anchors here
+   instead of floating to whichever ancestor is positioned. flex+column lets
+   the terminal host fill the remaining space without margin from the search
+   bar (the bar is absolute, doesn't take flex space). */
 .terminal-wrap {
-  display: contents;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+/* The host inside the wrap fills the wrap so xterm's FitAddon sees the
+   real container height. */
+.terminal-wrap > .detail-xterm,
+.terminal-wrap > .modal-xterm {
+  flex: 1;
+  min-height: 0;
 }
 .term-search {
   position: absolute;
@@ -982,11 +989,22 @@ def test_safe_read_for_pane_uses_tmux_cwd(tmp_path, monkeypatch):
     assert resolved == str(f.resolve())
 
 
-def test_safe_read_for_pane_404_when_target_unknown(monkeypatch):
-    def fake_tmux(*args):
-        raise RuntimeError("no such target")
+def test_safe_read_for_pane_404_on_empty_tmux_output(monkeypatch):
+    # `tmux()` doesn't raise on non-zero exit — returns "" instead
+    # (verified at periscope/tmux.py:21-25). Production 404 path is the
+    # `if not out:` branch in _cwd_for_target, not the except.
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: "")
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_read_for_pane("sess:1", "x.txt")
+    assert exc.value.status_code == 404
 
-    monkeypatch.setattr("periscope.fs.tmux", fake_tmux)
+
+def test_safe_read_for_pane_404_when_tmux_binary_missing(monkeypatch):
+    # Defensive: if tmux itself can't run (binary not found, timeout), the
+    # except branch still gives 404 — that's the safety net.
+    def boom(*a):
+        raise FileNotFoundError("tmux")
+    monkeypatch.setattr("periscope.fs.tmux", boom)
     with pytest.raises(HTTPException) as exc:
         fs.safe_read_for_pane("sess:1", "x.txt")
     assert exc.value.status_code == 404
@@ -1120,10 +1138,10 @@ def test_fs_read_missing(tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
-def test_fs_read_unknown_pane(monkeypatch):
-    def boom(*a):
-        raise RuntimeError("no such target")
-    monkeypatch.setattr("periscope.fs.tmux", boom)
+def test_fs_read_unknown_pane_empty_tmux(monkeypatch):
+    # Production path: tmux returns "" when target doesn't exist; the
+    # route must surface 404 (not 500).
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: "")
     client = TestClient(app)
     r = client.get("/api/fs/read",
                    params={"session": "s", "index": 99, "path": "x"})
@@ -1379,8 +1397,12 @@ git commit -m "store: paneTranscript + previewPath signals; add vitest for pure-
 import { describe, it, expect } from "vitest";
 import { filesTouched } from "../filesTouched.js";
 
-const u = (text) => ({ role: "user", user_text: text });
-const a = (toolUses = []) => ({ role: "assistant", tool_uses: toolUses });
+// Matches the /api/pane/turns shape (history/search.py:262-275): each
+// message has {role, text, tool_uses} — the selector only reads
+// tool_uses, but the fixture mirrors the real shape so future
+// maintainers don't propagate a wrong type.
+const u = (text) => ({ role: "user", text });
+const a = (toolUses = []) => ({ role: "assistant", text: "", tool_uses: toolUses });
 const tu = (name, file_path, extra = {}) => ({
   id: Math.random().toString(36),
   name,
@@ -1560,7 +1582,17 @@ function useTranscriptPoll(target, pid, selected) {
 
 - [ ] **Step 2: Update `<TranscriptView>` to read from the signal.**
 
-Find the line in `<TranscriptView>` (it's likely the function that calls `useTranscriptPoll`) where messages are consumed for rendering. Currently the hook returns `messages`. Change the consumer to:
+In `static/src/split/Transcript.jsx`, find `<TranscriptView>` (look for the function that calls `useTranscriptPoll(target, pid, selected)`).
+
+**Two edits required:**
+
+(a) Inside the refactored `useTranscriptPoll`, remove the now-dead
+`const [messages, setMessages] = useState([])` line and the `return messages;`
+at the bottom of the hook. The hook is side-effect-only — it writes the
+signal; it returns nothing. Leaving the `useState` in place is dead code
+and confusing.
+
+(b) Update the call site to read from the signal:
 
 ```jsx
 import { paneTranscript } from "../store.js";
@@ -2153,11 +2185,40 @@ npm run build
 
 Open a Claude pane in split view; in the Sidebar's Files section, click a row. Expected: preview overlay appears over the terminal/transcript area, file rendered with line numbers + syntax highlighting. Esc closes. `⌖` reveals in Finder. Try a binary file (any `.png` in the touched list — should show the 415 "binary file" message + Open-in-Finder button).
 
-- [ ] **Step 6: Commit.**
+- [ ] **Step 6: Measure bundle weight.**
+
+```bash
+du -k static/dist/app.js
+```
+
+Compare to the pre-Task-17 size (run the same command on a checkout
+without this task's changes, or read `git show HEAD:static/dist/app.js | wc -c`
+on the prior commit). Spec budget: **+150-200KB acceptable, +250KB triggers
+fallback** (lazy-load language packs via dynamic import).
+
+If the delta is over budget, refactor `languageExt` to dynamically import
+each lang pack on first use:
+
+```jsx
+async function languageExt(name) {
+  switch (name) {
+    case "javascript": return (await import("@codemirror/lang-javascript")).javascript();
+    case "python":     return (await import("@codemirror/lang-python")).python();
+    // ...etc
+    default: return null;
+  }
+}
+```
+
+(and adjust the mount effect to `await` the language ext before constructing the view).
+
+Note the bundle size in the commit message.
+
+- [ ] **Step 7: Commit.**
 
 ```bash
 git add package.json package-lock.json static/src/preview/PreviewOverlay.jsx static/src/split/Detail.jsx static/styles.css static/dist/app.js
-git commit -m "preview: CodeMirror 6 read-only overlay (sidebar entry), Esc + Reveal"
+git commit -m "preview: CodeMirror 6 read-only overlay (sidebar entry), Esc + Reveal (bundle: +XKB)"
 ```
 
 ---
