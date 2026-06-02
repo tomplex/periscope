@@ -1,8 +1,16 @@
 # Terminal Polish — Ghostty-feel + Filesystem Integration — Design Spec
 
 **Date:** 2026-06-02
-**Status:** draft, ready for spec-reviewer
+**Status:** revised for landed transcript UI, ready for spec-reviewer
 **Author:** Tom + Claude (brainstorm)
+
+> **Revision note (2026-06-02, post-transcript merge).** The segmented
+> transcript shipped between the first draft and now (commits
+> `13fdb7a` → `8ed9729`). Module placements, data flow, and a few
+> assumptions changed. This revision applies six fixes against the
+> landed reality: module paths, files-touched data source, cwd
+> resolution pattern, preview-overlay entry points, modal incidental
+> landing, and the composer-already-shipped strike.
 
 ---
 
@@ -265,6 +273,16 @@ Lives in `<Detail>`, the shared `<Sidebar>` component, the existing
 `<PaneHeader>`, plus a new `static/src/preview/` module for the
 overlay, plus new server code.
 
+**Modal incidental landing.** `<Sidebar>` is shared between
+`<Detail>` (split-view) and the grid-view modal — both render the
+same `Sidebar` component with their own container id/class. Adding
+a "Files" section to `<Sidebar>` therefore lands it in the modal
+too. **This is acceptable, not a goal.** The modal stays functional
+through its eventual deprecation; we don't add bespoke modal UI
+(no preview overlay in the modal, no cwd breadcrumb in the modal
+header — those live only in `<Detail>`). Acknowledging it here so
+"new section appeared in modal" doesn't read as a regression.
+
 **Files-touched panel.** New stacked section in `<Sidebar>` —
 joining the existing Linked / Notes / Activity sections (the
 current Sidebar uses `<section>` blocks stacked vertically,
@@ -278,11 +296,24 @@ Renders a scrollable list:
 👁 README.md
 ```
 
-Source: the same JSONL parsing already done for segmented transcript.
-A new selector function `filesTouched(events)` in
-`static/src/transcript/` (or wherever the segmented-transcript code
-lands) collapses the event stream into a per-path ordered list with
-the latest op as the icon. Pure function; trivially testable.
+**Source — single poll, two readers.** The transcript view already
+polls `/api/pane/turns` every 2s (`useTranscriptPoll` inside
+`static/src/split/Transcript.jsx`) and holds `messages` in
+component-local state. The Files section needs the same data without
+a second 2s poll.
+
+The revision: **lift `messages` to a shared `paneTranscript:
+{ [pid]: { messages, sessionId } }` signal in `store.js`,** owned by
+a single poll loop hoisted into `<PaneDetail>` (or a hook called
+there). `<TranscriptView>` reads its messages from the signal via
+prop / direct subscription; the Sidebar's Files section reads the
+same. One poll, two consumers, no duplicated network or parser
+work.
+
+A new pure selector function `filesTouched(messages)` in
+`static/src/split/filesTouched.js` collapses the message stream into
+a per-path ordered list with the latest op as the icon.
+Trivially testable.
 
 **Tool scope.** The selector reads `input.file_path` from these
 tools only: `Read` (👁), `Edit` (✎), `Write` (+), `MultiEdit` (✎),
@@ -293,8 +324,9 @@ Deletes-via-Bash are not shown; that's an accepted v1 limitation.
 
 Click on a row → opens the preview overlay for that path.
 
-When no Claude JSONL is resolvable for the pane (shell pane), the tab
-is hidden — same pattern as the segmented-transcript tab.
+When no Claude JSONL is resolvable for the pane (shell pane), the
+section is hidden — same pattern as the segmented-transcript
+auto-promote (driven by `transcriptSeen[pid]`).
 
 **Cwd + git breadcrumb.** Extend `<PaneHeader>` (`Detail.jsx:71`)
 with a cwd segment:
@@ -314,8 +346,25 @@ Data already exists in the pane payload (`w.cwd`); no schema change.
 `static/src/preview/PreviewOverlay.jsx`. Mounted unconditionally in
 `<Detail>` (so it can animate in/out without remounting); visibility
 driven by a `previewPath` signal in `static/src/store.js`. When non-
-null, the overlay covers the `.detail-xterm` area (positioned over,
-not in flow — see Invariant *never resizes terminal*).
+null, the overlay covers the `.detail-pane-body` area — *over* the
+terminal-or-transcript content, not in flow (see Invariant *never
+resizes terminal*).
+
+**Two entry points, one overlay.** The same preview is opened from:
+1. **Terminal Cmd+click** on a path (dispatched by the routing link
+   provider in `terminalCore.js`).
+2. **Transcript tool-call file_path chip** — `<Transcript>` already
+   renders `Read("path")`, `Edit("path")`, `Write("path")`, etc. as
+   `⏺ Name(arg)` rows. Wrapping the arg in a click handler on
+   `{Read, Edit, Write, MultiEdit, NotebookEdit}` opens the same
+   overlay. No modifier required for transcript-side clicks (it's a
+   direct UI affordance, unlike terminal where Cmd avoids hijacking
+   scrollback selection).
+3. **Files-touched row click** in the sidebar — third entry point,
+   trivially same overlay.
+
+All three set `previewPath.value = {path, line}`; the overlay
+doesn't care about origin.
 
 Structure:
 ```
@@ -409,18 +458,15 @@ def safe_reveal(target: str, raw_path: str) -> None:
 **Resolution rules.** `target` is the standard `session:index` tmux
 target.
 
-Cwd lookup: **the client passes its already-known cwd as a request
-parameter**. The client renders the polled `windows` signal where
-each pane carries `w.cwd` (propagated from `panes.py:list_windows()`
-via `window_view.py:165`). The `/api/fs/read` and `/api/fs/open`
-routes accept `cwd` as a query string parameter; `fs.safe_read`
-validates the supplied cwd is a real path and uses it for relative
-resolution. The route does NOT re-derive cwd server-side — there's
-no cached `_STATE.windows` to consult, and re-running `list_windows`
-just to recover a value the client already has is a wasted
-subprocess. Trade-off: a malicious client could lie about cwd, but
-the safe-roots check below (cwd + repo root + allowlist) still
-applies after path resolution, so the attack surface is bounded.
+Cwd lookup: **server resolves cwd via one `tmux display-message`
+call**, same pattern as `periscope/turns.py:get_turns_for_pane`
+(`#{pane_current_path}`). One subprocess per `/api/fs/read` request
+(~20-80ms) is fine for a click-to-preview interaction — comparable
+to the cost the transcript polls already pay every 2 seconds. The
+client does not pass cwd as a parameter. This is strictly tighter
+than a client-supplied value (no spoofing surface to defend
+against), and the pattern is consistent with the rest of the
+pane-keyed routes.
 
 `raw_path` is then:
 1. If absolute, used directly.
@@ -446,13 +492,18 @@ Anything else → 403. The check is `os.path.commonpath` based; reject
 prefix-only matches (`/foo` vs `/foobar`).
 
 **`periscope/routes/fs.py`.** Two routes:
-- `GET /api/fs/read?session=...&index=...&cwd=...&path=...` →
+- `GET /api/fs/read?session=...&index=...&path=...` →
   `{path, content, language}`. `language` is the CodeMirror language
   id ("javascript", "python", etc.), derived from the extension.
-- `POST /api/fs/open?session=...&index=...&cwd=...&path=...&action=reveal`
+- `POST /api/fs/open?session=...&index=...&path=...&action=reveal`
   → `{ok: true}`. Only `action=reveal` is supported in v1 (single
   shell-out path: `open -R <path>` — macOS-only; see Non-goals).
   Returns 400 for unknown action.
+
+Server-side cwd resolution: each route runs one
+`tmux display-message -t {session}:{index} -p '#{pane_current_path}'`
+to get the pane's cwd before calling `fs.safe_read(target, path)`.
+Same pattern as `routes/pane.py:pane_turns` → `turns.get_turns_for_pane`.
 
 Both use safe-path resolution from `fs.py`. Errors follow the
 project-wide convention (`raise HTTPException(...)`).
@@ -570,12 +621,13 @@ Visible after Phase 3: full file-context shell.
 **New unit tests:**
 - `static/src/terminal/__tests__/clickRouter.test.js` — regex
   matching + dispatcher precedence.
-- `static/src/transcript/__tests__/filesTouched.test.js` — selector
-  collapses events correctly: dedup + latest-op-wins over
+- `static/src/split/__tests__/filesTouched.test.js` — selector
+  collapses messages correctly: dedup + latest-op-wins over
   `{Read, Edit, Write, MultiEdit, NotebookEdit}` only (matches the
   narrowed tool scope in the Files-touched section; no Bash-derived
   delete handling in v1). Path matches the home of the
-  segmented-transcript parser the selector lives next to.
+  segmented-transcript code (`static/src/split/Transcript.jsx`,
+  `static/src/split/markdown.jsx`).
 - `tests/test_fs.py` — safe-path resolver edge cases.
 - `tests/routes/test_fs.py` — endpoint happy paths + error mapping.
 
