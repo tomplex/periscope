@@ -206,7 +206,7 @@ def recent(*,
 
 
 def messages_from_jsonl(jsonl_path: str) -> list[dict]:
-    """Stream-parse a Claude JSONL into structured turn messages (full file).
+    """Parse a Claude JSONL into structured turn messages (full file, two-pass).
 
     User/assistant turns in JSONL order. Assistant tool_use blocks are
     back-patched with their paired tool_result content (tool_use.id ==
