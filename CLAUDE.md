@@ -325,21 +325,19 @@ for all of them). The mapping is a directory of tiny files,
 `<id>.jsonl` (glob, not cwd-encode — a pane that `cd`'d into a worktree has its
 JSONL under the *start* dir's encoding).
 
-Two producers write that file, both periscope-owned:
+The producer is **`pane_session_hook.py`** — a Claude `UserPromptSubmit` hook
+installed by `bin/periscope install-hook` (run from `install`; removed by
+`uninstall-hook`). It fires on *every* prompt and re-records, reading
+`session_id` from the hook **payload** (current, so it survives `/clear` — which
+mints a new session id) and `TMUX_PANE` from a direct child of the pane's Claude
+(the real pane id). A deep `ps`/env scan is deliberately NOT used: inherited
+`CLAUDE_CODE_SESSION_ID`/`TMUX_PANE` from tool/subagent subprocesses
+cross-contaminate, and a `/clear` leaves the shim's spawn-time env stale — the
+payload is the only authoritative, current source. `/clear`'d and pre-hook panes
+self-correct on their next message.
 
-- **`channel_shim.py`** records at spawn (`_record_pane_session`) — instant, but
-  its `CLAUDE_CODE_SESSION_ID` is frozen at spawn, so it goes **stale after a
-  `/clear`** (which mints a new session id without respawning the shim).
-- **`pane_session_hook.py`** — a Claude `UserPromptSubmit` hook installed by
-  `bin/periscope install-hook` (and `install`). It fires on *every* prompt and
-  re-records, reading `session_id` from the hook **payload** (current, not
-  env) and `TMUX_PANE` from a direct child of the pane's Claude (the real pane
-  id — a deep `ps` env scan is useless here: inherited env from tool/subagent
-  subprocesses cross-contaminates). This is what makes `/clear` and pre-hook
-  panes self-correct on their next message. `uninstall-hook` removes it.
-
-Resolution falls back to newest-mtime-in-cwd when a pane has no recorded
-session (channel off / brand-new pane mid-first-prompt).
+Resolution falls back to newest-mtime-in-cwd when a pane has no recorded session
+yet (hook not loaded / brand-new pane before its first prompt).
 
 ## LGTM integration
 
