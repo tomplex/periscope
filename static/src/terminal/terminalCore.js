@@ -135,6 +135,20 @@ export function startLiveTerminal(target) {
   term.open(containerEl);
   term.focus();
 
+  // Try WebGL renderer; fall back to canvas on init failure (older Chromes,
+  // headless contexts, GPU-disabled environments). The addon writes to its
+  // own canvas inside xterm's element tree, so failure is silent on success
+  // paths but we log it once for diagnosis.
+  try {
+    const webgl = new WebglAddon.WebglAddon();
+    webgl.onContextLoss(() => {
+      try { webgl.dispose(); } catch (_) {}
+    });
+    term.loadAddon(webgl);
+  } catch (e) {
+    console.warn("[periscope] WebGL terminal renderer unavailable; falling back to canvas:", e);
+  }
+
   // Cmd+click on a `.md` path → add it as a document to the LGTM
   // session for this pane's repo. Path is resolved against the pane's
   // cwd server-side. Plain click on the underlined path does nothing
