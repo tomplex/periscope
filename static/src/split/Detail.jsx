@@ -110,6 +110,27 @@ function PaneHeader({ w, mode, onMode }) {
     </button>,
     <span><b>{w.session || ""}</b></span>,
   ];
+  if (w.cwd) {
+    const parts2 = w.cwd.split("/").filter(Boolean);
+    const tail = parts2.length >= 2 ? parts2.slice(-2).join("/") : (parts2[0] || w.cwd);
+    parts.push(
+      <>
+        <span class="hsep">·</span>
+        <span
+          class="header-cwd-reveal"
+          title={`Reveal ${w.cwd} in Finder`}
+          onClick={async () => {
+            try {
+              await fetch(
+                `/api/fs/open?session=${encodeURIComponent(w.session)}&index=${w.index}&path=.&action=reveal`,
+                { method: "POST" },
+              );
+            } catch (_) { /* best-effort */ }
+          }}
+        >{tail}</span>
+      </>
+    );
+  }
   if (w.branch) {
     parts.push(<><span class="hsep">·</span><span>{w.branch}</span></>);
   }

@@ -3426,3 +3426,12 @@ body[data-alerts="open"][data-view="stream"] main {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.header-cwd-reveal {
+  cursor: pointer;
+  text-decoration: underline dotted rgba(255,255,255,0.3);
+  text-underline-offset: 3px;
+}
+.header-cwd-reveal:hover {
+  color: var(--fg-1);
+  text-decoration-color: rgba(255,255,255,0.6);
+}
