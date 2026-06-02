@@ -3123,50 +3123,184 @@ body[data-alerts="open"][data-view="stream"] main {
    reaffirmed here for clarity). */
 .rail-label b { font-weight: 600; }
 
-/* Transcript content mode (split-view detail).
-   The host is absolutely positioned over #detail's BODY region — it must start
-   BELOW #detail-pane-header so the Transcript/Terminal toggle stays visible and
-   clickable. PaneDetail still renders its header in normal flow at the top of
-   #detail (its body's terminal is display:none in transcript mode), so the host
-   is offset by the header height. #detail is full-height from the split layout,
-   so top+bottom anchoring fills the body. */
+/* ───────────────────────────────────────────────────────────────────────
+   Segmented transcript — Claude turns (split-view detail).
+   Reads like a richer version of Claude Code's own terminal output: markdown
+   prose, ⏺ tool rows with collapsible ⎿ output, red/green Edit diffs.
+   The host is absolutely positioned in the terminal's grid cell — below the
+   (flex-wrapping, dynamic-height) header via --detail-header-h, and left of the
+   280px sidebar via right:280px — so both the rich header and the sidebar stay
+   visible in transcript mode. Kept mounted (one per opened pane) so scroll +
+   expand survive pane switches. */
 #detail { position: relative; }
 #detail-pane-header { position: relative; z-index: 2; }
 .detail-transcript-host {
   position: absolute;
-  top: 2.4em;          /* ≈ #detail-pane-header height — verify in browser */
-  left: 0; right: 0; bottom: 0;
+  top: var(--detail-header-h, 40px);
+  left: 0; right: 280px; bottom: 0;
   z-index: 1;
-  overflow-y: auto;
-  background: var(--bg, #111);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-0);
+  border-right: 1px solid var(--line);
 }
-.detail-mode-toggle { margin-left: auto; display: inline-flex; gap: 2px; }
+
+/* Transcript / Terminal toggle in the pane header */
+.detail-mode-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  align-self: center;
+}
 .detail-mode-toggle button {
-  font: inherit; padding: 1px 8px; cursor: pointer;
-  border: 1px solid var(--border, #333); background: transparent; color: inherit;
+  font-family: var(--sans); font-size: 11px; line-height: 1.6;
+  padding: 1px 9px; cursor: pointer;
+  border: 0; background: transparent; color: var(--fg-2);
+  transition: background 0.12s, color 0.12s;
 }
-.detail-mode-toggle button.is-active { background: var(--accent, #2a4); color: #fff; }
-.transcript { padding: 8px 10px; font-size: 13px; }
-.transcript-empty { opacity: 0.6; padding: 16px; }
-.transcript-compact { border: 0; border-top: 1px dashed var(--border, #555); margin: 10px 0; }
-.turn { margin: 4px 0; border-left: 2px solid transparent; }
-.turn-user { border-left-color: #49f; }
-.turn-assistant { border-left-color: #a6f; }
-.turn-head {
-  display: flex; gap: 8px; width: 100%; text-align: left; cursor: pointer;
-  background: transparent; border: 0; color: inherit; padding: 3px 4px;
+.detail-mode-toggle button:hover { color: var(--fg-0); }
+.detail-mode-toggle button.is-active { background: var(--bg-2); color: var(--fg-0); }
+
+.transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 28px 28px; }
+.transcript-empty { color: var(--fg-3); font-size: 13px; }
+
+/* Bottom composer — the input affordance for transcript mode (terminal hidden). */
+.transcript-composer {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 10px 14px; border-top: 1px solid var(--line); background: var(--bg-0);
 }
-.turn-role { text-transform: uppercase; font-size: 10px; opacity: 0.7; min-width: 64px; }
-.turn-time { opacity: 0.5; min-width: 32px; }
-.turn-preview { opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.turn-body { padding: 4px 4px 8px 12px; }
-.turn-text { white-space: pre-wrap; margin-bottom: 6px; }
-.toolcall { margin: 3px 0; border: 1px solid var(--border, #333); border-radius: 3px; }
-.toolcall-head {
-  display: flex; gap: 8px; width: 100%; text-align: left; cursor: pointer;
-  background: transparent; border: 0; color: inherit; padding: 3px 6px;
+.transcript-composer-input {
+  flex: 1; resize: none; min-height: 38px; max-height: 160px; overflow-y: auto;
+  font-family: var(--sans); font-size: 13px; line-height: 1.45;
+  color: var(--fg-0); background: var(--bg-1);
+  border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 11px;
 }
-.toolcall-name { font-weight: 600; }
-.toolcall-summary { opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
-.toolcall-running { color: #fb4; }
-.toolcall-output, .toolcall-diff { margin: 0; padding: 6px; white-space: pre-wrap; overflow-x: auto; max-height: 320px; }
+.transcript-composer-input::placeholder { color: var(--fg-4); }
+.transcript-composer-input:focus { outline: none; border-color: var(--accent); }
+.transcript-composer-send {
+  flex: none; height: 38px; padding: 0 16px; cursor: pointer;
+  font-family: var(--sans); font-size: 12px; font-weight: 600;
+  color: #fff; background: var(--accent); border: 0; border-radius: var(--r-md);
+}
+.transcript-composer-send:disabled { opacity: 0.45; cursor: default; }
+
+.transcript-compact {
+  display: flex; align-items: center; gap: 12px;
+  margin: 20px 0; color: var(--fg-4);
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.09em;
+}
+.transcript-compact::before, .transcript-compact::after {
+  content: ""; flex: 1; height: 1px; background: var(--line-soft);
+}
+
+/* ── turns ── */
+.turn { margin: 0 0 17px; }
+
+.turn-user {
+  display: flex; gap: 9px;
+  padding: 9px 12px; margin-bottom: 14px;
+  background: var(--bg-1); border-left: 2px solid var(--accent);
+  border-radius: var(--r-sm);
+}
+.turn-user-mark { color: var(--accent); font-weight: 700; line-height: 1.55; }
+.turn-user-body { color: var(--fg-0); min-width: 0; }
+
+.turn-prose { color: var(--fg-1); font-family: var(--sans); font-size: 13.5px; line-height: 1.58; }
+.turn-tools { margin-top: 7px; display: flex; flex-direction: column; gap: 2px; }
+
+/* ── tool calls — Claude terminal vocabulary ── */
+.tc { font-family: var(--mono); font-size: 12px; }
+.tc-head {
+  display: flex; align-items: baseline; gap: 7px; width: 100%;
+  text-align: left; background: transparent; border: 0; color: var(--fg-1);
+  padding: 2px 0; cursor: default; min-width: 0;
+}
+.tc-head.expandable { cursor: pointer; }
+.tc-head.expandable:hover .tc-name { color: var(--accent); }
+.tc-dot { color: var(--s-done); font-size: 9px; flex: none; }
+.tc-name { font-weight: 600; color: var(--fg-0); flex: none; }
+.tc-arg { color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tc-running { color: var(--s-working); font-style: italic; flex: none; }
+.tc-caret { color: var(--fg-4); margin-left: auto; font-size: 9px; flex: none; padding-left: 6px; }
+
+.tc-out {
+  margin: 2px 0 7px 16px; padding: 8px 10px;
+  background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  color: var(--fg-2); white-space: pre-wrap; overflow-x: auto;
+  max-height: 360px; font-size: 11.5px; line-height: 1.5;
+}
+.tc-elbow { color: var(--fg-4); user-select: none; }
+
+.tc-diff {
+  margin: 2px 0 7px 16px; border-radius: var(--r-sm); overflow: hidden;
+  font-size: 11.5px; line-height: 1.5; border: 1px solid var(--line-soft);
+}
+.tc-diff-del { background: color-mix(in oklch, var(--s-danger) 15%, transparent); color: var(--fg-1); padding: 0 9px; white-space: pre-wrap; }
+.tc-diff-del::before { content: "- "; color: var(--s-danger); }
+.tc-diff-add { background: color-mix(in oklch, var(--s-success) 15%, transparent); color: var(--fg-1); padding: 0 9px; white-space: pre-wrap; }
+.tc-diff-add::before { content: "+ "; color: var(--s-success); }
+
+/* ── markdown ── */
+.turn-prose .md-p { margin: 0 0 9px; }
+.turn-prose .md-p:last-child { margin-bottom: 0; }
+.turn-prose .md-h { font-family: var(--sans); color: var(--fg-0); line-height: 1.3; margin: 13px 0 6px; font-weight: 650; }
+.turn-prose .md-h:first-child { margin-top: 0; }
+.turn-prose h3.md-h { font-size: 15px; }
+.turn-prose h4.md-h { font-size: 13.5px; }
+.turn-prose h5.md-h, .turn-prose h6.md-h { font-size: 12.5px; color: var(--fg-1); }
+.turn-prose .md-ul, .turn-prose .md-ol { margin: 7px 0; padding-left: 20px; }
+.turn-prose .md-ul li, .turn-prose .md-ol li { margin: 2px 0; }
+.turn-prose .md-quote { border-left: 2px solid var(--line); padding-left: 11px; color: var(--fg-2); margin: 8px 0; }
+.turn-prose .md-link { color: var(--accent); text-decoration: none; }
+.turn-prose .md-link:hover { text-decoration: underline; }
+.turn-prose .md-hr { border: 0; border-top: 1px solid var(--line-soft); margin: 13px 0; }
+.turn-prose strong { color: var(--fg-0); font-weight: 650; }
+.md-icode { font-family: var(--mono); font-size: 0.86em; background: var(--bg-2); padding: 1px 5px; border-radius: 3px; color: var(--fg-0); }
+.turn-prose .md-code {
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
+  background: var(--bg-term); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  padding: 9px 12px; overflow-x: auto; margin: 9px 0; color: var(--fg-1);
+}
+.turn-prose .md-code code { font-family: inherit; white-space: pre; }
+
+/* markdown tables (GFM) */
+.turn-prose .md-table {
+  border-collapse: collapse; margin: 10px 0; font-size: 12.5px;
+  border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden;
+}
+.turn-prose .md-table th, .turn-prose .md-table td {
+  padding: 5px 11px; text-align: left; border-bottom: 1px solid var(--line-soft);
+  border-right: 1px solid var(--line-soft); vertical-align: top;
+}
+.turn-prose .md-table th:last-child, .turn-prose .md-table td:last-child { border-right: 0; }
+.turn-prose .md-table tbody tr:last-child td { border-bottom: 0; }
+.turn-prose .md-table thead th {
+  background: var(--bg-2); color: var(--fg-0); font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.turn-prose .md-table tbody tr:nth-child(even) td { background: color-mix(in oklch, var(--bg-1) 50%, transparent); }
+
+/* ── polish pass ──────────────────────────────────────────────────────── */
+/* roomier rhythm + crisper headings */
+.turn { margin-bottom: 22px; }
+.turn-prose { font-size: 13.5px; line-height: 1.62; }
+.turn-prose > .md-p:first-child { margin-top: 0; }
+.turn-prose .md-h { letter-spacing: -0.01em; }
+.turn-prose h3.md-h { font-size: 15.5px; margin-top: 16px; }
+.turn-prose h3.md-h::after {
+  content: ""; display: block; height: 1px; margin-top: 5px;
+  background: var(--line-soft);
+}
+.turn-prose .md-ul li::marker { color: var(--fg-3); }
+.turn-prose .md-ol li::marker { color: var(--fg-3); }
+.md-icode { background: color-mix(in oklch, var(--bg-2) 70%, transparent); }
+
+/* subagent (Agent/Task tool) — distinct from a plain tool call */
+.tc.tc-agent .tc-dot { color: var(--accent); }
+.tc.tc-agent .tc-name { color: var(--accent); }
+.tc-agent-type {
+  font-weight: 600; color: var(--fg-0);
+  background: var(--bg-2); border-radius: 3px; padding: 0 6px; flex: none;
+}

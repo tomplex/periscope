@@ -39,6 +39,37 @@ def test_paste_image_writes_file_and_pastes(client, mocker, tmp_path):
     assert "paste-buffer" in cmds
 
 
+def test_paste_image_deliver_false_skips_pane_paste(client, mocker, tmp_path):
+    # The transcript composer uploads with deliver=false: the file is written and
+    # its @path returned, but it is NOT pasted into the pane (the composer splices
+    # it into the message instead).
+    for mod_path in ("periscope.routes.paste_image", "server"):
+        try:
+            mod = __import__(mod_path, fromlist=["_PASTE_IMG_DIR"])
+            mocker.patch.object(mod, "_PASTE_IMG_DIR", tmp_path)
+            break
+        except (ImportError, AttributeError):
+            continue
+
+    tmux_mock = mocker.MagicMock(return_value="")
+    for path in ("periscope.routes.paste_image.tmux", "server.tmux"):
+        try:
+            mocker.patch(path, tmux_mock)
+            break
+        except (AttributeError, ModuleNotFoundError):
+            continue
+
+    r = client.post(
+        "/api/paste-image?session=main&index=0&deliver=false",
+        content=b"\x89PNG\r\n\x1a\nfakebytes",
+        headers={"content-type": "image/png"},
+    )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert r.json()["path"].endswith(".png")
+    tmux_mock.assert_not_called()   # no set-buffer / paste-buffer into the pane
+
+
 def test_paste_image_rejects_empty_body(client, mocker):
     # Even though body is empty, tmux must not be invoked.
     tmux_mock = mocker.MagicMock(return_value="")

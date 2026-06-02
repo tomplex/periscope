@@ -213,6 +213,21 @@ function PaneDetail({ w }) {
     activeTarget.value = w.target;
   }, [w.target]);
 
+  // Publish the pane header's height as --detail-header-h so the (absolutely
+  // positioned, kept-mounted) transcript host can sit exactly below it. The
+  // header flex-wraps (PR/branch/model chips), so its height is dynamic — a
+  // ResizeObserver keeps the offset correct instead of a magic constant.
+  useEffect(() => {
+    const el = document.getElementById("detail-pane-header");
+    const detail = document.getElementById("detail");
+    if (!el || !detail) return;
+    const apply = () => detail.style.setProperty("--detail-header-h", el.offsetHeight + "px");
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [w.target]);
+
   return (
     <div id="detail-pane" class="detail-pane">
       <PaneHeader w={w} mode={mode} onMode={(next) => setTranscriptMode(w.pid, next)} />
@@ -398,7 +413,7 @@ export function Detail() {
         const shown = isSelected && selMode === "transcript";
         return (
           <div key={`tr:${pid}`} class="detail-transcript-host"
-               style={shown ? "display:block" : "display:none"}>
+               style={shown ? "display:flex" : "display:none"}>
             <TranscriptView target={tw?.target} pid={pid} selected={isSelected} />
           </div>
         );

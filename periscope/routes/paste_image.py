@@ -47,7 +47,11 @@ def _sweep_old_paste_images() -> None:
 
 
 @router.post("/api/paste-image")
-async def paste_image(session: str, index: int, request: Request):
+async def paste_image(session: str, index: int, request: Request, deliver: bool = True):
+    """Write a clipboard image to /tmp and return its @path. With deliver=True
+    (the terminal's path) also bracketed-paste `@path ` straight into the pane.
+    With deliver=False (the transcript composer) skip the pane paste — the caller
+    splices the @path into the message it's composing instead."""
     target = f"{session}:{index}"
     body = await request.body()
     if not body:
@@ -59,11 +63,12 @@ async def paste_image(session: str, index: int, request: Request):
     _sweep_old_paste_images()
     path = _PASTE_IMG_DIR / f"{_PASTE_IMG_PREFIX}{uuid.uuid4().hex}.{ext}"
     path.write_bytes(body)
-    # Trailing space so Claude Code commits the @-reference (its file picker
-    # closes on whitespace) and the user can keep typing immediately after.
-    buf = f"wd-img-{uuid.uuid4().hex[:8]}"
-    tmux("set-buffer", "-b", buf, f"@{path} ")
-    tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
-    note_focus(target)
-    note_action(target)
+    if deliver:
+        # Trailing space so Claude Code commits the @-reference (its file picker
+        # closes on whitespace) and the user can keep typing immediately after.
+        buf = f"wd-img-{uuid.uuid4().hex[:8]}"
+        tmux("set-buffer", "-b", buf, f"@{path} ")
+        tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+        note_focus(target)
+        note_action(target)
     return {"ok": True, "path": str(path), "bytes": len(body)}
