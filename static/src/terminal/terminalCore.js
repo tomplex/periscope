@@ -27,6 +27,7 @@ let termReconnectAttempt = 0;
 let termReconnectedNotified = false; // only print "reconnecting…" once per outage
 let fitAddon = null;
 let webglAddon = null;
+let searchAddon = null;
 let termResizeObserver = null;
 let fitDebounce = null;
 let containerEl = null;          // set by setTerminalContainer() before startLiveTerminal()
@@ -150,6 +151,11 @@ export function startLiveTerminal(target) {
   } catch (e) {
     console.warn("[periscope] WebGL terminal renderer unavailable; falling back to canvas:", e);
   }
+
+  // Search addon: powers the Cmd+F bar (UI in a later task). Exported as
+  // searchNext/searchPrev/clearSearch below.
+  searchAddon = new SearchAddon.SearchAddon();
+  term.loadAddon(searchAddon);
 
   // Cmd+click on a `.md` path → add it as a document to the LGTM
   // session for this pane's repo. Path is resolved against the pane's
@@ -352,6 +358,10 @@ export function stopLiveTerminal() {
     try { webglAddon.dispose(); } catch (_) {}
     webglAddon = null;
   }
+  if (searchAddon) {
+    try { searchAddon.dispose(); } catch (_) {}
+    searchAddon = null;
+  }
   fitAddon = null;
   if (termWs) {
     try { termWs.close(); } catch (_) {}
@@ -384,6 +394,17 @@ export function scrollTerminalToBottom() {
 export function refitTerminal() {
   if (!term || !fitAddon) return;
   scheduleFit();
+}
+
+// Search API used by the Cmd+F bar in <Terminal>.
+export function searchNext(query, opts = {}) {
+  return searchAddon ? searchAddon.findNext(query, opts) : false;
+}
+export function searchPrev(query, opts = {}) {
+  return searchAddon ? searchAddon.findPrevious(query, opts) : false;
+}
+export function clearSearch() {
+  if (searchAddon) searchAddon.clearDecorations();
 }
 
 // --- mount helper (ported from static/terminal-mount.js) ---
