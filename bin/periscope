@@ -73,10 +73,13 @@ EOF
     "$0" uninstall-hook
     ;;
   install-hook)
-    # Register pane_session_hook.py as a Claude UserPromptSubmit hook so each
-    # pane records its CURRENT session id (periscope.turns maps pane -> session;
-    # the channel_shim records only at spawn and goes stale on /clear). Idempotent
-    # merge into ~/.claude/settings.json — preserves any existing hooks.
+    # Register pane_session_hook.py on Claude's SessionStart + UserPromptSubmit
+    # hooks so each pane records its CURRENT session id (periscope.turns maps
+    # pane -> session). SessionStart fires at startup AND on /clear (immediate,
+    # before the first prompt — a fresh pane shows its OWN transcript at once);
+    # UserPromptSubmit catches every prompt (migrates pre-hook panes on next
+    # message). Idempotent merge into ~/.claude/settings.json — joins existing
+    # hook groups, preserves everything else.
     python3 - "$REPO" <<'PY'
 import json, os, sys
 repo = sys.argv[1]
@@ -86,15 +89,24 @@ try:
     with open(p) as f: d = json.load(f)
 except FileNotFoundError:
     d = {}
-ups = d.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
-present = any(h.get("command", "").endswith("pane_session_hook.py")
-              for g in ups for h in g.get("hooks", []))
-if present:
-    print("periscope pane-session hook already installed")
-else:
-    ups.append({"matcher": "", "hooks": [{"type": "command", "command": cmd, "timeout": 5}]})
+hooks = d.setdefault("hooks", {})
+added = []
+for ev in ("SessionStart", "UserPromptSubmit"):
+    groups = hooks.setdefault(ev, [])
+    if any(h.get("command", "").endswith("pane_session_hook.py")
+           for g in groups for h in g.get("hooks", [])):
+        continue
+    entry = {"type": "command", "command": cmd, "timeout": 5}
+    if groups:
+        groups[0].setdefault("hooks", []).append(entry)   # join an existing group
+    else:
+        groups.append({"matcher": "", "hooks": [entry]})
+    added.append(ev)
+if added:
     with open(p, "w") as f: json.dump(d, f, indent=2)
-    print(f"installed UserPromptSubmit hook -> {cmd}")
+    print(f"installed pane-session hook on: {', '.join(added)}")
+else:
+    print("pane-session hook already installed (SessionStart + UserPromptSubmit)")
 PY
     ;;
   uninstall-hook)
@@ -106,16 +118,17 @@ try:
 except FileNotFoundError:
     raise SystemExit(0)
 h = d.get("hooks", {})
-ups = h.get("UserPromptSubmit", [])
-for g in ups:
-    g["hooks"] = [x for x in g.get("hooks", []) if not x.get("command", "").endswith("pane_session_hook.py")]
-ups = [g for g in ups if g.get("hooks")]
-if ups:
-    h["UserPromptSubmit"] = ups
-else:
-    h.pop("UserPromptSubmit", None)
+for ev in ("SessionStart", "UserPromptSubmit"):
+    groups = h.get(ev, [])
+    for g in groups:
+        g["hooks"] = [x for x in g.get("hooks", []) if not x.get("command", "").endswith("pane_session_hook.py")]
+    groups = [g for g in groups if g.get("hooks")]
+    if groups:
+        h[ev] = groups
+    else:
+        h.pop(ev, None)
 with open(p, "w") as f: json.dump(d, f, indent=2)
-print("removed periscope pane-session hook")
+print("removed pane-session hook from SessionStart + UserPromptSubmit")
 PY
     ;;
   start)

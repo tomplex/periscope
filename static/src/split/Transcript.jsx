@@ -68,6 +68,11 @@ function toolArg(t) {
     case "WebFetch": return inp.url || "";
     case "WebSearch": return inp.query || "";
     case "Skill": return inp.skill || inp.command || "";
+    case "AskUserQuestion": {
+      const qs = inp.questions || [];
+      if (qs.length === 1) return qs[0].question || qs[0].header || "";
+      return qs.length ? `${qs.length} questions` : "";
+    }
     default: {
       const s = JSON.stringify(inp);
       if (s === "{}" || s === "null") return "";
@@ -99,15 +104,45 @@ function fullInput(t) {
   }
 }
 
+// AskUserQuestion's input is structured (questions → options), not a flat
+// string — render each question with its header chip, prompt, and the offered
+// options. The chosen answer arrives in the tool_result string (rendered as the
+// normal tc-out below this block).
+function AskQuestions({ input }) {
+  const qs = input.questions || [];
+  return (
+    <div class="tc-ask">
+      {qs.map((q, i) => (
+        <div class="tc-ask-q" key={i}>
+          <div class="tc-ask-qhead">
+            {q.header && <span class="tc-ask-chip">{q.header}</span>}
+            {q.multiSelect && <span class="tc-ask-multi">multi-select</span>}
+          </div>
+          <div class="tc-ask-question">{q.question}</div>
+          <div class="tc-ask-options">
+            {(q.options || []).map((o, j) => (
+              <div class="tc-ask-opt" key={j}>
+                <span class="tc-ask-opt-label">{o.label}</span>
+                {o.description && <span class="tc-ask-opt-desc">{o.description}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ToolCall({ t }) {
   const [open, setOpen] = useState(false);
   const running = t.result == null;
   const isEdit = t.name === "Edit";
+  const isAsk = t.name === "AskUserQuestion";
   const isAgent = t.name === "Agent" || t.name === "Task";
   const detail = fullInput(t);
   const hasResult = !running && t.result != null && t.result !== "";
-  // Expandable if there's a full command/content, an Edit diff, or output.
-  const expandable = isEdit || !!detail || hasResult;
+  // Expandable if there's a full command/content, an Edit diff, questions, or output.
+  const expandable = isEdit || isAsk || !!detail || hasResult;
   const arg = toolArg(t);
   const subtype = isAgent ? (t.input?.subagent_type || "") : "";
   return (
@@ -144,6 +179,8 @@ function ToolCall({ t }) {
         <div class="tc-detail">
           {isEdit
             ? <EditDiff input={t.input || {}} />
+            : isAsk
+            ? <AskQuestions input={t.input || {}} />
             : detail && <pre class="tc-cmd">{detail}</pre>}
           {hasResult && <pre class="tc-out">{t.result}</pre>}
         </div>
@@ -152,10 +189,10 @@ function ToolCall({ t }) {
   );
 }
 
-function Turn({ m }) {
+function Turn({ m, current }) {
   if (m.role === "user") {
     return (
-      <div class="turn turn-user">
+      <div class={`turn turn-user${current ? " turn-current" : ""}`}>
         <span class="turn-user-mark">›</span>
         <div class="turn-user-body">{renderMarkdown(m.text)}</div>
       </div>
@@ -163,7 +200,7 @@ function Turn({ m }) {
   }
   const tools = m.tool_uses || [];
   return (
-    <div class="turn turn-assistant">
+    <div class={`turn turn-assistant${current ? " turn-current" : ""}`}>
       {m.text && <div class="turn-prose">{renderMarkdown(m.text)}</div>}
       {tools.length > 0 && (
         <div class="turn-tools">
@@ -312,6 +349,12 @@ export function TranscriptView({ target, pid, selected }) {
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   }
 
+  // Newest non-system message — gets a subtle highlight as the live turn.
+  let lastUuid = "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== "system") { lastUuid = messages[i].uuid; break; }
+  }
+
   return (
     <>
       <div class="transcript" ref={scrollRef} onScroll={onScroll}>
@@ -320,7 +363,7 @@ export function TranscriptView({ target, pid, selected }) {
           : messages.map((m) =>
               m.role === "system" && m.kind === "compact"
                 ? <div key={m.uuid} class="transcript-compact"><span>context compacted</span></div>
-                : <Turn key={m.uuid} m={m} />
+                : <Turn key={m.uuid} m={m} current={m.uuid === lastUuid} />
             )}
       </div>
       <Composer target={target} composerRef={composerRef} />

@@ -99,21 +99,24 @@ def test_none_when_no_transcript(tmp_path, monkeypatch):
     assert turns.get_turns_for_pane("main", 0) is None
 
 
-# ── channel_shim producer ────────────────────────────────────────────────
+# ── pane_session_hook producer (UserPromptSubmit) ─────────────────────────
 
-def test_shim_records_pane_session(tmp_path, monkeypatch):
-    import channel_shim
+def test_hook_records_pane_session(tmp_path, monkeypatch):
+    import io
+    import pane_session_hook as hook
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    monkeypatch.setattr(channel_shim, "TMUX_PANE", "%56")
-    monkeypatch.setattr(channel_shim, "CLAUDE_SESSION_ID", "abc-123")
-    channel_shim._record_pane_session()
-    assert (tmp_path / "periscope" / "pane_sessions" / "%56").read_text() == "abc-123"
+    monkeypatch.setenv("TMUX_PANE", "%56")
+    # session id comes from the hook payload (authoritative/current), not env.
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":"sess-abc","cwd":"/x"}'))
+    hook.record()
+    assert (tmp_path / "periscope" / "pane_sessions" / "%56").read_text() == "sess-abc"
 
 
-def test_shim_records_nothing_without_session(tmp_path, monkeypatch):
-    import channel_shim
+def test_hook_noop_without_tmux_pane(tmp_path, monkeypatch):
+    import io
+    import pane_session_hook as hook
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    monkeypatch.setattr(channel_shim, "TMUX_PANE", "%56")
-    monkeypatch.setattr(channel_shim, "CLAUDE_SESSION_ID", "")   # session id absent
-    channel_shim._record_pane_session()
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":"x"}'))
+    hook.record()
     assert not (tmp_path / "periscope" / "pane_sessions").exists()

@@ -42,11 +42,6 @@ SOCKET_PATH = os.environ.get(
     "PERISCOPE_MCP_SOCKET_PATH", "/tmp/periscope-mcp.sock"
 )
 TMUX_PANE = os.environ.get("TMUX_PANE", "")
-# The shim is a *direct* MCP child of this pane's claude, so it inherits exactly
-# this pane's session id — unlike tool/subagent subprocesses, whose inherited
-# CLAUDE_CODE_SESSION_ID / TMUX_PANE cross-contaminate. That makes the shim the
-# one reliable place to capture pane -> session.
-CLAUDE_SESSION_ID = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
 RECONNECT_BACKOFF_S = float(
     os.environ.get("PERISCOPE_MCP_RECONNECT_BACKOFF_S", "1.0")
 )
@@ -64,27 +59,6 @@ _RECONNECT_ERROR_CODE = -32099
 def _err(msg: str) -> None:
     sys.stderr.write(f"channel_shim: {msg}\n")
     sys.stderr.flush()
-
-
-def _record_pane_session() -> None:
-    """Persist this pane's Claude session id where periscope.turns can read it,
-    so periscope can map pane -> transcript (cwd alone collides when panes share
-    a dir). Writes <XDG>/periscope/pane_sessions/<TMUX_PANE> = session id,
-    atomically. Best-effort: any failure is swallowed — the shim must never
-    disrupt Claude and only ever exits 0 (see module docstring, item 10)."""
-    if not (TMUX_PANE.startswith("%") and CLAUDE_SESSION_ID):
-        return
-    try:
-        xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-        d = os.path.join(xdg, "periscope", "pane_sessions")
-        os.makedirs(d, exist_ok=True)
-        path = os.path.join(d, TMUX_PANE)          # e.g. ".../pane_sessions/%56"
-        tmp = f"{path}.{os.getpid()}.tmp"
-        with open(tmp, "w") as f:
-            f.write(CLAUDE_SESSION_ID)
-        os.replace(tmp, path)                      # atomic publish
-    except Exception:
-        pass
 
 
 class Shim:
@@ -336,7 +310,6 @@ def _parse_json_object(line: bytes) -> dict | None:
 
 
 def main() -> None:
-    _record_pane_session()
     try:
         asyncio.run(Shim().run())
     except KeyboardInterrupt:

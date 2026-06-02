@@ -3266,6 +3266,33 @@ body[data-alerts="open"][data-view="stream"] main {
 .tc-diff-add { background: color-mix(in oklch, var(--s-success) 15%, transparent); color: var(--fg-1); padding: 0 9px; white-space: pre-wrap; }
 .tc-diff-add::before { content: "+ "; color: var(--s-success); }
 
+/* AskUserQuestion — structured question/options block on expand. */
+.tc-ask { display: flex; flex-direction: column; gap: 11px; }
+.tc-ask-q { display: flex; flex-direction: column; gap: 5px; }
+.tc-ask-qhead { display: flex; align-items: center; gap: 7px; }
+.tc-ask-chip {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--accent); background: color-mix(in oklch, var(--accent) 12%, transparent);
+  padding: 1px 7px; border-radius: var(--r-sm); font-weight: 600;
+}
+.tc-ask-multi { font-size: 9.5px; color: var(--fg-4); font-style: italic; }
+.tc-ask-question { color: var(--fg-0); font-weight: 600; font-size: 12px; }
+.tc-ask-options { display: flex; flex-direction: column; gap: 4px; }
+.tc-ask-opt {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 9px; border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm); background: var(--bg-1);
+}
+.tc-ask-opt-label { color: var(--fg-1); font-weight: 600; }
+.tc-ask-opt-desc { color: var(--fg-3); font-size: 11px; line-height: 1.45; }
+
+/* Live turn — subtle tint on the newest non-system message. */
+.turn-current {
+  background: color-mix(in oklch, var(--accent) 7%, transparent);
+  border-radius: var(--r-sm);
+  padding: 8px 11px; margin-left: -11px; margin-right: -11px;
+}
+
 /* ── markdown ── */
 .turn-prose .md-p { margin: 0 0 9px; }
 .turn-prose .md-p:last-child { margin-bottom: 0; }

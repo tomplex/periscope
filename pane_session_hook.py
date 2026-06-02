@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""periscope pane->session recorder — Claude `UserPromptSubmit` hook.
+"""periscope pane->session recorder — Claude `SessionStart` + `UserPromptSubmit` hook.
 
 Records the pane's CURRENT Claude session id so periscope can map a tmux pane to
 its SPECIFIC transcript. cwd alone collides when several panes share a directory
-(periscope.turns), and `channel_shim.py` records the session only at spawn — a
-`/clear` mints a NEW session id without respawning the shim, so its mapping goes
-stale. This hook closes that gap: it fires on every prompt and re-records, so a
-`/clear`'d (or pre-hook) pane self-corrects the moment you talk to it.
+(periscope.turns). Registered on two events:
+  - SessionStart — fires at startup AND on /clear, so a fresh or just-cleared
+    pane records its own session id immediately, before its first prompt (no
+    cwd-fallback to whatever was most recently active).
+  - UserPromptSubmit — fires on every prompt, so panes that predate the hook
+    self-correct the moment you talk to them.
 
 Why this is the reliable producer: it reads `session_id` from the hook PAYLOAD
 (authoritative + current, unlike the shim's spawn-frozen env) and `TMUX_PANE`
