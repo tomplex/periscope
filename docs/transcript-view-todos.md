@@ -36,14 +36,22 @@ Each item below is self-contained enough to pick up in a fresh session.
 
 ## 1. Current-turn highlight + resume verify (small; was plan Task 7)
 
-- **Highlight the newest turn.** In `<TranscriptView>`, compute the last
-  non-system message uuid and pass `current={m.uuid===lastUuid}` to `<Turn>`;
-  add a subtle `.turn-current` background (CSS var already in palette, e.g.
-  `color-mix(in oklch, var(--accent) 8%, transparent)`). Pure CSS, no timer.
-- **Resume path-flip manual test.** With a pane in Transcript mode, run
-  `claude --resume` / start a new session in the same cwd; confirm the transcript
-  full-replaces to the new session's turns (no stale merge, no dupes). The
-  full-resend design + uuid keying should already handle this — just verify.
+- **Highlight the newest turn. DONE** (commit a390101). `<TranscriptView>`
+  computes the last non-system message uuid and passes `current` to `<Turn>`;
+  `.turn-current` tints it `color-mix(in oklch, var(--accent) 7%, transparent)`.
+  Pure CSS, no timer. Caveat: it can only highlight what the JSONL contains —
+  see the in-flight-flush finding under item 2.
+- **AskUserQuestion rendering. DONE** (same commit). Was falling into
+  `toolArg`'s `default` and dumping truncated JSON. Now `toolArg` shows the
+  question (or "N questions"), and expanding renders an `<AskQuestions>` block:
+  per-question header chip + prompt + options (label/description) + multi-select
+  marker. The chosen answer is already in the `tool_result` string (normal
+  `tc-out`). See the `.tc-ask*` CSS.
+- **Resume path-flip manual test. STILL OPEN.** With a pane in Transcript mode,
+  run `claude --resume` / start a new session in the same cwd; confirm the
+  transcript full-replaces to the new session's turns (no stale merge, no
+  dupes). The full-resend design + uuid keying should already handle this —
+  just verify.
 
 ---
 
@@ -58,7 +66,9 @@ The JSONL carries everything needed (confirmed against a real session):
   view, live.
 - **Current activity:** the last assistant turn's in-flight tool (`result===null`
   → "running Bash…"), or the in-progress task's `activeForm`, or idle. Cheap,
-  high-signal at-a-glance header.
+  high-signal at-a-glance header. **But the JSONL is an unreliable source for
+  in-flight state** — see the flush finding below; the truly-live signal has to
+  come from the live pane, not the transcript JSONL.
 - **Turn timing:** `type:"system"` events with `subtype:"turn_duration"` (and
   `stop_hook_summary`) carry per-turn duration. Currently filtered out by
   `messages_from_jsonl` (non-compact system events are dropped) — surface them
@@ -72,6 +82,28 @@ or a sibling, so it's unit-testable — `tests/test_search.py`) that derives a
 
 **Design note:** decide placement with Tom (pinned top strip vs. a toggle vs.
 the side metadata panel). This is a brainstorm-worthy UX call before building.
+
+**FINDING — JSONL does not reliably carry in-flight turns (measured, not
+guessed).** A 4 Hz probe over a pending `AskUserQuestion` (`/tmp/ask_probe.sh`,
+sampling both the resolved JSONL and `/api/pane/turns`) showed the question
+**never** on disk while pending — it materialized only at turn completion,
+**already paired with its result**, in a single atomic write. So:
+- **Client-side pausing tools (`AskUserQuestion`, plan approval, etc.) are
+  invisible in the transcript until answered.** The whole turn (prose + the
+  tool) lands at once on answer. Not fixable from the JSONL.
+- **Server-side tools (Bash/Read/…) DO flush live** — the assistant message
+  with the tool_use is written before its result, so `result===null` →
+  "running…" works for those (observed directly).
+- There is *anecdotal* evidence the pending question is occasionally visible
+  (one clear sighting), i.e. Claude Code's flush timing isn't 100% — but it's
+  not dependable.
+
+**Implication for this item:** a trustworthy "what is Claude doing / waiting on
+you" indicator must read **live pane state** (capture-pane / the status-line
+periscope already parses, the spinner, the alt-screen question box), NOT the
+transcript JSONL. The JSONL-derived task list and per-turn timing are still fine
+to surface — those are about *completed* state — but the live "now" signal is a
+live-pane concern. Don't build the activity header purely off `/api/pane/turns`.
 
 ---
 
