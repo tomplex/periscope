@@ -3122,3 +3122,51 @@ body[data-alerts="open"][data-view="stream"] main {
 /* Truncation in labels keeps row height uniform (already set on rail-label,
    reaffirmed here for clarity). */
 .rail-label b { font-weight: 600; }
+
+/* Transcript content mode (split-view detail).
+   The host is absolutely positioned over #detail's BODY region — it must start
+   BELOW #detail-pane-header so the Transcript/Terminal toggle stays visible and
+   clickable. PaneDetail still renders its header in normal flow at the top of
+   #detail (its body's terminal is display:none in transcript mode), so the host
+   is offset by the header height. #detail is full-height from the split layout,
+   so top+bottom anchoring fills the body. */
+#detail { position: relative; }
+#detail-pane-header { position: relative; z-index: 2; }
+.detail-transcript-host {
+  position: absolute;
+  top: 2.4em;          /* ≈ #detail-pane-header height — verify in browser */
+  left: 0; right: 0; bottom: 0;
+  z-index: 1;
+  overflow-y: auto;
+  background: var(--bg, #111);
+}
+.detail-mode-toggle { margin-left: auto; display: inline-flex; gap: 2px; }
+.detail-mode-toggle button {
+  font: inherit; padding: 1px 8px; cursor: pointer;
+  border: 1px solid var(--border, #333); background: transparent; color: inherit;
+}
+.detail-mode-toggle button.is-active { background: var(--accent, #2a4); color: #fff; }
+.transcript { padding: 8px 10px; font-size: 13px; }
+.transcript-empty { opacity: 0.6; padding: 16px; }
+.transcript-compact { border: 0; border-top: 1px dashed var(--border, #555); margin: 10px 0; }
+.turn { margin: 4px 0; border-left: 2px solid transparent; }
+.turn-user { border-left-color: #49f; }
+.turn-assistant { border-left-color: #a6f; }
+.turn-head {
+  display: flex; gap: 8px; width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: 0; color: inherit; padding: 3px 4px;
+}
+.turn-role { text-transform: uppercase; font-size: 10px; opacity: 0.7; min-width: 64px; }
+.turn-time { opacity: 0.5; min-width: 32px; }
+.turn-preview { opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-body { padding: 4px 4px 8px 12px; }
+.turn-text { white-space: pre-wrap; margin-bottom: 6px; }
+.toolcall { margin: 3px 0; border: 1px solid var(--border, #333); border-radius: 3px; }
+.toolcall-head {
+  display: flex; gap: 8px; width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: 0; color: inherit; padding: 3px 6px;
+}
+.toolcall-name { font-weight: 600; }
+.toolcall-summary { opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
+.toolcall-running { color: #fb4; }
+.toolcall-output, .toolcall-diff { margin: 0; padding: 6px; white-space: pre-wrap; overflow-x: auto; max-height: 320px; }

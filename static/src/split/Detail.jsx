@@ -19,17 +19,29 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useRef, useEffect, useState } from "preact/hooks";
-import { windows, activeTarget, railSelection } from "../store.js";
+import { windows, activeTarget, railSelection, transcriptMode, transcriptSeen } from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { writeTerminalLine } from "../terminal/terminalCore.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
+import { TranscriptView } from "./Transcript.jsx";
 
 // Match the modal's /api/pane cadence so the two views feel identical.
 const DETAIL_POLL_MS = 1500;
 
 function lookupWindow(pid) {
   return (windows.value || []).find((w) => w.pid === pid) || null;
+}
+
+function computeMode(w) {
+  if (!w || !w.is_claude) return "terminal";
+  const explicit = transcriptMode.value[w.pid];
+  if (explicit) return explicit;
+  return transcriptSeen.value[w.pid] ? "transcript" : "terminal";
+}
+
+function setTranscriptMode(pid, mode) {
+  transcriptMode.value = { ...transcriptMode.value, [pid]: mode };
 }
 
 function lgtmSessionForWorktree(worktreeKey) {
@@ -68,7 +80,7 @@ async function handleDetailPaste(e) {
 // API error · ✨ auto-rename. PR/Linear anchors are real links; they sit
 // inside a non-clickable header so no stopPropagation is needed here (unlike
 // the rail rows).
-function PaneHeader({ w }) {
+function PaneHeader({ w, mode, onMode }) {
   const [renaming, setRenaming] = useState(false);
 
   async function autoRename() {
@@ -134,6 +146,16 @@ function PaneHeader({ w }) {
   if (w.api_error) {
     parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);
   }
+  if (w.is_claude) {
+    parts.push(
+      <span class="detail-mode-toggle">
+        <button class={mode === "transcript" ? "is-active" : ""}
+                onClick={() => onMode("transcript")}>Transcript</button>
+        <button class={mode === "terminal" ? "is-active" : ""}
+                onClick={() => onMode("terminal")}>Terminal</button>
+      </span>
+    );
+  }
   return <header id="detail-pane-header" class="detail-pane-header">{parts.map((p, i) => <>{p}</>)}</header>;
 }
 
@@ -185,6 +207,7 @@ function SidePanel({ target }) {
 // activeTarget is set on every render so the shared paste handler tracks the
 // live target even when the same pane stays selected.
 function PaneDetail({ w }) {
+  const mode = computeMode(w);
   // Set the shared paste/active-target before anything else (coupling #5).
   useEffect(() => {
     activeTarget.value = w.target;
@@ -192,18 +215,20 @@ function PaneDetail({ w }) {
 
   return (
     <div id="detail-pane" class="detail-pane">
-      <PaneHeader w={w} />
+      <PaneHeader w={w} mode={mode} onMode={(next) => setTranscriptMode(w.pid, next)} />
       <div class="detail-pane-body">
-        <Terminal
-          key={w.pid}
-          id="detail-xterm"
-          class="detail-xterm"
-          target={w.target}
-          onPaste={handleDetailPaste}
-        />
+        <div class="detail-term-host" style={mode === "terminal" ? "display:contents" : "display:none"}>
+          <Terminal
+            key={w.pid}
+            id="detail-xterm"
+            class="detail-xterm"
+            target={w.target}
+            onPaste={handleDetailPaste}
+          />
+        </div>
         {/* Keyed on target so switching panes wipes paneData rather than
             showing the previous pane's PR/notes for ~1.5s until the new tick
-            lands. */}
+            lands. SidePanel takes `target`, NOT `w`. */}
         <SidePanel key={w.target} target={w.target} />
       </div>
     </div>
@@ -345,6 +370,19 @@ export function Detail() {
 
   const paneW = isPane ? lookupWindow(sel.slice("pane:".length)) : null;
 
+  // Keep every opened Claude transcript mounted (CSS-hidden when not active) so
+  // scroll position + expanded segments survive pane switches — same discipline
+  // as the review iframes. Pruned to pids still live in /api/state.
+  const openedTr = useRef(new Set());
+  if (isPane && paneW?.is_claude) openedTr.current.add(paneW.pid);
+  const livePids = new Set(ws.map((x) => x.pid));
+  const selMode = computeMode(paneW);
+  for (const pid of [...openedTr.current]) {
+    const isSelected = isPane && paneW?.pid === pid;
+    if (!isSelected && !livePids.has(pid)) openedTr.current.delete(pid);
+  }
+  const trPids = [...openedTr.current];
+
   return (
     <section id="detail">
       {!sel && <EmptyDetail />}
@@ -354,6 +392,17 @@ export function Detail() {
           <ReviewDetail key={wt} worktreeKey={wt} />
         </div>
       ))}
+      {trPids.map((pid) => {
+        const tw = lookupWindow(pid);
+        const isSelected = isPane && paneW?.pid === pid;
+        const shown = isSelected && selMode === "transcript";
+        return (
+          <div key={`tr:${pid}`} class="detail-transcript-host"
+               style={shown ? "display:block" : "display:none"}>
+            <TranscriptView target={tw?.target} pid={pid} selected={isSelected} />
+          </div>
+        );
+      })}
     </section>
   );
 }
