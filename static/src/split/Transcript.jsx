@@ -274,7 +274,7 @@ function Composer({ target, composerRef }) {
   );
 }
 
-export function TranscriptView({ target, pid, selected }) {
+export function TranscriptView({ target, pid, selected, state, waitingFor }) {
   const messages = useTranscriptPoll(target, pid, selected);
   const scrollRef = useRef(null);
   const composerRef = useRef(null);
@@ -319,6 +319,10 @@ export function TranscriptView({ target, pid, selected }) {
     return () => ro.disconnect();
   }, []);
 
+  // Bring the waiting banner into view when Claude transitions to needs-input
+  // (no new message arrives to trigger the content-change pin above).
+  useEffect(() => { if (state === "needs-input") pin(); }, [state]);
+
   function onScroll(e) {
     const el = e.currentTarget;
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -340,6 +344,18 @@ export function TranscriptView({ target, pid, selected }) {
                 ? <div key={m.uuid} class="transcript-compact"><span>context compacted</span></div>
                 : <Turn key={m.uuid} m={m} current={m.uuid === lastUuid} />
             )}
+        {/* Claude is blocked on you. The pending turn (e.g. an AskUserQuestion)
+            is NOT in the JSONL until answered, so this banner — sourced from the
+            session-status file via /api/state — is the only in-transcript signal
+            that input is needed. */}
+        {state === "needs-input" && (
+          <div class="transcript-waiting">
+            <span class="transcript-waiting-dot" />
+            <span class="transcript-waiting-text">
+              Waiting for your input{waitingFor ? ` — ${waitingFor}` : ""}
+            </span>
+          </div>
+        )}
       </div>
       <Composer target={target} composerRef={composerRef} />
     </>

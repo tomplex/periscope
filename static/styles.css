@@ -3285,6 +3285,27 @@ body[data-alerts="open"][data-view="stream"] main {
 .tc-ask-opt-label { color: var(--fg-1); font-weight: 600; }
 .tc-ask-opt-desc { color: var(--fg-3); font-size: 11px; line-height: 1.45; }
 
+/* Claude is waiting on you — prominent banner at the transcript tail (the
+   pending question itself isn't in the JSONL, so this is the live signal). */
+.transcript-waiting {
+  display: flex; align-items: center; gap: 9px;
+  margin: 6px 0 2px; padding: 9px 13px;
+  border: 1px solid color-mix(in oklch, var(--s-working) 45%, transparent);
+  background: color-mix(in oklch, var(--s-working) 13%, transparent);
+  border-radius: var(--r-sm);
+  color: var(--fg-0); font-size: 12.5px; font-weight: 600;
+}
+.transcript-waiting-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--s-working);
+  animation: transcript-waiting-pulse 1.4s ease-in-out infinite;
+}
+.transcript-waiting-text { min-width: 0; }
+@keyframes transcript-waiting-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.82); }
+}
+
 /* Live turn — subtle tint on the newest non-system message. */
 .turn-current {
   background: color-mix(in oklch, var(--accent) 7%, transparent);
