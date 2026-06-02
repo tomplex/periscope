@@ -29,3 +29,16 @@ export const modalAutoRenaming = signal(false);
 // computeMode): explicit override wins, else transcript iff seen, else terminal.
 export const transcriptMode = signal({});   // { [pid]: "transcript" | "terminal" }
 export const transcriptSeen = signal({});   // { [pid]: true }
+
+// Shared transcript messages — written by useTranscriptPoll in
+// Transcript.jsx (the kept-mounted instance for each opened Claude pid),
+// read by both TranscriptView (own messages) and Sidebar's Files section
+// (selected pane's messages). One poll per selected pid; no duplicate
+// fetches. Evicted alongside transcript-host pruning in Detail.jsx.
+export const paneTranscript = signal({});   // { [pid]: { messages, sessionId } }
+
+// File-preview overlay state. Non-null => overlay is shown for that path.
+// Three setters: terminal Cmd+click (via terminalCore link router),
+// transcript tool-call chip click, sidebar Files row click. All write
+// the same shape: { path, line } where line may be null.
+export const previewPath = signal(null);
