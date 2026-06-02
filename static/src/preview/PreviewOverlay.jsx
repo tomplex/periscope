@@ -37,6 +37,11 @@ function loadInner() {
     _innerPromise = import("./PreviewOverlayInner.jsx").then((m) => {
       _innerMod = m;
       return m;
+    }).catch((err) => {
+      // Reset so a future open can retry from scratch (e.g., transient
+      // network failure). Surface the error to the chrome via thrown rejection.
+      _innerPromise = null;
+      throw err;
     });
   }
   return _innerPromise;
@@ -45,15 +50,40 @@ function loadInner() {
 export function PreviewOverlay() {
   const cur = previewPath.value;
   const [Inner, setInner] = useState(() => _innerMod?.PreviewOverlayInner || null);
+  const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
     if (!cur || Inner) return;
     let alive = true;
-    loadInner().then((m) => { if (alive) setInner(() => m.PreviewOverlayInner); });
+    setLoadError(null);
+    loadInner()
+      .then((m) => { if (alive) setInner(() => m.PreviewOverlayInner); })
+      .catch((err) => {
+        if (!alive) return;
+        // Network error / chunk missing — show the user instead of
+        // sitting on the loading spinner forever.
+        setLoadError(err?.message || String(err));
+      });
     return () => { alive = false; };
   }, [cur, Inner]);
 
   if (!cur) return null;
+  if (loadError) {
+    return (
+      <div class="preview-overlay" role="dialog" aria-label="File preview">
+        <header class="preview-header">
+          <span class="preview-path">{cur.path}</span>
+          <button class="preview-btn" title="Close (Esc)" onClick={() => (previewPath.value = null)}>✕</button>
+        </header>
+        <div class="preview-body">
+          <div class="preview-error">
+            <div>Failed to load preview module:</div>
+            <div class="preview-error-code">{loadError}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (!Inner) {
     // First-open path: chunk still loading. Show the chrome immediately so
     // the user sees feedback; the CM-mounted body renders once Inner lands.
