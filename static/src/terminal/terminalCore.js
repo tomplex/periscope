@@ -31,6 +31,15 @@ let fitDebounce = null;
 let containerEl = null;          // set by setTerminalContainer() before startLiveTerminal()
 let linkClickCallback = null;    // set by setTerminalLinkCallback()
 
+// Whether the viewport is at the live bottom. The detail pane polls this to
+// show its scroll-to-bottom button only when scrolled up. True when there's no
+// terminal (nothing to scroll) or in alt-screen (no scrollback).
+export function isTerminalAtBottom() {
+  if (!term) return true;
+  const b = term.buffer.active;
+  return b.viewportY >= b.baseY;
+}
+
 // Mount target for the live xterm. Must be called before startLiveTerminal().
 // Consumers: <Modal> and <Detail> (via mountTerminal).
 export function setTerminalContainer(el) {
@@ -339,6 +348,15 @@ export function writeTerminalLine(line) {
   if (term) term.writeln(line);
 }
 
+// Jump the viewport to the live bottom. Used on mount, on switching back to
+// terminal mode, and by the detail pane's scroll-to-bottom button — xterm's
+// own scrollbar is fiddly to drag to the very bottom.
+export function scrollTerminalToBottom() {
+  if (term) {
+    try { term.scrollToBottom(); } catch (_) {}
+  }
+}
+
 // Re-run FitAddon. Used by mountTerminal after a deferred frame to catch the
 // case where the container's layout wasn't fully computed when
 // startLiveTerminal called fit() synchronously (common when re-mounting into a
@@ -381,7 +399,14 @@ export function mountTerminal(container, target, opts = {}) {
   // the browser to refit on the next frame catches that case. Two rAFs
   // because the first one fires before the post-paint relayout settles
   // when transitioning from `display: none` → visible.
-  requestAnimationFrame(() => requestAnimationFrame(refitTerminal));
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    refitTerminal();
+    scrollTerminalToBottom();
+  }));
+  // The initial capture-pane paint streams in over the socket after mount;
+  // pin to the bottom once it's likely landed so a shell pane opens at its
+  // prompt rather than scrolled up in scrollback.
+  setTimeout(scrollTerminalToBottom, 300);
 }
 
 export function unmountTerminal() {

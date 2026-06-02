@@ -205,6 +205,77 @@ def recent(*,
     return _normalize_rows(rows)
 
 
+def messages_from_jsonl(jsonl_path: str) -> list[dict]:
+    """Parse a Claude JSONL into structured turn messages (full file, two-pass).
+
+    User/assistant turns in JSONL order. Assistant tool_use blocks are
+    back-patched with their paired tool_result content (tool_use.id ==
+    tool_result.tool_use_id from later user-role events); unpaired (in-flight)
+    tool_uses get result=None. Each message carries `uuid` (the client's stable
+    reconciliation key). compact_boundary system events become divider markers.
+
+    Filters read `ev.raw` — isMeta/isSidechain/subtype are NOT lifted onto the
+    Event by `_classify` (history/jsonl.py); reaching for ev.is_meta would be an
+    AttributeError. Skip the event if any of:
+      - ev.raw.get("isMeta") is True
+      - ev.raw.get("isSidechain") is True
+      - ev.type == "system" and ev.raw.get("subtype") != "compact_boundary"
+      - the event carries no user_text, assistant_text, tool_uses, or tool_results
+    """
+    from .jsonl import parse_jsonl
+
+    events = list(parse_jsonl(jsonl_path))
+
+    # Pass 1: tool_use_id -> result content (full-file; a result can pair with
+    # a tool_use emitted in an earlier event).
+    results: dict[str, str] = {}
+    for ev in events:
+        for tr in ev.tool_results:
+            tuid = tr.get("tool_use_id")
+            if tuid is not None:
+                results[tuid] = tr.get("content", "")
+
+    # Pass 2: emit messages.
+    messages: list[dict] = []
+    for ev in events:
+        raw = ev.raw
+        if raw.get("isMeta") is True or raw.get("isSidechain") is True:
+            continue
+        if ev.type == "system":
+            if raw.get("subtype") == "compact_boundary":
+                messages.append({
+                    "role": "system",
+                    "kind": "compact",
+                    "uuid": ev.uuid,
+                    "ts_ms": ev.ts_ms,
+                })
+            continue
+        if not (ev.user_text or ev.assistant_text or ev.tool_uses or ev.tool_results):
+            continue
+        if ev.type == "user" and ev.user_text:
+            messages.append({
+                "role": "user",
+                "uuid": ev.uuid,
+                "ts_ms": ev.ts_ms,
+                "text": ev.user_text,
+            })
+        elif ev.type == "assistant":
+            tool_uses = [{
+                "id": tu.get("id"),
+                "name": tu.get("name"),
+                "input": tu.get("input") or {},
+                "result": results.get(tu.get("id")),
+            } for tu in ev.tool_uses]
+            messages.append({
+                "role": "assistant",
+                "uuid": ev.uuid,
+                "ts_ms": ev.ts_ms,
+                "text": ev.assistant_text or "",
+                "tool_uses": tool_uses,
+            })
+    return messages
+
+
 def get_session(session_id: str, *,
                 db_path: Path | str | None = None) -> dict | None:
     """Return the full session row + parsed conversation messages.
@@ -213,7 +284,6 @@ def get_session(session_id: str, *,
     None if no row matches session_id, or if the JSONL file is missing on
     disk (the row exists but is orphaned; `clean` would remove it)."""
     import os
-    from .jsonl import parse_jsonl
 
     conn = connect(db_path)
     try:
@@ -226,23 +296,8 @@ def get_session(session_id: str, *,
         conn.close()
 
     jsonl_path = record.get("jsonl_path") or ""
-    messages: list[dict] = []
     jsonl_missing = not os.path.isfile(jsonl_path)
-    if not jsonl_missing:
-        for ev in parse_jsonl(jsonl_path):
-            if ev.type == "user" and ev.user_text:
-                messages.append({
-                    "role": "user",
-                    "ts_ms": ev.ts_ms,
-                    "text": ev.user_text,
-                })
-            elif ev.type == "assistant":
-                messages.append({
-                    "role": "assistant",
-                    "ts_ms": ev.ts_ms,
-                    "text": ev.assistant_text or "",
-                    "tool_uses": ev.tool_uses,
-                })
+    messages = [] if jsonl_missing else messages_from_jsonl(jsonl_path)
 
     # Normalize JSON columns + decode tags
     return {

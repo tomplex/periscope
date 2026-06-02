@@ -72,3 +72,40 @@ def test_rename_rejects_empty(client, mocker):
     r = client.post("/api/rename?session=main&index=0", json={"name": "   "})
     assert r.status_code == 400
     assert "empty" in r.json()["detail"]
+
+
+def test_pane_turns_returns_messages_end_to_end(client, mocker, tmp_path, monkeypatch):
+    # Exercise route -> get_turns_for_pane -> messages_from_jsonl against a real
+    # tmp transcript (the Q1-2026 mocked-migration lesson: don't mock the path
+    # the bug would live in). Only the tmux boundary and the session lookup are faked.
+    import json
+    import periscope.activity as activity
+
+    cwd = "/Users/tom/dev/turnsproj"
+    enc = tmp_path / activity._encode_cwd(cwd)
+    enc.mkdir(parents=True)
+    (enc / "sid-9.jsonl").write_text(json.dumps({
+        "type": "user", "sessionId": "sid-9", "cwd": cwd,
+        "timestamp": "2026-06-01T10:00:00.000Z", "uuid": "u1", "parentUuid": None,
+        "message": {"role": "user", "content": "hi there"},
+    }) + "\n")
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)
+    mocker.patch("periscope.turns.tmux", return_value=f"%9\t{cwd}")
+    mocker.patch("periscope.turns.session_id_for_pane", return_value="sid-9")
+
+    r = client.get("/api/pane/turns?session=main&index=0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_id"] == "sid-9"
+    assert body["messages"][0]["text"] == "hi there"
+
+
+def test_pane_turns_null_when_no_transcript(client, mocker, tmp_path, monkeypatch):
+    import periscope.activity as activity
+
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)  # empty -> no match
+    mocker.patch("periscope.turns.tmux", return_value="%9\t/no/such/cwd")
+    mocker.patch("periscope.turns.session_id_for_pane", return_value=None)
+    r = client.get("/api/pane/turns?session=main&index=0")
+    assert r.status_code == 200
+    assert r.json() == {"turns": None}

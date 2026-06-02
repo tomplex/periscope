@@ -22,3 +22,10 @@ export const usage = signal(null);
 export const editingTarget = signal(null);
 export const modalRenaming = signal(false);
 export const modalAutoRenaming = signal(false);
+
+// Transcript content-mode state (split-view detail). transcriptMode holds only
+// an EXPLICIT user toggle per pid; transcriptSeen is set once the pane's first
+// poll returns real turns. Displayed mode is computed from both (see Detail.jsx
+// computeMode): explicit override wins, else transcript iff seen, else terminal.
+export const transcriptMode = signal({});   // { [pid]: "transcript" | "terminal" }
+export const transcriptSeen = signal({});   // { [pid]: true }

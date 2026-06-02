@@ -202,3 +202,34 @@ def test_get_session_marks_jsonl_missing(tmp_path):
     assert sess is not None
     assert sess["jsonl_missing"] is True
     assert sess["messages"] == []
+
+
+def test_messages_from_jsonl_pairs_filters_and_stamps_uuid(fixture_dir):
+    from history.search import messages_from_jsonl
+    msgs = messages_from_jsonl(str(fixture_dir / "turns_session.jsonl"))
+
+    # Order preserved; isMeta(m1)/isSidechain(sc1)/tool-result-only(u2)/
+    # non-compact-system(sys2) dropped.
+    assert [m["uuid"] for m in msgs] == ["u1", "a1", "a2", "c1", "u3"]
+
+    # tool_use/result pairing (tool_use.id <-> tool_result.tool_use_id)
+    a1 = next(m for m in msgs if m["uuid"] == "a1")
+    assert a1["role"] == "assistant"
+    assert a1["text"] == "Running them now"
+    assert a1["tool_uses"][0]["name"] == "Bash"
+    assert a1["tool_uses"][0]["result"] == "All pass"
+
+    # in-flight tool_use: no matching result yet -> None
+    a2 = next(m for m in msgs if m["uuid"] == "a2")
+    assert a2["tool_uses"][0]["result"] is None
+
+    # compact_boundary emitted as a divider
+    c1 = next(m for m in msgs if m["uuid"] == "c1")
+    assert c1["role"] == "system" and c1["kind"] == "compact"
+
+    # every emitted message carries a uuid + ts_ms (reconciliation depends on it)
+    assert all(m["uuid"] and m["ts_ms"] for m in msgs)
+
+    # deterministic: a second parse yields the same uuids in the same order
+    again = [m["uuid"] for m in messages_from_jsonl(str(fixture_dir / "turns_session.jsonl"))]
+    assert again == ["u1", "a1", "a2", "c1", "u3"]

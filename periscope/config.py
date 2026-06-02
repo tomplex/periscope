@@ -41,6 +41,15 @@ PORT = int(os.environ.get("PERISCOPE_PORT", "8765"))
 _XDG = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
 ACTIVITY_DB = Path(_XDG) / "periscope" / "periscope.db"
 
+# Per-pane Claude session map. Each pane's channel_shim writes a file named by
+# its tmux pane id (e.g. "%56") containing that pane's CLAUDE_CODE_SESSION_ID
+# (the transcript JSONL stem). periscope.turns reads it to map a pane to its
+# SPECIFIC session — cwd alone collides when several panes share a directory.
+# A file the shim owns keeps the mapping inside periscope (no Claude hooks) and
+# readable by both the prod and a dev instance (the shim only talks to prod's
+# socket, but the file is shared).
+PANE_SESSIONS_DIR = Path(_XDG) / "periscope" / "pane_sessions"
+
 # Activity timeline window: git commits + CI runs newer than this many
 # days show in the modal's Activity section. Was a hardcoded 24h.
 ACTIVITY_DAYS = int(os.environ.get("PERISCOPE_ACTIVITY_DAYS", "7"))
