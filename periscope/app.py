@@ -22,7 +22,7 @@ from periscope.usage import cached_scraped_usage, kill_orphan_usage_sessions
 
 # Routes — each module owns an APIRouter that we mount into `app` below.
 from periscope.routes import (
-    alerts, auto_rename, channel, healthz, history, pane, paste_image, prefs,
+    alerts, auto_rename, channel, fs, healthz, history, pane, paste_image, prefs,
     send, sessions, state, ws,
 )
 from periscope.routes import lgtm as lgtm_route
@@ -97,7 +97,7 @@ app = FastAPI(lifespan=lifespan)
 # by path — but we mount them before the static catch-all below so
 # `/api/*` and `/ws/*` paths take precedence over `StaticFiles`.
 for r in (
-    alerts, auto_rename, channel, cleanup_routes, healthz, history, lgtm_route,
+    alerts, auto_rename, channel, cleanup_routes, fs, healthz, history, lgtm_route,
     pane, paste_image, prefs, projects_routes, send, sessions, settings_routes,
     state, ws,
 ):
