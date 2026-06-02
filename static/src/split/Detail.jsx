@@ -19,10 +19,10 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useRef, useEffect, useState } from "preact/hooks";
-import { windows, activeTarget, railSelection, transcriptMode, transcriptSeen, paneTranscript } from "../store.js";
+import { windows, activeTarget, railSelection, transcriptMode, transcriptSeen, paneTranscript, previewPath } from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
-import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom } from "../terminal/terminalCore.js";
+import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom, setTerminalFileCallback } from "../terminal/terminalCore.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
 import { TranscriptView } from "./Transcript.jsx";
 import { PreviewOverlay } from "../preview/PreviewOverlay.jsx";
@@ -233,6 +233,21 @@ function PaneDetail({ w }) {
   // Set the shared paste/active-target before anything else (coupling #5).
   useEffect(() => {
     activeTarget.value = w.target;
+  }, [w.target]);
+
+  // Wire the terminal's file-link callback to the preview overlay.
+  // Set on mount, cleared on unmount. Cmd+click on a path in the
+  // terminal → previewPath.value → overlay opens.
+  useEffect(() => {
+    setTerminalFileCallback((rawPath) => {
+      // Split off optional :NN line suffix for the line jump.
+      let path = rawPath;
+      let line = null;
+      const m = path.match(/^(.*?):(\d+)$/);
+      if (m) { path = m[1]; line = m[2]; }
+      previewPath.value = { path, line };
+    });
+    return () => setTerminalFileCallback(null);
   }, [w.target]);
 
   // Publish the pane header's height as --detail-header-h so the (absolutely
