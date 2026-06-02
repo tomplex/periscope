@@ -23,8 +23,10 @@ from periscope.panes import (
     smooth_is_claude, smooth_spinner,
 )
 from periscope.projects import resolve_project_for_window, get_project
+from periscope.session_status import session_state_for
 from periscope.store import get_window
 from periscope.tmux import capture
+from periscope.turns import session_id_for_pane
 from periscope.worktrees import affiliation
 
 
@@ -103,6 +105,21 @@ def build_window_view(
             parsed["state"] = "working"
 
         _view_cache[cache_key] = {"activity": activity, "parsed": dict(parsed)}
+
+    # Authoritative state from the session status file (sessions/<pid>.json),
+    # which replaces the scraped working/needs-input/idle signal whenever the
+    # pane maps to a live Claude session. Applied every poll (outside the cache
+    # branch) so a busy→waiting→idle transition shows even on a cache hit. Falls
+    # through to the scraped state for shell/unknown status or unmapped panes.
+    # A mapped live session is also proof the pane IS Claude (a dialog that
+    # blanks the bottom status line no longer flips the card to "shell").
+    sess = session_state_for(session_id_for_pane(w.get("pane_id", "")))
+    if sess:
+        parsed["is_claude"] = True
+        parsed["state"] = sess["state"]
+        parsed["needs_input"] = sess["state"] == "needs-input"
+        parsed["asked_question"] = False
+        parsed["waiting_for"] = sess.get("waiting_for")
 
     # done-vs-idle refinement. Uses per-pid stamps (persisted via
     # state.json) so a server restart preserves the "Claude finished
