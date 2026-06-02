@@ -86,7 +86,18 @@ function PaneHeader({ w }) {
     }
   }
 
-  const parts = [<span><b>{w.session || ""}</b></span>];
+  const parts = [
+    <button
+      type="button"
+      class={`header-rename${renaming ? " busy" : ""}`}
+      title="ask Claude to rename this window"
+      disabled={renaming}
+      onClick={autoRename}
+    >
+      ✨
+    </button>,
+    <span><b>{w.session || ""}</b></span>,
+  ];
   if (w.branch) {
     parts.push(<><span class="hsep">·</span><span>{w.branch}</span></>);
   }
@@ -123,19 +134,6 @@ function PaneHeader({ w }) {
   if (w.api_error) {
     parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);
   }
-  // ✨ at the rightmost edge (margin-left:auto in CSS) — ask Claude to
-  // rename this window. Mirrors the modal's modal-title-rename button.
-  parts.push(
-    <button
-      type="button"
-      class={`header-rename${renaming ? " busy" : ""}`}
-      title="ask Claude to rename this window"
-      disabled={renaming}
-      onClick={autoRename}
-    >
-      ✨
-    </button>
-  );
   return <header id="detail-pane-header" class="detail-pane-header">{parts.map((p, i) => <>{p}</>)}</header>;
 }
 

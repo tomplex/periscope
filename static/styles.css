@@ -2987,13 +2987,11 @@ body[data-alerts="open"][data-view="stream"] main {
 .detail-pane-header .header-git { color: var(--s-needs); font-family: var(--mono); }
 .detail-pane-header .header-api-error { color: var(--s-danger); }
 
-/* Auto-rename button at the right edge of the detail-pane-header. Mirrors
-   the modal-title-rename behavior (POST /api/auto-rename-window then let the
-   next /api/state poll surface the new window name in the rail). margin-left
-   auto pushes it past the wrapping status chips so it always lands rightmost
-   regardless of how many fields rendered. */
+/* Auto-rename button inline at the left of the detail-pane-header, before
+   the session name. Mirrors the modal-title-rename behavior (POST
+   /api/auto-rename-window then let the next /api/state poll surface the new
+   window name in the rail). */
 .detail-pane-header .header-rename {
-  margin-left: auto;
   align-self: center;
   padding: 0 4px;
   font-size: 13px;
