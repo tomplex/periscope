@@ -65,9 +65,27 @@ async function handleDetailPaste(e) {
 }
 
 // Header for the pane detail — branch · PR · CI · Linear · git · model · ctx% ·
-// API error. PR/Linear anchors are real links; they sit inside a non-clickable
-// header so no stopPropagation is needed here (unlike the rail rows).
+// API error · ✨ auto-rename. PR/Linear anchors are real links; they sit
+// inside a non-clickable header so no stopPropagation is needed here (unlike
+// the rail rows).
 function PaneHeader({ w }) {
+  const [renaming, setRenaming] = useState(false);
+
+  async function autoRename() {
+    if (renaming) return;
+    setRenaming(true);
+    try {
+      // The endpoint mutates the tmux window's title via Claude; the next
+      // /api/state poll surfaces the new name in the rail row. No need to
+      // touch local state — refresh is implicit via the poll loop.
+      await apiCall("auto-rename window", `/api/auto-rename-window?${targetQuery(w.target)}`, {
+        method: "POST",
+      });
+    } finally {
+      setRenaming(false);
+    }
+  }
+
   const parts = [<span><b>{w.session || ""}</b></span>];
   if (w.branch) {
     parts.push(<><span class="hsep">·</span><span>{w.branch}</span></>);
@@ -105,6 +123,19 @@ function PaneHeader({ w }) {
   if (w.api_error) {
     parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);
   }
+  // ✨ at the rightmost edge (margin-left:auto in CSS) — ask Claude to
+  // rename this window. Mirrors the modal's modal-title-rename button.
+  parts.push(
+    <button
+      type="button"
+      class={`header-rename${renaming ? " busy" : ""}`}
+      title="ask Claude to rename this window"
+      disabled={renaming}
+      onClick={autoRename}
+    >
+      ✨
+    </button>
+  );
   return <header id="detail-pane-header" class="detail-pane-header">{parts.map((p, i) => <>{p}</>)}</header>;
 }
 

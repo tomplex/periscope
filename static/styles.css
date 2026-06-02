@@ -2831,7 +2831,7 @@ body[data-alerts="open"][data-view="stream"] main {
 }
 
 .detail-pane { display: flex; flex-direction: column; }
-.detail-pane-body { display: grid; grid-template-columns: 1fr 240px; flex: 1; min-height: 0; }
+.detail-pane-body { display: grid; grid-template-columns: 1fr 280px; flex: 1; min-height: 0; }
 .detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; padding: 8px; }
 .detail-xterm .xterm { height: 100%; }
 .detail-xterm .xterm-viewport { background: var(--bg-term) !important; }
@@ -2986,6 +2986,34 @@ body[data-alerts="open"][data-view="stream"] main {
 .detail-pane-header .header-ci.ci-running { color: var(--s-working); }
 .detail-pane-header .header-git { color: var(--s-needs); font-family: var(--mono); }
 .detail-pane-header .header-api-error { color: var(--s-danger); }
+
+/* Auto-rename button at the right edge of the detail-pane-header. Mirrors
+   the modal-title-rename behavior (POST /api/auto-rename-window then let the
+   next /api/state poll surface the new window name in the rail). margin-left
+   auto pushes it past the wrapping status chips so it always lands rightmost
+   regardless of how many fields rendered. */
+.detail-pane-header .header-rename {
+  margin-left: auto;
+  align-self: center;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s, background 0.12s;
+}
+.detail-pane-header .header-rename:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--bg-1);
+}
+.detail-pane-header .header-rename:disabled,
+.detail-pane-header .header-rename.busy {
+  cursor: progress;
+  animation: modal-rename-pulse 1.1s ease-in-out infinite;
+}
 .side-section { margin-bottom: 10px; }
 .side-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; opacity: .5; margin-bottom: 3px; }
 .side-mono { font-family: var(--mono); font-size: 11px; opacity: .85; }
