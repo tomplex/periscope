@@ -392,7 +392,7 @@ export function Rail() {
                     dragProps={makeDragProps({ kind: "worktree", key: `wt:${wtKey}`, repoKey })}
                     dropPos={dropPosFor(`wt:${wtKey}`)}
                   />
-                  {!isOther && !wtCollapsed && <WorktreeMeta wtWindows={wtWindows} />}
+                  {!isOther && <WorktreeMeta wtWindows={wtWindows} />}
                   {!wtCollapsed && childRows}
                 </RailFragment>
               );
