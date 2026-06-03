@@ -23,11 +23,10 @@ export const editingTarget = signal(null);
 export const modalRenaming = signal(false);
 export const modalAutoRenaming = signal(false);
 
-// Transcript content-mode state (split-view detail). transcriptMode holds only
-// an EXPLICIT user toggle per pid; transcriptSeen is set once the pane's first
-// poll returns real turns. Displayed mode is computed from both (see Detail.jsx
-// computeMode): explicit override wins, else transcript iff seen, else terminal.
-export const transcriptMode = signal({});   // { [pid]: "transcript" | "terminal" }
+// Transcript-seen flag (split-view detail). Set once a Claude pane's first
+// poll returns real turns. Currently consumed by Sidebar's FilesSection as a
+// "transcript data exists for this pid" gate. The detail-mode toggle itself
+// (Transcript/Terminal) is persisted via UI prefs (detail_mode_by_pid).
 export const transcriptSeen = signal({});   // { [pid]: true }
 
 // Shared transcript messages — written by useTranscriptPoll in

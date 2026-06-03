@@ -23,6 +23,28 @@ def test_patch_prefs_ui_rejects_bogus_view(client, clean_state):
     assert "invalid view" in r.json()["detail"]
 
 
+def test_patch_prefs_ui_detail_mode_by_pid(client, clean_state):
+    r = client.patch(
+        "/api/prefs/ui",
+        json={"detail_mode_by_pid": {"abc123": "transcript", "def456": "terminal"}},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ui"]["detail_mode_by_pid"] == {
+        "abc123": "transcript",
+        "def456": "terminal",
+    }
+
+
+def test_patch_prefs_ui_rejects_bogus_detail_mode(client, clean_state):
+    r = client.patch(
+        "/api/prefs/ui",
+        json={"detail_mode_by_pid": {"abc123": "weird"}},
+    )
+    assert r.status_code == 400
+    assert "invalid detail_mode" in r.json()["detail"]
+
+
 def test_put_window_annotation(client, clean_state):
     r = client.put("/api/prefs/windows/abc123", json={"notes": "hi", "tags": ["a", "b", "a"]})
     assert r.status_code == 200

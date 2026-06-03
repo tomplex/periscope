@@ -19,8 +19,9 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useRef, useEffect, useState } from "preact/hooks";
-import { windows, activeTarget, railSelection, transcriptMode, paneTranscript, previewPath } from "../store.js";
+import { windows, activeTarget, railSelection, paneTranscript, previewPath } from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
+import { getDetailMode, setDetailMode } from "../prefs.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
 import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom, setTerminalFileCallback } from "../terminal/terminalCore.js";
@@ -38,14 +39,10 @@ function lookupWindow(pid) {
 function computeMode(w) {
   if (!w || !w.is_claude) return "terminal";
   // Default to terminal; per-pid explicit choice (the Transcript/Terminal toggle
-  // in the header) overrides for the lifetime of the page. We deliberately do
-  // NOT auto-flip to transcript once data is seen — that surprises users who
-  // were happily watching the terminal.
-  return transcriptMode.value[w.pid] || "terminal";
-}
-
-function setTranscriptMode(pid, mode) {
-  transcriptMode.value = { ...transcriptMode.value, [pid]: mode };
+  // in the header) is persisted in UI prefs (detail_mode_by_pid) so it survives
+  // reloads. We deliberately do NOT auto-flip to transcript once data is seen —
+  // that surprises users who were happily watching the terminal.
+  return getDetailMode(w.pid) || "terminal";
 }
 
 function lgtmSessionForWorktree(worktreeKey) {
@@ -307,7 +304,7 @@ function PaneDetail({ w }) {
 
   return (
     <div id="detail-pane" class="detail-pane">
-      <PaneHeader w={w} mode={mode} onMode={(next) => setTranscriptMode(w.pid, next)} />
+      <PaneHeader w={w} mode={mode} onMode={(next) => setDetailMode(w.pid, next)} />
       <div class="detail-pane-body">
         <div class="detail-term-host" style={mode === "terminal" ? "display:contents" : "display:none"}>
           <Terminal

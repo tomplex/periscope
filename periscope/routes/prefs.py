@@ -42,6 +42,9 @@ class UIPatch(BaseModel):
     panes_by_worktree: dict[str, list[str]] | None = None
     rail_collapsed: dict[str, bool] | None = None
     last_selected: dict | None = None
+    # Per-pane detail-mode toggle (split view): "terminal" | "transcript".
+    # Keyed by periscope pid; entries persist until the pid is reaped.
+    detail_mode_by_pid: dict[str, str] | None = None
 
 
 @router.patch("/api/prefs/ui")
@@ -51,6 +54,10 @@ def patch_prefs_ui(body: UIPatch):
     # `view` is validated against a fixed enum to keep junk out of the file.
     if "view" in patch and patch["view"] not in ("grid", "stream", "split"):
         raise HTTPException(400, f"invalid view: {patch['view']!r}")
+    if "detail_mode_by_pid" in patch:
+        for pid, mode in patch["detail_mode_by_pid"].items():
+            if mode not in ("terminal", "transcript"):
+                raise HTTPException(400, f"invalid detail_mode for {pid!r}: {mode!r}")
     update_ui(patch)
     from periscope.store import get_ui
     return {"ok": True, "ui": get_ui()}

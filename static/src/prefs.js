@@ -318,6 +318,18 @@ export function setLastSelected(sel) {
   return patchUI({ last_selected: sel });
 }
 
+// Per-pane detail-mode toggle (split view). Reactive via prefsSignal — read
+// directly in components for live updates. Map shape: { [pid]: "terminal" | "transcript" }.
+export function getDetailMode(pid) {
+  return P().ui?.detail_mode_by_pid?.[pid] || null;
+}
+
+export function setDetailMode(pid, mode) {
+  const next = { ...(P().ui?.detail_mode_by_pid || {}) };
+  next[pid] = mode;
+  return patchUI({ detail_mode_by_pid: next });
+}
+
 // Add a worktree to the rail. If its repo isn't railed yet, append to
 // repo_order. Idempotent — re-adding the same worktree is a no-op.
 //
