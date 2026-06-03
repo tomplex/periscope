@@ -168,28 +168,49 @@ function PaneHeader({ w, mode, onMode }) {
     >
       ✨
     </button>,
-    <span><b>{w.session || ""}</b></span>,
   ];
+  // Session: shown only when it isn't just the branch repeated (the
+  // worktree-pane case — session and branch are literally the same string
+  // there, which produced a triple-printed line per the screenshot). For
+  // non-worktree panes session is meaningful ("personal", "default"), so
+  // keep it then.
+  if (w.session && w.session !== w.branch) {
+    parts.push(<span><b>{w.session}</b></span>);
+  }
   if (w.cwd) {
-    const parts2 = w.cwd.split("/").filter(Boolean);
-    const tail = parts2.length >= 2 ? parts2.slice(-2).join("/") : (parts2[0] || w.cwd);
-    parts.push(
-      <>
-        <span class="hsep">·</span>
-        <span
-          class="header-cwd-reveal"
-          title={`Reveal ${w.cwd} in Finder`}
-          onClick={async () => {
-            try {
-              await fetch(
-                `/api/fs/open?session=${encodeURIComponent(w.session)}&index=${w.index}&path=.&action=reveal`,
-                { method: "POST" },
-              );
-            } catch (_) { /* best-effort */ }
-          }}
-        >{tail}</span>
-      </>
-    );
+    const segs = w.cwd.split("/").filter(Boolean);
+    // Slugified-branch heuristic: when the last cwd segment is just the
+    // branch with slashes flipped to hyphens (the standard worktree
+    // layout), the segment is fully redundant with the branch chip — show
+    // only the parent (the project name, e.g. "fdy") instead.
+    const last = segs[segs.length - 1] || "";
+    const branchSlug = w.branch ? w.branch.replace(/[\/\\]/g, "-") : null;
+    let tail;
+    if (branchSlug && last === branchSlug && segs.length >= 2) {
+      tail = segs[segs.length - 2];
+    } else {
+      tail = segs.length >= 2 ? segs.slice(-2).join("/") : (segs[0] || w.cwd);
+    }
+    // Empty tail (root cwd) — skip the chip entirely.
+    if (tail) {
+      parts.push(
+        <>
+          {parts.length > 1 && <span class="hsep">·</span>}
+          <span
+            class="header-cwd-reveal"
+            title={`Reveal ${w.cwd} in Finder`}
+            onClick={async () => {
+              try {
+                await fetch(
+                  `/api/fs/open?session=${encodeURIComponent(w.session)}&index=${w.index}&path=.&action=reveal`,
+                  { method: "POST" },
+                );
+              } catch (_) { /* best-effort */ }
+            }}
+          >{tail}</span>
+        </>
+      );
+    }
   }
   if (w.branch) {
     parts.push(<><span class="hsep">·</span><span>{w.branch}</span></>);
@@ -363,9 +384,9 @@ function PaneDetail({ w }) {
   const tabs = paneTabs.value[w.pid] || [];
   const activeTab = paneActiveTab.value[w.pid] || "pane";
   const paneTabActive = activeTab === "pane";
-  // Label the pane tab with the session/window name when known; falls
-  // back to a generic "Pane" if the rename didn't land yet.
-  const paneLabel = w.session_name || w.name || "Pane";
+  // Label the pane tab with the window name (auto-rename target). Same
+  // fallback the rail rows use (RailRows.jsx).
+  const paneLabel = w.name || (w.is_claude ? "claude" : "shell");
 
   return (
     <div id="detail-pane" class="detail-pane">

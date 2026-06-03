@@ -2982,7 +2982,7 @@ body[data-alerts="open"][data-view="stream"] main {
 @keyframes rail-pulse { 50% { box-shadow: 0 0 0 4px var(--s-needs-bg); } }
 
 .detail-pane-header, .detail-review-header {
-  padding: 8px 14px; border-bottom: 1px solid var(--line);
+  padding: 5px 14px; border-bottom: 1px solid var(--line);
   display: flex; gap: 8px; align-items: baseline; font-size: 12px;
   flex-wrap: wrap;
 }
