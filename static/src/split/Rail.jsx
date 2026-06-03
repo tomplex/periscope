@@ -32,6 +32,7 @@ import {
   mergeLiveAndPrefs, indexWindowsByWorktree, repoLabelFor, maxSeverity, OTHER_REPO_KEY,
 } from "./railTree.js";
 import { PaneRow, ReviewRow, NewTabRow, WorktreeRow, RepoRow, WorktreeMeta } from "./RailRows.jsx";
+import { SectionHeader } from "./SectionHeader.jsx";
 
 // Bridge to the launcher modal. The "+ New tab" row opens it via
 // window.__periscopeOpenLauncher — installed by vanilla app.js while the
@@ -180,6 +181,7 @@ export function Rail() {
   syncRailPrefs();
 
   const collapsed = prefs.getRailCollapsed();
+  const projectsCollapsed = collapsed[`sec:projects`] === true;
   const byWorktree = indexWindowsByWorktree(live);
   const { repoOrder, worktreesByRepo, panesByWorktree } = mergeLiveAndPrefs(
     live, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
@@ -305,8 +307,13 @@ export function Rail() {
   // --- Tree ----------------------------------------------------------------
   return (
     <aside id="rail" aria-label="projects rail">
-      <div class="rail-head"><span>Projects</span></div>
-      {repoOrder.map((repoKey) => {
+      <SectionHeader
+        label="PROJECTS"
+        count={null}
+        collapsed={projectsCollapsed}
+        onToggle={() => toggleCollapse("sec:projects")}
+      />
+      {!projectsCollapsed && repoOrder.map((repoKey) => {
         const isOther = repoKey === OTHER_REPO_KEY;
         const repoLabel = repoLabelFor(repoKey, live);
         const worktrees = worktreesByRepo[repoKey] || [];

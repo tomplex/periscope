@@ -2886,6 +2886,28 @@ body[data-alerts="open"][data-view="stream"] main {
 }
 .rail-empty { padding: 14px; font-size: 12px; color: var(--fg-3); }
 
+.section-header {
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 10px;
+  color: var(--muted, #7b818c);
+  user-select: none;
+}
+.section-header .section-header-label { font-weight: 600; }
+.section-header .section-header-icon { margin-right: 4px; }
+.section-header .section-header-count {
+  margin-left: auto;
+  border-radius: 9px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--chip-bg, #2a2e37);
+  color: var(--chip-fg, #9aa0ab);
+}
+.section-header-alert { color: #f0857d; }
+.section-header-alert .section-header-count { background: #f85149; color: #fff; }
+
 /* Each nesting level adds --rail-indent of left-padding so the tree's
    hierarchy reads visually. repo at base; worktree at base + 1 step;
    pane / review / new-tab at base + 2 steps. */
