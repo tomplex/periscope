@@ -19,7 +19,10 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useRef, useEffect, useState } from "preact/hooks";
-import { windows, activeTarget, railSelection, paneTranscript, previewPath } from "../store.js";
+import {
+  windows, activeTarget, railSelection, paneTranscript,
+  paneTabs, paneActiveTab, openFileTab, closeFileTab, setActiveTab,
+} from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
 import { getDetailMode, setDetailMode } from "../prefs.js";
 import { Terminal } from "../terminal/Terminal.jsx";
@@ -27,10 +30,66 @@ import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
 import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom, setTerminalFileCallback } from "../terminal/terminalCore.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
 import { TranscriptView } from "./Transcript.jsx";
-import { PreviewOverlay } from "../preview/PreviewOverlay.jsx";
+import { PreviewTab } from "../preview/PreviewTab.jsx";
 
 // Match the modal's /api/pane cadence so the two views feel identical.
 const DETAIL_POLL_MS = 1500;
+
+// Last segment of a path, for the tab label. Strips trailing slash and
+// returns the segment after the last "/". Falls back to the full path
+// if no "/" is present (rare — REL_PATH_RE requires at least one).
+function tabLabel(path) {
+  const p = path.replace(/\/+$/, "");
+  const i = p.lastIndexOf("/");
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+// Browser-style tab strip at the top of an open pane. The first tab is
+// the pane itself (terminal or transcript, per the header toggle); each
+// subsequent tab is an open file preview. Clicking a tab switches the
+// body content; the × on a file tab closes it (falls back to the pane
+// tab if that tab was active). State is per-pid signal, so tabs persist
+// across rail-selection changes and only evaporate on reload.
+function TabStrip({ pid, paneLabel }) {
+  const tabs = paneTabs.value[pid] || [];
+  const active = paneActiveTab.value[pid] || "pane";
+  return (
+    <div class="detail-tab-strip" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        class={`detail-tab${active === "pane" ? " is-active" : ""}`}
+        aria-selected={active === "pane"}
+        onClick={() => setActiveTab(pid, "pane")}
+        title={paneLabel}
+      >
+        <span class="detail-tab-label">{paneLabel}</span>
+      </button>
+      {tabs.map((t) => {
+        const key = `file:${t.path}`;
+        const isActive = active === key;
+        return (
+          <button
+            type="button"
+            role="tab"
+            key={key}
+            class={`detail-tab${isActive ? " is-active" : ""}`}
+            aria-selected={isActive}
+            onClick={() => setActiveTab(pid, key)}
+            title={t.path}
+          >
+            <span class="detail-tab-label">{tabLabel(t.path)}</span>
+            <span
+              class="detail-tab-close"
+              title="Close tab"
+              onClick={(e) => { e.stopPropagation(); closeFileTab(pid, t.path); }}
+            >×</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function lookupWindow(pid) {
   return (windows.value || []).find((w) => w.pid === pid) || null;
@@ -235,9 +294,8 @@ function PaneDetail({ w }) {
     activeTarget.value = w.target;
   }, [w.target]);
 
-  // Wire the terminal's file-link callback to the preview overlay.
-  // Set on mount, cleared on unmount. Cmd+click on a path in the
-  // terminal → previewPath.value → overlay opens.
+  // Wire the terminal's file-link callback. Cmd+click on a path → add
+  // (or focus) a preview tab for the active pane.
   useEffect(() => {
     setTerminalFileCallback((rawPath) => {
       // Split off optional :NN line suffix for the line jump.
@@ -245,7 +303,7 @@ function PaneDetail({ w }) {
       let line = null;
       const m = path.match(/^(.*?):(\d+)$/);
       if (m) { path = m[1]; line = m[2]; }
-      previewPath.value = { path, line, target: w.target };
+      openFileTab({ path, line });
     });
     return () => setTerminalFileCallback(null);
   }, [w.target]);
@@ -302,11 +360,19 @@ function PaneDetail({ w }) {
     prevState.current = w.state;
   }, [w.state, w.is_claude]);
 
+  const tabs = paneTabs.value[w.pid] || [];
+  const activeTab = paneActiveTab.value[w.pid] || "pane";
+  const paneTabActive = activeTab === "pane";
+  // Label the pane tab with the session/window name when known; falls
+  // back to a generic "Pane" if the rename didn't land yet.
+  const paneLabel = w.session_name || w.name || "Pane";
+
   return (
     <div id="detail-pane" class="detail-pane">
+      <TabStrip pid={w.pid} paneLabel={paneLabel} />
       <PaneHeader w={w} mode={mode} onMode={(next) => setDetailMode(w.pid, next)} />
       <div class="detail-pane-body">
-        <div class="detail-term-host" style={mode === "terminal" ? "display:contents" : "display:none"}>
+        <div class="detail-term-host" style={paneTabActive && mode === "terminal" ? "display:contents" : "display:none"}>
           <Terminal
             key={w.pid}
             id="detail-xterm"
@@ -315,12 +381,29 @@ function PaneDetail({ w }) {
             onPaste={handleDetailPaste}
           />
         </div>
+        {/* Each opened file preview tab stays mounted; CSS-hidden when
+            inactive so switching is instant and per-tab CM state survives.
+            Keyed by path so re-opening the same file finds its existing
+            mounted instance. */}
+        {tabs.map((t) => {
+          const tabKey = `file:${t.path}`;
+          const shown = activeTab === tabKey;
+          return (
+            <div
+              key={tabKey}
+              class="detail-preview-host"
+              style={shown ? "display:contents" : "display:none"}
+            >
+              <PreviewTab entry={t} />
+            </div>
+          );
+        })}
         {/* Keyed on target so switching panes wipes paneData rather than
             showing the previous pane's PR/notes for ~1.5s until the new tick
             lands. SidePanel takes `target`, NOT `w`. */}
         <SidePanel key={w.target} target={w.target} />
       </div>
-      {mode === "terminal" && !atBottom && (
+      {paneTabActive && mode === "terminal" && !atBottom && (
         <button
           class="term-scroll-bottom"
           title="Scroll to latest"
@@ -329,7 +412,7 @@ function PaneDetail({ w }) {
           ⤓
         </button>
       )}
-      {mode === "terminal" && <TerminalSearch />}
+      {paneTabActive && mode === "terminal" && <TerminalSearch />}
     </div>
   );
 }
@@ -502,7 +585,11 @@ export function Detail() {
       {trPids.map((pid) => {
         const tw = lookupWindow(pid);
         const isSelected = isPane && paneW?.pid === pid;
-        const shown = isSelected && selMode === "transcript";
+        // Transcript host visibility is gated on the "pane" tab being
+        // active too — switching to a file preview tab must hide the
+        // transcript along with the terminal.
+        const paneTabActive = (paneActiveTab.value[pid] || "pane") === "pane";
+        const shown = isSelected && paneTabActive && selMode === "transcript";
         return (
           <div key={`tr:${pid}`} class="detail-transcript-host"
                style={shown ? "display:flex" : "display:none"}>
@@ -512,7 +599,6 @@ export function Detail() {
           </div>
         );
       })}
-      <PreviewOverlay />
     </section>
   );
 }

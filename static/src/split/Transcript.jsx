@@ -5,7 +5,7 @@
 // collapsible `⎿` output, Edit diffs. No xterm/emulation — JSONL is already
 // structured. See the segmented-transcript design spec.
 import { useEffect, useState, useRef } from "preact/hooks";
-import { transcriptSeen, paneTranscript, previewPath } from "../store.js";
+import { transcriptSeen, paneTranscript, openFileTab } from "../store.js";
 import { targetQuery, apiCall } from "../util.js";
 import { renderMarkdown } from "./markdown.jsx";
 
@@ -171,7 +171,7 @@ function ToolCall({ t }) {
                 // wants to expand the row), Cmd/Ctrl+click opens preview.
                 if (!e.metaKey && !e.ctrlKey) return;
                 e.stopPropagation();
-                previewPath.value = { path: arg, line: null };
+                openFileTab({ path: arg, line: null });
               }}
             >{arg}</span>
           );

@@ -18,7 +18,7 @@
 import { useRef, useEffect } from "preact/hooks";
 import { relTime, prUrl } from "../util.js";
 import * as prefs from "../prefs.js";
-import { paneTranscript, transcriptSeen, previewPath } from "../store.js";
+import { paneTranscript, transcriptSeen, openFileTab } from "../store.js";
 import { filesTouched } from "../split/filesTouched.js";
 
 function alertDotColor(kind) {
@@ -315,8 +315,8 @@ function FilesSection({ pid }) {
           <li
             key={it.path}
             class="files-row"
-            onClick={() => { previewPath.value = { path: it.path, line: null }; }}
-            title={`Open ${it.path} in preview overlay`}
+            onClick={() => openFileTab({ path: it.path, line: null })}
+            title={`Open ${it.path} as a preview tab`}
           >
             <span class="files-op">{opGlyph(it.op)}</span>
             <span class="files-path">{it.path}</span>

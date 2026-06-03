@@ -36,8 +36,41 @@ export const transcriptSeen = signal({});   // { [pid]: true }
 // fetches. Evicted alongside transcript-host pruning in Detail.jsx.
 export const paneTranscript = signal({});   // { [pid]: { messages, sessionId } }
 
-// File-preview overlay state. Non-null => overlay is shown for that path.
-// Three setters: terminal Cmd+click (via terminalCore link router),
-// transcript tool-call chip click, sidebar Files row click. All write
-// the same shape: { path, line } where line may be null.
-export const previewPath = signal(null);
+// File-preview TABS (browser-style). Each pane has its own set of open
+// file tabs and a currently-active tab. The Pane's own terminal/transcript
+// is always the implicit first tab (key "pane"); file tabs are keyed by
+// "file:<path>". Setters all go through openFileTab below — keeps the
+// add-or-focus + activate behavior identical across callers.
+export const paneTabs = signal({});         // { [pid]: [{ path, line, target }, ...] }
+export const paneActiveTab = signal({});    // { [pid]: "pane" | "file:<path>" }
+
+// Add (or focus, if already open) a file tab for the currently-active
+// pane. Callers are: terminal Cmd+click (Detail.jsx), Sidebar Files row,
+// Transcript tool-call chip Cmd+click. All share activeTarget — the
+// per-callsite pid lookup is done here so the call sites stay terse.
+export function openFileTab(entry) {
+  const tgt = activeTarget.value;
+  if (!tgt) return;
+  const w = (windows.value || []).find((x) => x.target === tgt);
+  if (!w) return;
+  const pid = w.pid;
+  const tabs = paneTabs.value[pid] || [];
+  const has = tabs.some((t) => t.path === entry.path);
+  if (!has) {
+    paneTabs.value = { ...paneTabs.value, [pid]: [...tabs, { ...entry, target: tgt }] };
+  }
+  paneActiveTab.value = { ...paneActiveTab.value, [pid]: `file:${entry.path}` };
+}
+
+export function closeFileTab(pid, path) {
+  const tabs = paneTabs.value[pid] || [];
+  const next = tabs.filter((t) => t.path !== path);
+  paneTabs.value = { ...paneTabs.value, [pid]: next };
+  if (paneActiveTab.value[pid] === `file:${path}`) {
+    paneActiveTab.value = { ...paneActiveTab.value, [pid]: "pane" };
+  }
+}
+
+export function setActiveTab(pid, tabKey) {
+  paneActiveTab.value = { ...paneActiveTab.value, [pid]: tabKey };
+}

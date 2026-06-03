@@ -3491,20 +3491,66 @@ body[data-alerts="open"][data-view="stream"] main {
   text-decoration-color: rgba(255,255,255,0.6);
 }
 
-.preview-overlay {
-  position: absolute;
-  top: var(--detail-header-h, 0);
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 20;
+/* Inline preview tab — fills the terminal column inside .detail-pane-body
+   (display:contents on the wrapper hoists this directly into the grid). */
+.preview-tab-content {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   background: var(--bg-0);
-  border: 1px solid var(--line-soft);
-  border-radius: 6px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
 }
+
+/* Browser-style tab strip above the pane meta-header. The first tab is
+   the pane (terminal/transcript); each Cmd+click on a file path adds a
+   tab. State persists per-pid across rail selection changes. */
+.detail-tab-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 6px 0 6px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-1);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.detail-tab-strip::-webkit-scrollbar { display: none; }
+.detail-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--fg-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.detail-tab:hover { color: var(--fg-1); background: rgba(255,255,255,0.03); }
+.detail-tab.is-active {
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border-color: var(--line-soft);
+}
+.detail-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-tab-close {
+  color: var(--fg-3);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+.detail-tab-close:hover { background: rgba(255,255,255,0.08); color: var(--fg-0); }
 .preview-header {
   display: flex;
   align-items: center;

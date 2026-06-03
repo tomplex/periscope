@@ -1,13 +1,12 @@
-// Heavy inner of the file preview overlay. Imported dynamically by
-// PreviewOverlay.jsx so the CodeMirror dependency stays out of the eager
-// app.js bundle (see fallback note in PreviewOverlay.jsx).
+// Heavy inner of the in-pane file preview tab. Imported dynamically by
+// PreviewTab.jsx so the CodeMirror dependency stays out of the eager
+// app.js bundle (see fallback note in PreviewTab.jsx).
 //
 // All CodeMirror packages (state, view, language) and every lang pack are
 // statically imported here — they end up in one rolled-up chunk that's
-// fetched on the first preview open and then cached.
+// fetched on the first preview-tab open and then cached.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { previewPath, activeTarget } from "../store.js";
-import { useEscape } from "../hooks/useEscape.js";
+import { activeTarget } from "../store.js";
 
 import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers, highlightActiveLineGutter, drawSelection } from "@codemirror/view";
@@ -105,22 +104,19 @@ function languageExt(name) {
   }
 }
 
-export function PreviewOverlayInner({ entry }) {
+export function PreviewTabInner({ entry }) {
   const hostRef = useRef(null);
-  const closeBtnRef = useRef(null);
   const [state, setState] = useState({ loading: true, error: null, content: null, lang: null, resolved: null });
   // Renderable langs (HTML, Markdown) default to "rendered"; everything
   // else goes to source. A `:NN` line jump always wins → source, since
   // line numbers don't translate to the rendered view.
   const [view, setView] = useState(entry.line ? "source" : "rendered");
 
-  // Target the file's pane: caller-provided wins (so the modal can use
-  // modalTarget even though activeTarget points at the split selection).
-  // Falls back to activeTarget for older callers.
+  // Target the file's pane: caller-provided (every entry carries the
+  // target captured at openFileTab() time, so the fetch hits the pane
+  // the tab was opened against — not whichever pane is currently active).
+  // Falls back to activeTarget defensively for old call sites.
   const target = entry.target ?? activeTarget.value;
-
-  function close() { previewPath.value = null; }
-  useEscape(close, true);
 
   // Fetch the file.
   useEffect(() => {
@@ -192,11 +188,6 @@ export function PreviewOverlayInner({ entry }) {
     return () => editor.destroy();
   }, [state.loading, state.error, state.content, state.lang, effectiveView]);
 
-  // Focus the close button on mount so keystrokes don't reach xterm.
-  useEffect(() => {
-    closeBtnRef.current?.focus();
-  }, []);
-
   async function reveal() {
     if (!target) return;
     const [session, indexStr] = target.split(":");
@@ -212,7 +203,7 @@ export function PreviewOverlayInner({ entry }) {
     : null;
 
   return (
-    <div class="preview-overlay" role="dialog" aria-label="File preview">
+    <div class="preview-tab-content" role="region" aria-label="File preview">
       <header class="preview-header">
         <span class="preview-path">{state.resolved || entry.path}{entry.line ? `:${entry.line}` : ""}</span>
         {RENDERABLE.has(state.lang) && (
@@ -225,7 +216,6 @@ export function PreviewOverlayInner({ entry }) {
           </button>
         )}
         <button class="preview-btn" title="Reveal in Finder" onClick={reveal}>⌖</button>
-        <button class="preview-btn" title="Close (Esc)" onClick={close} ref={closeBtnRef}>✕</button>
       </header>
       <div class="preview-body">
         {state.loading && <div class="preview-loading">loading…</div>}
