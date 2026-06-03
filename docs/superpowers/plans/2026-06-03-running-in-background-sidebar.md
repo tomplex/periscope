@@ -30,10 +30,10 @@ Frontend tasks verify in the browser via the dev instance (HMR at :5174 proxying
 | File | Responsibility | Action |
 |---|---|---|
 | `history/search.py` | add `include_sidechain` param to `messages_from_jsonl` | Modify |
+| `history/tests/test_search.py` | sidechain-parse test (NOT `tests/test_search.py` — doesn't exist) | Modify |
 | `periscope/running.py` | `background_shells()` + `subagents()` derivation | Create |
 | `periscope/turns.py` | `subagent_jsonl()` resolver | Modify |
 | `periscope/routes/pane.py` | `/api/pane` new fields + `/api/pane/subagent` route | Modify |
-| `tests/test_search.py` | sidechain-parse test | Modify |
 | `tests/test_running.py` | `background_shells` + `subagents` tests | Create |
 | `tests/routes/test_pane.py` | route tests | Modify |
 | `static/src/store.js` | `subagentView` signal | Modify |
@@ -50,9 +50,9 @@ Frontend tasks verify in the browser via the dev instance (HMR at :5174 proxying
 
 **Files:**
 - Modify: `history/search.py:208` (signature), `:242` (skip condition)
-- Test: `tests/test_search.py`
+- Test: `history/tests/test_search.py` (the real location — `tests/test_search.py` does not exist; `pyproject.toml` testpaths include `history/tests`. An existing test there already guards the default `isSidechain` skip.)
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test** (append to `history/tests/test_search.py`)
 
 ```python
 def test_messages_from_jsonl_include_sidechain(tmp_path):
@@ -70,7 +70,7 @@ def test_messages_from_jsonl_include_sidechain(tmp_path):
 
 - [ ] **Step 2: Run it, verify it fails**
 
-Run: `uv run pytest tests/test_search.py::test_messages_from_jsonl_include_sidechain -v`
+Run: `uv run pytest history/tests/test_search.py::test_messages_from_jsonl_include_sidechain -v`
 Expected: FAIL — `messages_from_jsonl() got an unexpected keyword argument 'include_sidechain'`.
 
 - [ ] **Step 3: Implement**
@@ -92,13 +92,13 @@ Change the skip line (currently line 242):
 
 - [ ] **Step 4: Run tests, verify pass**
 
-Run: `uv run pytest tests/test_search.py -q`
-Expected: PASS (new test + existing search tests unchanged).
+Run: `uv run pytest history/tests/test_search.py -q`
+Expected: PASS (new test + existing search tests, incl. the existing default-skip test, unchanged).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add history/search.py tests/test_search.py
+git add history/search.py history/tests/test_search.py
 git commit -m "search: messages_from_jsonl(include_sidechain=False) opt-in for subagent transcripts"
 ```
 
@@ -451,26 +451,39 @@ git commit -m "turns: subagent_jsonl(session_id, agent_id) resolver (glob-by-id)
 - Modify: `periscope/routes/pane.py` (imports + `pane()` body/return)
 - Test: `tests/routes/test_pane.py`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test** (uses the file's existing `_patch(mocker, …)` helper + `client` fixture; modeled on `test_pane_returns_parsed_payload`)
 
 ```python
-def test_pane_includes_running_fields(monkeypatch, client):
-    # `client` is the existing FastAPI TestClient fixture in this file.
-    import periscope.routes.pane as paneroute
-    monkeypatch.setattr(paneroute, "background_shells", lambda pid, key: [{"pid": 9, "cmd": "npm run dev", "runtime_s": 300}])
-    monkeypatch.setattr(paneroute, "subagents", lambda sid: [{"agent_id": "a1", "agent_type": "Explore", "description": "x", "running": True}])
-    # tmux + session resolution are stubbed by the existing pane-route test harness;
-    # follow the pattern already used by the other /api/pane tests in this file.
-    r = client.get("/api/pane?session=demo&index=0")
-    assert r.status_code == 200
-    body = r.json()
+def test_pane_includes_running_fields(client, mocker):
+    def fake_tmux(*args):
+        if args and args[0] == "capture-pane":
+            return "$ ls\n"
+        if args and args[0] == "display-message":
+            return "12345" if "#{pane_pid}" in args else "win-name\t/tmp/proj"
+        return ""
+
+    _patch(mocker, "tmux", side_effect=fake_tmux)
+    _patch(mocker, "parse_pane", return_value={"is_claude": True, "spinner": None})
+    _patch(mocker, "smooth_spinner", side_effect=lambda t, s: s)
+    _patch(mocker, "smooth_is_claude", side_effect=lambda t, c: c)
+    _patch(mocker, "cached_git_state", return_value={"branch": "main"})
+    _patch(mocker, "cached_pr_state", return_value={"pr": None})
+    _patch(mocker, "cached_pane_activity", return_value=[])
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "list_windows", return_value=[
+        {"session": "main", "index": 0, "name": "x", "pane_id": "%7", "cwd": "/tmp"}
+    ])
+    _patch(mocker, "cached_lgtm_state", return_value=None)
+    _patch(mocker, "session_id_for_pane", return_value="sid-1")
+    _patch(mocker, "background_shells",
+           return_value=[{"pid": 9, "cmd": "npm run dev", "runtime_s": 300}])
+    _patch(mocker, "subagents",
+           return_value=[{"agent_id": "a1", "agent_type": "Explore", "description": "x", "running": True}])
+
+    body = client.get("/api/pane?session=main&index=0").json()
     assert body["background_shells"][0]["cmd"] == "npm run dev"
     assert body["subagents"][0]["agent_type"] == "Explore"
 ```
-
-> NOTE to implementer: open `tests/routes/test_pane.py` first and match its existing
-> tmux/`list_windows` stubbing pattern (the route shells out to tmux). Adapt the test
-> above to that harness rather than inventing new stubs.
 
 - [ ] **Step 2: Run it, verify it fails**
 
@@ -486,12 +499,15 @@ from periscope.turns import get_turns_for_pane, session_id_for_pane, subagent_js
 from periscope.running import background_shells, subagents
 ```
 
-In `pane()`, after `pane_id`/`target` are known and before the `return`, resolve the pane's process pid and session id:
+In `pane()`, after `pane_id` is resolved from `list_windows()` (~line 75) and before
+the `return`, resolve the pane's process pid (a *new* `tmux` call — the route's
+existing `pid` at ~line 79 is the resolved git/claude pid, not the pane process) and
+the session id (reuse the already-resolved `pane_id`, don't re-derive it):
 
 ```python
     try:
         pane_pid = int(tmux("display-message", "-t", target, "-p", "#{pane_pid}").strip())
-    except (ValueError, Exception):
+    except Exception:
         pane_pid = 0
     sid = session_id_for_pane(pane_id)
 ```
@@ -523,24 +539,28 @@ git commit -m "pane: /api/pane carries background_shells + subagents"
 - Modify: `periscope/routes/pane.py`
 - Test: `tests/routes/test_pane.py`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test** (modeled on `test_pane_turns_returns_messages_end_to_end` — real tmp projects dir, only the tmux boundary + session lookup faked; uses the file's `_patch` helper)
 
 ```python
-def test_pane_subagent_validates_and_returns_messages(monkeypatch, client, tmp_path):
-    import periscope.routes.pane as paneroute
-    import periscope.activity as activity, json
-    d = tmp_path / "-enc" / "sidZ" / "subagents"; d.mkdir(parents=True)
-    (d / "agent-abc123.jsonl").write_text(
-        '{"type":"user","sessionId":"sidZ","cwd":"/x","timestamp":"2026-06-03T10:00:00.000Z",'
-        '"uuid":"u1","parentUuid":null,"isSidechain":true,'
-        '"message":{"role":"user","content":"sub work"}}\n'
-    )
+def test_pane_subagent_validates_and_returns_messages(client, mocker, tmp_path, monkeypatch):
+    import json
+    import periscope.activity as activity
+    sub = tmp_path / "-enc" / "sidZ" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-abc123.jsonl").write_text(json.dumps({
+        "type": "user", "sessionId": "sidZ", "cwd": "/x",
+        "timestamp": "2026-06-03T10:00:00.000Z", "uuid": "u1", "parentUuid": None,
+        "isSidechain": True,
+        "message": {"role": "user", "content": "sub work"},
+    }) + "\n")
     monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)
-    monkeypatch.setattr(paneroute, "session_id_for_pane", lambda pane_id: "sidZ")
-    # 400 on a bad agent id
-    assert client.get("/api/pane/subagent?session=demo&index=0&agent=NOThex!").status_code == 400
-    # messages for a valid id (sidechain event included)
-    body = client.get("/api/pane/subagent?session=demo&index=0&agent=abc123").json()
+    _patch(mocker, "tmux", return_value="%9")                       # route's #{pane_id} lookup
+    _patch(mocker, "session_id_for_pane", return_value="sidZ")
+
+    # validation runs before any tmux/IO: bad agent id -> 400
+    assert client.get("/api/pane/subagent?session=main&index=0&agent=NOPE!").status_code == 400
+    # valid id -> messages, with the sidechain event included
+    body = client.get("/api/pane/subagent?session=main&index=0&agent=abc123").json()
     assert body["messages"][0]["text"] == "sub work"
 ```
 
@@ -702,7 +722,7 @@ export function SubagentOverlay() {
   const view = subagentView.value;
   const [messages, setMessages] = useState(null);
 
-  useEscape(!!view, () => { subagentView.value = null; });
+  useEscape(() => { subagentView.value = null; }, !!view);   // signature: useEscape(handler, active)
 
   useEffect(() => {
     if (!view) { setMessages(null); return; }
@@ -734,9 +754,8 @@ export function SubagentOverlay() {
 }
 ```
 
-> Implementer: confirm `useEscape`'s signature against `static/src/hooks/useEscape.js`
-> (it's used by `PreviewOverlay`). If it takes `(active, handler)` use as shown; if it
-> registers differently, match `PreviewOverlay`'s usage exactly.
+> `useEscape` signature confirmed: `useEscape(handler, active = true)` (`static/src/hooks/useEscape.js:22`;
+> 11 call sites agree, e.g. `Modal.jsx`: `useEscape(closeModal, !!target)`). Use exactly as shown above.
 
 - [ ] **Step 2: Verify it builds**
 
@@ -941,8 +960,8 @@ Append near the other sidebar section styles:
 .subagent-overlay-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px; }
 ```
 
-If `PreviewOverlay` lacks an explicit z-index higher than 5, bump it (check its
-rule) so it stacks above `.subagent-overlay`.
+(`PreviewOverlay` is `z-index: 20` — `styles.css:3500` — already above `.subagent-overlay`'s
+`5`, so a file chip clicked inside a subagent transcript correctly layers on top. No change needed.)
 
 - [ ] **Step 4: Verify (browser)**
 
@@ -1007,4 +1026,5 @@ git worktree remove ../periscope-running
 - **First-poll warmup:** shells empty for ~1.5s after selecting a pane, then populate. Intended.
 - **Subagent running gate is coarse** (per-session parent-`working` + 10s mtime window); a just-finished agent can read "running" ≤10s. Accepted.
 - **Undocumented internals:** subagents meta + session-status file are Claude Code internals; all reads degrade to empty.
+- **`_LAST_SEEN` is process-global** and grows by distinct `session:index` keys for the server's lifetime (no eviction). Bounded by pane count, harmless staleness for closed panes — spec-accepted.
 - **Subagent overlay is split-view-only (v1).** `Sidebar` is shared with the modal, so the Running section (and clickable subagent rows) also appear in the modal — but `SubagentOverlay` mounts only in the split-view `Detail`, and its CSS is positioned for `.detail-pane-body`. In the modal, a subagent row sets `subagentView` but no overlay appears. Acceptable: this work targets split view (the premise). A later pass can mount the overlay in the modal too.
