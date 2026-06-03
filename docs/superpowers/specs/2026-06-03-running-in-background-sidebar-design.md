@@ -51,9 +51,11 @@ Two secondary problems addressed here:
   Claude pid surfaces tool shells, dev servers, MCP servers, LSP, `uv`/`python`
   workers.
 - **Subagents → the `subagents/` dir.** `projects/<enc-cwd>/<session-id>/subagents/agent-<id>.meta.json`
-  = `{agentType, description}`; `agent-<id>.jsonl` = the subagent's transcript
-  (same format `history.search.messages_from_jsonl` parses). Recent `.jsonl`
-  mtime + parent session `busy` ⇒ running.
+  = `{agentType, description}`; `agent-<id>.jsonl` = the subagent's transcript.
+  Recent `.jsonl` mtime + parent session `working` ⇒ running (see the running-gate
+  note below). **Note:** every subagent event carries `isSidechain: true`, which
+  `messages_from_jsonl` currently skips (`history/search.py:242`) — the drill-in
+  needs a sidechain-aware parse (see §New route).
 
 ## Server design
 
@@ -68,6 +70,7 @@ background_shells(pane_pid: int) -> list[dict]
 
 subagents(session_id: str) -> list[dict]
     # glob projects/<enc>/<sid>/subagents/agent-*.meta.json + jsonl mtime.
+    # agent_id is the BARE hex id (filename stem minus the "agent-" prefix).
     # -> [{"agent_id": str, "agent_type": str, "description": str, "running": bool}]
 ```
 
@@ -79,9 +82,12 @@ subagents(session_id: str) -> list[dict]
   other LSPs), `node` running an MCP server, the periscope channel shim,
   `caffeinate`, bare `zsh`/`-zsh` login shells with no command.
 - **Persistence filter:** only emit pids seen on the *previous* poll too (a tiny
-  per-pane `_last_seen_pids` cache in the module), so a transient foreground
-  tool-bash caught mid-run is dropped. Backgrounded/long-running processes
-  persist across polls and survive.
+  `_last_seen_pids` cache in the module, keyed by `target` = `session:index`), so
+  a transient foreground tool-bash caught mid-run is dropped. Backgrounded/
+  long-running processes persist across polls and survive. **Consequence:** the
+  first `/api/pane` poll after selecting a pane (SidePanel remounts per `target`)
+  has no prior entry, so shells are empty for one poll (~1.5s warmup) then
+  populate. Accepted.
 - `cmd` is the trimmed `args` (capped, e.g. 80 chars); `runtime_s` parsed from
   `etime`.
 
@@ -93,8 +99,12 @@ subagents(session_id: str) -> list[dict]
   each `agent-<id>.meta.json` with its sibling `agent-<id>.jsonl` for the mtime
   check.
 - `running`: `.jsonl` mtime within `RUNNING_WINDOW_S` (≈10s) **and**
-  `session_status.session_state_for(session_id)` is `working`. Both gates so a
-  stale subagent file from a finished run doesn't read as running.
+  `(session_status.session_state_for(session_id) or {}).get("state") == "working"`
+  (guard the `None` return; `session_state_for` returns `{"state","status",
+  "waiting_for"} | None`). **Coarseness (accepted v1):** the parent-`working` gate
+  is per-session, not per-agent — when several agents run in one turn, a
+  just-finished one can read "running" until its mtime ages out of the window
+  (≤10s, self-corrects); parallel agents all correctly read running.
 - Degrade to `[]` on any missing dir / parse error (LGTM-integration philosophy).
 
 Unit-tested in `tests/test_running.py`: `background_shells` against a synthesized
@@ -111,11 +121,18 @@ against a seeded `projects/<enc>/<sid>/subagents/` fixture dir.
 ### New route: subagent transcript
 
 `GET /api/pane/subagent?session=&index=&agent=<agent_id>` in `routes/pane.py`:
+- `agent_id` is the **bare hex id**; validate `^[0-9a-f]+$` (reject otherwise — it
+  composes into a filename) → 400 on mismatch.
 - resolve pane → `session_id`; locate `subagents/agent-<agent_id>.jsonl` under the
-  session's project dir (a `turns.subagent_jsonl(session_id, agent_id)` helper);
-  return `{messages: messages_from_jsonl(path)}` or `{messages: null}` if absent.
-- Path-param safety: `agent_id` is validated against `^agent-?[0-9a-f]+$` (it
-  composes into a glob/filename) — reject otherwise.
+  session's project dir via a `turns.subagent_jsonl(session_id, agent_id)` helper
+  (globs `*/{session_id}/subagents/agent-{agent_id}.jsonl`).
+- return `{messages: messages_from_jsonl(path, include_sidechain=True)}`, or
+  `{messages: null}` if absent.
+- **`messages_from_jsonl` change:** add an `include_sidechain: bool = False`
+  parameter. Subagent events all carry `isSidechain: true`, which the current
+  parser drops (`history/search.py:242` skips `isMeta` OR `isSidechain`). With
+  `include_sidechain=True`, skip only `isMeta`. Default `False` preserves every
+  existing caller's behavior.
 
 ## Frontend design
 
@@ -143,12 +160,21 @@ Modeled on `FilesSection`. Reads `data.background_shells` + `data.subagents`.
   `.detail-pane-body`): on a non-null `subagentView`, fetches
   `/api/pane/subagent`, renders the messages, Esc-dismiss via the shared
   `useEscape` LIFO. Re-opening on a new `agentId` re-fetches in place.
+- **Stacking:** the transcript host is `z-index:1`, composer `z-index:2`.
+  `SubagentOverlay` sits above both (e.g. `z-index:5`); `PreviewOverlay` sits
+  above *it* (e.g. `z-index:10`). A file chip clicked *inside* a subagent
+  transcript sets `previewPath` (the shared `TranscriptBody` chips do this), so
+  `PreviewOverlay` floats over the open subagent transcript — supported on
+  purpose; the `useEscape` LIFO dismisses the preview first, then the subagent
+  overlay.
 - **Refactor:** extract a presentational `<TranscriptBody messages currentUuid />`
   from `TranscriptView` (the `messages.map → Turn/ToolCall` core, the
   current-turn highlight, the compact divider). `TranscriptView` keeps the poll /
   autoscroll / composer / status-banner and renders `<TranscriptBody>` inside;
-  `SubagentOverlay` renders `<TranscriptBody>` with the fetched messages and no
-  composer (subagents are read-only). No behavior change to the live view.
+  `SubagentOverlay` renders `<TranscriptBody>` with the fetched messages, no
+  composer, and `currentUuid={null}` (static history → no live-turn highlight).
+  No behavior change to the live view. (A truncated subagent's last in-flight
+  tool would show `running…`; harmless — correct when genuinely live.)
 
 ### Transcript-mode sidebar fix
 
@@ -192,8 +218,12 @@ cost per 1.5s, not all panes.
 - `tests/test_running.py` — `background_shells` (denylist + descendant walk +
   persistence filter against an injected ps table) and `subagents` (seeded dir,
   running-gate logic).
+- `tests/test_search.py` — `messages_from_jsonl(..., include_sidechain=True)`
+  returns sidechain events; default still drops them (regression guard for the
+  existing callers).
 - `tests/routes/test_pane.py` — `/api/pane` carries the new keys; `/api/pane/subagent`
-  returns messages for a seeded subagent jsonl and `null`/400 for missing/invalid.
+  returns messages for a seeded subagent jsonl (sidechain events present), `null`
+  for missing, and 400 for an `agent_id` failing `^[0-9a-f]+$`.
 - Frontend per project convention: verify in the browser on the dev instance
   (running shells appear, subagent drill-in opens the transcript, sidebar shows in
   both terminal and transcript mode); rebuild + commit `static/dist/app.js`.
