@@ -10,7 +10,6 @@ import { promptDialog } from "./Dialog.jsx";
 import { apiCall } from "../util.js";
 import { poll } from "../grid/poll.js";
 import { initExternalLinks } from "../tauri.js";
-import { Alerts } from "./Alerts.jsx";
 import { CommandsModal } from "./CommandsModal.jsx";
 import { NewProjectModal } from "./NewProjectModal.jsx";
 import { ReviewPrModal } from "./ReviewPrModal.jsx";
@@ -54,7 +53,6 @@ export function Overlays() {
 
   return (
     <>
-      <Alerts />
       <CommandsModal />
       <NewProjectModal />
       <ReviewPrModal />

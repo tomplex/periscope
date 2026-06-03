@@ -245,20 +245,6 @@ export function Header() {
 
         <span class="filters-spacer"></span>
 
-        {/* Alerts toggle — feed + badge land with Alerts in Task 8; inert
-            here. */}
-        <button
-          id="alerts-toggle"
-          class="filter-btn is-action"
-          aria-pressed="false"
-          title="toggle notifications panel — cross-pane feed"
-        >
-          <span class="alerts-toggle-label">🔔 notifications</span>
-          <span class="alerts-badge" id="alerts-badge" hidden>
-            0
-          </span>
-        </button>
-
         <ViewSwitch />
       </nav>
     </header>
