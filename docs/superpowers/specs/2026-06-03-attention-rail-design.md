@@ -116,12 +116,16 @@ section-header primitive.
 **Needs you:**
 - Data source per pane is already computed in `panes.py`: `state == "needs-input"`
   (covers both `_detect_needs_input` dialogs and `_detect_asked_question`).
-- Reason label is **`dialog` vs `asked`**, derived client-side from the two
-  fields the view already exposes (`needs_input` and `asked_question`). The
-  parser does **not** distinguish a permission dialog from an AskUserQuestion
-  dialog — both render the identical numbered-choice footer and `_detect_needs_input`
-  is a single boolean — so a finer `permission`/`AskUserQuestion` label would
-  need a new detector. Out of scope for v1.
+- Reason label is derived client-side via `waitLabel(w.waiting_for)` — the view
+  already exposes `waiting_for`, and `util.js:waitLabel` already maps its values
+  (`"approve askuserquestion"` → "needs answer", `"permission prompt"` → "needs
+  approval", `"dialog open"` → "needs input"). This **does** distinguish
+  AskUserQuestion from a permission prompt (directly serving ask #2), and
+  degrades to a generic "needs input" when `waiting_for` is absent. (Earlier
+  draft assumed only a `dialog`/`asked` split from `parse_pane` was possible;
+  `waiting_for` from the session state is the richer, real signal — note that
+  `window_view.py` forces `asked_question=False` for mapped live sessions, so a
+  flag-derived label would be dead in prod.)
 - `need_human` events come from the alert feed (`/api/alerts/recent`, filtered
   to `kind == "need_human"`) and are merged in as event rows with a relative
   timestamp + a `×` dismiss. Each event carries a stable id (see Server-side

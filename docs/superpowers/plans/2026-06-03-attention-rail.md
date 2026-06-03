@@ -191,14 +191,18 @@ Add to `tests/test_channels.py`:
 
 ```python
 def test_notify_tool_stamps_unique_id():
-    _do_notify_tool("first", "done", "tc/x", "0", "win")
-    _do_notify_tool("second", "done", "tc/x", "0", "win")
-    ids = [a["id"] for a in _CHANNEL_ALERTS]
+    # Real signature: _do_notify_tool(pane: str, arguments: dict).
+    # Both alerts append under the same pane key in _CHANNEL_ALERTS (a dict
+    # pane→list), so read the list under that pane, not the dict itself.
+    _do_notify_tool("%5", {"message": "first", "kind": "done"})
+    _do_notify_tool("%5", {"message": "second", "kind": "done"})
+    entries = _CHANNEL_ALERTS["%5"]
+    ids = [a["id"] for a in entries]
     assert all(isinstance(i, str) and i for i in ids)
     assert len(set(ids)) == len(ids)  # unique
 ```
 
-(Match the real `_do_notify_tool` signature — check it in `channels.py` and adjust the positional args in the test to the actual parameters. The assertion on `id` is the point.)
+(The `reset_channel_state` autouse fixture already in `tests/test_channels.py` clears `_CHANNEL_ALERTS` between tests.)
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -225,21 +229,32 @@ Expected: PASS.
 
 - [ ] **Step 5: Write the failing route test**
 
-Create `tests/routes/test_alerts.py` (mirror an existing `tests/routes/test_*.py` for the TestClient + clean_state fixture pattern):
+Create `tests/routes/test_alerts.py`. Two real constraints (both caught in review):
+- `/api/alerts/recent` only emits rows for panes present in live tmux (`alerts.py` does `w = by_pane.get(pane_id); if not w: continue`). So the test MUST mock `list_windows` to return a pane whose `pane_id` matches the one passed to `_do_notify_tool`.
+- `tests/routes/conftest.py` provides `client` but does NOT reset channel state — clear `_CHANNEL_ALERTS` in the test (or add a local fixture).
 
 ```python
-from periscope.channels import _do_notify_tool
+from periscope.channels import _do_notify_tool, _CHANNEL_ALERTS, _CHANNELS_LOCK
 
 
-def test_alerts_recent_surfaces_id(client):
-    _do_notify_tool("hello", "need_human", "tc/x", "0", "win")
+def test_alerts_recent_surfaces_id(client, mocker):
+    with _CHANNELS_LOCK:
+        _CHANNEL_ALERTS.clear()
+    mocker.patch(
+        "periscope.routes.alerts.list_windows",
+        return_value=[{
+            "pane_id": "%5", "session": "tc/x", "index": "0",
+            "name": "win", "cwd": "/tmp",
+        }],
+    )
+    _do_notify_tool("%5", {"message": "hello", "kind": "need_human"})
     res = client.get("/api/alerts/recent?limit=10")
     assert res.status_code == 200
     items = res.json()["items"]
     assert items and all("id" in it for it in items)
 ```
 
-(Use whatever `client` fixture the other route tests use; copy their import header.)
+(Confirm the exact mock target — `periscope.routes.alerts.list_windows` — and the window-dict keys the route reads, against the real `alerts.py` and an existing `tests/routes/test_*.py` that mocks `list_windows`, e.g. `test_pane.py`/`test_send.py`.)
 
 - [ ] **Step 6: Run it to verify it fails**
 
@@ -291,17 +306,17 @@ const evt = (over = {}) => ({
 });
 
 describe("buildNeedsYou", () => {
-  it("includes live needs-input panes with reason from flags", () => {
-    const live = win({ state: "needs-input", needs_input: true });
+  it("includes live needs-input panes, carrying the window for label/waiting_for", () => {
+    const live = win({ state: "needs-input", waiting_for: "approve askuserquestion" });
     const rows = buildNeedsYou([live], [], new Set());
     expect(rows).toHaveLength(1);
     expect(rows[0].kind).toBe("live");
-    expect(rows[0].reason).toBe("dialog");
+    expect(rows[0].w.waiting_for).toBe("approve askuserquestion");
   });
 
-  it("reason is 'asked' when asked_question set", () => {
-    const live = win({ state: "needs-input", asked_question: true });
-    expect(buildNeedsYou([live], [], new Set())[0].reason).toBe("asked");
+  it("excludes panes not in needs-input state", () => {
+    const idle = win({ state: "idle" });
+    expect(buildNeedsYou([idle], [], new Set())).toHaveLength(0);
   });
 
   it("includes unacked need_human events after live rows", () => {
@@ -377,12 +392,11 @@ export function buildNeedsYou(windows, alertItems, dismissedIds) {
   const byTarget = indexByTarget(windows);
   const live = (windows || [])
     .filter((w) => w.state === "needs-input")
-    .map((w) => ({
-      kind: "live",
-      pid: w.pid,
-      w,
-      reason: w.asked_question ? "asked" : "dialog",
-    }));
+    .map((w) => ({ kind: "live", pid: w.pid, w }));
+  // No reason field here: the human label is rendered in the component via
+  // waitLabel(w.waiting_for). window_view.py forces asked_question=False for
+  // mapped live sessions, so a flag-derived label would be dead in prod;
+  // waiting_for carries the real distinction (incl. AskUserQuestion).
   const events = (alertItems || [])
     .filter((r) => r.kind === "need_human")
     .filter((r) => !dismissedIds.has(r.id))
@@ -403,6 +417,10 @@ export function buildNeedsYou(windows, alertItems, dismissedIds) {
 
 // An event is acked once the user has engaged the pane after it fired:
 // max(focused_at, acted_at) > event.ts. Missing window → not acked.
+// Note: the payload's `acted_at` already folds in the persisted modal-open
+// "acked_at" stamp (window_view.py), so opening the modal also acks — this is
+// intentionally more generous than the spec's literal rule, matching the
+// "however you got there" goal.
 export function isAcked(event, windowByTarget) {
   const w = windowByTarget[event.target];
   if (!w) return false;
@@ -450,54 +468,16 @@ git commit -m "rail: attention.js pure module (needs-you merge/ack, pin resolve,
 
 ---
 
-### Task 5: Pin mutators in `prefs.js` (TDD)
+### Task 5: Pin mutators in `prefs.js`
 
 **Files:**
 - Modify: `static/src/prefs.js` (add `getPinnedPids` / `setPinnedPids` / `togglePin`)
-- Create or extend: `static/src/split/__tests__/pins.test.js`
 
-- [ ] **Step 1: Write the failing test**
+No unit test here (deliberate). `patchUI` reverts its optimistic write on any network failure, so a no-network unit test of `togglePin` would assert the post-revert state and fail; mocking the round-trip would only re-test existing `patchUI` plumbing. The real pin invariants — render order and dead-id pruning — are covered by `resolvePinned`'s unit tests (Task 4). `togglePin` is a thin `patchUI` wrapper, verified end-to-end in the browser (Task 7 Step 5). This matches the project convention: don't unit-test trivial wrappers over already-tested infrastructure.
 
-Create `static/src/split/__tests__/pins.test.js`. Mock `patchUI` by intercepting `fetch` the way the existing prefs flow expects, OR — simpler and sufficient here — test `togglePin`'s membership logic against a seeded `prefsSignal`. Concretely:
+- [ ] **Step 1: Add mutators to `prefs.js`**
 
-```js
-import { describe, it, expect, beforeEach } from "vitest";
-import { prefsSignal } from "../../prefs.js";
-import { getPinnedPids, togglePin } from "../../prefs.js";
-
-// togglePin calls patchUI which POSTs; in the test env fetch is undefined,
-// but patchUI updates prefsSignal optimistically before the network call.
-// We assert the optimistic signal state.
-beforeEach(() => {
-  prefsSignal.value = { loaded: true, ui: {}, windows: {}, commands: [] };
-});
-
-describe("pins", () => {
-  it("toggle adds then removes a pid", async () => {
-    await togglePin("p1").catch(() => {});
-    expect(getPinnedPids()).toContain("p1");
-    await togglePin("p1").catch(() => {});
-    expect(getPinnedPids()).not.toContain("p1");
-  });
-
-  it("preserves order of insertion", async () => {
-    await togglePin("a").catch(() => {});
-    await togglePin("b").catch(() => {});
-    expect(getPinnedPids()).toEqual(["a", "b"]);
-  });
-});
-```
-
-(If the existing prefs mutators throw on a missing `fetch`, the `.catch(() => {})` swallows the network rejection after the optimistic signal update — verify `patchUI` updates the signal *before* awaiting the POST; if it doesn't, seed via `setPinnedPids` and test the pure membership toggle instead.)
-
-- [ ] **Step 2: Run to verify it fails**
-
-Run: `npx vitest run static/src/split/__tests__/pins.test.js`
-Expected: FAIL ("getPinnedPids is not a function").
-
-- [ ] **Step 3: Add mutators to `prefs.js`**
-
-Near the other `ui` getters/mutators:
+Near the other `ui` getters/mutators (e.g. by `getRailCollapsed`/`setRailCollapsedKey`):
 
 ```js
 export function getPinnedPids() {
@@ -513,15 +493,15 @@ export function togglePin(pid) {
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [ ] **Step 2: Sanity build**
 
-Run: `npx vitest run static/src/split/__tests__/pins.test.js`
-Expected: PASS.
+Run: `npm run build`
+Expected: builds clean (no syntax error). Behavior is exercised in Task 7.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add static/src/prefs.js static/src/split/__tests__/pins.test.js
+git add static/src/prefs.js
 git commit -m "prefs: pinned_pids list + getPinnedPids/setPinnedPids/togglePin"
 ```
 
@@ -538,6 +518,8 @@ git commit -m "prefs: pinned_pids list + getPinnedPids/setPinnedPids/togglePin"
 - Delete: `static/src/overlays/Alerts.jsx`
 
 This is a behavior-preserving move: the poll body, native-notify, dock-badge, and dedupe sentinel move verbatim. Only two changes: `alertKey` → `r.id`, and the header-`getElementById` badge writes are dropped (the badge becomes a Rail prop in Task 7).
+
+> **Ordering gate:** between this task's commit and Task 7's, `need_human`/`done`/`info` alerts have **no rendered surface** (right rail deleted, new sections not yet added) — only the Tauri dock badge reflects them. This is an acceptable *intermediate* state on the worktree branch. **Do not merge to `main` or restart prod between Task 6 and Task 7** — the phase must land whole.
 
 - [ ] **Step 1: Add the transient signals to `store.js`**
 
@@ -678,7 +660,7 @@ git commit -m "rail: re-home alert poll loop into alertFeed.js module; remove ri
 import { windows, dismissedAlertIds, railSelection } from "../store.js";
 import { alertItems, revealPane } from "./alertFeed.js";
 import * as prefs from "../prefs.js";
-import { relTime } from "../util.js";
+import { relTime, waitLabel } from "../util.js";
 import { SectionHeader } from "./SectionHeader.jsx";
 import { buildNeedsYou, needsYouCount, resolvePinned, buildActivity } from "./attention.js";
 import { statusDotClass } from "./RailRows.jsx";
@@ -745,7 +727,7 @@ export function AttentionSections() {
                    onClick={() => selectPane(r.w)}>
                 <span class="attn-dot dot dot-alert dot-pulse"></span>
                 <span class="attn-label">{originLabel(r.w)}</span>
-                <span class="attn-reason">{r.reason}</span>
+                <span class="attn-reason">{waitLabel(r.w?.waiting_for)}</span>
               </div>
             ) : (
               <div key={`evt:${r.id}`} class="rail-row attn-row attn-needs attn-event"
@@ -808,7 +790,7 @@ pinned={prefs.getPinnedPids().includes(w.pid)}
 onTogglePin={() => prefs.togglePin(w.pid)}
 ```
 
-In `RailRows.jsx`'s `PaneRow`, add the star button before the `.rail-close` button:
+In `RailRows.jsx`'s `PaneRow`, insert the star button **before the status-dot `<span>`** (so the order is icon · label · ★ · dot · ×, matching the mockup `✻ rail-redesign ★ ●`), not before `.rail-close`:
 
 ```jsx
 <button
@@ -878,13 +860,13 @@ git commit -m "rail: NEEDS YOU / PINNED / ACTIVITY attention sections + hover-st
 ## Final verification
 
 - [ ] Run the full backend suite: `uv run pytest -q` — expect green (new alert-id tests included).
-- [ ] Run the frontend suite: `npm test` — expect green (`attention.test.js`, `pins.test.js`).
+- [ ] Run the frontend suite: `npm test` — expect green (`attention.test.js`).
 - [ ] `npm run build` once more; confirm `static/dist/app.js` is committed.
-- [ ] Merge the worktree branch to `main`; `bin/periscope restart`; smoke-test prod at `http://localhost:8765/`.
+- [ ] **Only after Task 7 is complete:** merge the worktree branch to `main`; `bin/periscope restart`; smoke-test prod at `http://localhost:8765/`.
 
 ## Spec coverage self-check
 
-- Needs you (live needs-input + need_human merge, dialog/asked label, ack via max(focused,acted)>ts, × dismiss) → Tasks 3,4,7.
+- Needs you (live needs-input + need_human merge, reason label via waitLabel(waiting_for) — incl. AskUserQuestion distinction, ack via max(focused,acted)>ts, × dismiss) → Tasks 3,4,7.
 - Pinned (pane-only, periscope-id, in-tree star, render-time dead-id prune) → Tasks 5,7.
 - Activity (done/info/milestone, collapsed default) → Tasks 4,6,7.
 - Section-header primitive + restyle + collapsible PROJECTS → Tasks 1,2.
