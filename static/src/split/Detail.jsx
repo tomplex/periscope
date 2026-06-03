@@ -22,6 +22,7 @@ import { useRef, useEffect, useState } from "preact/hooks";
 import { windows, activeTarget, railSelection, transcriptMode, transcriptSeen, paneTranscript, previewPath } from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
+import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
 import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom, setTerminalFileCallback } from "../terminal/terminalCore.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
 import { TranscriptView } from "./Transcript.jsx";
@@ -329,6 +330,7 @@ function PaneDetail({ w }) {
           ⤓
         </button>
       )}
+      {mode === "terminal" && <TerminalSearch />}
     </div>
   );
 }

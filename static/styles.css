@@ -3356,29 +3356,17 @@ body[data-alerts="open"][data-view="stream"] main {
   background: var(--bg-2); border-radius: 3px; padding: 0 6px; flex: none;
 }
 
-/* .terminal-wrap must be a positioned containing block (NOT display:contents,
-   which generates no box and ignores position) so .term-search anchors here
-   instead of floating to whichever ancestor is positioned. flex+column lets
-   the terminal host fill the remaining space without margin from the search
-   bar (the bar is absolute, doesn't take flex space). */
-.terminal-wrap {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-/* The host inside the wrap fills the wrap so xterm's FitAddon sees the
-   real container height. */
-.terminal-wrap > .detail-xterm,
-.terminal-wrap > .modal-xterm {
-  flex: 1;
-  min-height: 0;
-}
+/* The Cmd+F search bar floats over the terminal area of #detail-pane
+   (#detail-pane is `position: relative` via .detail-pane). Anchored at
+   top: --detail-header-h (just under the header), right: 290px (just
+   inside the 280px sidebar + a little gutter). Does NOT wrap the
+   terminal host — wrapping the host with extra layout layers (`display:
+   flex` etc.) shifts FitAddon's measurements and reflows scrollback at
+   different widths. */
 .term-search {
   position: absolute;
-  top: 4px;
-  right: 12px;
+  top: calc(var(--detail-header-h, 40px) + 4px);
+  right: 290px;
   z-index: 5;
   display: flex;
   gap: 4px;

@@ -1,85 +1,33 @@
 // Thin ref+useEffect wrapper over the imperative xterm/WS core
 // (terminalCore.js). This is the ONLY Preact-aware part of the terminal —
-// the xterm instance, WebSocket, reconnect FSM, fit/resize, paste, and
-// link handlers all live in the core and stay imperative.
+// the xterm instance, WebSocket, reconnect FSM, fit/resize, and paste
+// handlers all live in the core and stay imperative.
 //
 // Lifecycle: the empty-deps effect mounts the live terminal ONCE per
 // component instance and tears it down on unmount. Call sites KEY this
-// component on the pane's pid so re-selecting the same pane preserves
-// this instance.
+// component on the pane's pid:
 //
-// Cmd+F opens a search bar overlay above the terminal. The bar is
-// rendered here (Preact) but the actual search work is in terminalCore
-// (xterm.js addon-search). Esc closes the bar via useEscape (LIFO).
-import { useRef, useEffect, useState, useCallback } from "preact/hooks";
-import {
-  mountTerminal, unmountTerminal,
-  searchNext, searchPrev, clearSearch,
-} from "./terminalCore.js";
-import { useEscape } from "../hooks/useEscape.js";
+//   <Terminal key={pid} target={target} onPaste={handlePaste} />
+//
+// so re-selecting the same pane preserves this instance (reconnect, not
+// remount) and selecting a different pane unmounts+remounts → a fresh
+// connect.
+//
+// The Cmd+F search bar lives at the <Detail> level as a sibling overlay
+// (TerminalSearch component), NOT inside this wrapper — wrapping the
+// terminal host in extra flex/relative layers shifts FitAddon's
+// measurements and causes mid-mount tmux reflow (scrollback at one width,
+// new output at another). Keep this wrapper a pure pass-through.
+import { useRef, useEffect } from "preact/hooks";
+import { mountTerminal, unmountTerminal } from "./terminalCore.js";
 
 export function Terminal({ target, onMdLink, onPaste, class: className = "modal-xterm", id }) {
-  const hostRef = useRef(null);
-  const inputRef = useRef(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState("");
-
+  const ref = useRef(null);
   useEffect(() => {
-    mountTerminal(hostRef.current, target, { onMdLink, onPaste });
+    mountTerminal(ref.current, target, { onMdLink, onPaste });
+    // mountTerminal self-unmounts the prior mount on its next call, so the
+    // single cleanup here is enough — don't double-tear-down.
     return unmountTerminal;
-  }, []); // empty deps — mount ONCE per component instance (pid-keyed at call site)
-
-  // Cmd+F opens the search bar. Use a window-level listener so the user
-  // doesn't have to focus the terminal first.
-  useEffect(() => {
-    function onKey(e) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-        e.preventDefault();
-        setSearchOpen(true);
-        requestAnimationFrame(() => inputRef.current?.focus());
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  const close = useCallback(() => {
-    setSearchOpen(false);
-    setQuery("");
-    clearSearch();
-  }, []);
-
-  useEscape(close, searchOpen);
-
-  function onSubmit(e) {
-    e.preventDefault();
-    if (!query) return;
-    if (e.shiftKey) searchPrev(query); else searchNext(query);
-  }
-
-  return (
-    <div class="terminal-wrap">
-      {searchOpen && (
-        <form class="term-search" onSubmit={onSubmit}>
-          <input
-            ref={inputRef}
-            class="term-search-input"
-            value={query}
-            placeholder="find in terminal"
-            onInput={(e) => { setQuery(e.currentTarget.value); }}
-          />
-          <button type="button" class="term-search-btn"
-                  title="Previous (Shift+Enter)"
-                  onClick={() => query && searchPrev(query)}>‹</button>
-          <button type="button" class="term-search-btn"
-                  title="Next (Enter)"
-                  onClick={() => query && searchNext(query)}>›</button>
-          <button type="button" class="term-search-btn"
-                  title="Close (Esc)"
-                  onClick={close}>✕</button>
-        </form>
-      )}
-      <div ref={hostRef} id={id} class={className} />
-    </div>
-  );
+  }, []); // empty deps: mount ONCE for this component instance (pid-keyed at call site)
+  return <div ref={ref} id={id} class={className} />;
 }
