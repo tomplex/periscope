@@ -181,7 +181,10 @@ export function startLiveTerminal(target) {
 
   term = new Terminal({
     fontFamily: '"SF Mono", "JetBrains Mono", "Menlo", monospace',
-    fontSize: 12,
+    // 11 over 12 buys ~5 more rows in the same Detail pane, which shows more
+    // at once and marginally reduces Claude's scrolled-redraw duplication
+    // (upstream Ink bug — fewer responses overflow the viewport). Tune freely.
+    fontSize: 11,
     cursorBlink: true,
     // Holds the initial paint (up to 10k lines from capture-pane in ws.py)
     // plus everything that streams in afterwards. 20k gives modals room to
