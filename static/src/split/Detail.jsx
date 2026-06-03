@@ -390,8 +390,8 @@ function PaneDetail({ w }) {
 
   return (
     <div id="detail-pane" class="detail-pane">
-      <TabStrip pid={w.pid} paneLabel={paneLabel} />
       <PaneHeader w={w} mode={mode} onMode={(next) => setDetailMode(w.pid, next)} />
+      <TabStrip pid={w.pid} paneLabel={paneLabel} />
       <div class="detail-pane-body">
         <div class="detail-term-host" style={paneTabActive && mode === "terminal" ? "display:contents" : "display:none"}>
           <Terminal
