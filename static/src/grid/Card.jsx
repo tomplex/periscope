@@ -18,7 +18,7 @@
 //  - footer model parenthetical strip + relTime(focused_at).
 import { useRef, useEffect } from "preact/hooks";
 import { signal } from "@preact/signals";
-import { relTime, prUrl, targetQuery, apiCall } from "../util.js";
+import { relTime, prUrl, targetQuery, apiCall, waitLabel } from "../util.js";
 import * as prefs from "../prefs.js";
 import { editingTarget } from "../store.js";
 import { poll, openModal } from "./poll.js";
@@ -248,10 +248,12 @@ export function Card({ w }) {
   const aff = w.worktree_affiliation || { kind: "no-repo" };
 
   // Status label. needs-input wins over the spinner verb (convention #6 —
-  // a stale "envisioning…" in scrollback shouldn't drown out the prompt).
+  // a stale "envisioning…" in scrollback shouldn't drown out the prompt). When
+  // the session status tells us WHY (waiting_for), show that instead of the
+  // generic "needs input".
   const statusText =
     w.state === "needs-input"
-      ? "needs input"
+      ? waitLabel(w.waiting_for)
       : w.spinner
         ? `${w.spinner.toLowerCase()}…`
         : w.state;
