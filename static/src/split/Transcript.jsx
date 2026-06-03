@@ -274,7 +274,7 @@ function Composer({ target, composerRef }) {
   );
 }
 
-export function TranscriptView({ target, pid, selected, state, waitingFor }) {
+export function TranscriptView({ target, pid, selected, state, waitingFor, spinner }) {
   const messages = useTranscriptPoll(target, pid, selected);
   const scrollRef = useRef(null);
   const composerRef = useRef(null);
@@ -319,9 +319,11 @@ export function TranscriptView({ target, pid, selected, state, waitingFor }) {
     return () => ro.disconnect();
   }, []);
 
-  // Bring the waiting banner into view when Claude transitions to needs-input
-  // (no new message arrives to trigger the content-change pin above).
-  useEffect(() => { if (state === "needs-input") pin(); }, [state]);
+  // Bring the status banner into view when Claude transitions to working or
+  // needs-input (no new message may arrive to trigger the content-change pin).
+  useEffect(() => {
+    if (state === "needs-input" || state === "working") pin();
+  }, [state]);
 
   function onScroll(e) {
     const el = e.currentTarget;
@@ -344,15 +346,24 @@ export function TranscriptView({ target, pid, selected, state, waitingFor }) {
                 ? <div key={m.uuid} class="transcript-compact"><span>context compacted</span></div>
                 : <Turn key={m.uuid} m={m} current={m.uuid === lastUuid} />
             )}
-        {/* Claude is blocked on you. The pending turn (e.g. an AskUserQuestion)
-            is NOT in the JSONL until answered, so this banner — sourced from the
-            session-status file via /api/state — is the only in-transcript signal
-            that input is needed. */}
+        {/* Live status banner at the transcript tail, sourced from the
+            session-status file via /api/state — NOT the JSONL. It's the only
+            in-transcript signal during the in-flight window: a pending turn
+            (working/thinking) and a pending question (needs-input) are both
+            absent from the JSONL until they resolve. */}
         {state === "needs-input" && (
-          <div class="transcript-waiting">
-            <span class="transcript-waiting-dot" />
-            <span class="transcript-waiting-text">
+          <div class="transcript-status transcript-status-waiting">
+            <span class="transcript-status-dot" />
+            <span class="transcript-status-text">
               Waiting for your input{waitingFor ? ` — ${waitingFor}` : ""}
+            </span>
+          </div>
+        )}
+        {state === "working" && (
+          <div class="transcript-status transcript-status-working">
+            <span class="transcript-status-dot" />
+            <span class="transcript-status-text">
+              {spinner ? `Working — ${spinner.toLowerCase()}…` : "Working…"}
             </span>
           </div>
         )}

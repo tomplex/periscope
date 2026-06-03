@@ -443,7 +443,8 @@ export function Detail() {
           <div key={`tr:${pid}`} class="detail-transcript-host"
                style={shown ? "display:flex" : "display:none"}>
             <TranscriptView target={tw?.target} pid={pid} selected={isSelected}
-                            state={tw?.state} waitingFor={tw?.waiting_for} />
+                            state={tw?.state} waitingFor={tw?.waiting_for}
+                            spinner={tw?.spinner} />
           </div>
         );
       })}
