@@ -34,8 +34,8 @@ The rail becomes four stacked, collapsible regions, top to bottom:
 ```
 ┌─ #rail ───────────────────────────┐
 │ ▾ ⚠ NEEDS YOU                 [2]  │  attention — red-tinted
-│     ● periscope · rail-redesign    │    AskUserQuestion
-│     ⚠ fdy · etl-job        4m  ×   │    need_human
+│     ● periscope · rail-redesign    │    dialog (live needs-input)
+│     ⚠ fdy · etl-job        4m  ×   │    need_human (event)
 │ ▾ ★ PINNED                    [3]  │  convenience — subtle
 │     ✻ periscope · main-server  ●   │
 │     ✻ fdy · feature-store      ●   │
@@ -116,11 +116,16 @@ section-header primitive.
 **Needs you:**
 - Data source per pane is already computed in `panes.py`: `state == "needs-input"`
   (covers both `_detect_needs_input` dialogs and `_detect_asked_question`).
-  Reason label derives from which detector fired: dialog → `permission` /
-  `AskUserQuestion`-style, `?`-reply → `asked`.
+- Reason label is **`dialog` vs `asked`**, derived client-side from the two
+  fields the view already exposes (`needs_input` and `asked_question`). The
+  parser does **not** distinguish a permission dialog from an AskUserQuestion
+  dialog — both render the identical numbered-choice footer and `_detect_needs_input`
+  is a single boolean — so a finer `permission`/`AskUserQuestion` label would
+  need a new detector. Out of scope for v1.
 - `need_human` events come from the alert feed (`/api/alerts/recent`, filtered
   to `kind == "need_human"`) and are merged in as event rows with a relative
-  timestamp + a `×` dismiss.
+  timestamp + a `×` dismiss. Each event carries a stable id (see Server-side
+  work) so ack/dismiss can't collide two same-second alerts.
 - Live needs-input rows self-clear (next poll without the state). Event rows
   clear per the Ack model below.
 - Sort: live needs-input first (most urgent — a dialog is blocking *now*), then
@@ -139,45 +144,68 @@ section-header primitive.
 - `done` / `info` (and `milestone`) events from the existing feed, reverse-chron,
   collapsed by default. This is the relocated/repurposed content of today's
   right `#alerts-rail`, minus the need_human rows (those moved up to Needs you).
-- The right `#alerts-rail` is removed once its content lives here. The header
-  alerts-toggle button + badge behavior folds into the new sections (need_human
-  count drives the Needs-you badge).
+- The right `#alerts-rail` (`Alerts.jsx`) is removed once its content lives here.
+  This is **not** a pure delete — three things must be re-homed or they regress:
+  1. The `#alerts-toggle` / `#alerts-badge` markup is rendered by **`Header.jsx`**
+     (not `Alerts.jsx`). Repurpose or remove it; the need_human count now drives
+     the Needs-you badge instead.
+  2. The **poll loop** (`/api/alerts/recent` every 3s) moves to whatever owns the
+     new sections. The Needs-you badge must stay fresh even when sections are
+     collapsed, exactly as today's badge polls regardless of panel open-state.
+  3. **`maybeNativeNotify` + `setBadgeCount`** (the macOS dock badge + native
+     notification on a need_human rising edge, Tauri-only) live *inside* the
+     deleted component. They must move with the poll loop or native notifications
+     regress. The first-poll dedupe sentinel (`seenAlertKeys = null`) moves intact.
+- `--header-h` is **not** at risk — `Header.jsx` sets it authoritatively, so
+  split-view's `top: var(--header-h)` survives the rail removal.
 
 ## Ack model (need_human events)
 
 Live needs-input never needs an ack — it is derived state and disappears on its
 own. `need_human` events do, because they are events, not state.
 
-- **Visiting the pane acks its need_human, however the user got there:** rail
-  selection, modal open, or typing directly into the tmux pane. The server
-  already tracks this as **`_acted_at`** (panes.py) — a *user-action-only*
-  recency stamp (distinct from `_focused_at`, which bumps on mere output). A
-  need_human event is acked once `_acted_at[target] > event.ts`.
-- A `×` on the row dismisses without visiting (escape hatch).
-- Prior art for per-pane ack persistence: state.py already stamps
-  `completed_at` / `acked_at` per periscope-id via `set_window_fields_bulk` —
-  the need_human ack should follow the same persistence pattern rather than
-  inventing a parallel store.
+**Ack rule (computed client-side):** a need_human event is acked once
+`max(focused_at, acted_at) > event.ts`. Both stamps are already in the per-pane
+view payload (`recency_stamps_for`, panes.py), so no server work is needed.
+
+- `acted_at` bumps on periscope-originated actions — `/api/send`, rename, paste,
+  and the `/ws/pane` terminal mount (opening the pane in the detail view).
+- `focused_at` bumps when the pane **becomes the active window in its session**
+  (`update_focus_from_windows`, panes.py:113) — i.e. when the user switches to
+  it directly in tmux. This is what makes "however you got there" mostly true:
+  navigating to the pane in raw tmux *is* observable.
+- **Residual gap (accepted):** if the pane was *already* the active tmux window
+  when the alert fired and the user answers by typing straight into raw tmux,
+  nothing re-stamps — periscope cannot see keystrokes in an already-focused
+  pane. This is the least-urgent case (the user is already looking at it); the
+  `×` dismiss is the escape hatch. We document this rather than pretend the rule
+  is total.
+
+A `×` on the row dismisses explicitly, keyed on the event id. Dismissed ids are
+held client-side (the feed is in-memory and resets on restart, so no durable
+ack store is warranted — this is a deliberate simplification over the
+`set_window_fields_bulk` per-pid stamp machinery, which exists but isn't needed
+here).
 
 ## Server-side work
 
-Most of Phase 2 is frontend; the server already exposes what's needed, with two
-gaps:
+Phase 2 is almost entirely frontend — the server already exposes the per-pane
+state, the `focused_at`/`acted_at` stamps, and the alert feed. **One** server
+change is required:
 
-1. **Alert kind split for the feed.** `/api/alerts/recent` already returns
-   `kind`. The frontend filters: `need_human` → Needs you, others → Activity.
-   No server change strictly required, but consider an `acked` flag on
-   need_human rows (see #2).
-2. **need_human ack.** Either (a) compute acked-ness server-side by comparing
-   the event ts against `_acted_at` and stamp it, or (b) expose `_acted_at` and
-   let the client compute it. *Recommendation: server-side* — keeps the
-   "however you got there" rule (which includes typing directly into tmux, a
-   thing the client can't observe) authoritative on the server. A small
-   `acked_at` stamp per (periscope-id, event) following the existing
-   `set_window_fields_bulk` pattern.
+1. **Stable alert event id.** Alert records are currently `{message, kind,
+   severity, ts}` with whole-second `ts` and no id, so the frontend synthesizes
+   a collision-prone `target|ts|message[:60]` key. Stamp a `uuid4().hex` (uuid is
+   already imported) on the record in `channels.py`'s notify-tool handler and
+   surface it through `/api/alerts/recent`. Ack/dismiss then key on the id.
 
-The exact reuse boundary (extend the existing stamp machinery vs. a small new
-store) is a structure-proposer question.
+Everything else is client-side and needs **no** server change:
+- **Kind split:** `kind` is already on every row; the frontend filters
+  `need_human` → Needs you, `done`/`info`/`milestone` → Activity.
+- **Ack:** computed from `max(focused_at, acted_at) > event.ts` using stamps
+  already in the view payload (see Ack model).
+- **Reason label:** `dialog` vs `asked` from existing `needs_input` /
+  `asked_question` view fields.
 
 ## Out of scope (YAGNI)
 
@@ -189,13 +217,17 @@ store) is a structure-proposer question.
 
 ## Testing strategy
 
-- `panes.py` reason-label derivation: extend `tests/test_panes.py` with
-  fixtures that exercise `needs-input` → `(permission | AskUserQuestion | asked)`
-  classification.
-- Ack logic (`_acted_at > event.ts`): unit test the server-side ack computation
-  with synthetic timestamps.
-- Pin persistence: pin/unpin round-trips through prefs keyed by periscope-id;
-  dead-id pruning.
-- Frontend section rendering is verified in the browser (the project convention
-  — UI work is eyeballed, not unit-tested), except the merge/sort logic for the
-  Needs-you union, which is a pure function and gets a unit test.
+- **Alert event id** (`channels.py`): extend `tests/test_channel_smoke.py` /
+  the channels test to assert every notify() record carries a unique id, and
+  that `/api/alerts/recent` surfaces it.
+- **Needs-you union + sort** (the one pure frontend function worth a test):
+  merging live needs-input rows with unacked need_human events, ordering
+  (live-first, then events newest-first), and the client-side ack filter
+  (`max(focused_at, acted_at) > event.ts` plus dismissed-id set).
+- **Pin persistence:** pin/unpin round-trips through prefs keyed by
+  periscope-id; dead-id pruning when a pinned pane is gone from live state.
+- No server-side ack or reason-label tests — both moved client-side and need no
+  new server plumbing.
+- Everything else (section rendering, restyle, hover-star affordance) is
+  verified in the browser per the project convention — UI work is eyeballed,
+  not unit-tested.
