@@ -3530,11 +3530,16 @@ body[data-alerts="open"][data-view="stream"] main {
   border-radius: 4px;
   cursor: pointer;
 }
+/* The tc-arg-clickable underline is loud on purpose — Tom called out that
+   the dim version was invisible. Use the accent color so it pops against
+   the muted .tc-arg base. */
 .tc-arg-clickable {
-  cursor: pointer;
-  text-decoration: underline dotted rgba(255,255,255,0.3);
+  cursor: pointer !important;
+  color: var(--accent) !important;
+  text-decoration: underline dotted var(--accent) !important;
   text-underline-offset: 2px;
 }
 .tc-arg-clickable:hover {
-  text-decoration-color: rgba(255,255,255,0.7);
+  text-decoration-style: solid !important;
+  filter: brightness(1.15);
 }

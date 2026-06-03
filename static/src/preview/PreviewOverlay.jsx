@@ -49,6 +49,9 @@ function loadInner() {
 
 export function PreviewOverlay() {
   const cur = previewPath.value;
+  // [periscope-debug] temporary log — remove once preview flow is
+  // confirmed working end-to-end.
+  if (cur) console.log("[periscope] PreviewOverlay render with", cur);
   const [Inner, setInner] = useState(() => _innerMod?.PreviewOverlayInner || null);
   const [loadError, setLoadError] = useState(null);
 

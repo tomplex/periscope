@@ -166,6 +166,9 @@ function ToolCall({ t }) {
               class="tc-arg tc-arg-clickable"
               title="Open preview"
               onClick={(e) => {
+                // [periscope-debug] temporary log — remove once preview
+                // flow is confirmed working end-to-end.
+                console.log("[periscope] transcript chip click", { tool: t.name, arg });
                 e.stopPropagation();
                 previewPath.value = { path: arg, line: null };
               }}
