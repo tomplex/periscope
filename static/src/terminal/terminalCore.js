@@ -141,8 +141,14 @@ function registerRoutingLinkProvider(t) {
               // browser tab, and scrollback often has incidental
               // path-shaped text.
               if (kind === "url") {
-                if (urlLinkCallback) urlLinkCallback(linkText);
-                else openExternal(linkText);
+                if (urlLinkCallback) { urlLinkCallback(linkText); return; }
+                const ok = openExternal(linkText);
+                // Surface failure in-pane so the user sees that activate
+                // fired but the browser/Tauri rejected the open. (Success
+                // is silent — a new tab is its own feedback.)
+                if (!ok && term) {
+                  term.writeln(`\r\n\x1b[31m[periscope: failed to open ${linkText}]\x1b[0m`);
+                }
                 return;
               }
               if (!event.metaKey && !event.ctrlKey) return;

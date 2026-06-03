@@ -77,25 +77,41 @@ export async function onNotificationClick(cb) {
 
 // Open a URL in the user's OS browser, regardless of host.
 //
-// We can't just call `window.open(url, "_blank")` from a callback like
-// xterm's link-activate: WKWebView silently swallows it in the Tauri
-// shell, and some browsers gate it with popup-blocker heuristics when
-// the call doesn't look like it came from a direct click. Instead, we
-// synthesize an `<a target="_blank">` and dispatch a click on it. In a
-// browser the click opens a new tab natively; in the Tauri shell the
-// capture-phase handler installed by `initExternalLinks` (below) sees
-// the click first and routes it through plugin:opener.
+// Returns true on a path that should reach the user's browser, false if
+// every fallback failed (caller can surface an error). Tries:
+//   1. Tauri: direct plugin:opener|open_url invoke. Most reliable in
+//      the shell — bypasses WKWebView's swallow-on-target=_blank quirk.
+//   2. Browser: window.open. Works in Chrome/Safari from a real click;
+//      may be null'd by popup blocker.
+//   3. Synthetic <a target="_blank"> click fallback. Append+click+remove
+//      so the click bubbles through document (so any capture listener
+//      sees it, including `initExternalLinks` below).
 export function openExternal(url) {
-  const a = document.createElement("a");
-  a.href = url;
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
-  // Append+remove so initExternalLinks' document-level capture listener
-  // sees a real bubbling click. A detached element's click() doesn't
-  // bubble through the document, so the Tauri intercept would miss it.
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  if (inTauri()) {
+    invoke("plugin:opener|open_url", { url }).catch((err) => {
+      console.warn("[tauri] open_url failed:", err);
+    });
+    return true;
+  }
+  try {
+    const popup = window.open(url, "_blank", "noopener,noreferrer");
+    if (popup) return true;
+  } catch (e) {
+    console.warn("[periscope] window.open threw:", e);
+  }
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return true;
+  } catch (e) {
+    console.warn("[periscope] anchor-click fallback threw:", e);
+  }
+  return false;
 }
 
 // In the Tauri shell, WKWebView silently swallows target="_blank" clicks
