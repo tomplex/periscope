@@ -113,6 +113,87 @@ const REL_PATH_RE = /(?<![:\w./-])(?:\.{1,2}\/[\w./-]+|[\w.-]+(?:\/[\w.-]+)+)\.(
 //   2. File path (any ext in REL_PATH_RE, plus any absolute path) —
 //      handed to fileLinkCallback. The preview overlay routes by
 //      extension (md → rendered markdown, html → iframe, else source).
+// Custom URL click handler. Installed on the xterm container's mousedown
+// and mouseup in capture phase. Bypasses xterm's link-manager activate
+// path, which races a TUI mouse-reporting redraw on Claude's pane —
+// Claude redraws on receiving the forwarded mousedown, xterm rerenders
+// the row, the link manager clears _currentLink, and mouseup fires with
+// no link to activate. The hover decoration still works (it doesn't
+// depend on the click path), so users see the URL is clickable.
+//
+// We do NOT preventDefault — selection / mouse-reporting / scrolling
+// all continue to work. The URL just also opens.
+let urlMouseDownHandler = null;
+let urlMouseUpHandler = null;
+let urlClickListenerEl = null;
+let pendingUrlClick = null;     // { url, x, y } across mousedown→mouseup
+
+function urlAtClick(e, t) {
+  if (!t) return null;
+  // Use .xterm-screen (the character grid) rather than the outer container,
+  // so the scrollbar / padding don't skew the pixel→cell math.
+  const screen = t.element?.querySelector(".xterm-screen");
+  if (!screen) return null;
+  const rect = screen.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const charW = rect.width / t.cols;
+  const charH = rect.height / t.rows;
+  const cx = Math.floor((e.clientX - rect.left) / charW);
+  const cy = Math.floor((e.clientY - rect.top) / charH);
+  if (cx < 0 || cx >= t.cols || cy < 0 || cy >= t.rows) return null;
+  const buf = t.buffer.active;
+  const line = buf.getLine(buf.viewportY + cy);
+  if (!line) return null;
+  const text = line.translateToString(true);
+  URL_RE.lastIndex = 0;
+  let m;
+  while ((m = URL_RE.exec(text)) !== null) {
+    const s = m.index;
+    const e2 = s + m[0].length;
+    if (cx >= s && cx < e2) return m[0];
+  }
+  return null;
+}
+
+function installUrlClickHandler(t) {
+  const el = t.element;
+  if (!el) return;
+  urlMouseDownHandler = (e) => {
+    if (e.button !== 0) return;            // left click only
+    const url = urlAtClick(e, t);
+    if (!url) return;
+    pendingUrlClick = { url, x: e.clientX, y: e.clientY };
+  };
+  urlMouseUpHandler = (e) => {
+    if (e.button !== 0 || !pendingUrlClick) return;
+    // Require small movement so drag-to-select doesn't trigger an open.
+    const dx = Math.abs(e.clientX - pendingUrlClick.x);
+    const dy = Math.abs(e.clientY - pendingUrlClick.y);
+    const { url } = pendingUrlClick;
+    pendingUrlClick = null;
+    if (dx > 4 || dy > 4) return;
+    if (urlLinkCallback) { urlLinkCallback(url); return; }
+    const ok = openExternal(url);
+    if (!ok) {
+      t.writeln(`\r\n\x1b[31m[periscope: failed to open ${url}]\x1b[0m`);
+    }
+  };
+  el.addEventListener("mousedown", urlMouseDownHandler, true);
+  el.addEventListener("mouseup", urlMouseUpHandler, true);
+  urlClickListenerEl = el;
+}
+
+function uninstallUrlClickHandler() {
+  if (urlClickListenerEl) {
+    if (urlMouseDownHandler) urlClickListenerEl.removeEventListener("mousedown", urlMouseDownHandler, true);
+    if (urlMouseUpHandler) urlClickListenerEl.removeEventListener("mouseup", urlMouseUpHandler, true);
+  }
+  urlClickListenerEl = null;
+  urlMouseDownHandler = null;
+  urlMouseUpHandler = null;
+  pendingUrlClick = null;
+}
+
 function registerRoutingLinkProvider(t) {
   t.registerLinkProvider({
     provideLinks(rowNumber, callback) {
@@ -141,14 +222,13 @@ function registerRoutingLinkProvider(t) {
               // browser tab, and scrollback often has incidental
               // path-shaped text.
               if (kind === "url") {
-                if (urlLinkCallback) { urlLinkCallback(linkText); return; }
-                const ok = openExternal(linkText);
-                // Surface failure in-pane so the user sees that activate
-                // fired but the browser/Tauri rejected the open. (Success
-                // is silent — a new tab is its own feedback.)
-                if (!ok && term) {
-                  term.writeln(`\r\n\x1b[31m[periscope: failed to open ${linkText}]\x1b[0m`);
-                }
+                // URL activation is handled by the custom mousedown/mouseup
+                // pair installed below (installUrlClickHandler). xterm's
+                // own activate path races a TUI mouse-reporting redraw
+                // that clears _currentLink mid-click, so we can't rely on
+                // it. Keeping URL matches in the link provider gives us
+                // the hover decoration (underline + pointer cursor) for
+                // free; the actual open lives in the custom handler.
                 return;
               }
               if (!event.metaKey && !event.ctrlKey) return;
@@ -235,6 +315,7 @@ export function startLiveTerminal(target) {
   // The link provider runs per-rendered-row on demand. Underline-on-
   // hover comes for free from xterm's default link styling.
   registerRoutingLinkProvider(term);
+  installUrlClickHandler(term);
 
   // Fit xterm to the modal container's actual pixel size (so we never clip
   // the bottom rows) and ask tmux to resize the underlying pane to match.
@@ -464,6 +545,7 @@ export function stopLiveTerminal() {
   // Suppress the reconnect path before closing — otherwise onclose would
   // schedule a retry against a target whose modal we've just torn down.
   termIntentionalClose = true;
+  uninstallUrlClickHandler();
   termWsTarget = null;
   if (termReconnectTimer) {
     clearTimeout(termReconnectTimer);
