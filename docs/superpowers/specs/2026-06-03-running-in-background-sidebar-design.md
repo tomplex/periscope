@@ -24,32 +24,39 @@ Two secondary problems addressed here:
 
 ## Scope (v1)
 
-- **At-a-glance list** of running background shells + subagents in a new "Running"
-  sidebar section.
-- **Subagent transcript drill-in** (clicking a subagent opens its transcript).
-  This also satisfies `docs/transcript-view-todos.md` item 3.
-- **Running-only.** The process tree only contains live shells; subagents are
-  filtered to recently-active. Finished items are not listed.
+- **A new "Running" sidebar section** listing:
+  - **Background shells** — the authoritatively-running `run_in_background` tasks
+    (command + runtime).
+  - **Subagents** — split into a **Running** group and a collapsible
+    **Complete (N)** group (type + description; running drilling into the
+    transcript). Satisfies `docs/transcript-view-todos.md` item 3.
+- **All sidebar sections collapsible** (Linked/Notes/Files/Activity/Running) with
+  per-section collapsed state persisted in prefs; the sidebar scrolls.
 - Fix the transcript-mode-empty sidebar.
 
 ### Non-goals
 
-- **Shell output drill-in.** A background shell's captured stdout lives in the
-  harness tasks-dir (`/private/tmp/claude-<uid>/<enc-cwd>/<conversation-id>/tasks/<id>.output`),
-  keyed by a conversation-id that isn't cleanly linked from the current
-  (post-`/clear`) session. Deferred — the list shows command + runtime only.
+- **Shell output content.** We use the harness tasks-dir to detect *which* shells
+  are running and their command/runtime, but do NOT surface the captured stdout
+  (a later pass could add an output drill-in like the subagent transcript).
 - Background **jobs** (`kind=bg` sessions / `~/.claude/jobs/`) — a separate
   concept, out of scope.
-- Perfect foreground/background discrimination for shells (see Caveats).
 
 ## Data sources (measured)
 
-- **Background shells → the process tree.** A `run_in_background` task is a
-  detached, persistent process under the pane's Claude. `ps` descendants of the
-  pane's pid give command (args), runtime (etime), and alive=running directly.
-  No fragile conversation-id mapping. Confirmed: walking the tree from a live
-  Claude pid surfaces tool shells, dev servers, MCP servers, LSP, `uv`/`python`
-  workers.
+- **Background shells → the harness tasks-dir + `lsof` (authoritative).** Each
+  `run_in_background` task writes to
+  `/private/tmp/claude-<uid>/<enc-cwd>/<conv-id>/tasks/<task-id>.output` (regular
+  file; subagents are symlinks in the same dir). The task's process holds that
+  file open **only while running**, so `lsof` on it is an exact running signal —
+  no infra noise (only real backgrounded tasks are here), no
+  foreground/background guessing. Measured: `lsof -t bso70m181.output` → live pid
+  (running dev server); a finished task's `.output` → no writer. The writer pid
+  gives the real command (`ps -o command`) and runtime (`etime`). The only thing
+  needing the session JSONL is locating the `tasks/` dir: the `<conv-id>` is
+  embedded in every bg-task result path in the JSONL (scan once, cache per
+  session). (The earlier process-tree approach was abandoned — it surfaced too
+  much plumbing: `ty`, MCP servers, uv-venv pythons.)
 - **Subagents → the `subagents/` dir.** `projects/<enc-cwd>/<session-id>/subagents/agent-<id>.meta.json`
   = `{agentType, description}`; `agent-<id>.jsonl` = the subagent's transcript.
   Recent `.jsonl` mtime + parent session `working` ⇒ running (see the running-gate
@@ -64,8 +71,8 @@ Two secondary problems addressed here:
 Stdlib + `periscope.*` leaf (no `from server import`). Two functions:
 
 ```
-background_shells(pane_pid: int) -> list[dict]
-    # ps descendants of pane_pid, infra-filtered.
+background_shells(session_id: str) -> list[dict]
+    # tasks-dir .output files held open by a live process (lsof) = running.
     # -> [{"pid": int, "cmd": str, "runtime_s": int}]
 
 subagents(session_id: str) -> list[dict]
@@ -75,21 +82,24 @@ subagents(session_id: str) -> list[dict]
 ```
 
 `background_shells`:
-- Build a `pid → (ppid, comm, args, etime)` map from one
-  `ps -axo pid=,ppid=,comm=,etime=,args=` call; walk descendants of `pane_pid`.
-- **Infra denylist** (drop these `comm`/arg patterns): the `claude` launcher and
-  versioned binary (`.../share/claude/versions/...`), `*-mcp` servers, `ty` (and
-  other LSPs), `node` running an MCP server, the periscope channel shim,
-  `caffeinate`, bare `zsh`/`-zsh` login shells with no command.
-- **Persistence filter:** only emit pids seen on the *previous* poll too (a tiny
-  `_last_seen_pids` cache in the module, keyed by `target` = `session:index`), so
-  a transient foreground tool-bash caught mid-run is dropped. Backgrounded/
-  long-running processes persist across polls and survive. **Consequence:** the
-  first `/api/pane` poll after selecting a pane (SidePanel remounts per `target`)
-  has no prior entry, so shells are empty for one poll (~1.5s warmup) then
-  populate. Accepted.
-- `cmd` is the trimmed `args` (capped, e.g. 80 chars); `runtime_s` parsed from
-  `etime`.
+- **Locate the tasks-dir:** resolve `session_id` → its JSONL (`turns._jsonl_for_session`),
+  scan for the first `/private/tmp/claude-…/…/<conv-id>/tasks/` path (regex), and
+  cache `session_id → tasks_dir` (the `<conv-id>` is stable per conversation, so
+  this is a one-time scan; re-scan only if not yet cached). No bg task ever ⇒ no
+  path ⇒ `[]` (nothing to show anyway).
+- **List candidates:** regular `*.output` files in the tasks-dir (skip symlinks —
+  those are subagents).
+- **Running check (one `lsof`):** `lsof -F pn <all .output files>` in a single
+  call → parse the `p<pid>`/`n<name>` records into `{output_path: writer_pid}`.
+  A file with a live writer = running.
+- **For each running task:** `pid` = writer; `cmd` = `ps -o command= -p <pid>`
+  (the real process command, trimmed/capped ~80 chars); `runtime_s` = `_etime_to_s`
+  of `ps -o etime= -p <pid>`. Build the `{pid, cmd}` and etime lookups from one
+  `ps` snapshot. Only running tasks are returned (finished ones have no writer).
+- Degrade to `[]` on any error (no tasks-dir, lsof/ps failure).
+- Helpers worth keeping/injecting for tests: `_etime_to_s`, and an injectable
+  `lsof`/`ps` boundary (pass the parsed `{output_path: pid}` + `{pid: (cmd,etime)}`
+  as test params, like `subagents` takes a seeded dir).
 
 `subagents`:
 - The subagents dir is `projects/<enc-cwd>/<session-id>/subagents/` — a subdir
@@ -113,10 +123,10 @@ against a seeded `projects/<enc>/<sid>/subagents/` fixture dir.
 
 ### `/api/pane` additions
 
-`routes/pane.py::pane(session, index, lines)` already resolves `target`. Add:
-- resolve `pane_pid` via `tmux display-message -t <target> -p '#{pane_pid}'`
+`routes/pane.py::pane(session, index, lines)` already resolves `pane_id`. Add:
 - resolve `pane_id` → `session_id` via existing `turns.session_id_for_pane`
-- return two new keys: `background_shells` and `subagents` (each `[]` when none).
+- return two new keys: `background_shells(session_id)` and `subagents(session_id)`
+  (each `[]` when none). Both are session-id-based now — no `pane_pid` lookup.
 
 ### New route: subagent transcript
 
@@ -142,14 +152,37 @@ Modeled on `FilesSection`. Reads `data.background_shells` + `data.subagents`.
 
 - **Returns `null` when both are empty** (section absent when nothing runs).
 - Rendered **first** in `Sidebar` (above Linked) — it's the live "now".
-- Shell row: `▶ {cmd}` + right-aligned `{runtime}` (formatted via `relTime`-style
-  s/m/h).
-- Subagent row: `⚇ {agent_type}` + `{description}` + a pulsing run-dot; the row is
-  clickable (opens the transcript, below).
-- **Sub-labels** ("Background shells" / "Subagents") render **only when both**
-  kinds are non-empty; with one kind the `▶`/`⚇` glyphs self-identify.
-- New CSS block `.run-*` at the end of `static/styles.css`; the pulsing dot reuses
-  the `transcript-status-pulse` keyframes.
+- **Background shells** group: shell row `▶ {cmd}` + right-aligned `{runtime}`
+  (formatted s/m/h). All entries are running (lsof-confirmed), no dot needed.
+- **Subagents** split into two groups:
+  - **Running** — `⚇ {agent_type}` + `{description}` + pulsing run-dot, clickable
+    (opens the transcript).
+  - **Complete (N)** — same rows minus the dot, inside a collapsible group that is
+    **collapsed by default** (keeps the long finished-agent list out of the way).
+    `subagents()` returns all agents with their `running` flag; the component
+    partitions on it.
+- **Sub-group labels** ("Background shells" / "Subagents") render **only when
+  more than one group is shown**; with a single group the `▶`/`⚇` glyphs
+  self-identify.
+- New CSS block `.run-*` at the end of `static/styles.css`; pulsing dot reuses
+  `transcript-status-pulse`.
+
+### Collapsible sidebar sections (all of them)
+
+Make every `Sidebar` section header (`<h4>`) a collapse toggle, with per-section
+state persisted in prefs (mirror the rail's `rail_collapsed` pattern in
+`prefs.js`). Approach:
+- A `<SidebarSection title key children>` wrapper (or extend the existing
+  `<section>`s) that renders a clickable `<h4>` with a chevron (▸/▾) and hides its
+  body when collapsed.
+- Collapsed state keyed by a stable section id ("linked"/"notes"/"files"/
+  "activity"/"running") in a new prefs blob (e.g. `sidebar_collapsed: {id: bool}`),
+  read/written via `prefs.js` helpers like the rail's `getRailCollapsed`/
+  `setRailCollapsedKey`. Shared by modal + detail sidebars (same component).
+- The Complete-subagents group has its own independent collapse (collapsed by
+  default), separate from the section-level Running collapse.
+- `.detail-side` (and the modal side) get `overflow-y: auto` so a long sidebar
+  scrolls instead of overflowing.
 
 ### Subagent transcript drill-in
 
@@ -161,8 +194,8 @@ Modeled on `FilesSection`. Reads `data.background_shells` + `data.subagents`.
   `/api/pane/subagent`, renders the messages, Esc-dismiss via the shared
   `useEscape` LIFO. Re-opening on a new `agentId` re-fetches in place.
 - **Stacking:** the transcript host is `z-index:1`, composer `z-index:2`.
-  `SubagentOverlay` sits above both (e.g. `z-index:5`); `PreviewOverlay` sits
-  above *it* (e.g. `z-index:10`). A file chip clicked *inside* a subagent
+  `SubagentOverlay` sits above both (`z-index:5`); `PreviewOverlay` is already
+  `z-index:20`, above *it*. A file chip clicked *inside* a subagent
   transcript sets `previewPath` (the shared `TranscriptBody` chips do this), so
   `PreviewOverlay` floats over the open subagent transcript — supported on
   purpose; the `useEscape` LIFO dismisses the preview first, then the subagent
@@ -192,19 +225,21 @@ in the browser that the Files/Activity/Running sections render in transcript mod
 ## Refresh / performance
 
 No new poll loop — the sidebar's existing 1.5s `/api/pane` poll (`SidePanel`)
-carries the new fields. One `ps -axo` call per `/api/pane` request; the
-persistence filter needs the per-pane `_last_seen_pids` cache (bounded by pane
-count, harmless staleness for closed panes). Subagent globbing is a few small
-files. `/api/pane` is only polled for the *selected* pane, so this is one pane's
-cost per 1.5s, not all panes.
+carries the new fields. Per poll, for the *selected* pane only: a cached JSONL
+scan for the tasks-dir (one-time per session), one `lsof` over the tasks-dir
+`.output` files, and one `ps` snapshot for the running writers' cmd/etime. Bounded
+and fine. `/api/pane` is only polled for the selected pane, not all panes.
 
 ## Caveats
 
-- **Foreground leak.** `ps` can't perfectly distinguish a backgrounded shell from
-  a long-running foreground tool command. The persistence filter (alive across
-  two polls) drops transient ones; a foreground command that runs >1 poll will
-  appear — which is arguably useful ("Claude is running a slow command") and is an
-  accepted v1 tradeoff (confirmed with Tom).
+- **`lsof` cost / liveness exactness.** One `lsof` call per selected-pane poll
+  (~tens of ms). The writer-open-file signal is exact for running-vs-finished — no
+  foreground/background guessing. A task that closes its own stdout while still
+  alive (rare) would read as finished; acceptable.
+- **Conv-id discovery needs a prior bg task.** The tasks-dir is located by scanning
+  the JSONL for a `/tasks/<conv-id>/` path, which only exists once the session has
+  launched ≥1 background task. Before that there are no bg shells to show anyway,
+  so `[]` is correct.
 - **Undocumented internals.** `subagents/*.meta.json` shape and the session-status
   file are Claude Code internals (version-tagged). All reads degrade to empty on a
   shape change; the section simply doesn't render.
