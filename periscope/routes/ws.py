@@ -15,7 +15,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from periscope.log import _task
 from periscope.panes import note_action
-from periscope.tmux import tmux, deliver_input
+from periscope.tmux import tmux
+from periscope import tmux_input
 
 router = APIRouter()
 
@@ -165,10 +166,7 @@ async def ws_pane(
                 batch = [first]
                 while not keystroke_q.empty():
                     batch.append(keystroke_q.get_nowait())
-                text = "".join(batch)
-                await loop.run_in_executor(
-                    None, lambda t=text: deliver_input(target, t)
-                )
+                await tmux_input.send(target, "".join(batch))
 
         drain_task = _task("ws-deliver", drain_input())
 

@@ -15,7 +15,7 @@ the resume orchestration).
 import re
 import time
 
-from periscope.config import USAGE_SESSION_PREFIX
+from periscope.config import USAGE_SESSION_PREFIX, INPUT_CTL_SESSION
 from periscope.tmux import tmux, _ANSI_SGR_RE, _FG_COLOR_RE
 
 
@@ -266,9 +266,10 @@ def list_windows() -> list[dict]:
         # @periscope_id is empty for unmanaged windows — `resolve_pids` mints
         # one on first sighting and stamps it onto the window.
         s, idx, name, active = parts[:4]
-        # Hide the hidden `/usage`-scraper sessions from every caller; they're
-        # our internal scaffolding, not user-visible tmux state.
-        if s.startswith(USAGE_SESSION_PREFIX):
+        # Hide periscope's internal sessions from every caller — the
+        # `/usage`-scraper sessions and the control-mode input client's
+        # session are scaffolding, not user-visible tmux state.
+        if s.startswith(USAGE_SESSION_PREFIX) or s == INPUT_CTL_SESSION:
             continue
         cwd = parts[4] if len(parts) > 4 else ""
         pid_raw = parts[5] if len(parts) > 5 else ""

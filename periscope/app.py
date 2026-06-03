@@ -71,6 +71,8 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         log.info("periscope shutting down (pid=%d)", os.getpid())
+        from periscope import tmux_input
+        await tmux_input.shutdown()
         if mcp_task is not None:
             mcp_task.cancel()
         lgtm_task.cancel()
