@@ -318,6 +318,18 @@ export function setLastSelected(sel) {
   return patchUI({ last_selected: sel });
 }
 
+export function getPinnedPids() {
+  return [...(P().ui?.pinned_pids || [])];
+}
+export function setPinnedPids(list) {
+  return patchUI({ pinned_pids: list });
+}
+export function togglePin(pid) {
+  const cur = getPinnedPids();
+  const next = cur.includes(pid) ? cur.filter((p) => p !== pid) : [...cur, pid];
+  return setPinnedPids(next);
+}
+
 // Per-pane detail-mode toggle (split view). Reactive via prefsSignal — read
 // directly in components for live updates. Map shape: { [pid]: "terminal" | "transcript" }.
 export function getDetailMode(pid) {
