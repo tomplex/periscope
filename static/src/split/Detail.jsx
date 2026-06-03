@@ -19,7 +19,7 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useRef, useEffect, useState } from "preact/hooks";
-import { windows, activeTarget, railSelection, transcriptMode, transcriptSeen, paneTranscript, previewPath } from "../store.js";
+import { windows, activeTarget, railSelection, transcriptMode, paneTranscript, previewPath } from "../store.js";
 import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
@@ -37,9 +37,11 @@ function lookupWindow(pid) {
 
 function computeMode(w) {
   if (!w || !w.is_claude) return "terminal";
-  const explicit = transcriptMode.value[w.pid];
-  if (explicit) return explicit;
-  return transcriptSeen.value[w.pid] ? "transcript" : "terminal";
+  // Default to terminal; per-pid explicit choice (the Transcript/Terminal toggle
+  // in the header) overrides for the lifetime of the page. We deliberately do
+  // NOT auto-flip to transcript once data is seen — that surprises users who
+  // were happily watching the terminal.
+  return transcriptMode.value[w.pid] || "terminal";
 }
 
 function setTranscriptMode(pid, mode) {
