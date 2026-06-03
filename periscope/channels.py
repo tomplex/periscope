@@ -144,6 +144,7 @@ def _do_notify_tool(pane: str, arguments: dict):
     severity = arguments.get("severity", "info")
 
     entry = {
+        "id": uuid.uuid4().hex,
         "message": message,
         "kind": kind,
         "severity": severity,
