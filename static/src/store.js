@@ -74,3 +74,7 @@ export function closeFileTab(pid, path) {
 export function setActiveTab(pid, tabKey) {
   paneActiveTab.value = { ...paneActiveTab.value, [pid]: tabKey };
 }
+
+// Dismissed need_human alert ids (transient — resets on restart, the feed is
+// in-memory anyway). The Needs-you section filters these out.
+export const dismissedAlertIds = signal(new Set());

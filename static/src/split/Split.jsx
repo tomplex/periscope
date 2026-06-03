@@ -13,13 +13,15 @@ import { useEffect } from "preact/hooks";
 import { Rail } from "./Rail.jsx";
 import { Detail } from "./Detail.jsx";
 import { startPolling } from "../grid/poll.js";
+import { startAlertFeed } from "./alertFeed.js";
 
 export function Split() {
   // Own the single /api/state poll loop that feeds the `windows` signal — the
   // Rail + Detail render off it. startPolling is double-start-guarded, so when
   // the grid surface is also Preact-owned this is a no-op (Grid already started
   // it); when split is mounted alone it's the only poller writing the signals.
-  useEffect(() => startPolling(), []);
+  // startAlertFeed is similarly guarded and starts the alert poll loop.
+  useEffect(() => { startPolling(); startAlertFeed(); }, []);
 
   useEffect(() => {
     // Mirror the view onto the body attribute (CSS keys #split-view + grid

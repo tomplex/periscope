@@ -109,3 +109,15 @@ def test_link_linear_tool_clears_stale_metadata_on_relink(clean_state, mocker):
     assert entry["linked_linear"] == "FAR-2"
     assert "linked_linear_title" not in entry
     assert "linked_linear_status" not in entry
+
+
+def test_notify_tool_stamps_unique_id():
+    # Real signature: _do_notify_tool(pane: str, arguments: dict).
+    # Both alerts append under the same pane key in _CHANNEL_ALERTS (a dict
+    # pane→list), so read the list under that pane, not the dict itself.
+    _do_notify_tool("%5", {"message": "first", "kind": "done"})
+    _do_notify_tool("%5", {"message": "second", "kind": "done"})
+    entries = _CHANNEL_ALERTS["%5"]
+    ids = [a["id"] for a in entries]
+    assert all(isinstance(i, str) and i for i in ids)
+    assert len(set(ids)) == len(ids)  # unique

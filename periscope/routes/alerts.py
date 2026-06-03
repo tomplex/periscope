@@ -41,6 +41,7 @@ def alerts_recent(limit: int = Query(100, ge=1, le=500)):
         target = f"{w['session']}:{w['index']}"
         for r in alerts:
             items.append({
+                "id": r.get("id") or "",
                 "ts": int(r.get("ts") or 0),
                 "kind": r.get("kind") or "info",
                 "severity": r.get("severity") or "info",
@@ -70,6 +71,7 @@ def alerts_recent(limit: int = Query(100, ge=1, le=500)):
             if e.get("kind") != "milestone":
                 continue
             items.append({
+                "id": f"milestone|{e['at']}|{target}",
                 "ts": e["at"],
                 "kind": "milestone",
                 "severity": "info",

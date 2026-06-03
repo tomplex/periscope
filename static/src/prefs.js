@@ -67,10 +67,6 @@ export function getView() {
   return (v === "grid" || v === "stream" || v === "split") ? v : "split";
 }
 
-export function getAlertsOpen() {
-  return !!P().ui.alerts_open;
-}
-
 export function getCommands() {
   return P().commands || [];
 }
@@ -153,10 +149,6 @@ export function setCollapsed(set) {
 
 export function setView(view) {
   return patchUI({ view });
-}
-
-export function setAlertsOpen(open) {
-  return patchUI({ alerts_open: !!open });
 }
 
 // ── Window annotations ──────────────────────────────────────────────────
@@ -316,6 +308,18 @@ export function getLastSelected() {
 
 export function setLastSelected(sel) {
   return patchUI({ last_selected: sel });
+}
+
+export function getPinnedPids() {
+  return [...(P().ui?.pinned_pids || [])];
+}
+export function setPinnedPids(list) {
+  return patchUI({ pinned_pids: list });
+}
+export function togglePin(pid) {
+  const cur = getPinnedPids();
+  const next = cur.includes(pid) ? cur.filter((p) => p !== pid) : [...cur, pid];
+  return setPinnedPids(next);
 }
 
 // Per-pane detail-mode toggle (split view). Reactive via prefsSignal — read
