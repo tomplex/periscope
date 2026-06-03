@@ -11,7 +11,8 @@ import { useEscape } from "../hooks/useEscape.js";
 
 import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers, highlightActiveLineGutter, drawSelection } from "@codemirror/view";
-import { syntaxHighlighting, defaultHighlightStyle, bracketMatching } from "@codemirror/language";
+import { syntaxHighlighting, HighlightStyle, bracketMatching } from "@codemirror/language";
+import { tags as t } from "@lezer/highlight";
 
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
@@ -20,6 +21,52 @@ import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
 import { json } from "@codemirror/lang-json";
 import { rust } from "@codemirror/lang-rust";
+
+// One-Dark-style palette tuned to match periscope's terminal theme
+// (terminal/theme.js #282c34 bg, #e6edf3 fg). Picks a darker gutter so
+// line numbers read as ambient context, not text. Selection/active-line
+// kept subtle so they don't fight the syntax highlight.
+const PREVIEW_THEME = EditorView.theme({
+  "&": {
+    backgroundColor: "#282c34",
+    color: "#e6edf3",
+    height: "100%",
+  },
+  ".cm-content": { caretColor: "#7aa2f7", padding: "8px 0" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#7aa2f7" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+    backgroundColor: "rgba(88,166,255,0.22)",
+  },
+  ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.03)" },
+  ".cm-activeLineGutter": { backgroundColor: "rgba(255,255,255,0.04)", color: "#abb2bf" },
+  ".cm-gutters": {
+    backgroundColor: "#21252b",
+    color: "#5c6370",
+    border: "none",
+  },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 12px 0 8px" },
+  ".cm-foldPlaceholder": { backgroundColor: "transparent", border: "none", color: "#5c6370" },
+}, { dark: true });
+
+const PREVIEW_HIGHLIGHT = HighlightStyle.define([
+  { tag: t.keyword,                       color: "#c678dd" },
+  { tag: [t.atom, t.bool, t.null, t.special(t.brace)], color: "#d19a66" },
+  { tag: [t.number, t.literal],           color: "#d19a66" },
+  { tag: t.definition(t.variableName),    color: "#e6edf3" },
+  { tag: t.variableName,                  color: "#e06c75" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName], color: "#61afef" },
+  { tag: t.propertyName,                  color: "#e6edf3" },
+  { tag: [t.string, t.special(t.string)], color: "#98c379" },
+  { tag: [t.regexp, t.escape, t.special(t.brace)], color: "#56b6c2" },
+  { tag: t.comment,                       color: "#7f848e", fontStyle: "italic" },
+  { tag: [t.typeName, t.className],       color: "#e5c07b" },
+  { tag: t.operator,                      color: "#56b6c2" },
+  { tag: [t.tagName, t.heading],          color: "#e06c75" },
+  { tag: t.attributeName,                 color: "#d19a66" },
+  { tag: t.link,                          color: "#61afef", textDecoration: "underline" },
+  { tag: t.emphasis,                      fontStyle: "italic" },
+  { tag: t.strong,                        fontWeight: "bold" },
+]);
 
 function languageExt(name) {
   switch (name) {
@@ -86,7 +133,8 @@ export function PreviewOverlayInner({ entry }) {
           highlightActiveLineGutter(),
           drawSelection(),
           bracketMatching(),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          PREVIEW_THEME,
+          syntaxHighlighting(PREVIEW_HIGHLIGHT, { fallback: true }),
           EditorState.readOnly.of(true),
           EditorView.editable.of(false),
           ...(langExt ? [langExt] : []),

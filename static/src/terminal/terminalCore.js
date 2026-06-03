@@ -135,12 +135,6 @@ function registerRoutingLinkProvider(t) {
               end:   { x: end,   y: rowNumber },
             },
             activate(event, linkText) {
-              // [periscope-debug] temporary log — remove once preview flow
-              // is confirmed working end-to-end.
-              console.log("[periscope] link activate", {
-                kind, linkText, metaKey: event.metaKey, ctrlKey: event.ctrlKey,
-                fileCb: !!fileLinkCallback, mdCb: !!linkClickCallback, urlCb: !!urlLinkCallback,
-              });
               // Cmd/Ctrl is required for ALL routes — reading scrollback
               // can't accidentally trigger a file open or URL.
               if (!event.metaKey && !event.ctrlKey) return;

@@ -165,10 +165,12 @@ function ToolCall({ t }) {
             <span
               class="tc-arg tc-arg-clickable"
               title="Open preview"
+              title="Cmd+click to preview"
               onClick={(e) => {
-                // [periscope-debug] temporary log — remove once preview
-                // flow is confirmed working end-to-end.
-                console.log("[periscope] transcript chip click", { tool: t.name, arg });
+                // Match the terminal Cmd+click contract — plain click on
+                // the chip toggles the parent ToolCall (the user often
+                // wants to expand the row), Cmd/Ctrl+click opens preview.
+                if (!e.metaKey && !e.ctrlKey) return;
                 e.stopPropagation();
                 previewPath.value = { path: arg, line: null };
               }}
