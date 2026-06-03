@@ -1,8 +1,9 @@
-// The left-rail attention zone: NEEDS YOU + PINNED + ACTIVITY, stacked above
-// the project tree, all rendered inside <Rail>'s <aside>. Reads the windows +
-// alertItems signals through the pure transforms in attention.js. Out-of-tree
-// rows use `attn-row` classes (NOT child-row) so they never enter the tree's
-// connector-adjacency CSS.
+// The left-rail attention zone. Two mount points (see <Rail>):
+//   <AttentionTop>    — NEEDS YOU + PINNED, rendered ABOVE the project tree.
+//   <ActivitySection> — the low-signal ACTIVITY log, rendered BELOW the tree.
+// Reads the windows + alertItems signals through the pure transforms in
+// attention.js. Out-of-tree rows use `attn-row` classes (NOT child-row) so they
+// never enter the tree's connector-adjacency CSS.
 import { windows, dismissedAlertIds, railSelection } from "../store.js";
 import { alertItems, revealPane } from "./alertFeed.js";
 import * as prefs from "../prefs.js";
@@ -28,33 +29,28 @@ function selectPane(w) {
   prefs.setLastSelected({ kind: "pane", pid: w.pid });
 }
 
-export function AttentionSections() {
+// Toggle takes the section's already-computed current state so the inverted
+// Activity default lives at exactly one place (the read site), not here.
+function toggle(key, currentlyCollapsed) {
+  prefs.setRailCollapsedKey(key, !currentlyCollapsed);
+}
+
+// NEEDS YOU + PINNED — top of the rail, above the project tree.
+export function AttentionTop() {
   // Subscribe to prefs explicitly (pins + section-collapse live there), the
-  // same way Rail does — so reactivity is self-contained, not inherited from
-  // the parent's subscription.
+  // same way Rail does — so reactivity is self-contained.
   prefs.prefsSignal.value;
   const live = windows.value || [];
   const items = alertItems.value || [];
   const dismissed = dismissedAlertIds.value;
   const collapsed = prefs.getRailCollapsed();
 
-  // NEEDS YOU
   const needsRows = buildNeedsYou(live, items, dismissed);
   const needsCollapsed = collapsed["sec:needs"] === true;
 
-  // PINNED
   const pinned = resolvePinned(prefs.getPinnedPids(), live);
   const pinnedCollapsed = collapsed["sec:pinned"] === true;
 
-  // ACTIVITY (default collapsed: absent → collapsed)
-  const activity = buildActivity(items);
-  const activityCollapsed = collapsed["sec:activity"] !== false;
-
-  // Toggle takes the section's already-computed current state so the inverted
-  // Activity default lives at exactly one place (the const above), not here.
-  function toggle(key, currentlyCollapsed) {
-    prefs.setRailCollapsedKey(key, !currentlyCollapsed);
-  }
   function dismiss(id) {
     const next = new Set(dismissed);
     next.add(id);
@@ -110,7 +106,21 @@ export function AttentionSections() {
           ))}
         </>
       )}
+    </>
+  );
+}
 
+// ACTIVITY — bottom of the rail, below the project tree. Default collapsed.
+export function ActivitySection() {
+  prefs.prefsSignal.value;
+  const items = alertItems.value || [];
+  const collapsed = prefs.getRailCollapsed();
+
+  const activity = buildActivity(items);
+  const activityCollapsed = collapsed["sec:activity"] !== false;  // absent → collapsed
+
+  return (
+    <>
       <SectionHeader
         label="ACTIVITY" count={activity.length || null}
         collapsed={activityCollapsed}

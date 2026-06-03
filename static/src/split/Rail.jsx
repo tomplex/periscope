@@ -33,7 +33,7 @@ import {
 } from "./railTree.js";
 import { PaneRow, ReviewRow, NewTabRow, WorktreeRow, RepoRow, WorktreeMeta } from "./RailRows.jsx";
 import { SectionHeader } from "./SectionHeader.jsx";
-import { AttentionSections } from "./AttentionSections.jsx";
+import { AttentionTop, ActivitySection } from "./AttentionSections.jsx";
 
 // Bridge to the launcher modal. The "+ New tab" row opens it via
 // window.__periscopeOpenLauncher — installed by vanilla app.js while the
@@ -308,7 +308,7 @@ export function Rail() {
   // --- Tree ----------------------------------------------------------------
   return (
     <aside id="rail" aria-label="projects rail">
-      <AttentionSections />
+      <AttentionTop />
       <SectionHeader
         label="PROJECTS"
         count={null}
@@ -411,6 +411,7 @@ export function Rail() {
           </RailFragment>
         );
       })}
+      <ActivitySection />
     </aside>
   );
 }

@@ -3005,7 +3005,7 @@ body.disconnected .grid {
 #rail .rail-row { padding-top: 3px; padding-bottom: 3px; }
 #rail .repo-row { margin-top: 6px; }
 #rail .wt-row { color: #aeb4bf; }
-#rail .child-row { padding-left: 34px; }
+#rail .child-row { padding-left: calc(10px + 2 * var(--rail-indent) + 6px); }
 
 #rail .child-row::before,
 #rail .child-row::after { opacity: 0.6; }
