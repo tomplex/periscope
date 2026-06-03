@@ -40,6 +40,12 @@ import { css } from "@codemirror/lang-css";
 import { json } from "@codemirror/lang-json";
 import { rust } from "@codemirror/lang-rust";
 
+import { renderMarkdown } from "../split/markdown.jsx";
+
+// Languages with a "rendered" view (toggleable to source). Everything
+// else collapses to source-only — no toggle button.
+const RENDERABLE = new Set(["html", "markdown"]);
+
 // One-Dark-style palette tuned to match periscope's terminal theme
 // (terminal/theme.js #282c34 bg, #e6edf3 fg). Picks a darker gutter so
 // line numbers read as ambient context, not text. Selection/active-line
@@ -103,11 +109,15 @@ export function PreviewOverlayInner({ entry }) {
   const hostRef = useRef(null);
   const closeBtnRef = useRef(null);
   const [state, setState] = useState({ loading: true, error: null, content: null, lang: null, resolved: null });
-  // HTML defaults to the rendered iframe; everything else goes to source.
-  // A `:NN` line jump implies the user wants source even on HTML — there's
-  // no line concept in the rendered view. The toggle flips between the
-  // two for HTML; for non-HTML it's a no-op (button hidden).
+  // Renderable langs (HTML, Markdown) default to "rendered"; everything
+  // else goes to source. A `:NN` line jump always wins → source, since
+  // line numbers don't translate to the rendered view.
   const [view, setView] = useState(entry.line ? "source" : "rendered");
+
+  // Target the file's pane: caller-provided wins (so the modal can use
+  // modalTarget even though activeTarget points at the split selection).
+  // Falls back to activeTarget for older callers.
+  const target = entry.target ?? activeTarget.value;
 
   function close() { previewPath.value = null; }
   useEscape(close, true);
@@ -116,12 +126,11 @@ export function PreviewOverlayInner({ entry }) {
   useEffect(() => {
     let alive = true;
     async function load() {
-      const t = activeTarget.value;
-      if (!t) {
+      if (!target) {
         setState({ loading: false, error: "no active pane", content: null, lang: null, resolved: null });
         return;
       }
-      const [session, indexStr] = t.split(":");
+      const [session, indexStr] = target.split(":");
       const params = new URLSearchParams({
         session, index: indexStr, path: entry.path,
       });
@@ -143,8 +152,8 @@ export function PreviewOverlayInner({ entry }) {
     return () => { alive = false; };
   }, [entry.path]);
 
-  // Effective view: non-HTML always falls through to source.
-  const effectiveView = state.lang === "html" ? view : "source";
+  // Effective view: non-renderable langs always collapse to source.
+  const effectiveView = RENDERABLE.has(state.lang) ? view : "source";
 
   // Mount CodeMirror once content lands AND we're in source view.
   useEffect(() => {
@@ -189,9 +198,8 @@ export function PreviewOverlayInner({ entry }) {
   }, []);
 
   async function reveal() {
-    const t = activeTarget.value;
-    if (!t) return;
-    const [session, indexStr] = t.split(":");
+    if (!target) return;
+    const [session, indexStr] = target.split(":");
     const params = new URLSearchParams({
       session, index: indexStr, path: entry.path, action: "reveal",
     });
@@ -199,18 +207,18 @@ export function PreviewOverlayInner({ entry }) {
     catch (_) {}
   }
 
-  const iframeSrc = effectiveView === "rendered" && state.resolved && activeTarget.value
-    ? renderUrl(activeTarget.value, state.resolved)
+  const iframeSrc = effectiveView === "rendered" && state.lang === "html" && state.resolved && target
+    ? renderUrl(target, state.resolved)
     : null;
 
   return (
     <div class="preview-overlay" role="dialog" aria-label="File preview">
       <header class="preview-header">
         <span class="preview-path">{state.resolved || entry.path}{entry.line ? `:${entry.line}` : ""}</span>
-        {state.lang === "html" && (
+        {RENDERABLE.has(state.lang) && (
           <button
             class="preview-btn preview-btn-text"
-            title={view === "rendered" ? "Show HTML source" : "Show rendered page"}
+            title={view === "rendered" ? "Show source" : "Show rendered"}
             onClick={() => setView(view === "rendered" ? "source" : "rendered")}
           >
             {view === "rendered" ? "Source" : "Rendered"}
@@ -230,7 +238,7 @@ export function PreviewOverlayInner({ entry }) {
             )}
           </div>
         )}
-        {!state.loading && !state.error && effectiveView === "rendered" && iframeSrc && (
+        {!state.loading && !state.error && effectiveView === "rendered" && state.lang === "html" && iframeSrc && (
           // allow-same-origin so the page's own scripts can fetch sibling
           // JSON/data files (common for self-contained dashboards). Periscope
           // is local-only, so granting the rendered page the same trust as
@@ -241,6 +249,14 @@ export function PreviewOverlayInner({ entry }) {
             sandbox="allow-scripts allow-same-origin allow-popups"
             title="Rendered HTML preview"
           />
+        )}
+        {!state.loading && !state.error && effectiveView === "rendered" && state.lang === "markdown" && (
+          // turn-prose re-uses the transcript's markdown styles (.md-h /
+          // .md-p / .md-code / .md-ul ...) so we don't duplicate a parallel
+          // stylesheet. preview-md-host adds the scroll/padding chrome.
+          <div class="preview-md-host turn-prose">
+            {renderMarkdown(state.content || "")}
+          </div>
         )}
         {!state.loading && !state.error && effectiveView === "source" && (
           <div ref={hostRef} class="preview-cm-host" />

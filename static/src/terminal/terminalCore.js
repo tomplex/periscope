@@ -18,6 +18,7 @@
 
 import { targetQuery } from "../util.js";
 import { terminalTheme } from "./theme.js";
+import { openExternal } from "../tauri.js";
 
 let term = null;
 let termWs = null;
@@ -43,7 +44,6 @@ let lastSentRows = 0;            //   — used to suppress redundant resizes dur
 let pinnedCols = 0;
 const WIDTH_PIN_TOLERANCE = 4;   // cols; absorbs scrollbar/rounding wobble, not a real resize
 let containerEl = null;          // set by setTerminalContainer() before startLiveTerminal()
-let linkClickCallback = null;    // set by setTerminalLinkCallback()
 
 // Whether the viewport is at the live bottom. The detail pane polls this to
 // show its scroll-to-bottom button only when scrolled up. True when there's no
@@ -60,27 +60,20 @@ export function setTerminalContainer(el) {
   containerEl = el;
 }
 
-// Register a callback invoked when an .md link in the terminal is clicked.
-// Callback signature: (rawPath: string) => void
-// rawPath includes any trailing ":42" line suffix; callees parse it themselves
-// (see addLgtmDocFromTerminal in the modal for the original handler).
-export function setTerminalLinkCallback(cb) {
-  linkClickCallback = cb;
-}
-
 let fileLinkCallback = null;
 let urlLinkCallback = null;
 
-// Register a callback for absolute/relative file path clicks (no .md
-// special case). Callback signature: (rawPath: string) => void.
-// Parents (Detail.jsx) register this to open the preview overlay.
+// Register a callback for absolute/relative file path clicks. Callback
+// signature: (rawPath: string) => void. .md paths take this route too
+// (the preview overlay renders markdown). Parents (Detail.jsx, Modal.jsx)
+// register this to open the preview overlay.
 export function setTerminalFileCallback(cb) {
   fileLinkCallback = cb;
 }
 
 // Register a callback for URL clicks. Callback signature: (url: string)
-// => void. Default unwired — terminalCore handles URLs via window.open
-// directly when no callback is registered (see registerRoutingLinkProvider).
+// => void. Default unwired — terminalCore hands URLs to openExternal
+// (browser: new tab; Tauri: OS browser via plugin-opener).
 export function setTerminalUrlCallback(cb) {
   urlLinkCallback = cb;
 }
@@ -112,19 +105,14 @@ const ABS_PATH_RE = /(?<![:\w./-])\/[\w./-]+\b(?::\d+)?/g;
 //    `/`-required guard keeps stray "version 1.2.3.json" prose unclicked.
 const REL_PATH_RE = /(?<![:\w./-])(?:\.{1,2}\/[\w./-]+|[\w.-]+(?:\/[\w.-]+)+)\.(?:md|py|ts|tsx|js|jsx|json|html|css|rs|go|toml|yaml|yml|sh|sql|txt|rb)\b(?::\d+)?/g;
 
-// .md special-case for LGTM routing (legacy behavior preserved). Same
-// shape as the prior MD_PATH_RE but renamed for clarity.
-const MD_PATH_RE = /(?<![\w./-])[\w./~-]*[\w-]+\.md(?::\d+)?(?!\w)/g;
-
 // One routing link provider. xterm supports N providers but a single
 // routing provider keeps the regex passes minimal (one per row) and routing
 // decisions in one place. Precedence:
-//   1. URL — always handled by urlLinkCallback if registered, else
-//      window.open with noopener.
-//   2. .md AND a markdown handler is registered (LGTM session for this
-//      cwd) → markdown handler.
-//   3. File path — handled by fileLinkCallback if registered (Phase 3 wires
-//      this to the preview overlay). Until then it's a no-op.
+//   1. URL — handed to urlLinkCallback if registered, else openExternal
+//      (browser: new tab; Tauri: OS browser via plugin-opener).
+//   2. File path (any ext in REL_PATH_RE, plus any absolute path) —
+//      handed to fileLinkCallback. The preview overlay routes by
+//      extension (md → rendered markdown, html → iframe, else source).
 function registerRoutingLinkProvider(t) {
   t.registerLinkProvider({
     provideLinks(rowNumber, callback) {
@@ -151,11 +139,7 @@ function registerRoutingLinkProvider(t) {
               if (!event.metaKey && !event.ctrlKey) return;
               if (kind === "url") {
                 if (urlLinkCallback) urlLinkCallback(linkText);
-                else window.open(linkText, "_blank", "noopener");
-                return;
-              }
-              if (kind === "md" && linkClickCallback) {
-                linkClickCallback(linkText);
+                else openExternal(linkText);
                 return;
               }
               if (kind === "file" && fileLinkCallback) {
@@ -168,9 +152,9 @@ function registerRoutingLinkProvider(t) {
         }
       }
 
-      // Order matters: URLs first so http://foo.md isn't claimed as .md.
+      // Order matters: URLs first so http://foo.md isn't claimed as a
+      // file. ABS before REL so /abs/foo.html doesn't double-match.
       pushMatch(URL_RE, "url");
-      pushMatch(MD_PATH_RE, "md");
       pushMatch(ABS_PATH_RE, "file");
       pushMatch(REL_PATH_RE, "file");
 
@@ -552,13 +536,11 @@ let activeContainer = null;
  * @param {HTMLElement} container
  * @param {string} target — tmux target spec (e.g. "session:0.0")
  * @param {Object} opts
- * @param {(rawPath: string) => void} [opts.onMdLink]
  * @param {(event: ClipboardEvent) => void} [opts.onPaste] — capture-phase paste hook
  */
 export function mountTerminal(container, target, opts = {}) {
   unmountTerminal();  // tear down any previous mount
   setTerminalContainer(container);
-  setTerminalLinkCallback(opts.onMdLink || null);
   if (opts.onPaste) {
     activePasteHandler = opts.onPaste;
     container.addEventListener("paste", activePasteHandler, true);
@@ -589,5 +571,4 @@ export function unmountTerminal() {
   activePasteHandler = null;
   activeContainer = null;
   setTerminalContainer(null);
-  setTerminalLinkCallback(null);
 }

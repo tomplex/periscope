@@ -3549,6 +3549,16 @@ body[data-alerts="open"][data-view="stream"] main {
   border: none;
   background: white;
 }
+.preview-md-host {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 16px 24px;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--fg-1);
+}
 /* Text-labeled toggle (Source/Rendered) — same hover affordance as the
    icon buttons but sized for a short word. */
 .preview-btn-text {

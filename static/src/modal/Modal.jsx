@@ -25,10 +25,11 @@
 import { signal } from "@preact/signals";
 import { useRef, useEffect, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
-import { modalTarget, modalRenaming, modalAutoRenaming } from "../store.js";
+import { modalTarget, modalRenaming, modalAutoRenaming, previewPath } from "../store.js";
 import { targetQuery, apiCall, prUrl, rewriteLgtmHost } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
-import { writeTerminalLine } from "../terminal/terminalCore.js";
+import { writeTerminalLine, setTerminalFileCallback } from "../terminal/terminalCore.js";
+import { PreviewOverlay } from "../preview/PreviewOverlay.jsx";
 import { poll } from "../grid/poll.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
 
@@ -517,25 +518,21 @@ function ModalBody({ target }) {
     }
   }
 
-  // Cmd+click on a .md path in the terminal → add as an LGTM doc; queue the
-  // auto-switch to the new tab.
-  async function onMdLink(rawPath) {
-    if (!rawPath) return;
-    const cwd = lastData.current?.cwd_raw;
-    if (!cwd) {
-      console.warn("add doc: no cwd for current pane");
-      return;
-    }
-    const path = rawPath.replace(/:\d+$/, "");
-    const payload = await apiCall("add doc", "/api/lgtm/add-doc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, path }),
+  // Cmd+click on a file path in the modal terminal → open in the preview
+  // overlay (rendered for HTML/Markdown, source for everything else).
+  // Threading `target` through previewPath lets the overlay fetch via the
+  // modal's pane even though activeTarget points at the split-view
+  // selection (they're intentionally distinct — store.js).
+  useEffect(() => {
+    setTerminalFileCallback((rawPath) => {
+      let path = rawPath;
+      let line = null;
+      const m = path.match(/^(.*?):(\d+)$/);
+      if (m) { path = m[1]; line = m[2]; }
+      previewPath.value = { path, line, target };
     });
-    if (!payload) return;
-    pendingTabIdAfterAdd.current = payload.tab_id;
-    refresh();
-  }
+    return () => setTerminalFileCallback(null);
+  }, [target]);
 
   async function onPaste(e) {
     if (!modalTarget.value) return;
@@ -629,9 +626,9 @@ function ModalBody({ target }) {
               id="modal-xterm"
               class="modal-xterm"
               target={target}
-              onMdLink={onMdLink}
               onPaste={onPaste}
             />
+            <PreviewOverlay />
             {data && (
               <Sidebar
                 data={data}

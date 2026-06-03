@@ -75,6 +75,29 @@ export async function onNotificationClick(cb) {
   }
 }
 
+// Open a URL in the user's OS browser, regardless of host.
+//
+// We can't just call `window.open(url, "_blank")` from a callback like
+// xterm's link-activate: WKWebView silently swallows it in the Tauri
+// shell, and some browsers gate it with popup-blocker heuristics when
+// the call doesn't look like it came from a direct click. Instead, we
+// synthesize an `<a target="_blank">` and dispatch a click on it. In a
+// browser the click opens a new tab natively; in the Tauri shell the
+// capture-phase handler installed by `initExternalLinks` (below) sees
+// the click first and routes it through plugin:opener.
+export function openExternal(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  // Append+remove so initExternalLinks' document-level capture listener
+  // sees a real bubbling click. A detached element's click() doesn't
+  // bubble through the document, so the Tauri intercept would miss it.
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 // In the Tauri shell, WKWebView silently swallows target="_blank" clicks
 // and a plain cross-origin <a href> would replace the dashboard itself.
 // Intercept clicks on external http(s) links and hand them to the OS

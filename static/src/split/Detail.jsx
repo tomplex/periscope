@@ -245,7 +245,7 @@ function PaneDetail({ w }) {
       let line = null;
       const m = path.match(/^(.*?):(\d+)$/);
       if (m) { path = m[1]; line = m[2]; }
-      previewPath.value = { path, line };
+      previewPath.value = { path, line, target: w.target };
     });
     return () => setTerminalFileCallback(null);
   }, [w.target]);
