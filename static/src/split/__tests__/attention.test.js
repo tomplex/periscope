@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   buildNeedsYou, isAcked, needsYouCount, resolvePinned, buildActivity,
+  isSoftQuestion, prunedNeedsDismissals,
 } from "../attention.js";
+import { shortestUniqueSuffix } from "../../util.js";
 
 const win = (over = {}) => ({
   pid: "p1", target: "tc/x:0", state: "idle",
@@ -78,5 +80,58 @@ describe("buildActivity", () => {
 describe("needsYouCount", () => {
   it("counts rows", () => {
     expect(needsYouCount([{ kind: "live" }, { kind: "event" }])).toBe(2);
+  });
+});
+
+describe("isSoftQuestion", () => {
+  it("true for asked_question with no dialog", () => {
+    expect(isSoftQuestion(win({ asked_question: true, waiting_for: null }))).toBe(true);
+  });
+  it("false when a real dialog is open", () => {
+    expect(isSoftQuestion(win({ asked_question: true, waiting_for: "permission prompt" }))).toBe(false);
+  });
+  it("false when not a question at all", () => {
+    expect(isSoftQuestion(win({ asked_question: false }))).toBe(false);
+  });
+});
+
+describe("buildNeedsYou dismissedNeedsPids", () => {
+  it("hides a dismissed live pid", () => {
+    const live = win({ pid: "p1", state: "needs-input" });
+    expect(buildNeedsYou([live], [], new Set())).toHaveLength(1);
+    expect(buildNeedsYou([live], [], new Set(), new Set(["p1"]))).toHaveLength(0);
+  });
+});
+
+describe("prunedNeedsDismissals", () => {
+  it("keeps pids still in needs-input, drops the rest", () => {
+    const live = [win({ pid: "p1", state: "needs-input" }), win({ pid: "p2", state: "idle" })];
+    const next = prunedNeedsDismissals(new Set(["p1", "p2"]), live);
+    expect([...next]).toEqual(["p1"]);
+  });
+});
+
+describe("shortestUniqueSuffix", () => {
+  const all = [
+    "tc/model-train/feature-store-validity-window",
+    "tc/model-train/anthology-shared-lookup-cache",
+    "tc/data-catalog-anthology-update",
+  ];
+  it("collapses to the leaf when unique", () => {
+    expect(shortestUniqueSuffix("tc/model-train/feature-store-validity-window", all))
+      .toBe("feature-store-validity-window");
+  });
+  it("grows a segment when leaves collide", () => {
+    const colliding = ["tc/model-train/feature-store", "tc/data-catalog/feature-store"];
+    expect(shortestUniqueSuffix("tc/model-train/feature-store", colliding))
+      .toBe("model-train/feature-store");
+  });
+  it("disambiguates a leaf that is a tail of a longer path", () => {
+    const names = ["a/b", "x/a/b"];
+    expect(shortestUniqueSuffix("a/b", names)).toBe("a/b");   // 2 segs, can't grow further
+    expect(shortestUniqueSuffix("x/a/b", names)).toBe("x/a/b"); // grows past the collision
+  });
+  it("returns single-segment names unchanged", () => {
+    expect(shortestUniqueSuffix("periscope", ["periscope", "lgtm"])).toBe("periscope");
   });
 });

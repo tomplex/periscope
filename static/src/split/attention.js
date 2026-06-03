@@ -2,12 +2,34 @@
 // Mirrors railTree.js's posture (consumed by render, testable in isolation).
 // This is the one unit-tested frontend module; keep it pure.
 
+// A live needs-input row is "soft" when it's only there because Claude's reply
+// ended in a question (asked_question) with no actual blocking dialog open
+// (waiting_for unset). These are the rows the user can click to dismiss; real
+// dialogs (waiting_for set: permission / AskUserQuestion) stay sticky.
+export function isSoftQuestion(w) {
+  return !!w?.asked_question && !w?.waiting_for;
+}
+
+// Drop dismissed-pids that are no longer in needs-input, so a pane that asks
+// again later re-appears (dismissal is scoped to one needs-input episode).
+export function prunedNeedsDismissals(dismissedNeedsPids, windows) {
+  const needy = new Set(
+    (windows || []).filter((w) => w.state === "needs-input").map((w) => w.pid)
+  );
+  const next = new Set();
+  for (const pid of dismissedNeedsPids) if (needy.has(pid)) next.add(pid);
+  return next;
+}
+
 // Union of live needs-input panes + unacked need_human events, ordered
-// live-first then events newest-first.
-export function buildNeedsYou(windows, alertItems, dismissedIds) {
+// live-first then events newest-first. `dismissedNeedsPids` hides live rows the
+// user has clicked away (only soft-question rows are ever added — see the
+// component); they reappear once the pane leaves needs-input (prune above).
+export function buildNeedsYou(windows, alertItems, dismissedIds, dismissedNeedsPids = new Set()) {
   const byTarget = indexByTarget(windows);
   const live = (windows || [])
     .filter((w) => w.state === "needs-input")
+    .filter((w) => !dismissedNeedsPids.has(w.pid))
     .map((w) => ({ kind: "live", pid: w.pid, w }));
   // No reason field here: the human label is rendered in the component via
   // waitLabel(w.waiting_for). window_view.py forces asked_question=False for

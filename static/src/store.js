@@ -78,3 +78,8 @@ export function setActiveTab(pid, tabKey) {
 // Dismissed need_human alert ids (transient — resets on restart, the feed is
 // in-memory anyway). The Needs-you section filters these out.
 export const dismissedAlertIds = signal(new Set());
+
+// Soft-question live rows (Claude's reply ended in "?") the user clicked away.
+// Keyed by pid; pruned when the pane leaves needs-input so a fresh question
+// re-surfaces. Transient. The Needs-you section filters these out.
+export const dismissedNeedsPids = signal(new Set());

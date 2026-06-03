@@ -49,6 +49,24 @@ export function waitLabel(reason) {
   return map[reason.toLowerCase()] || reason.toLowerCase();
 }
 
+// Shortest trailing-path suffix of `name` that is unique among `allNames`.
+// Branch/session names are slash-paths (tc/model-train/feature-store); we show
+// the fewest trailing segments needed to disambiguate from the other names
+// currently on screen. Falls back to the full name when even that collides
+// (e.g. an exact duplicate). `allNames` should include `name` itself.
+export function shortestUniqueSuffix(name, allNames) {
+  if (!name) return name;
+  const segs = name.split("/");
+  for (let k = 1; k < segs.length; k++) {
+    const suffix = segs.slice(-k).join("/");
+    const collides = allNames.some(
+      (o) => o !== name && o && o.split("/").slice(-k).join("/") === suffix
+    );
+    if (!collides) return suffix;
+  }
+  return name;
+}
+
 // GitHub PR URL for a pane's repo. `slug` ("owner/repo") is derived
 // server-side from `git remote get-url origin`; null when the repo's origin
 // isn't a GitHub remote — callers then render the PR badge unlinked.

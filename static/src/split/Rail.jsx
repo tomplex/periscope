@@ -26,7 +26,7 @@ import { useRef, useState } from "preact/hooks";
 import { windows, currentFilter, railSelection, dragState } from "../store.js";
 import * as prefs from "../prefs.js";
 import { passesFilter } from "../filter.js";
-import { apiCall, targetQuery } from "../util.js";
+import { apiCall, targetQuery, shortestUniqueSuffix } from "../util.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
 import {
   mergeLiveAndPrefs, indexWindowsByWorktree, repoLabelFor, maxSeverity, OTHER_REPO_KEY,
@@ -187,6 +187,11 @@ export function Rail() {
   const { repoOrder, worktreesByRepo, panesByWorktree } = mergeLiveAndPrefs(
     live, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
   );
+  // Universe for shortest-unique-suffix worktree labels: every non-Other
+  // worktree's displayed name, so a label only grows a segment on real collision.
+  const wtLabelUniverse = repoOrder
+    .filter((r) => r !== OTHER_REPO_KEY)
+    .flatMap((r) => (worktreesByRepo[r] || []).map((wt) => byWorktree[wt]?.[0]?.branch || wt));
 
   // --- Selection -----------------------------------------------------------
   function selectKey(key) {
@@ -383,7 +388,9 @@ export function Rail() {
               childRows.push(<NewTabRow key={`newtab:${wtKey}`} worktreeKey={wtKey} onOpen={openLauncher} />);
 
               const rolledUp = maxSeverity(childStates);
-              const label = isOther ? wtKey : (wtWindows[0]?.branch || wtKey);
+              const label = isOther
+                ? wtKey
+                : shortestUniqueSuffix(wtWindows[0]?.branch || wtKey, wtLabelUniverse);
               const wtDim = wtWindows.some((w) => passesFilter(w, filter));
               const childCount = childOrder.filter((c) => c === "review" || windowsByPid[c]).length;
 
