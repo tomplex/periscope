@@ -92,7 +92,14 @@ const ABS_PATH_RE = /(?<![:\w./-])\/[\w./-]+\b(?::\d+)?/g;
 // toward false negatives — Cmd+click on garbage in scrollback is worse
 // than a missed click. Expand cautiously when concrete misses surface.
 // Same ':' exclusion as ABS_PATH_RE for the same URL-overlap reason.
-const REL_PATH_RE = /(?<![:\w./-])\.{0,2}\/[\w./-]+\.(?:md|py|ts|tsx|js|jsx|json|html|css|rs|go|toml|yaml|yml|sh|sql|txt|rb)\b(?::\d+)?/g;
+//
+// Two forms:
+//  - `./foo/bar.py` or `../foo/bar.py` (explicit `./` or `../` prefix)
+//  - `src/foo/bar.py` (bare path REQUIRING at least one '/' in the body,
+//    so `foo.py` alone is NOT clickable but `path/to/foo.py` is). Claude
+//    commonly emits bare relative paths in `Read("src/foo.py")` etc; the
+//    `/`-required guard keeps stray "version 1.2.3.json" prose unclicked.
+const REL_PATH_RE = /(?<![:\w./-])(?:\.{1,2}\/[\w./-]+|[\w.-]+(?:\/[\w.-]+)+)\.(?:md|py|ts|tsx|js|jsx|json|html|css|rs|go|toml|yaml|yml|sh|sql|txt|rb)\b(?::\d+)?/g;
 
 // .md special-case for LGTM routing (legacy behavior preserved). Same
 // shape as the prior MD_PATH_RE but renamed for clarity.
