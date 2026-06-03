@@ -3306,17 +3306,24 @@ body[data-alerts="open"][data-view="stream"] main {
   background: color-mix(in oklch, var(--s-needs) 14%, transparent);
 }
 .transcript-status-waiting .transcript-status-dot { background: var(--s-needs); }
-/* working — calmer. */
-.transcript-status-working {
-  border-color: color-mix(in oklch, var(--s-working) 40%, transparent);
-  background: color-mix(in oklch, var(--s-working) 11%, transparent);
-  color: var(--fg-1); font-weight: 500;
-}
-.transcript-status-working .transcript-status-dot { background: var(--s-working); }
 @keyframes transcript-status-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.82); }
 }
+
+/* working — no box, just a pulsing dot + the verb Claude chose (matches its
+   own TUI spinner line). */
+.transcript-working {
+  display: flex; align-items: center; gap: 8px;
+  margin: 5px 0 2px; padding: 2px 0;
+  color: var(--fg-3); font-size: 12.5px;
+}
+.transcript-working-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--s-working);
+  animation: transcript-status-pulse 1.4s ease-in-out infinite;
+}
+.transcript-working-verb { min-width: 0; }
 
 /* Live turn — subtle tint on the newest non-system message. */
 .turn-current {

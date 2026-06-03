@@ -360,10 +360,10 @@ export function TranscriptView({ target, pid, selected, state, waitingFor, spinn
           </div>
         )}
         {state === "working" && (
-          <div class="transcript-status transcript-status-working">
-            <span class="transcript-status-dot" />
-            <span class="transcript-status-text">
-              {spinner ? `Working — ${spinner.toLowerCase()}…` : "Working…"}
+          <div class="transcript-working">
+            <span class="transcript-working-dot" />
+            <span class="transcript-working-verb">
+              {spinner ? `${spinner.toLowerCase()}…` : "working…"}
             </span>
           </div>
         )}
