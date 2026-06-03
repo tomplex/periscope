@@ -67,10 +67,6 @@ export function getView() {
   return (v === "grid" || v === "stream" || v === "split") ? v : "split";
 }
 
-export function getAlertsOpen() {
-  return !!P().ui.alerts_open;
-}
-
 export function getCommands() {
   return P().commands || [];
 }
@@ -153,10 +149,6 @@ export function setCollapsed(set) {
 
 export function setView(view) {
   return patchUI({ view });
-}
-
-export function setAlertsOpen(open) {
-  return patchUI({ alerts_open: !!open });
 }
 
 // ── Window annotations ──────────────────────────────────────────────────

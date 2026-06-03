@@ -62,6 +62,7 @@ async function poll() {
     alertItems.value = list;
   } catch (e) {
     if (!pollFailed) { pollFailed = true; showToast(`notifications feed unavailable: ${e.message}`, "bad"); }
+    // Keep the stale list visible — better than blanking the panel.
   }
 }
 
