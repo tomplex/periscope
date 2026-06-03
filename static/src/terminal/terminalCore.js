@@ -33,6 +33,15 @@ let termResizeObserver = null;
 let fitDebounce = null;
 let lastSentCols = 0;            // dims of the most recent resize message sent to the server
 let lastSentRows = 0;            //   — used to suppress redundant resizes during initial mount
+// Width is pinned for the session. Navigating panes re-runs startLiveTerminal
+// with a FRESH xterm + a fresh fit(); a mount-time measurement that differs by
+// a column or two (scrollbar appearing, layout rounding) would otherwise resize
+// tmux and reflow scrollback — surfacing as the same block duplicated at two
+// wrap widths, even though the user never resized. We snap such wobble back to
+// the pinned width and only accept a genuinely different width (real window /
+// rail resize, or a different container like the modal) as a new pin.
+let pinnedCols = 0;
+const WIDTH_PIN_TOLERANCE = 4;   // cols; absorbs scrollbar/rounding wobble, not a real resize
 let containerEl = null;          // set by setTerminalContainer() before startLiveTerminal()
 let linkClickCallback = null;    // set by setTerminalLinkCallback()
 
@@ -255,7 +264,16 @@ export function startLiveTerminal(target) {
   let initialRows = 0;
   try {
     fitAddon.fit();
-    initialCols = term.cols;
+    // Reuse the session's pinned width unless this is a genuinely different
+    // size (first mount, or a real resize beyond the wobble tolerance). This
+    // is what stops navigation from reflowing tmux at slightly-different
+    // widths. Height always follows the fit — row changes don't reflow.
+    if (pinnedCols <= 0 || Math.abs(term.cols - pinnedCols) > WIDTH_PIN_TOLERANCE) {
+      pinnedCols = term.cols;
+    } else if (term.cols !== pinnedCols) {
+      term.resize(pinnedCols, term.rows);
+    }
+    initialCols = pinnedCols;
     initialRows = term.rows;
   } catch (_) {}
 
@@ -423,6 +441,16 @@ function scheduleFit() {
       fitAddon.fit();
     } catch (_) {
       return;
+    }
+    // Hold the pinned width: a fit that wobbled by a column or two (the bug —
+    // mount/layout transients) snaps back so tmux never reflows; a genuinely
+    // different width (real resize beyond tolerance) becomes the new pin.
+    if (pinnedCols > 0 && term.cols !== pinnedCols) {
+      if (Math.abs(term.cols - pinnedCols) > WIDTH_PIN_TOLERANCE) {
+        pinnedCols = term.cols;
+      } else {
+        term.resize(pinnedCols, term.rows);
+      }
     }
     // Only send a resize message when the dims actually changed since the
     // last one we sent. Without this guard, the ResizeObserver's initial
