@@ -2337,167 +2337,22 @@ body.disconnected .grid {
 .card-promote:hover { opacity: 1; }
 .card-promote:disabled { opacity: 0.3; cursor: not-allowed; }
 
-/* ─── Alerts rail (right side panel) ────────────────────────────── */
+/* ─── Attention sections (NEEDS YOU / PINNED / ACTIVITY) ────────── */
 
-/* Header toggle button — sized to match the other .filter-btn chips. The
-   badge sits to the right; hidden until updateBadge sets a non-zero count. */
-#alerts-toggle {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-#alerts-toggle[aria-pressed="true"] {
-  background: color-mix(in oklch, var(--accent) 18%, var(--bg-2));
-  border-color: color-mix(in oklch, var(--accent) 40%, transparent);
-  color: var(--fg-0);
-}
-.alerts-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 5px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  background: var(--s-danger);
-  color: var(--fg-0);
-  line-height: 1;
-}
+#rail .attn-row { display: flex; align-items: center; gap: 8px; padding: 3px 10px 3px 16px; cursor: pointer; }
+#rail .attn-needs { background: #241316; }
+#rail .attn-needs:hover { background: #2c181c; }
+#rail .attn-pinned { background: #161a14; }
+#rail .attn-label { color: #e6e9ef; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#rail .attn-reason { margin-left: auto; color: #8a6c6f; font-size: 11px; white-space: nowrap; }
+#rail .attn-activity .attn-reason { color: #5b606b; }
+#rail .attn-x { color: #6b5256; background: none; border: 0; cursor: pointer; }
+#rail .attn-dot { width: 7px; height: 7px; border-radius: 50%; }
 
-/* The rail itself: fixed to the right edge, full viewport height below the
-   sticky header. Transformed off-screen when closed so opening it slides
-   in; CSS-only, no JS animation. */
-/* Rail sits below the sticky header, not over it. `--header-h` is set by
-   alerts.js via a ResizeObserver on .periscope-header so the offset stays
-   correct when the filter row wraps. The fallback (80px) is a sane default
-   for first paint before JS runs. */
-#alerts-rail {
-  position: fixed;
-  top: var(--header-h, 80px);
-  right: 0;
-  width: 340px;
-  height: calc(100vh - var(--header-h, 80px));
-  background: var(--bg-1);
-  border-left: 1px solid var(--line-soft);
-  display: flex;
-  flex-direction: column;
-  z-index: 9;
-  transform: translateX(100%);
-  transition: transform 180ms ease;
-  box-shadow: -8px 0 24px oklch(0 0 0 / 0.35);
-}
-body[data-alerts="open"] #alerts-rail {
-  transform: translateX(0);
-}
-/* Shrink the main grid scroll region when the rail is open, so cards don't
-   sit behind it. Stream view's full-bleed rows get the same treatment. */
-body[data-alerts="open"] main {
-  padding-right: 360px;
-}
-body[data-alerts="open"][data-view="stream"] main {
-  padding-right: 340px;
-}
-
-.alerts-rail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid var(--line-soft);
-  background: var(--bg-0);
-}
-.alerts-rail-head h2 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-2);
-}
-#alerts-rail-close {
-  background: transparent;
-  border: 0;
-  color: var(--fg-3);
-  font-size: 18px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-#alerts-rail-close:hover { color: var(--fg-0); }
-
-.alerts-rail-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-}
-
-.alerts-empty {
-  color: var(--fg-3);
-  font-size: 12px;
-  padding: 20px 8px;
-  text-align: center;
-}
-.alerts-empty code {
-  background: var(--bg-2);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-
-.alerts-row {
-  padding: 8px 10px;
-  margin-bottom: 6px;
-  border-radius: var(--r-md);
-  background: var(--bg-2);
-  border-left: 3px solid var(--line-soft);
-  cursor: pointer;
-  transition: background 80ms ease;
-}
-.alerts-row:hover { background: var(--bg-1-hi); }
-
-.alerts-row-need_human {
-  border-left-color: var(--s-danger);
-  background: color-mix(in oklch, var(--s-danger) 8%, var(--bg-2));
-}
-.alerts-row-done {
-  border-left-color: var(--s-done);
-}
-.alerts-row-info {
-  border-left-color: var(--s-working);
-}
-
-.alerts-row-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--fg-2);
-  margin-bottom: 3px;
-}
-.alerts-row-icon {
-  font-size: 12px;
-}
-.alerts-row-pane {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--fg-1);
-  font-weight: 500;
-}
-.alerts-row-time {
-  color: var(--fg-3);
-  font-size: 10px;
-}
-.alerts-row-body {
-  font-size: 12px;
-  color: var(--fg-1);
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.4;
-}
+/* Pin star: hidden until row hover; always visible when pinned. */
+#rail .child-row .rail-pin { opacity: 0; margin-left: auto; background: none; border: 0; cursor: pointer; color: #5b606b; }
+#rail .child-row:hover .rail-pin { opacity: 1; }
+#rail .child-row .rail-pin.pinned { opacity: 1; color: #d8b33a; }
 
 /* ─── Toast surface ─────────────────────────────────────────────── */
 

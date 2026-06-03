@@ -18,7 +18,7 @@
 import { useState, useRef, useEffect } from "preact/hooks";
 import { prUrl } from "../util.js";
 
-function statusDotClass(s) {
+export function statusDotClass(s) {
   if (s === "needs-input") return "dot dot-alert dot-pulse";
   if (s === "working") return "dot dot-green";
   if (s === "done") return "dot dot-blue";
@@ -97,7 +97,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
   );
 }
 
-export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos }) {
+export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos, pinned, onTogglePin }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey ? " selected" : "";
   const dimCls = dim ? "" : " rail-dim";
@@ -115,6 +115,11 @@ export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, drag
         ? <span class="rail-icon icon-claude">✻</span>
         : <span class="rail-icon icon-shell">$</span>}
       <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
+      <button
+        class={`rail-pin${pinned ? " pinned" : ""}`}
+        title={pinned ? "unpin" : "pin"}
+        onClick={(e) => { e.stopPropagation(); onTogglePin && onTogglePin(); }}
+      >{pinned ? "★" : "☆"}</button>
       <span class={statusDotClass(w.state)}></span>
       <button
         class="rail-close"
