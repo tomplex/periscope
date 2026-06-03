@@ -3541,6 +3541,20 @@ body[data-alerts="open"][data-view="stream"] main {
   overflow: auto;
 }
 .preview-cm-host .cm-editor { height: 100%; }
+.preview-iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: white;
+}
+/* Text-labeled toggle (Source/Rendered) — same hover affordance as the
+   icon buttons but sized for a short word. */
+.preview-btn-text {
+  font-size: 12px;
+  padding: 2px 8px;
+}
 .preview-loading,
 .preview-error {
   padding: 20px;

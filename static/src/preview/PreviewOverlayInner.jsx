@@ -14,6 +14,24 @@ import { EditorView, lineNumbers, highlightActiveLineGutter, drawSelection } fro
 import { syntaxHighlighting, HighlightStyle, bracketMatching } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
+// Encode "session:index" as base64url for the /api/fs/render path token.
+// btoa() is bytes-from-string, so the input must be ASCII-safe; tmux
+// targets are.
+function paneToken(target) {
+  return btoa(target).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Build the iframe URL for an absolute file path. The path is encoded
+// segment-by-segment so '#' / '?' / spaces don't break URL parsing, but
+// '/' stays intact (the browser needs the real path structure for
+// sibling-asset resolution to work).
+function renderUrl(target, absPath) {
+  const encoded = absPath.split("/").map(encodeURIComponent).join("/");
+  // absPath starts with '/'; the split produces a leading "" segment, so
+  // the joined string already begins with '/' — no double-slash here.
+  return `/api/fs/render/${paneToken(target)}${encoded}`;
+}
+
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { markdown } from "@codemirror/lang-markdown";
@@ -85,6 +103,11 @@ export function PreviewOverlayInner({ entry }) {
   const hostRef = useRef(null);
   const closeBtnRef = useRef(null);
   const [state, setState] = useState({ loading: true, error: null, content: null, lang: null, resolved: null });
+  // HTML defaults to the rendered iframe; everything else goes to source.
+  // A `:NN` line jump implies the user wants source even on HTML — there's
+  // no line concept in the rendered view. The toggle flips between the
+  // two for HTML; for non-HTML it's a no-op (button hidden).
+  const [view, setView] = useState(entry.line ? "source" : "rendered");
 
   function close() { previewPath.value = null; }
   useEscape(close, true);
@@ -120,11 +143,16 @@ export function PreviewOverlayInner({ entry }) {
     return () => { alive = false; };
   }, [entry.path]);
 
-  // Mount CodeMirror once content lands.
+  // Effective view: non-HTML always falls through to source.
+  const effectiveView = state.lang === "html" ? view : "source";
+
+  // Mount CodeMirror once content lands AND we're in source view.
   useEffect(() => {
-    if (state.loading || state.error || !hostRef.current || state.content == null) return;
+    if (state.loading || state.error || effectiveView !== "source" || !hostRef.current || state.content == null) return;
     const langExt = languageExt(state.lang);
-    const view = new EditorView({
+    // Local name is `editor` (not `view`) so it doesn't shadow the
+    // component-level `view` toggle state declared above.
+    const editor = new EditorView({
       parent: hostRef.current,
       state: EditorState.create({
         doc: state.content,
@@ -145,15 +173,15 @@ export function PreviewOverlayInner({ entry }) {
     if (entry.line) {
       const lineNo = Number(entry.line);
       if (Number.isFinite(lineNo) && lineNo > 0) {
-        const line = view.state.doc.line(Math.min(lineNo, view.state.doc.lines));
-        view.dispatch({
+        const line = editor.state.doc.line(Math.min(lineNo, editor.state.doc.lines));
+        editor.dispatch({
           selection: { anchor: line.from, head: line.from },
           effects: EditorView.scrollIntoView(line.from, { y: "center" }),
         });
       }
     }
-    return () => view.destroy();
-  }, [state.loading, state.error, state.content, state.lang]);
+    return () => editor.destroy();
+  }, [state.loading, state.error, state.content, state.lang, effectiveView]);
 
   // Focus the close button on mount so keystrokes don't reach xterm.
   useEffect(() => {
@@ -171,10 +199,23 @@ export function PreviewOverlayInner({ entry }) {
     catch (_) {}
   }
 
+  const iframeSrc = effectiveView === "rendered" && state.resolved && activeTarget.value
+    ? renderUrl(activeTarget.value, state.resolved)
+    : null;
+
   return (
     <div class="preview-overlay" role="dialog" aria-label="File preview">
       <header class="preview-header">
         <span class="preview-path">{state.resolved || entry.path}{entry.line ? `:${entry.line}` : ""}</span>
+        {state.lang === "html" && (
+          <button
+            class="preview-btn preview-btn-text"
+            title={view === "rendered" ? "Show HTML source" : "Show rendered page"}
+            onClick={() => setView(view === "rendered" ? "source" : "rendered")}
+          >
+            {view === "rendered" ? "Source" : "Rendered"}
+          </button>
+        )}
         <button class="preview-btn" title="Reveal in Finder" onClick={reveal}>⌖</button>
         <button class="preview-btn" title="Close (Esc)" onClick={close} ref={closeBtnRef}>✕</button>
       </header>
@@ -189,7 +230,21 @@ export function PreviewOverlayInner({ entry }) {
             )}
           </div>
         )}
-        {!state.loading && !state.error && <div ref={hostRef} class="preview-cm-host" />}
+        {!state.loading && !state.error && effectiveView === "rendered" && iframeSrc && (
+          // allow-same-origin so the page's own scripts can fetch sibling
+          // JSON/data files (common for self-contained dashboards). Periscope
+          // is local-only, so granting the rendered page the same trust as
+          // any other locally-opened HTML is acceptable.
+          <iframe
+            class="preview-iframe"
+            src={iframeSrc}
+            sandbox="allow-scripts allow-same-origin allow-popups"
+            title="Rendered HTML preview"
+          />
+        )}
+        {!state.loading && !state.error && effectiveView === "source" && (
+          <div ref={hostRef} class="preview-cm-host" />
+        )}
       </div>
     </div>
   );

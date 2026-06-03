@@ -142,3 +142,34 @@ def test_safe_reveal_for_pane_invokes_open_R(tmp_path, monkeypatch):
     monkeypatch.setattr("periscope.fs.subprocess.run", fake_run)
     fs.safe_reveal_for_pane("sess:1", "x.txt")
     assert called == [["open", "-R", str(f.resolve())]]
+
+
+def test_safe_resolve_happy(tmp_path):
+    f = tmp_path / "hi.html"
+    f.write_text("<h1>hi</h1>")
+    resolved = fs.safe_resolve(str(tmp_path), "hi.html")
+    assert str(resolved) == str(f.resolve())
+
+
+def test_safe_resolve_blocks_dotdot(tmp_path):
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "secret.html").write_text("nope")
+    (tmp_path / "cwd").mkdir()
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_resolve(str(tmp_path / "cwd"), "../outside/secret.html")
+    assert exc.value.status_code == 403
+
+
+def test_safe_resolve_missing(tmp_path):
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_resolve(str(tmp_path), "no.html")
+    assert exc.value.status_code == 404
+
+
+def test_safe_resolve_doesnt_cap_size(tmp_path):
+    # safe_read caps at 1MB; safe_resolve must NOT — it's used to stream
+    # large assets (images, bundled JS) via FileResponse.
+    big = tmp_path / "big.bin"
+    big.write_bytes(b"x" * (2 * 1024 * 1024))
+    resolved = fs.safe_resolve(str(tmp_path), "big.bin")
+    assert str(resolved) == str(big.resolve())

@@ -128,6 +128,38 @@ def safe_read(cwd: str, raw_path: str,
     return (str(resolved), text)
 
 
+def safe_resolve(cwd: str, raw_path: str) -> Path:
+    """Resolve `raw_path` against `cwd`, enforce safe roots, return the
+    resolved Path.
+
+    Same gating as `safe_read` but doesn't read the file — for endpoints
+    that stream the bytes themselves (FileResponse) and don't need a UTF-8
+    decode. The `safe_read` size + UTF-8 caps don't apply here; callers
+    enforce their own (typically larger) limit.
+    """
+    if not raw_path or not raw_path.strip():
+        raise HTTPException(status_code=400, detail="empty path")
+    cwd_p = Path(cwd).resolve()
+    if not cwd_p.exists():
+        raise HTTPException(status_code=400, detail=f"cwd does not exist: {cwd}")
+    candidate = raw_path
+    if ":" in candidate and candidate.rsplit(":", 1)[1].isdigit():
+        candidate = candidate.rsplit(":", 1)[0]
+    expanded = os.path.expanduser(candidate)
+    target = Path(expanded) if os.path.isabs(expanded) else cwd_p / expanded
+    try:
+        resolved = target.resolve()
+    except OSError:
+        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}")
+    if not _inside_any(resolved, _safe_roots(cwd_p)):
+        raise HTTPException(status_code=403, detail="path outside safe roots")
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"no such file: {resolved}")
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail="not a regular file")
+    return resolved
+
+
 def safe_reveal(cwd: str, raw_path: str) -> None:
     """Resolve `raw_path` against `cwd`, enforce safe roots, `open -R`.
 
@@ -178,3 +210,8 @@ def safe_read_for_pane(target: str, raw_path: str,
 def safe_reveal_for_pane(target: str, raw_path: str) -> None:
     """tmux-resolves cwd from `target`, then calls safe_reveal."""
     safe_reveal(_cwd_for_target(target), raw_path)
+
+
+def safe_resolve_for_pane(target: str, raw_path: str) -> Path:
+    """tmux-resolves cwd from `target`, then calls safe_resolve."""
+    return safe_resolve(_cwd_for_target(target), raw_path)
