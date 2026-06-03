@@ -94,9 +94,21 @@ sampling both the resolved JSONL and `/api/pane/turns`) showed the question
 - **Server-side tools (Bash/Read/…) DO flush live** — the assistant message
   with the tool_use is written before its result, so `result===null` →
   "running…" works for those (observed directly).
-- There is *anecdotal* evidence the pending question is occasionally visible
-  (one clear sighting), i.e. Claude Code's flush timing isn't 100% — but it's
-  not dependable.
+- **The flush is non-deterministic, now confirmed both ways.** `askprobe3`
+  caught a pending `AskUserQuestion` that *never* hit disk; a later capture
+  (`ask-user-question-waiting.jsonl`, the pending question copied live) showed
+  one that *was* on disk with `result` absent — and the transcript correctly
+  rendered it `running…`, questions/options and all. Same tool, opposite
+  outcomes. The extended-**thinking** hypothesis does NOT explain it (across the
+  session, `AskUserQuestion` turns both with and without a `thinking` block
+  appear, no clean split). The unverified-but-plausible factor is how much the
+  turn *streamed before* the question — a long turn (lots of text/tool output)
+  seems to get its assistant message written incrementally, so the tool_use
+  block lands on disk before the answer; a short turn buffers and writes only at
+  completion. Not worth pinning down further: it's Claude Code streaming
+  internals we don't control, and **nothing depends on it** (the waiting signal
+  comes from `sessions/<pid>.json`, which flips reliably every time). The JSONL
+  rendering of a pending question is a non-deterministic bonus.
 
 A second contamination-free probe (`/tmp/askprobe3.sh`, watch which files change
 during a pending question, no marker) confirmed the stronger claim: across ~96s

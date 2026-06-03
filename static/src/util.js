@@ -35,6 +35,20 @@ export function relTime(epochSec) {
   return `${Math.floor(diff / 86400)}d`;
 }
 
+// Human label for a pane's needs-input reason. `reason` is the session
+// status file's `waitingFor` (best-effort; values vary by Claude version), or
+// falsy for unmapped panes that hit the scraping fallback. Known values get a
+// friendly phrasing; anything else shows lowercased verbatim.
+export function waitLabel(reason) {
+  if (!reason) return "needs input";
+  const map = {
+    "approve askuserquestion": "needs answer",
+    "permission prompt": "needs approval",
+    "dialog open": "needs input",
+  };
+  return map[reason.toLowerCase()] || reason.toLowerCase();
+}
+
 // GitHub PR URL for a pane's repo. `slug` ("owner/repo") is derived
 // server-side from `git remote get-url origin`; null when the repo's origin
 // isn't a GitHub remote — callers then render the PR badge unlinked.

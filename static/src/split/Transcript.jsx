@@ -164,7 +164,6 @@ function ToolCall({ t }) {
           return (
             <span
               class="tc-arg tc-arg-clickable"
-              title="Open preview"
               title="Cmd+click to preview"
               onClick={(e) => {
                 // Match the terminal Cmd+click contract — plain click on
@@ -303,7 +302,7 @@ function Composer({ target, composerRef }) {
   );
 }
 
-export function TranscriptView({ target, pid, selected }) {
+export function TranscriptView({ target, pid, selected, state, waitingFor, spinner }) {
   useTranscriptPoll(target, pid, selected);
   const messages = paneTranscript.value[pid]?.messages || [];
   const scrollRef = useRef(null);
@@ -349,6 +348,12 @@ export function TranscriptView({ target, pid, selected }) {
     return () => ro.disconnect();
   }, []);
 
+  // Bring the status banner into view when Claude transitions to working or
+  // needs-input (no new message may arrive to trigger the content-change pin).
+  useEffect(() => {
+    if (state === "needs-input" || state === "working") pin();
+  }, [state]);
+
   function onScroll(e) {
     const el = e.currentTarget;
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -370,6 +375,27 @@ export function TranscriptView({ target, pid, selected }) {
                 ? <div key={m.uuid} class="transcript-compact"><span>context compacted</span></div>
                 : <Turn key={m.uuid} m={m} current={m.uuid === lastUuid} />
             )}
+        {/* Live status banner at the transcript tail, sourced from the
+            session-status file via /api/state — NOT the JSONL. It's the only
+            in-transcript signal during the in-flight window: a pending turn
+            (working/thinking) and a pending question (needs-input) are both
+            absent from the JSONL until they resolve. */}
+        {state === "needs-input" && (
+          <div class="transcript-status transcript-status-waiting">
+            <span class="transcript-status-dot" />
+            <span class="transcript-status-text">
+              Waiting for your input{waitingFor ? ` — ${waitingFor}` : ""}
+            </span>
+          </div>
+        )}
+        {state === "working" && (
+          <div class="transcript-working">
+            <span class="transcript-working-dot" />
+            <span class="transcript-working-verb">
+              {spinner ? `${spinner.toLowerCase()}…` : "working…"}
+            </span>
+          </div>
+        )}
       </div>
       <Composer target={target} composerRef={composerRef} />
     </>
