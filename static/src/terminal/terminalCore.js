@@ -31,6 +31,8 @@ let webglAddon = null;
 let searchAddon = null;
 let termResizeObserver = null;
 let fitDebounce = null;
+let lastSentCols = 0;            // dims of the most recent resize message sent to the server
+let lastSentRows = 0;            //   — used to suppress redundant resizes during initial mount
 let containerEl = null;          // set by setTerminalContainer() before startLiveTerminal()
 let linkClickCallback = null;    // set by setTerminalLinkCallback()
 
@@ -323,6 +325,11 @@ export function startLiveTerminal(target) {
   termIntentionalClose = false;
   termReconnectAttempt = 0;
   termReconnectedNotified = false;
+  // Seed the "last sent" memo with the dims we're about to give the server
+  // via the WS query params. Without this, the first ResizeObserver fire
+  // would send a redundant resize message.
+  lastSentCols = initialCols;
+  lastSentRows = initialRows;
   connectTerminalWs(target, initialCols, initialRows);
 }
 
@@ -404,7 +411,18 @@ function scheduleFit() {
     } catch (_) {
       return;
     }
+    // Only send a resize message when the dims actually changed since the
+    // last one we sent. Without this guard, the ResizeObserver's initial
+    // observation fires shortly after mount and produces a no-op resize
+    // (cols/rows unchanged from the WS-connect hint), which tmux silently
+    // honors but the cycle of "fit → send → tmux resizes → output reflows"
+    // can produce visible width churn in scrollback. Suppressing redundant
+    // sends keeps tmux at the size set at connect-time unless the user
+    // actually resized the browser / sidebar / etc.
+    if (term.cols === lastSentCols && term.rows === lastSentRows) return;
     if (termWs && termWs.readyState === WebSocket.OPEN) {
+      lastSentCols = term.cols;
+      lastSentRows = term.rows;
       termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     }
   }, 80);
@@ -419,6 +437,8 @@ export function stopLiveTerminal() {
     clearTimeout(termReconnectTimer);
     termReconnectTimer = null;
   }
+  lastSentCols = 0;
+  lastSentRows = 0;
   if (fitDebounce) {
     clearTimeout(fitDebounce);
     fitDebounce = null;
