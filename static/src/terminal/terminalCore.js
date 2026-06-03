@@ -134,14 +134,18 @@ function registerRoutingLinkProvider(t) {
               end:   { x: end,   y: rowNumber },
             },
             activate(event, linkText) {
-              // Cmd/Ctrl is required for ALL routes — reading scrollback
-              // can't accidentally trigger a file open or URL.
-              if (!event.metaKey && !event.ctrlKey) return;
+              // URLs activate on a plain click — opening a wrong tab is
+              // mild, and the friction of "Cmd is required even for a
+              // URL" was a real pain point. File paths still demand
+              // Cmd/Ctrl: the preview overlay is more invasive than a
+              // browser tab, and scrollback often has incidental
+              // path-shaped text.
               if (kind === "url") {
                 if (urlLinkCallback) urlLinkCallback(linkText);
                 else openExternal(linkText);
                 return;
               }
+              if (!event.metaKey && !event.ctrlKey) return;
               if (kind === "file" && fileLinkCallback) {
                 fileLinkCallback(linkText);
               }
