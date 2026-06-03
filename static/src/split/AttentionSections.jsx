@@ -29,6 +29,10 @@ function selectPane(w) {
 }
 
 export function AttentionSections() {
+  // Subscribe to prefs explicitly (pins + section-collapse live there), the
+  // same way Rail does — so reactivity is self-contained, not inherited from
+  // the parent's subscription.
+  prefs.prefsSignal.value;
   const live = windows.value || [];
   const items = alertItems.value || [];
   const dismissed = dismissedAlertIds.value;

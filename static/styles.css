@@ -2343,6 +2343,9 @@ body.disconnected .grid {
 #rail .attn-needs { background: #241316; }
 #rail .attn-needs:hover { background: #2c181c; }
 #rail .attn-pinned { background: #161a14; }
+#rail .attn-pinned:hover { background: #1b2018; }
+#rail .attn-activity:hover { background: #1a1c20; }
+#rail .attn-ico { width: 14px; text-align: center; flex-shrink: 0; }
 #rail .attn-label { color: #e6e9ef; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #rail .attn-reason { margin-left: auto; color: #8a6c6f; font-size: 11px; white-space: nowrap; }
 #rail .attn-activity .attn-reason { color: #5b606b; }
