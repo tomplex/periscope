@@ -190,7 +190,7 @@ export function startLiveTerminal(target) {
 
   term = new Terminal({
     fontFamily: '"SF Mono", "JetBrains Mono", "Menlo", monospace',
-    fontSize: 13,
+    fontSize: 12,
     cursorBlink: true,
     // Holds the initial paint (up to 10k lines from capture-pane in ws.py)
     // plus everything that streams in afterwards. 20k gives modals room to
