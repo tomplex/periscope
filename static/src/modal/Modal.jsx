@@ -25,11 +25,10 @@
 import { signal } from "@preact/signals";
 import { useRef, useEffect, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
-import { modalTarget, modalRenaming, modalAutoRenaming, previewPath } from "../store.js";
+import { modalTarget, modalRenaming, modalAutoRenaming } from "../store.js";
 import { targetQuery, apiCall, prUrl, rewriteLgtmHost } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
-import { writeTerminalLine, setTerminalFileCallback } from "../terminal/terminalCore.js";
-import { PreviewOverlay } from "../preview/PreviewOverlay.jsx";
+import { writeTerminalLine } from "../terminal/terminalCore.js";
 import { poll } from "../grid/poll.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
 
@@ -518,22 +517,6 @@ function ModalBody({ target }) {
     }
   }
 
-  // Cmd+click on a file path in the modal terminal → open in the preview
-  // overlay (rendered for HTML/Markdown, source for everything else).
-  // Threading `target` through previewPath lets the overlay fetch via the
-  // modal's pane even though activeTarget points at the split-view
-  // selection (they're intentionally distinct — store.js).
-  useEffect(() => {
-    setTerminalFileCallback((rawPath) => {
-      let path = rawPath;
-      let line = null;
-      const m = path.match(/^(.*?):(\d+)$/);
-      if (m) { path = m[1]; line = m[2]; }
-      previewPath.value = { path, line, target };
-    });
-    return () => setTerminalFileCallback(null);
-  }, [target]);
-
   async function onPaste(e) {
     if (!modalTarget.value) return;
     const items = e.clipboardData?.items || [];
@@ -628,7 +611,6 @@ function ModalBody({ target }) {
               target={target}
               onPaste={onPaste}
             />
-            <PreviewOverlay />
             {data && (
               <Sidebar
                 data={data}
