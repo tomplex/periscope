@@ -286,6 +286,16 @@ export function startLiveTerminal(target) {
       return false;
     }
 
+    // Shift+Enter — insert a newline in Claude's input instead of submitting.
+    // xterm.js collapses Shift+Enter to a bare \r (identical to Enter), so
+    // Claude can't distinguish them. Send meta-return (ESC + CR) — the exact
+    // bytes Option+Enter already produces, which Claude treats as a newline.
+    if (e.key === "Enter" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send("\x1b\r");
+      return false;
+    }
+
     if (!e.metaKey) return true;
     const sendCtrl = (seq) => {
       e.preventDefault();
