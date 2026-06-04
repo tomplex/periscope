@@ -16,10 +16,10 @@
 //    /api/channel/clear-unread POST (the badge clears as soon as the user
 //    looks at the pane in either modal or split-view).
 import { useRef, useEffect } from "preact/hooks";
-import { relTime, prUrl } from "../util.js";
+import { relTime, prUrl, shortestUniqueSuffix } from "../util.js";
 import * as prefs from "../prefs.js";
 import { paneTranscript, transcriptSeen, openFileTab } from "../store.js";
-import { filesTouched } from "../split/filesTouched.js";
+import { filesTouched, partitionFilesByPriority } from "../split/filesTouched.js";
 
 function alertDotColor(kind) {
   if (kind === "need_human") return "var(--s-danger)";
@@ -301,26 +301,48 @@ function NotesEditor({ pid, onRefresh, idPrefix }) {
   );
 }
 
+// One file row. `label` is the shortest-unique-suffix display; the full path
+// stays in the tooltip and is what we actually open.
+function FileRow({ it, label, priority }) {
+  return (
+    <li
+      class={`files-row${priority ? " files-row-priority" : ""}`}
+      onClick={() => openFileTab({ path: it.path, line: null })}
+      title={`Open ${it.path} as a preview tab`}
+    >
+      <span class="files-op">{opGlyph(it.op)}</span>
+      <span class="files-path">{label}</span>
+    </li>
+  );
+}
+
 function FilesSection({ pid }) {
   if (!pid || !transcriptSeen.value[pid]) return null;
   const entry = paneTranscript.value[pid];
   if (!entry || !entry.messages) return null;
   const items = filesTouched(entry.messages);
   if (!items.length) return null;
+
+  // Shortest unique suffix over ALL paths, so a leaf only grows a directory
+  // segment when two touched files share a filename (e.g. two index.html).
+  const allPaths = items.map((it) => it.path);
+  const label = (p) => shortestUniqueSuffix(p, allPaths);
+
+  // Priority types (html/md) hoisted above a divider; both groups keep recency.
+  const { priority, others } = partitionFilesByPriority(items);
+
   return (
     <section class="modal-side-section modal-side-files">
       <h4>Files</h4>
       <ul class="files-list">
-        {items.map((it) => (
-          <li
-            key={it.path}
-            class="files-row"
-            onClick={() => openFileTab({ path: it.path, line: null })}
-            title={`Open ${it.path} as a preview tab`}
-          >
-            <span class="files-op">{opGlyph(it.op)}</span>
-            <span class="files-path">{it.path}</span>
-          </li>
+        {priority.map((it) => (
+          <FileRow key={it.path} it={it} label={label(it.path)} priority />
+        ))}
+        {priority.length > 0 && others.length > 0 && (
+          <li class="files-divider" aria-hidden="true"></li>
+        )}
+        {others.map((it) => (
+          <FileRow key={it.path} it={it} label={label(it.path)} />
         ))}
       </ul>
     </section>

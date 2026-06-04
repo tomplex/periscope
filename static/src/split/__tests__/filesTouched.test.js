@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { filesTouched } from "../filesTouched.js";
+import {
+  filesTouched, fileExt, partitionFilesByPriority,
+} from "../filesTouched.js";
 
 // Matches the /api/pane/turns shape (history/search.py:262-275): each
 // message has {role, text, tool_uses} — the selector only reads
@@ -66,5 +68,35 @@ describe("filesTouched", () => {
       a([{ id: "x", name: "Read", input: {} }]),
     ]);
     expect(out).toEqual([]);
+  });
+});
+
+describe("fileExt", () => {
+  it("lowercases the extension after the last dot", () => {
+    expect(fileExt("/a/b/Spec.MD")).toBe("md");
+    expect(fileExt("out.html")).toBe("html");
+    expect(fileExt("a/b/c.test.js")).toBe("js");
+  });
+  it("returns empty for no extension or leading-dot files", () => {
+    expect(fileExt("/a/Makefile")).toBe("");
+    expect(fileExt("README")).toBe("");
+  });
+});
+
+describe("partitionFilesByPriority", () => {
+  it("splits html/md into priority, keeps recency order within groups", () => {
+    const items = [
+      { path: "src/a.js", op: "Edit" },
+      { path: "docs/spec.md", op: "Read" },
+      { path: "out/page.html", op: "Write" },
+      { path: "src/b.js", op: "Edit" },
+    ];
+    const { priority, others } = partitionFilesByPriority(items);
+    expect(priority.map((i) => i.path)).toEqual(["docs/spec.md", "out/page.html"]);
+    expect(others.map((i) => i.path)).toEqual(["src/a.js", "src/b.js"]);
+  });
+  it("empty priority group when nothing matches", () => {
+    const items = [{ path: "a.js", op: "Edit" }];
+    expect(partitionFilesByPriority(items).priority).toEqual([]);
   });
 });

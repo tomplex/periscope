@@ -3371,6 +3371,18 @@ body.disconnected .grid {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Priority types (html/md) — hoisted to the top and accented so the spec /
+   structured-output files stand out in the narrow list. */
+.files-row-priority .files-path { color: #d8b33a; font-weight: 600; }
+.files-row-priority .files-op { opacity: 1; color: #d8b33a; }
+/* Non-interactive separator between the priority group and the rest. */
+.files-divider {
+  height: 0;
+  margin: 3px 0;
+  padding: 0;
+  border-bottom: 1px solid var(--line-soft);
+  list-style: none;
+}
 .header-cwd-reveal {
   cursor: pointer;
   text-decoration: underline dotted rgba(255,255,255,0.3);
