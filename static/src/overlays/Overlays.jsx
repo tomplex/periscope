@@ -8,7 +8,7 @@
 import { useEffect } from "preact/hooks";
 import { promptDialog } from "./Dialog.jsx";
 import { apiCall } from "../util.js";
-import { poll } from "../grid/poll.js";
+import { poll } from "../poll.js";
 import { initExternalLinks } from "../tauri.js";
 import { CommandsModal } from "./CommandsModal.jsx";
 import { NewProjectModal } from "./NewProjectModal.jsx";

@@ -73,7 +73,7 @@ variation, don't open a parallel framework.
 ```
 browser
  ├── /            → static/index.html → Preact app (static/dist/app.js)
- │       grid + split views; polls /api/state every 3s into a signals store
+ │       split view (rail + detail); polls /api/state every 3s into a signals store
  │       terminals open WS /ws/pane → xterm.js mirror of the live tmux pane
  └── /history     → static/history.html + history.js (search UI)
          hits /api/history/{search,session/:id,stats}
@@ -156,9 +156,9 @@ into `#app`. Components grouped by area:
 | Area | Modules |
 |---|---|
 | entry / state | `src/main.jsx` (mount + boot), `src/store.js` (transient signals — the read model), `src/prefs.js` (server-prefs cache as a signal — the persistence boundary) |
-| chrome | `src/chrome/{Header,FilterBar,ViewSwitch,UsagePill}.jsx` |
-| grid view | `src/grid/{Grid,Card,NewTile}.jsx` + `src/grid/poll.js` (the single `/api/state` poll loop; `openModal` bridge) |
-| split view | `src/split/{Split,Rail,RailRows,Detail}.jsx` + `src/split/railTree.js` (`mergeLiveAndPrefs`) |
+| chrome | `src/chrome/{Header,FilterBar,UsagePill}.jsx` |
+| poll | `src/poll.js` — the single `/api/state` poll loop (writes `windows` / `projects` / `usage` signals); `openModal` bridge for poll-driven open requests |
+| split view | `src/split/{Split,Rail,RailRows,Detail}.jsx` + `src/split/railTree.js` (`mergeLiveAndPrefs`) — the only dashboard view (grid retired) |
 | modal | `src/modal/Modal.jsx` (tab strip + sidebar + review pane) |
 | terminal | `src/terminal/Terminal.jsx` (ref+effect wrapper) + `src/terminal/terminalCore.js` (imperative xterm + `/ws/pane`, ported ~verbatim) |
 | overlays | `src/overlays/{Dialog,Toast,Alerts,Overlays,CommandsModal,NewProjectModal,ReviewPrModal,CleanupModal,SettingsModal,OpenPickerModal,LauncherModal}.jsx` + `src/hooks/useEscape.js` (LIFO escape stack) |
@@ -168,10 +168,12 @@ Still vanilla under `static/`: `history.js` + `util.js` (the `/history` SPA —
 its own `history.html` entry, untouched by the migration), `sw.js` (no-op PWA
 gate), `vendor/xterm.{js,css}` (plain `<script>` so `Terminal`/`FitAddon` land
 on `window` — don't edit, replace wholesale). `connection-banner` stays in
-`index.html` (read by `src/grid/poll.js`, not rendered by any component).
+`index.html` (read by `src/poll.js`, not rendered by any component).
 
 Migration notes worth knowing:
-- **Stream view was cut.** The view switch is grid ↔ split only.
+- **Split is the only view.** Grid and stream were both retired; there's no view
+  switch in the header. The `body[data-view]="split"` attribute is still
+  asserted on mount because some legacy CSS keys off it.
 - **LGTM review iframes** (modal + detail) are created imperatively and parked
   in a Preact-owned host so reconciliation never reloads them; `<Detail>` keeps
   every opened review's iframe mounted (CSS-hidden) so switching never reloads.

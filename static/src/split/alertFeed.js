@@ -1,14 +1,13 @@
 // The cross-pane alert feed: owns the /api/alerts/recent poll loop and the
 // native-notify/dock-badge side effects, exposing `alertItems` as the read
-// model. Non-component (mirrors grid/poll.js → windows) so the badge stays
+// model. Non-component (mirrors poll.js → windows) so the badge stays
 // fresh and native-notify fires regardless of what's rendered. Started once
 // from Split.jsx. Lifted from the former overlays/Alerts.jsx.
 import { signal } from "@preact/signals";
 import { showToast } from "../overlays/Toast.jsx";
 import { setBadgeCount, notify, onNotificationClick, inTauri } from "../tauri.js";
-import { view, windows, railSelection } from "../store.js";
+import { windows, railSelection } from "../store.js";
 import * as prefs from "../prefs.js";
-import { openModal } from "../modal/Modal.jsx";
 
 const POLL_MS = 3000;
 
@@ -18,19 +17,15 @@ let pollFailed = false;
 let seenAlertKeys = null;       // first-poll sentinel — see maybeNativeNotify
 let started = false;
 
-// Reveal a pane from an alert/native-notification click. Split → inline select;
-// else modal fallback. (Moved verbatim from Alerts.jsx.)
+// Reveal a pane from an alert/native-notification click via inline rail
+// selection. No-op when the pane isn't in the live window list (closed
+// since the alert fired).
 export function revealPane(target) {
   if (!target) return;
-  if (view.value === "split") {
-    const w = (windows.value || []).find((x) => x.target === target);
-    if (w?.pid) {
-      railSelection.value = `pane:${w.pid}`;
-      prefs.setLastSelected({ kind: "pane", pid: w.pid });
-      return;
-    }
-  }
-  openModal(target);
+  const w = (windows.value || []).find((x) => x.target === target);
+  if (!w?.pid) return;
+  railSelection.value = `pane:${w.pid}`;
+  prefs.setLastSelected({ kind: "pane", pid: w.pid });
 }
 
 function maybeNativeNotify(list) {

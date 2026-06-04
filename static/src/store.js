@@ -11,7 +11,6 @@ import { signal } from "@preact/signals";
 export const windows = signal([]);            // /api/state windows (poll-fed)
 export const projects = signal([]);
 export const currentFilter = signal("all");
-export const view = signal("split");          // grid | split   (stream removed)
 export const activeTarget = signal(null);     // detail-pane focused pane "session:index" (split); shared paste/poll target
 export const modalTarget = signal(null);      // the modal's OWN open-state: the pane it shows, or null when closed. Kept distinct from activeTarget so split-view inline selection (which sets activeTarget) never pops the modal.
 export const railSelection = signal(null);    // string highlight-key: "pane:<pid>" | "review:<worktree>" | null

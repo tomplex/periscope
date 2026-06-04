@@ -62,11 +62,6 @@ export function getCollapsed() {
   return new Set(P().ui.collapsed_sessions || []);
 }
 
-export function getView() {
-  const v = P().ui?.view;
-  return (v === "grid" || v === "stream" || v === "split") ? v : "split";
-}
-
 export function getCommands() {
   return P().commands || [];
 }
@@ -145,10 +140,6 @@ export function setSessionOrder(order) {
 
 export function setCollapsed(set) {
   return patchUI({ collapsed_sessions: [...set] });
-}
-
-export function setView(view) {
-  return patchUI({ view });
 }
 
 // ── Window annotations ──────────────────────────────────────────────────

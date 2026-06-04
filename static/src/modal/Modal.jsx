@@ -29,7 +29,7 @@ import { modalTarget, modalRenaming, modalAutoRenaming } from "../store.js";
 import { targetQuery, apiCall, prUrl, rewriteLgtmHost } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { writeTerminalLine } from "../terminal/terminalCore.js";
-import { poll } from "../grid/poll.js";
+import { poll } from "../poll.js";
 import { Sidebar } from "../sidebar/Sidebar.jsx";
 
 const MODAL_POLL_MS = 1500;

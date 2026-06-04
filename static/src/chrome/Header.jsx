@@ -13,12 +13,10 @@
 // Task 8). They are inert placeholders until then; the vanilla path still owns
 // those surfaces while only chrome is Preact-mounted.
 import { useEffect, useState, useRef, useCallback } from "preact/hooks";
-import { windows, view } from "../store.js";
+import { windows } from "../store.js";
 import { useEscape } from "../hooks/useEscape.js";
-import * as prefs from "../prefs.js";
 import { UsagePill } from "./UsagePill.jsx";
 import { FilterBar } from "./FilterBar.jsx";
-import { ViewSwitch, nextView } from "./ViewSwitch.jsx";
 
 // One dropdown open at a time among the toggle-style menus (+ new, ⋯). The
 // state-filter dropdown manages itself in <FilterBar>.
@@ -88,37 +86,13 @@ function Counts() {
 }
 
 export function Header() {
-  // Global keybindings owned by the chrome surface:
-  //   ⌘/ (or ⌃/)  → /history
-  //   Tab          → cycle grid ↔ split (2-way now; stream cut)
-  // Suppressed while an input/textarea/contenteditable is focused (so Tab
-  // through form fields keeps working) and while the modal is open (its own
-  // keybindings own that surface). One global listener — not per-component.
+  // ⌘/ (or ⌃/) → /history. The Tab keybinding (grid ↔ split cycle)
+  // was retired with the grid view.
   useEffect(() => {
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key === "/") {
         e.preventDefault();
         window.location.href = "/history";
-        return;
-      }
-      const tag = (document.activeElement?.tagName || "").toLowerCase();
-      const editable =
-        tag === "input" || tag === "textarea" || document.activeElement?.isContentEditable;
-      const modalEl = document.getElementById("modal");
-      const modalOpen = modalEl && !modalEl.classList.contains("hidden");
-      if (
-        e.key === "Tab" &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        !editable &&
-        !modalOpen
-      ) {
-        e.preventDefault();
-        const next = nextView(view.value);
-        view.value = next;
-        // ViewSwitch's effect mirrors the change onto body[data-view].
-        prefs.setView(next);
       }
     }
     document.addEventListener("keydown", onKey);
@@ -202,20 +176,7 @@ export function Header() {
           </button>
         </Dropdown>
 
-        {/* Conditional buttons (send-bulk, collapse-all) are grid-owned —
-            their visibility + handlers land in Task 5. Rendered hidden so the
-            layout slot exists; the vanilla grid still drives them while only
-            chrome is Preact-mounted. */}
-        <button
-          id="send-bulk"
-          class="filter-btn is-action"
-          hidden
-          title="paste text + Enter into every visible pane (filter first to scope)"
-        ></button>
-        <button id="toggle-all" class="filter-btn is-action" title="collapse or expand all sessions"></button>
-
-        {/* ⋯ overflow: low-frequency actions. Handlers (cleanup/settings/
-            commands) land in Task 8; inert here. */}
+        {/* ⋯ overflow: low-frequency actions. */}
         <Dropdown
           id="more-dd-toggle"
           toggleClass="filter-btn is-action tb-dd-toggle"
@@ -244,8 +205,6 @@ export function Header() {
         </Dropdown>
 
         <span class="filters-spacer"></span>
-
-        <ViewSwitch />
       </nav>
     </header>
   );

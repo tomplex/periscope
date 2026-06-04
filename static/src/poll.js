@@ -1,13 +1,9 @@
-// The single /api/state poll loop, factored out of the component so any
-// surface (a mutation handler in Grid, a future Modal/Detail) can force a
-// refresh by calling `poll()` — this is the shared store action that replaces
-// the vanilla grid↔modal circular import (grid.js exported `poll`, modal.js
-// imported it). Ported from grid.js:poll / initGrid.
+// The single /api/state poll loop. Any surface (Detail mutation handler,
+// Modal action) can force a refresh by calling `poll()`.
 //
 // Writes the transient signals (`windows`, `projects`, `usage`); the poll
 // does NOT commit while a rename or drag is in flight (`editingTarget` /
-// `dragState`) — that preserves the user's in-flight input exactly as the
-// vanilla `state.editingTarget` / `state.dragging` guards did. Connection-
+// `dragState`) — that preserves the user's in-flight input. Connection-
 // banner / disconnected handling is preserved (threshold of 2 ≈ 6s).
 import {
   windows,
@@ -15,7 +11,7 @@ import {
   usage,
   editingTarget,
   dragState,
-} from "../store.js";
+} from "./store.js";
 
 const POLL_MS = 3000;
 
