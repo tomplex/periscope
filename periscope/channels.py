@@ -308,10 +308,38 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     await asyncio.sleep(0.1)
     tmux("send-keys", "-t", target, CLAUDE_EXEC, "Enter")
 
-    # Claude Code's React TUI takes a moment to mount; pasting before it's
-    # ready leaves the prompt stranded in shell history instead of the
-    # input box. 1.5s is empirically enough.
-    await asyncio.sleep(1.5)
+    # Claude Code shows a one-time-per-process consent prompt for the
+    # --dangerously-load-development-channels flag:
+    #     WARNING: Loading development channels
+    #     ...
+    #     ❯ 1. I am using this for local development
+    #        2. Exit
+    # Default selection is option 1; bare Enter confirms. Without
+    # dismissing it, paste-buffer lands on the chooser (which only accepts
+    # digit keys) and is silently dropped, leaving the input box empty.
+    #
+    # Poll a plain (non-`-e`) capture-pane — `capture()` preserves SGR
+    # escapes, which interleave the dialog text with ANSI codes and break
+    # substring matching.
+    def _plain_snapshot() -> str:
+        return tmux("capture-pane", "-t", target, "-p", "-S", "-30")
+
+    for _ in range(50):  # up to 5s
+        await asyncio.sleep(0.1)
+        if "Loading development channels" in _plain_snapshot():
+            tmux("send-keys", "-t", target, "Enter")
+            break
+
+    # Even after dismissal the React TUI takes another beat to mount its
+    # keyboard handler — `❯` (the input glyph) and `auto mode on` (status
+    # line) both render before paste-buffer is reliably accepted. Wait
+    # for the post-dialog state, then a small settle window.
+    for _ in range(50):  # up to 5s
+        await asyncio.sleep(0.1)
+        snap = _plain_snapshot()
+        if "auto mode on" in snap and "Loading development channels" not in snap:
+            await asyncio.sleep(0.5)
+            break
 
     # Deliver the prompt via paste-buffer because send-keys strips embedded
     # newlines (see CLAUDE.md key invariant 5). Same buffer-name uuid trick
