@@ -525,14 +525,24 @@ function scheduleFit() {
       }
     }
     // Only send a resize message when the dims actually changed since the
-    // last one we sent. Without this guard, the ResizeObserver's initial
-    // observation fires shortly after mount and produces a no-op resize
-    // (cols/rows unchanged from the WS-connect hint), which tmux silently
-    // honors but the cycle of "fit → send → tmux resizes → output reflows"
-    // can produce visible width churn in scrollback. Suppressing redundant
-    // sends keeps tmux at the size set at connect-time unless the user
-    // actually resized the browser / sidebar / etc.
-    if (term.cols === lastSentCols && term.rows === lastSentRows) return;
+    // last one we sent, AND only when width changed — height-only changes
+    // are dropped. Two reasons:
+    //   1. The ResizeObserver's initial observation fires shortly after
+    //      mount and produces a no-op resize (cols/rows unchanged from the
+    //      WS-connect hint), which tmux silently honors but the cycle of
+    //      "fit → send → tmux resizes → output reflows" can produce visible
+    //      width churn in scrollback.
+    //   2. Height-only resizes (modal drag, sidebar splitter, browser window
+    //      vertical resize) don't reflow content — but tmux resize-window
+    //      still raises SIGWINCH and Claude's TUI re-renders its frame on
+    //      every SIGWINCH. That re-render mangles scrollback (characters
+    //      from earlier frames overlapping the latest content — the same
+    //      failure class as the width-reflow corruption noted in
+    //      `routes/ws.py::set_pane_size`). Suppressing row-only sends costs
+    //      "modal may show empty rows at the bottom until the next real
+    //      width change re-syncs height," which is strictly better than
+    //      scrambled chat history.
+    if (term.cols === lastSentCols) return;
     if (termWs && termWs.readyState === WebSocket.OPEN) {
       lastSentCols = term.cols;
       lastSentRows = term.rows;
