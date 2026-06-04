@@ -38,12 +38,17 @@ def test_safe_read_tilde_expansion(tmp_path, monkeypatch):
     assert contents == "x\n"
 
 
-def test_safe_read_dotdot_escape_blocked(tmp_path):
+def test_safe_read_dotdot_escape_blocked(tmp_path, monkeypatch):
     outside_root = tmp_path / "outside"
     outside_root.mkdir()
     (outside_root / "secret").write_text("nope")
     cwd = tmp_path / "cwd"
     cwd.mkdir()
+    # Pin the safe roots to just cwd. The real policy also allows /tmp + ~, and
+    # pytest's tmp_path lives under /tmp — so without this the "escape" target
+    # is legitimately inside a safe root. Isolates the escape-enforcement guard
+    # from the ambient root policy.
+    monkeypatch.setattr(fs, "_safe_roots", lambda c: [Path(c).resolve()])
     with pytest.raises(HTTPException) as exc:
         fs.safe_read(str(cwd), "../outside/secret")
     assert exc.value.status_code == 403
@@ -77,13 +82,17 @@ def test_safe_read_empty_path(tmp_path):
     assert exc.value.status_code == 400
 
 
-def test_safe_read_prefix_confusion_guard(tmp_path):
-    # /tmp/a/cwd as the safe root must NOT permit /tmp/a/cwd-sibling/...
+def test_safe_read_prefix_confusion_guard(tmp_path, monkeypatch):
+    # cwd `.../a/cwd` as the sole safe root must NOT permit `.../a/cwd-sibling`,
+    # even though str(sibling).startswith(str(cwd)) is True — this is exactly
+    # why _inside_any uses commonpath, not startswith. Pin roots to cwd so the
+    # ambient /tmp root doesn't mask the prefix-confusion check.
     cwd = tmp_path / "a" / "cwd"
     cwd.mkdir(parents=True)
     sibling = tmp_path / "a" / "cwd-sibling"
     sibling.mkdir()
     (sibling / "secret").write_text("nope")
+    monkeypatch.setattr(fs, "_safe_roots", lambda c: [Path(c).resolve()])
     with pytest.raises(HTTPException) as exc:
         fs.safe_read(str(cwd), str(sibling / "secret"))
     assert exc.value.status_code == 403
@@ -151,10 +160,12 @@ def test_safe_resolve_happy(tmp_path):
     assert str(resolved) == str(f.resolve())
 
 
-def test_safe_resolve_blocks_dotdot(tmp_path):
+def test_safe_resolve_blocks_dotdot(tmp_path, monkeypatch):
     (tmp_path / "outside").mkdir()
     (tmp_path / "outside" / "secret.html").write_text("nope")
     (tmp_path / "cwd").mkdir()
+    # Pin roots to cwd (see test_safe_read_dotdot_escape_blocked).
+    monkeypatch.setattr(fs, "_safe_roots", lambda c: [Path(c).resolve()])
     with pytest.raises(HTTPException) as exc:
         fs.safe_resolve(str(tmp_path / "cwd"), "../outside/secret.html")
     assert exc.value.status_code == 403

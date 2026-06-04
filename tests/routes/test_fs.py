@@ -115,7 +115,11 @@ def test_fs_render_safe_roots_enforced(tmp_path, monkeypatch):
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     monkeypatch.setattr("periscope.fs.tmux", lambda *a: str(cwd) + "\n")
-    # Outside both cwd AND ~ (HOME pointed at tmp_path/home → no overlap).
+    # Pin the safe roots to just cwd. The real policy also allows /tmp + ~, and
+    # tmp_path lives under /tmp — pointing HOME away (below) isn't enough; the
+    # /tmp root would still admit the escape. This isolates the enforcement path.
+    from pathlib import Path
+    monkeypatch.setattr("periscope.fs._safe_roots", lambda c: [Path(c).resolve()])
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "home").mkdir()
     client = TestClient(app)
