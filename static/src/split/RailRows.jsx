@@ -76,7 +76,12 @@ function RailLabel({ label, kind, renameable, onCommit }) {
           ref={inputRef}
           type="text"
           class="rail-rename-input"
-          value={label}
+          // Uncontrolled (defaultValue): the rail re-renders every poll
+          // (~3s) and a `value=` binding would overwrite the user's
+          // in-flight keystrokes each tick. Same convention as the
+          // sidebar's NotesEditor — see CLAUDE.md "Sidebar inputs are
+          // UNCONTROLLED".
+          defaultValue={label}
           spellcheck={false}
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => {
