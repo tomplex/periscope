@@ -17,6 +17,7 @@ import time
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from periscope.channels import dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC
 from periscope.panes import (
     _acted_at, _active_per_session, _focused_at, _resuming,
@@ -97,10 +98,17 @@ def _send_and_stamp(target: str, cmd: str) -> None:
     so the command lands as a real prompt entry, not mid-rc echoed text
     (CLAUDE.md "Key invariants" note 5) — then stamp focus + action so the
     window sorts to the top on the next poll. Shared by every window-spawn
-    endpoint."""
+    endpoint.
+
+    Claude launched with --dangerously-load-development-channels shows a
+    consent dialog that blocks keyboard input until dismissed. Fire a
+    background thread to auto-confirm option 1 so the user doesn't have
+    to hit Enter before they can type."""
     if cmd:
         time.sleep(0.1)
         tmux("send-keys", "-t", target, cmd, "Enter")
+        if "--dangerously-load-development-channels" in cmd:
+            dismiss_dev_channels_consent_bg(target)
     note_focus(target)
     note_action(target)
 

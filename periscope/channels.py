@@ -248,6 +248,60 @@ def _do_link_linear_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+def _plain_pane_snapshot(target: str) -> str:
+    """Capture the visible tail of `target` without SGR escapes.
+
+    `periscope.tmux.capture()` preserves escapes (`-e`) for parse_pane's
+    color-sensitive logic. We need a plain string for substring searches
+    against rendered TUI text — the channel-consent dialog title gets
+    interleaved with `\\x1b[...m` codes under `-e`, breaking
+    `"Loading development channels" in snap` checks.
+    """
+    return tmux("capture-pane", "-t", target, "-p", "-S", "-30")
+
+
+def _dev_channels_consent_visible(target: str) -> bool:
+    """Whether Claude's --dangerously-load-development-channels consent
+    dialog is currently up in `target`:
+
+        WARNING: Loading development channels
+        ...
+        ❯ 1. I am using this for local development
+           2. Exit
+        Enter to confirm · Esc to cancel
+
+    Default selection is option 1; bare Enter confirms. Until dismissed
+    the input chooser accepts only digit keys, so any send-keys text or
+    paste-buffer aimed at the window is silently discarded."""
+    return "Loading development channels" in _plain_pane_snapshot(target)
+
+
+def dismiss_dev_channels_consent_bg(target: str, max_wait_s: float = 5.0) -> None:
+    """Fire a background thread that polls `target` for the consent dialog
+    and sends Enter to confirm option 1. No-op if the dialog never appears
+    within `max_wait_s` (e.g. future Claude versions that persist the ack).
+
+    Used by the window-spawn routes (`/api/window/new`, `+claude` tab,
+    worktree spawn) so the user doesn't have to manually dismiss the
+    dialog before typing. `_do_spawn_claude_tool` inlines the same poll
+    (with a follow-up wait for the input handler) because it has a
+    queued prompt to paste."""
+    from periscope.log import _bg
+
+    def _worker() -> None:
+        # 100ms-grain polling matches the spawn_claude tool's pace.
+        # Total wall-clock work is dominated by `tmux capture-pane`, not
+        # the sleep, so a tighter interval mostly burns CPU for no win.
+        steps = max(1, int(max_wait_s / 0.1))
+        for _ in range(steps):
+            time.sleep(0.1)
+            if _dev_channels_consent_visible(target):
+                tmux("send-keys", "-t", target, "Enter")
+                return
+
+    _bg(f"dismiss-dev-channels-consent[{target}]", _worker)
+
+
 async def _do_spawn_claude_tool(pane: str, arguments: dict):
     """Spawn a new tmux window running `claude`, deliver an initial prompt.
 
@@ -308,25 +362,10 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     await asyncio.sleep(0.1)
     tmux("send-keys", "-t", target, CLAUDE_EXEC, "Enter")
 
-    # Claude Code shows a one-time-per-process consent prompt for the
-    # --dangerously-load-development-channels flag:
-    #     WARNING: Loading development channels
-    #     ...
-    #     ❯ 1. I am using this for local development
-    #        2. Exit
-    # Default selection is option 1; bare Enter confirms. Without
-    # dismissing it, paste-buffer lands on the chooser (which only accepts
-    # digit keys) and is silently dropped, leaving the input box empty.
-    #
-    # Poll a plain (non-`-e`) capture-pane — `capture()` preserves SGR
-    # escapes, which interleave the dialog text with ANSI codes and break
-    # substring matching.
-    def _plain_snapshot() -> str:
-        return tmux("capture-pane", "-t", target, "-p", "-S", "-30")
-
+    # Dismiss the consent dialog (see _dev_channels_consent_*).
     for _ in range(50):  # up to 5s
         await asyncio.sleep(0.1)
-        if "Loading development channels" in _plain_snapshot():
+        if _dev_channels_consent_visible(target):
             tmux("send-keys", "-t", target, "Enter")
             break
 
@@ -336,7 +375,7 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # for the post-dialog state, then a small settle window.
     for _ in range(50):  # up to 5s
         await asyncio.sleep(0.1)
-        snap = _plain_snapshot()
+        snap = _plain_pane_snapshot(target)
         if "auto mode on" in snap and "Loading development channels" not in snap:
             await asyncio.sleep(0.5)
             break
