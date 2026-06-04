@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.panes import list_windows, parse_pane
 from periscope.pids import _attach_git_then_resolve_pids
-from periscope.rename_ai import build_rename_prompt, claude_complete
+from periscope.rename_ai import build_rename_prompt, claude_complete, transcript_summary
 from periscope.tmux import capture, tmux
 
 router = APIRouter()
@@ -45,17 +45,20 @@ def auto_rename_session(session: str):
         # prompt actually-useful context.
         git = cached_git_state(w.get("cwd", "")) or {}
         pr = cached_pr_state(w.get("cwd", ""), git.get("branch")) or {}
-        context.append(
-            {
-                "index": w["index"],
-                "current_name": w["name"],
-                "branch": git.get("branch"),
-                "pr": pr.get("pr"),
-                "recap": parsed.get("recap"),
-                "pending_input": parsed.get("pending_input"),
-                "recent_excerpt": snippet,
-            }
-        )
+        entry = {
+            "index": w["index"],
+            "current_name": w["name"],
+            "branch": git.get("branch"),
+            "pr": pr.get("pr"),
+            "recap": parsed.get("recap"),
+            "pending_input": parsed.get("pending_input"),
+            "recent_excerpt": snippet,
+        }
+        # Fold in JSONL-derived signals (recent prompts, tool calls, files).
+        # No-op for shell panes; safe for Claude panes that recently
+        # restarted (channel hasn't recorded a session id yet).
+        entry.update(transcript_summary(w["session"], w["index"]))
+        context.append(entry)
 
     prompt = build_rename_prompt(context)
     try:
@@ -125,7 +128,7 @@ def auto_rename_window(session: str, index: int):
     git = cached_git_state(cwd) or {}
     pr = cached_pr_state(cwd, git.get("branch")) or {}
 
-    ctx = [{
+    entry = {
         "index": index,
         "current_name": current_name,
         "branch": git.get("branch"),
@@ -133,7 +136,9 @@ def auto_rename_window(session: str, index: int):
         "recap": parsed.get("recap"),
         "pending_input": parsed.get("pending_input"),
         "recent_excerpt": snippet,
-    }]
+    }
+    entry.update(transcript_summary(session, index))
+    ctx = [entry]
     prompt = build_rename_prompt(ctx)
     try:
         result = claude_complete(prompt)

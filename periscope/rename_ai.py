@@ -1,8 +1,7 @@
 """Auto-rename via the Anthropic SDK.
 
 Used by the /api/auto-rename-session and /api/auto-rename-window route
-handlers (which still live in server.py through Peel 7 — Peel 8 moves
-them to periscope/routes/auto_rename.py).
+handlers in periscope/routes/auto_rename.py.
 
 `get_anthropic` lazily constructs the SDK client (so the dashboard can boot
 without an API key as long as nothing triggers an auto-rename); the cached
@@ -12,6 +11,20 @@ client is reused for subsequent calls.
 import os
 
 _anthropic_client = None
+
+
+# Tool calls Claude makes whose `input` carries a file path worth
+# surfacing in the rename prompt. Each maps to the field name we look
+# for, or "*command" for Bash (a one-line summary of the command).
+_TOOL_PATH_FIELD = {
+    "Read": "file_path",
+    "Edit": "file_path",
+    "Write": "file_path",
+    "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+    "Glob": "pattern",
+    "Grep": "pattern",
+}
 
 
 def get_anthropic():
@@ -41,17 +54,116 @@ def claude_complete(prompt: str, model: str = "claude-haiku-4-5") -> str:
     return "".join(b.text for b in msg.content if b.type == "text")
 
 
+def transcript_summary(session: str, index: int, *,
+                       n_user: int = 3, n_tools: int = 8) -> dict:
+    """Pull rename-relevant signals from the pane's Claude JSONL.
+
+    Returns a dict that callers fold into the per-window context:
+      - recent_user_prompts: the last `n_user` user-turn texts, each
+        truncated to 240 chars. Highest-signal field for "what is the
+        user asking the assistant to do."
+      - recent_tool_calls: the last `n_tools` tool invocations as one-
+        line strings (e.g. "Edit src/foo.py", "Bash bin/test -k slow",
+        "Grep 'TODO: rename'"). Concrete; reveals scope at a glance.
+      - files_touched: unique recent file paths from Edit/Write/Read.
+        Bounded to the same `n_tools` window so the prompt isn't long.
+    Empty dict when the pane has no Claude transcript (shell pane,
+    channel never connected, etc.). Catches all exceptions — a malformed
+    JSONL must not break the rename request.
+    """
+    try:
+        from periscope.turns import get_turns_for_pane
+
+        turns = get_turns_for_pane(session, index)
+        if not turns or not turns.get("messages"):
+            return {}
+        messages = turns["messages"]
+
+        # Walk newest-first; collect until we have what we need.
+        user_prompts: list[str] = []
+        tool_calls: list[str] = []
+        files: list[str] = []
+        seen_files: set[str] = set()
+        for msg in reversed(messages):
+            role = msg.get("role")
+            if role == "user" and len(user_prompts) < n_user:
+                text = (msg.get("text") or "").strip()
+                if text:
+                    user_prompts.append(text[:240])
+            elif role == "assistant":
+                for tu in reversed(msg.get("tool_uses") or []):
+                    if len(tool_calls) >= n_tools:
+                        break
+                    name = tu.get("name") or ""
+                    inp = tu.get("input") or {}
+                    summary = _summarize_tool_call(name, inp)
+                    if summary:
+                        tool_calls.append(summary)
+                    field = _TOOL_PATH_FIELD.get(name)
+                    if field == "file_path" or field == "notebook_path":
+                        p = inp.get(field)
+                        if p and p not in seen_files and len(files) < n_tools:
+                            seen_files.add(p)
+                            files.append(p)
+            if len(user_prompts) >= n_user and len(tool_calls) >= n_tools:
+                break
+
+        # Newest-first iteration above gave us reverse order; flip so the
+        # prompt reads in chronological order (older → newer).
+        return {
+            "recent_user_prompts": list(reversed(user_prompts)),
+            "recent_tool_calls": list(reversed(tool_calls)),
+            "files_touched": files,
+        }
+    except Exception:
+        return {}
+
+
+def _summarize_tool_call(name: str, inp: dict) -> str:
+    """One-line representation of a single tool_use: tool + the field of
+    its input that's worth seeing in a rename prompt."""
+    if not name:
+        return ""
+    field = _TOOL_PATH_FIELD.get(name)
+    if field:
+        val = inp.get(field) or ""
+        if val:
+            return f"{name} {val}"
+    if name == "Bash":
+        cmd = (inp.get("command") or "").strip().split("\n", 1)[0]
+        if cmd:
+            return f"Bash {cmd[:100]}"
+    if name == "TodoWrite":
+        # The set of todos is a great signal of what the user is asking
+        # for. Surface the first todo's content as the summary.
+        todos = inp.get("todos") or []
+        if todos and isinstance(todos[0], dict):
+            content = (todos[0].get("content") or "").strip()
+            if content:
+                return f"TodoWrite {content[:100]}"
+    return name
+
+
 def build_rename_prompt(windows: list[dict]) -> str:
     lines = [
         "You are renaming tmux windows in a senior developer's terminal session.",
         "",
-        "For each window below, suggest a SHORT descriptive name that captures what",
-        "is currently happening in that window. Constraints:",
+        "For each window below, suggest a SHORT name that captures the SEMANTIC focus",
+        "of the work — what is the developer actually trying to accomplish? Constraints:",
         "  - 1-3 words, lowercase-with-dashes preferred (e.g. 'fs-build', 'cohort-inv')",
         "  - Max 25 characters",
-        "  - Concept-focused, not generic. Bad: 'claude', 'shell', 'zsh', 'work'.",
-        "    Good: 'postcode-ingestion', 'monitoring-cert', 'rust-port'",
-        "  - If the existing name is still accurate, KEEP IT (don't change for the sake of changing)",
+        "  - Prefer the CONCEPT being worked on over the mechanism. e.g. if recent",
+        "    prompts talk about 'feature store liveness' and tool calls touch",
+        "    files in anthology/liveness/, name it 'fs-liveness' — not 'edit-py'.",
+        "  - Bad: 'claude', 'shell', 'zsh', 'work', generic verbs.",
+        "  - Good: 'postcode-ingestion', 'monitoring-cert', 'rust-port', 'fs-liveness'",
+        "  - If the existing name still captures the work accurately, KEEP IT.",
+        "    Don't change names just to feel like progress.",
+        "  - Signal priority (highest first):",
+        "    1. recent_user_prompts — what the developer is asking for right now",
+        "    2. recent_tool_calls + files_touched — what's actually being done",
+        "    3. branch / PR — long-term context",
+        "    4. recap / recent_excerpt — fallback if the above is thin",
         "",
         "Windows in this session:",
     ]
@@ -61,12 +173,28 @@ def build_rename_prompt(windows: list[dict]) -> str:
         if w.get("branch"):
             pr = f", PR #{w['pr']}" if w.get("pr") else ""
             lines.append(f"  branch: {w['branch']}{pr}")
+        prompts = w.get("recent_user_prompts") or []
+        if prompts:
+            lines.append("  recent user prompts (oldest→newest):")
+            for i, p in enumerate(prompts, 1):
+                lines.append(f"    {i}. {p}")
+        tool_calls = w.get("recent_tool_calls") or []
+        if tool_calls:
+            lines.append("  recent tool calls (oldest→newest):")
+            for tc in tool_calls:
+                lines.append(f"    - {tc}")
+        files = w.get("files_touched") or []
+        if files:
+            lines.append(f"  files touched: {', '.join(files)}")
         if w.get("recap"):
             lines.append(f"  recap: {w['recap'][:300]}")
         if w.get("pending_input"):
             lines.append(f"  pending input: {w['pending_input'][:120]}")
         snippet = w.get("recent_excerpt", "")
-        if snippet:
+        # Only show the terminal excerpt as a fallback signal when the
+        # transcript was unavailable — otherwise it's noise vs. the
+        # structured tool-call view above.
+        if snippet and not prompts and not tool_calls:
             lines.append(f"  recent terminal excerpt:\n    {snippet}")
     lines.append("")
     lines.append(

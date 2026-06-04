@@ -60,3 +60,66 @@ def test_claude_complete_skips_non_text_blocks(mocker):
     mocker.patch("periscope.rename_ai.get_anthropic", return_value=fake_client)
     out = claude_complete("p")
     assert out == "answer"
+
+
+# ---- transcript_summary ----
+
+from periscope.rename_ai import transcript_summary
+
+
+def test_transcript_summary_extracts_recent_signals(monkeypatch):
+    fake = {
+        "messages": [
+            {"role": "user", "text": "old prompt"},
+            {"role": "user", "text": "implement liveness check"},
+            {"role": "assistant", "text": "ok", "tool_uses": [
+                {"name": "Read", "input": {"file_path": "/repo/anthology/liveness.py"}},
+                {"name": "Edit", "input": {"file_path": "/repo/anthology/liveness.py"}},
+            ]},
+            {"role": "user", "text": "now wire it into the pipeline"},
+            {"role": "assistant", "text": "", "tool_uses": [
+                {"name": "Bash", "input": {"command": "uv run pytest -k liveness"}},
+            ]},
+        ],
+    }
+    monkeypatch.setattr("periscope.turns.get_turns_for_pane", lambda s, i: fake)
+    out = transcript_summary("sess", 1)
+    # Last 3 user prompts in chronological order.
+    assert out["recent_user_prompts"][-1] == "now wire it into the pipeline"
+    assert out["recent_user_prompts"][0] == "old prompt"
+    # Tool calls flattened in chronological order.
+    assert "Read /repo/anthology/liveness.py" in out["recent_tool_calls"]
+    assert "Edit /repo/anthology/liveness.py" in out["recent_tool_calls"]
+    assert any("Bash uv run pytest" in tc for tc in out["recent_tool_calls"])
+    # Files deduped, only file-path tools.
+    assert out["files_touched"] == ["/repo/anthology/liveness.py"]
+
+
+def test_transcript_summary_no_jsonl_returns_empty(monkeypatch):
+    monkeypatch.setattr("periscope.turns.get_turns_for_pane", lambda s, i: None)
+    assert transcript_summary("sess", 1) == {}
+
+
+def test_transcript_summary_swallows_errors(monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("malformed jsonl")
+    monkeypatch.setattr("periscope.turns.get_turns_for_pane", boom)
+    # Rename request must NOT fail because of a bad transcript.
+    assert transcript_summary("sess", 1) == {}
+
+
+def test_build_rename_prompt_uses_transcript_signals():
+    windows = [{
+        "index": 0,
+        "current_name": "claude",
+        "branch": "tc/foo",
+        "recent_user_prompts": ["implement liveness check"],
+        "recent_tool_calls": ["Edit anthology/liveness.py", "Bash pytest -k liveness"],
+        "files_touched": ["anthology/liveness.py"],
+    }]
+    prompt = build_rename_prompt(windows)
+    assert "implement liveness check" in prompt
+    assert "Edit anthology/liveness.py" in prompt
+    assert "anthology/liveness.py" in prompt
+    # Signal priority hint that steers the model.
+    assert "recent_user_prompts" in prompt
