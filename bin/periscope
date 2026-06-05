@@ -131,6 +131,14 @@ with open(p, "w") as f: json.dump(d, f, indent=2)
 print("removed pane-session hook from SessionStart + UserPromptSubmit")
 PY
     ;;
+  resurrect-rewrite)
+    # tmux-resurrect post-save-layout hook (save.sh passes the save-file path).
+    # Rewrites claude pane commands to `claude --resume <uuid> <channels>` so a
+    # reboot restores each pane's specific session instead of a fresh one. Run
+    # from the checkout so `periscope` is importable (tmux fires hooks from an
+    # arbitrary cwd); stdlib-only, so plain python3 with no uv/venv.
+    ( cd "$REPO" && exec python3 -m periscope.resurrect "$2" )
+    ;;
   start)
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
     ;;
@@ -147,7 +155,7 @@ PY
     tail -F "$LOG"
     ;;
   *)
-    echo "usage: $0 {install|uninstall|install-hook|uninstall-hook|start|stop|restart|status|tail}"
+    echo "usage: $0 {install|uninstall|install-hook|uninstall-hook|resurrect-rewrite|start|stop|restart|status|tail}"
     exit 1
     ;;
 esac
