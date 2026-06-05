@@ -2434,6 +2434,29 @@ body.modal-open { overflow: hidden; }
   border-bottom: 1px solid var(--line-soft);
   list-style: none;
 }
+/* Star toggle: ghost button at the row's right edge. Hidden until row hover so
+   it doesn't visually clutter the column; always visible when active (pinned). */
+.files-pin {
+  flex: 0 0 18px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: var(--fg-3);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 80ms linear, color 80ms linear;
+}
+.files-row:hover .files-pin { opacity: 0.7; }
+.files-pin:hover { color: var(--fg-1); opacity: 1; }
+.files-pin-on { opacity: 1; color: #d8b33a; }
+.files-pin-on:hover { color: #e8c34a; }
+/* Pinned-but-not-touched rows: render at the same intensity as priority items
+   (this IS the user's explicit priority signal). */
+.files-row-pinned .files-path { color: var(--fg-1); font-weight: 600; }
+.files-row-pinned .files-op { opacity: 1; }
 .header-cwd-reveal {
   cursor: pointer;
   text-decoration: underline dotted rgba(255,255,255,0.3);

@@ -302,47 +302,93 @@ function NotesEditor({ pid, onRefresh, idPrefix }) {
 }
 
 // One file row. `label` is the shortest-unique-suffix display; the full path
-// stays in the tooltip and is what we actually open.
-function FileRow({ it, label, priority }) {
+// stays in the tooltip and is what we actually open. The star is a button so
+// keyboard activation works; it stops propagation so it never opens the file.
+function FileRow({ it, label, priority, pinned, onTogglePin }) {
   return (
     <li
-      class={`files-row${priority ? " files-row-priority" : ""}`}
+      class={`files-row${priority ? " files-row-priority" : ""}${pinned ? " files-row-pinned" : ""}`}
       onClick={() => openFileTab({ path: it.path, line: null })}
       title={`Open ${it.path} as a preview tab`}
     >
       <span class="files-op">{opGlyph(it.op)}</span>
       <span class="files-path">{label}</span>
+      <button
+        type="button"
+        class={`files-pin${pinned ? " files-pin-on" : ""}`}
+        title={pinned ? "Unpin file" : "Pin file"}
+        aria-label={pinned ? "Unpin file" : "Pin file"}
+        aria-pressed={pinned ? "true" : "false"}
+        onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+      >
+        {pinned ? "★" : "☆"}
+      </button>
     </li>
   );
 }
 
 function FilesSection({ pid }) {
-  if (!pid || !transcriptSeen.value[pid]) return null;
-  const entry = paneTranscript.value[pid];
-  if (!entry || !entry.messages) return null;
-  const items = filesTouched(entry.messages);
-  if (!items.length) return null;
+  // Subscribe to prefs explicitly so a pin toggle re-renders this section
+  // without waiting for the 1.5s /api/pane poll.
+  prefs.prefsSignal.value;
+  if (!pid) return null;
+  // Touched files come from the transcript when it's loaded. Pins survive
+  // independently — render the section if EITHER side has anything.
+  const seen = transcriptSeen.value[pid];
+  const entry = seen ? paneTranscript.value[pid] : null;
+  const touched = (entry && entry.messages) ? filesTouched(entry.messages) : [];
+  const pinnedPaths = prefs.getPinnedFiles(pid);
+  if (!touched.length && !pinnedPaths.length) return null;
 
-  // Shortest unique suffix over ALL paths, so a leaf only grows a directory
-  // segment when two touched files share a filename (e.g. two index.html).
-  const allPaths = items.map((it) => it.path);
+  const touchedByPath = new Map(touched.map((it) => [it.path, it]));
+  // Pinned group: pinned-files order from prefs. For paths Claude has also
+  // touched, reuse the touched op glyph; otherwise show a neutral dot.
+  const pinned = pinnedPaths.map((p) => touchedByPath.get(p) || { path: p, op: null });
+  const pinnedSet = new Set(pinnedPaths);
+
+  // Touched groups (priority / other) exclude paths already in the pinned group
+  // so each path appears once.
+  const remainingTouched = touched.filter((it) => !pinnedSet.has(it.path));
+  const { priority, others } = partitionFilesByPriority(remainingTouched);
+
+  // Shortest-unique-suffix universe spans every rendered path so a leaf only
+  // grows a directory segment on real collision (e.g. two index.html).
+  const allPaths = [...pinnedPaths, ...remainingTouched.map((it) => it.path)];
   const label = (p) => shortestUniqueSuffix(p, allPaths);
 
-  // Priority types (html/md) hoisted above a divider; both groups keep recency.
-  const { priority, others } = partitionFilesByPriority(items);
+  const togglePin = (path) => () => prefs.togglePinnedFile(pid, path);
+
+  // Divider between any two non-empty groups (at most two dividers possible).
+  const groups = [
+    { items: pinned, render: (it) => (
+      <FileRow
+        key={`pin:${it.path}`} it={it} label={label(it.path)}
+        pinned onTogglePin={togglePin(it.path)}
+      />
+    )},
+    { items: priority, render: (it) => (
+      <FileRow
+        key={`pri:${it.path}`} it={it} label={label(it.path)} priority
+        pinned={false} onTogglePin={togglePin(it.path)}
+      />
+    )},
+    { items: others, render: (it) => (
+      <FileRow
+        key={`oth:${it.path}`} it={it} label={label(it.path)}
+        pinned={false} onTogglePin={togglePin(it.path)}
+      />
+    )},
+  ].filter((g) => g.items.length > 0);
 
   return (
     <section class="modal-side-section modal-side-files">
       <h4>Files</h4>
       <ul class="files-list">
-        {priority.map((it) => (
-          <FileRow key={it.path} it={it} label={label(it.path)} priority />
-        ))}
-        {priority.length > 0 && others.length > 0 && (
-          <li class="files-divider" aria-hidden="true"></li>
-        )}
-        {others.map((it) => (
-          <FileRow key={it.path} it={it} label={label(it.path)} />
+        {groups.map((g, gi) => (
+          <>
+            {gi > 0 && <li class="files-divider" aria-hidden="true"></li>}
+            {g.items.map(g.render)}
+          </>
         ))}
       </ul>
     </section>

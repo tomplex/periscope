@@ -150,15 +150,16 @@ export function getAnnotation(pid) {
   if (!entry) return null;
   const notes = entry.notes || "";
   const tags = entry.tags || [];
-  if (!notes && !tags.length) return null;
-  return { notes, tags };
+  const pinned_files = entry.pinned_files || [];
+  if (!notes && !tags.length && !pinned_files.length) return null;
+  return { notes, tags, pinned_files };
 }
 
 export function hasAnnotation(pid) {
   return getAnnotation(pid) !== null;
 }
 
-export async function setAnnotation(pid, { notes, tags }) {
+export async function setAnnotation(pid, { notes, tags, pinned_files }) {
   if (!P().loaded) {
     await loadPrefs();
     if (!P().loaded) return false;
@@ -169,12 +170,19 @@ export async function setAnnotation(pid, { notes, tags }) {
     ...entry,
     notes: notes ?? entry.notes,
     tags: tags ?? entry.tags,
+    pinned_files: pinned_files ?? entry.pinned_files,
   };
   prefsSignal.value = { ...P(), windows: { ...P().windows, [pid]: optimistic } };
+  // exclude_none on the wire so server treats an omitted field as "no change",
+  // matching how undefined args are handled here on the client.
+  const body = {};
+  if (notes !== undefined) body.notes = notes;
+  if (tags !== undefined) body.tags = tags;
+  if (pinned_files !== undefined) body.pinned_files = pinned_files;
   const data = await apiCall("save annotation", `/api/prefs/windows/${encodeURIComponent(pid)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ notes, tags }),
+    body: JSON.stringify(body),
   });
   if (!data) {
     // Revert distinction: a brand-new entry (previous === undefined) must be
@@ -186,7 +194,7 @@ export async function setAnnotation(pid, { notes, tags }) {
     prefsSignal.value = { ...P(), windows: reverted };
     return false;
   }
-  // Server returns the cleaned annotation (deduped tags, trimmed); use it.
+  // Server returns the cleaned annotation (deduped, trimmed); use it.
   prefsSignal.value = {
     ...P(),
     windows: { ...P().windows, [pid]: { ...(P().windows[pid] || {}), ...data.annotation } },
@@ -201,6 +209,7 @@ export async function deleteAnnotation(pid) {
     const next = { ...P().windows[pid] };
     delete next.notes;
     delete next.tags;
+    delete next.pinned_files;
     prefsSignal.value = { ...P(), windows: { ...P().windows, [pid]: next } };
   }
   const data = await apiCall("clear annotation", `/api/prefs/windows/${encodeURIComponent(pid)}`, {
@@ -211,6 +220,27 @@ export async function deleteAnnotation(pid) {
     return false;
   }
   return true;
+}
+
+// ── Per-pane pinned files (Sidebar's Files section) ─────────────────────
+// Pins are stored as `pinned_files` on the window annotation blob. The order
+// in the array IS the display order in the Pinned group (insertion order).
+
+export function getPinnedFiles(pid) {
+  if (!pid) return [];
+  const entry = P().windows[pid];
+  return [...(entry?.pinned_files || [])];
+}
+
+export function isPinnedFile(pid, path) {
+  return getPinnedFiles(pid).includes(path);
+}
+
+export function togglePinnedFile(pid, path) {
+  if (!pid || !path) return Promise.resolve(false);
+  const cur = getPinnedFiles(pid);
+  const next = cur.includes(path) ? cur.filter((p) => p !== path) : [...cur, path];
+  return setAnnotation(pid, { pinned_files: next });
 }
 
 // ── One-time localStorage → server migration ─────────────────────────────
