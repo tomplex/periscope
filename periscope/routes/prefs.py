@@ -66,12 +66,14 @@ def patch_prefs_ui(body: UIPatch):
 class WindowAnnotation(BaseModel):
     notes: str | None = None
     tags: list[str] | None = None
+    pinned_files: list[str] | None = None
 
 
 @router.put("/api/prefs/windows/{pid}")
 def put_window_annotation(pid: str, body: WindowAnnotation):
-    """Set/replace notes and tags on a window. `last_seen` and other
-    fields are left intact — only notes/tags are managed via this endpoint."""
+    """Set/replace notes, tags, and pinned_files on a window. `last_seen`
+    and other fields are left intact — only the annotation-shaped fields
+    are managed via this endpoint."""
     if not pid or not pid.isalnum():
         raise HTTPException(400, "invalid pid")
     patch = body.model_dump(exclude_none=True)
@@ -85,26 +87,40 @@ def put_window_annotation(pid: str, body: WindowAnnotation):
                 seen.add(t)
                 clean.append(t)
         patch["tags"] = clean
-    # Empty notes / empty tag list → delete via the None-deletes semantics.
+    # Same dedupe + trim for pinned_files. Paths are stored verbatim
+    # (no path canonicalization — frontend pins exactly what filesTouched yields).
+    if "pinned_files" in patch:
+        seen_p: set[str] = set()
+        clean_p: list[str] = []
+        for p in patch["pinned_files"]:
+            p = (p or "").strip()
+            if p and p not in seen_p:
+                seen_p.add(p)
+                clean_p.append(p)
+        patch["pinned_files"] = clean_p
+    # Empty value → delete via the None-deletes semantics.
     updates: dict = {}
     if "notes" in patch:
         updates["notes"] = patch["notes"] if patch["notes"] != "" else None
     if "tags" in patch:
         updates["tags"] = patch["tags"] if patch["tags"] != [] else None
+    if "pinned_files" in patch:
+        updates["pinned_files"] = patch["pinned_files"] if patch["pinned_files"] != [] else None
     set_window_fields(pid, **updates)
     entry = get_window(pid)
     return {"ok": True, "pid": pid, "annotation": {
         "notes": entry.get("notes"),
         "tags": entry.get("tags") or [],
+        "pinned_files": entry.get("pinned_files") or [],
     }}
 
 
 @router.delete("/api/prefs/windows/{pid}")
 def delete_window_annotation(pid: str):
-    """Remove notes + tags. last_seen is preserved (it's the rebind hint)."""
+    """Remove notes + tags + pinned_files. last_seen is preserved (rebind hint)."""
     if not pid or not pid.isalnum():
         raise HTTPException(400, "invalid pid")
-    set_window_fields(pid, notes=None, tags=None)
+    set_window_fields(pid, notes=None, tags=None, pinned_files=None)
     return {"ok": True, "pid": pid}
 
 

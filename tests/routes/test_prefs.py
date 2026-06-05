@@ -52,6 +52,20 @@ def test_put_window_annotation(client, clean_state):
     assert body["ok"] is True
     assert body["annotation"]["notes"] == "hi"
     assert body["annotation"]["tags"] == ["a", "b"]
+    assert body["annotation"]["pinned_files"] == []
+
+
+def test_put_window_annotation_pinned_files(client, clean_state):
+    # Dedupe + preserve insertion order; trim blanks.
+    r = client.put("/api/prefs/windows/abc123", json={
+        "pinned_files": ["/a/b.md", "  ", "/a/b.md", "/c/d.html"],
+    })
+    assert r.status_code == 200
+    assert r.json()["annotation"]["pinned_files"] == ["/a/b.md", "/c/d.html"]
+    # Empty list clears the field.
+    r2 = client.put("/api/prefs/windows/abc123", json={"pinned_files": []})
+    assert r2.json()["annotation"]["pinned_files"] == []
+    assert "pinned_files" not in clean_state["windows"]["abc123"]
 
 
 def test_put_window_annotation_invalid_pid(client, clean_state):
@@ -61,11 +75,12 @@ def test_put_window_annotation_invalid_pid(client, clean_state):
 
 
 def test_delete_window_annotation(client, clean_state):
-    clean_state["windows"]["abc123"] = {"notes": "x", "tags": ["t"]}
+    clean_state["windows"]["abc123"] = {"notes": "x", "tags": ["t"], "pinned_files": ["/x"]}
     r = client.delete("/api/prefs/windows/abc123")
     assert r.json()["ok"] is True
     assert "notes" not in clean_state["windows"]["abc123"]
     assert "tags" not in clean_state["windows"]["abc123"]
+    assert "pinned_files" not in clean_state["windows"]["abc123"]
 
 
 def test_add_and_delete_command(client, clean_state):
