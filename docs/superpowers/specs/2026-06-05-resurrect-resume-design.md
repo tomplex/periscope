@@ -37,9 +37,13 @@ no-op**, for two independent reasons, plus a third latent defect:
 2. **Wrong session map.** The hook resolves UUIDs from
    `/tmp/claude-sessions/pid-<os_pid>` — an orphaned legacy map with no writer
    found anywhere in `~/.claude`, `~/dev/periscope`, or `~/.tmux*`. Periscope's
-   own authoritative, `/clear`-surviving map is
-   `~/.config/periscope/pane_sessions/<tmux_pane_id>`, maintained by
-   `pane_session_hook.py`.
+   own authoritative, `/clear`-surviving map is the **`pane_sessions` table in
+   `periscope.db`** (`~/.config/periscope/periscope.db`), keyed by tmux pane id,
+   written by `pane_session_hook.py` (which opens its own stdlib `sqlite3`
+   connection on Claude's `SessionStart`/`UserPromptSubmit`). The older
+   `~/.config/periscope/pane_sessions/<pane_id>` *directory* is itself legacy —
+   migrated into the table by `activity.migrate_legacy_pane_sessions()` and now
+   stale.
 
 3. **Latent: channel flags dropped.** Even when it matched, the rewrite
    `sed`-replaced everything after `:claude` with `--resume <uuid>`, discarding the
@@ -95,9 +99,18 @@ resurrect's own save dir.
 
 ### `periscope/resurrect.py`
 
-Stdlib-only (so the hook runs as `python3 -m periscope.resurrect <savefile>` with
-no `uv`/dependency-resolution cost on continuum's ~10-minute cadence). Public
-surface:
+**Import discipline.** Stdlib-only at runtime, so the hook runs as
+`python3 -m periscope.resurrect <savefile>` with no `uv`/dependency-resolution
+cost on continuum's ~10-minute cadence. It may import **only**
+`periscope.config` (a stdlib-only leaf module — `os`, `pathlib`) plus the stdlib
+(`sqlite3`, `re`, `subprocess`, `os`, `pathlib`, `tempfile`). It must **not**
+import `periscope.activity` (whose own imports pull in `git_pr`, `panes`, and
+`rename_ai` → the Anthropic SDK and other non-stdlib deps), which would break the
+plain-`python3` invocation. The module therefore opens its **own** read
+connection to the session DB — the same out-of-process pattern
+`pane_session_hook.py` already uses as the writer.
+
+Public surface:
 
 ```python
 def rewrite_save_file(save_path: Path) -> int:
@@ -123,9 +136,15 @@ fixes defect 1 and is robust to future `pane_current_command` changes.
 - Build the key `<session>:<window_index>.<pane_index>` from the save-file fields.
 - Map that key to the live tmux pane id via
   `tmux list-panes -a -F '#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}'`.
-- Read the uuid from `PANE_SESSIONS_DIR/<pane_id>` (i.e.
-  `~/.config/periscope/pane_sessions/<pane_id>`), reusing
-  `periscope.config.PANE_SESSIONS_DIR`.
+  (Pane indices are 1-based on this host — `pane-base-index 1` — matching the save
+  file; the lookup keys off whatever the save file recorded, so no assumption is
+  baked in.)
+- Read the uuid from the `pane_sessions` table in `config.ACTIVITY_DB`
+  (`~/.config/periscope/periscope.db`) via a stdlib `sqlite3` read:
+  `SELECT session_id FROM pane_sessions WHERE pane_id=?`. The connection is opened
+  read-only and closed per invocation (the hook is short-lived). This mirrors
+  `pane_session_hook.py`'s own direct-connection pattern rather than importing the
+  server's `activity` module.
 
 **Reconstruct, preserving channels.** From the captured full command, regex out
 every `--dangerously-load-development-channels <value>` flag (in original order),
@@ -141,8 +160,9 @@ Extracting only the channel flags sidesteps parsing the multi-kilobyte,
 `:` + the reconstructed command; rejoin the line with tabs.
 
 **Skip safely.** If the pane has no resolvable uuid (no live pane id for the
-position, or no `pane_sessions` file), leave the line **unchanged** — resurrect
-restores it as a fresh `claude`, never a broken pane. Count it as skipped.
+position, or no `pane_sessions` row for that pane id), leave the line
+**unchanged** — resurrect restores it as a fresh `claude`, never a broken pane.
+Count it as skipped.
 
 **Write atomically** (tmpfile + `os.replace`), matching the existing hook.
 
@@ -157,8 +177,9 @@ A thin subcommand alongside the existing ones (`install-hook`, etc.) that execs
 ## Testing
 
 `tests/test_resurrect.py`, following the package's one-test-per-module mirror.
-Monkeypatch the `tmux list-panes` call and point `PANE_SESSIONS_DIR` at a temp dir
-seeded with `pane_id → uuid` files. Fixture save-file lines:
+Monkeypatch the `tmux list-panes` call and point `config.ACTIVITY_DB` at a temp
+SQLite DB seeded with a `pane_sessions` table (`pane_id → session_id` rows).
+Fixture save-file lines:
 
 - A claude pane with `--system-prompt` + both `server:periscope` and `server:lgtm`
   channels → rewritten to `claude --resume <uuid>` with **both** channel flags
