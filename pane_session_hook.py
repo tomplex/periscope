@@ -15,15 +15,29 @@ Why this is the reliable producer: it reads `session_id` from the hook PAYLOAD
 from the environment of a DIRECT child of the pane's Claude (the real pane id,
 not the inherited/contaminated value a deep subprocess scan would see).
 
-Writes <XDG_CONFIG_HOME|~/.config>/periscope/pane_sessions/<TMUX_PANE> = id —
-the same file periscope.turns reads and channel_shim writes. Best-effort: any
+Writes one row into the `pane_sessions` table in
+<XDG_CONFIG_HOME|~/.config>/periscope/periscope.db. The hook opens its own
+short-lived SQLite connection (it runs out-of-process; no shared connection
+with the periscope server). The table's journal_mode persists in the file
+header, so the hook's connection inherits WAL automatically. Best-effort: any
 failure is swallowed and it always exits 0, so it can never block a prompt.
 
 Installed/removed by `bin/periscope {install-hook,uninstall-hook}`.
 """
 import json
 import os
+import sqlite3
 import sys
+import time
+
+
+_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS pane_sessions ("
+    "  pane_id TEXT PRIMARY KEY,"
+    "  session_id TEXT NOT NULL,"
+    "  updated_at INTEGER NOT NULL"
+    ")"
+)
 
 
 def record() -> None:
@@ -34,13 +48,21 @@ def record() -> None:
     if not sid:
         return
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    d = os.path.join(base, "periscope", "pane_sessions")
-    os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, pane)
-    tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        f.write(sid)
-    os.replace(tmp, path)  # atomic publish
+    db = os.path.join(base, "periscope", "periscope.db")
+    os.makedirs(os.path.dirname(db), exist_ok=True)
+    # `timeout` covers the rare case where periscope's worker is mid-write —
+    # SQLite serializes writers so we just wait briefly. WAL mode (set by the
+    # server on first open) makes this a non-blocker in practice.
+    with sqlite3.connect(db, timeout=2.0) as c:
+        c.execute(_SCHEMA)
+        c.execute(
+            "INSERT INTO pane_sessions (pane_id, session_id, updated_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(pane_id) DO UPDATE SET "
+            "  session_id=excluded.session_id, "
+            "  updated_at=excluded.updated_at",
+            (pane, sid, int(time.time())),
+        )
 
 
 def main() -> None:

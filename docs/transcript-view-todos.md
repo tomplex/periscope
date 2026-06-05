@@ -20,8 +20,8 @@ Each item below is self-contained enough to pick up in a fresh session.
   `session_id_for_pane`, glob-for-`<sid>.jsonl`), route `GET /api/pane/turns` in
   `periscope/routes/pane.py`.
 - **Pane→session map:** `pane_session_hook.py` (SessionStart + UserPromptSubmit)
-  writes `~/.config/periscope/pane_sessions/<tmux-pane>` = session id. See
-  CLAUDE.md "Pane → session mapping".
+  UPSERTs into the `pane_sessions` table in
+  `~/.config/periscope/periscope.db`. See CLAUDE.md "Pane → session mapping".
 - **Message shape** (what the renderer consumes): `{role, uuid, ts_ms, text,
   tool_uses:[{id,name,input,result}]}`; compact dividers `{role:"system",
   kind:"compact", uuid, ts_ms}`. `ts_ms` is **milliseconds** — `relTime` wants

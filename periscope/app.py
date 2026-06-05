@@ -38,9 +38,24 @@ async def lifespan(_app: FastAPI):
     # Reap any periscope-usage-* tmux sessions left behind by a prior
     # crash before the new scrape thread spawns a fresh one.
     kill_orphan_usage_sessions()
-    # Bound activity.db growth — drop events older than 30 days.
+    # Bound periscope.db growth — drop events older than 30 days, import the
+    # legacy pane_sessions/ directory if present, then drop pane_sessions rows
+    # whose tmux pane is gone.
     from periscope import activity
+    from periscope.panes import list_windows
     _bg("activity-prune", activity.prune)
+
+    def _pane_sessions_housekeeping() -> None:
+        imported = activity.migrate_legacy_pane_sessions()
+        if imported:
+            log.info("migrated %d legacy pane_sessions row(s) into periscope.db",
+                     imported)
+        alive = {w["pane_id"] for w in list_windows() if w.get("pane_id")}
+        dropped = activity.prune_pane_sessions(alive)
+        if dropped:
+            log.info("pruned %d dead pane_sessions row(s)", dropped)
+
+    _bg("pane-sessions-housekeeping", _pane_sessions_housekeeping)
     # Kick off cache prewarms eagerly so the first /api/state poll already
     # has PR badges and the usage bars populated.
     _bg("prewarm-pr", prewarm_pr_cache)

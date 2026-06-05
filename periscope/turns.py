@@ -3,30 +3,22 @@ session running in it, then parses that session's JSONL into turn messages.
 
 cwd alone can't identify the session: many panes share one cwd (several Claude
 sessions in the same repo), so newest-mtime-in-cwd returns the same transcript
-for all of them. The pane -> session id mapping is published by each pane's
-channel_shim into PANE_SESSIONS_DIR (see channel_shim._record_pane_session) —
-the shim is a direct MCP child of the pane's claude, so it carries exactly that
-pane's session id, unlike tool/subagent subprocesses whose inherited env
-cross-contaminates. Falls back to newest-mtime-in-cwd when a pane has no
-recorded session (channel never connected / shim predates this feature).
+for all of them. The pane -> session id mapping is published by pane_session_hook.py
+into the pane_sessions table in periscope.db — the hook reads session_id from
+Claude's hook payload (current + authoritative, unlike inherited env which
+cross-contaminates from tool/subagent subprocesses). Falls back to
+newest-mtime-in-cwd when a pane has no recorded session (hook not yet
+installed, or the pane predates the first SessionStart firing).
 
 Imports only periscope.* / history.* — never `from server import`."""
 import periscope.activity as activity
 from history.search import messages_from_jsonl
-from periscope.config import PANE_SESSIONS_DIR
 from periscope.tmux import tmux
 
 
 def session_id_for_pane(pane_id: str) -> str | None:
-    """The pane's Claude session id, read from the shim-written map file
-    PANE_SESSIONS_DIR/<pane_id>. None if the pane has no recorded session."""
-    if not pane_id:
-        return None
-    try:
-        sid = (PANE_SESSIONS_DIR / pane_id).read_text().strip()
-    except OSError:
-        return None
-    return sid or None
+    """The pane's Claude session id, or None if no row in pane_sessions."""
+    return activity.get_pane_session(pane_id)
 
 
 def _jsonl_for_session(session_id: str):

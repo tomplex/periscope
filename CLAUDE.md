@@ -321,11 +321,14 @@ just rarely now.
 transcript (the split-view "Transcript" mode + `GET /api/pane/turns`). It must
 map a tmux pane to its *specific* session JSONL — **cwd alone collides** when
 several Claude panes run in one directory (newest-mtime returns the same file
-for all of them). The mapping is a directory of tiny files,
-`~/.config/periscope/pane_sessions/<tmux-pane-id>` containing that pane's
-`CLAUDE_CODE_SESSION_ID` (the JSONL stem); `turns.py` reads it and globs for
-`<id>.jsonl` (glob, not cwd-encode — a pane that `cd`'d into a worktree has its
-JSONL under the *start* dir's encoding).
+for all of them). The mapping lives in the `pane_sessions` table in
+`~/.config/periscope/periscope.db` (`pane_id → session_id`, where `session_id`
+is the JSONL stem / `CLAUDE_CODE_SESSION_ID`); `turns.py` reads it via
+`activity.get_pane_session` and globs for `<id>.jsonl` (glob, not cwd-encode —
+a pane that `cd`'d into a worktree has its JSONL under the *start* dir's
+encoding). Lifespan runs a one-shot import from the legacy
+`~/.config/periscope/pane_sessions/` directory layout (`migrate_legacy_pane_sessions`)
+and prunes rows for tmux pane ids that no longer exist.
 
 The producer is **`pane_session_hook.py`**, registered on Claude's
 `SessionStart` *and* `UserPromptSubmit` events by `bin/periscope install-hook`

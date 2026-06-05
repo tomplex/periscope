@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_scope ON events (scope_kind, scope_key, at);
 CREATE TABLE IF NOT EXISTS cursors (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS pane_sessions (
+  pane_id     TEXT PRIMARY KEY,      -- tmux pane id, e.g. '%56'
+  session_id  TEXT NOT NULL,         -- Claude CLAUDE_CODE_SESSION_ID (JSONL stem)
+  updated_at  INTEGER NOT NULL
+);
 """
 
 _CONN: sqlite3.Connection | None = None
@@ -121,6 +126,87 @@ def checkpoint() -> None:
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except sqlite3.OperationalError:
             pass
+
+
+# --- pane_sessions: tmux pane id -> Claude session id mapping ----------
+#
+# Replaces the legacy ~/.config/periscope/pane_sessions/<pane> file
+# layout (one tiny file per pane id, 631+ inodes for a logical k/v map).
+# Writer is pane_session_hook.py (out-of-process, opens its own SQLite
+# connection on Claude's SessionStart/UserPromptSubmit). Readers are
+# periscope.turns and any future code that needs the mapping.
+
+def get_pane_session(pane_id: str) -> str | None:
+    """The Claude session id last recorded for this tmux pane, or None."""
+    if not pane_id:
+        return None
+    with _LOCK:
+        c = _conn()
+        row = c.execute(
+            "SELECT session_id FROM pane_sessions WHERE pane_id=?",
+            (pane_id,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def prune_pane_sessions(alive_pane_ids: set[str]) -> int:
+    """Drop pane_sessions rows for panes no longer in tmux. Returns the
+    number of rows deleted. Caller passes the live set; we can't safely
+    enumerate it here without circular imports."""
+    with _LOCK:
+        c = _conn()
+        existing = {r[0] for r in c.execute("SELECT pane_id FROM pane_sessions")}
+        dead = existing - alive_pane_ids
+        if not dead:
+            return 0
+        c.executemany("DELETE FROM pane_sessions WHERE pane_id=?",
+                      [(p,) for p in dead])
+        c.commit()
+        return len(dead)
+
+
+def migrate_legacy_pane_sessions() -> int:
+    """One-shot import of the legacy ~/.config/periscope/pane_sessions/
+    file layout into the pane_sessions table. Removes the directory on
+    success. Returns the number of rows imported. No-op if the directory
+    is absent. Idempotent: rows use INSERT OR REPLACE."""
+    import os
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    legacy = Path(base) / "periscope" / "pane_sessions"
+    if not legacy.is_dir():
+        return 0
+    now = int(time.time())
+    rows: list[tuple[str, str, int]] = []
+    for f in legacy.iterdir():
+        if not f.name.startswith("%") or not f.is_file():
+            continue
+        try:
+            sid = f.read_text().strip()
+        except OSError:
+            continue
+        if sid:
+            rows.append((f.name, sid, now))
+    if rows:
+        with _LOCK:
+            c = _conn()
+            c.executemany(
+                "INSERT INTO pane_sessions (pane_id, session_id, updated_at) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(pane_id) DO UPDATE SET "
+                "  session_id=excluded.session_id, "
+                "  updated_at=excluded.updated_at",
+                rows,
+            )
+            c.commit()
+    # Wipe the directory. Use rmtree so partial state doesn't survive —
+    # if a hook race left an unreadable file, we still don't want the
+    # legacy path to keep coming back on every restart.
+    import shutil
+    try:
+        shutil.rmtree(legacy)
+    except OSError:
+        log.warning("could not remove legacy pane_sessions dir %s", legacy)
+    return len(rows)
 
 
 def _row_to_event(event_kind, at, text, detail, url):
