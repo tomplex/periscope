@@ -108,6 +108,21 @@ def prune(max_age_days=30):
         c.commit()
 
 
+def checkpoint() -> None:
+    """Shrink the WAL file via a TRUNCATE checkpoint. SQLite's default
+    auto-checkpoint runs PASSIVE on every 1000-page write, which writes
+    the WAL into the main DB but never truncates the WAL file itself —
+    so it grows to ~4MB and stays there. TRUNCATE both checkpoints and
+    truncates. Best-effort: if a reader holds the file, the truncate
+    silently skips and we retry next tick."""
+    with _LOCK:
+        c = _conn()
+        try:
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.OperationalError:
+            pass
+
+
 def _row_to_event(event_kind, at, text, detail, url):
     """Map a DB row into the frontend event model (spec §Event model)."""
     if event_kind == "alert":
@@ -333,6 +348,9 @@ def _worker_tick(last_ctx: dict) -> None:
             maybe_emit_milestone(cwd, branch, settled)
         except Exception:
             log.exception("maybe_emit_milestone failed for %s", cwd)
+    # Keep periscope.db-wal bounded — see checkpoint() docstring for why
+    # SQLite's default auto-checkpoint isn't enough on its own.
+    checkpoint()
 
 
 async def run_worker() -> None:
