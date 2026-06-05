@@ -134,8 +134,13 @@ fixes defect 1 and is robust to future `pane_current_command` changes.
 
 **Resolve the session uuid.**
 - Build the key `<session>:<window_index>.<pane_index>` from the save-file fields.
-- Map that key to the live tmux pane id via
-  `tmux list-panes -a -F '#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}'`.
+- Map that key to the live tmux pane id via `tmux list-panes -a -F` with a format
+  string joining `#{session_name}`, `#{window_index}`, `#{pane_index}`,
+  `#{pane_id}` with **real tab characters**. Note: tmux's `-F` does *not* expand
+  `\t` — a literal backslash-t yields unsplittable single-field rows (a silent
+  no-op, the exact failure this feature replaces). A Python `"\t"` literal is a
+  real tab, so passing the format as a normal Python string is correct; the
+  hazard is only if the display form here is transcribed into a shell `-F`.
   (Pane indices are 1-based on this host — `pane-base-index 1` — matching the save
   file; the lookup keys off whatever the save file recorded, so no assumption is
   baked in.)
@@ -146,18 +151,41 @@ fixes defect 1 and is robust to future `pane_current_command` changes.
   `pane_session_hook.py`'s own direct-connection pattern rather than importing the
   server's `activity` module.
 
-**Reconstruct, preserving channels.** From the captured full command, regex out
-every `--dangerously-load-development-channels <value>` flag (in original order),
-discard the stale `--system-prompt …` value and any pre-existing `--resume …`, and
-emit:
+**Reconstruct, preserving channels.** From the captured full command:
+- Regex out every `--dangerously-load-development-channels <value>` flag,
+  **preserving their original on-disk order** (real save-file lines vary: some
+  carry `server:lgtm` then `server:periscope`, some carry `server:lgtm` alone —
+  do not assume periscope is present or first).
+- Strip **all** `--resume <uuid>` tokens, wherever they appear — not just a
+  trailing one. This matters: real lines already carry `--resume` *between* two
+  channel flags (panes that were themselves launched resumed), so a trailing-only
+  strip would leave a stray uuid. 9 of 24 claude lines in the current save file
+  already have a `--resume`, so this is the common path, not an edge case.
+- Discard the stale `--system-prompt …` value.
+
+Emit `claude --resume <uuid>` followed by the preserved channel flags in their
+original order:
 
 ```
-claude --resume <uuid> --dangerously-load-development-channels server:periscope [--dangerously-load-development-channels server:lgtm] …
+claude --resume <uuid> --dangerously-load-development-channels server:lgtm --dangerously-load-development-channels server:periscope
 ```
 
-Extracting only the channel flags sidesteps parsing the multi-kilobyte,
-`\012`-escaped system-prompt value entirely. Replace field 10 with
-`:` + the reconstructed command; rejoin the line with tabs.
+Extracting only the channel flags (the value is always `server:periscope` or
+`server:lgtm` — no spaces, no false positives, and the literal
+`dangerously-load-development-channels` never appears inside a system-prompt body
+in the real data) sidesteps parsing the multi-kilobyte, `\012`-escaped
+system-prompt value entirely. Replace field 10 with `:` + the reconstructed
+command; rejoin the line with tabs.
+
+**Relation to `CLAUDE_EXEC`.** The codebase's canonical resume command
+(`routes/sessions.py:164`) is `{CLAUDE_EXEC} --resume <id>`, where
+`config.CLAUDE_EXEC` = `claude --dangerously-load-development-channels
+server:periscope` — channels-then-resume, periscope-only. This design
+deliberately diverges: it preserves whatever channel set each pane actually had
+(keeping `server:lgtm`, which `CLAUDE_EXEC` would drop) rather than forcing the
+canonical single-channel command. Argument order is free to Claude's parser, so
+`--resume`-first is fine. `CLAUDE_EXEC` is not reused here precisely because it
+cannot express the per-pane channel set.
 
 **Skip safely.** If the pane has no resolvable uuid (no live pane id for the
 position, or no `pane_sessions` row for that pane id), leave the line
@@ -166,13 +194,32 @@ Count it as skipped.
 
 **Write atomically** (tmpfile + `os.replace`), matching the existing hook.
 
-**Idempotent.** Re-running on an already-rewritten file strips the existing
-`--resume` and re-injects the current uuid, so repeated saves converge.
+**Idempotent.** Because reconstruction strips *all* `--resume` tokens (anywhere
+in the field) before re-injecting the current uuid, re-running on an
+already-rewritten file converges to the same result.
+
+**Missing/empty DB degrades to "all fresh."** On a machine where the hook has
+never run (no `periscope.db`, or no `pane_sessions` rows yet), every claude line
+is skipped and restored as a fresh session — the same non-broken outcome as the
+per-pane skip path. The opened connection tolerates a missing DB without raising
+(checked before query, not `mode=ro` against a nonexistent file).
 
 ### `bin/periscope resurrect-rewrite <savefile>`
 
-A thin subcommand alongside the existing ones (`install-hook`, etc.) that execs
-`python3 -m periscope.resurrect "$1"` from the checkout. No new dependencies.
+A thin subcommand alongside the existing ones (`install-hook`, etc.). Because tmux
+fires the hook from an **arbitrary cwd**, a bare `python3 -m periscope.resurrect`
+fails with `ModuleNotFoundError` — the package isn't importable unless the
+checkout is on the path. The subcommand must run from the checkout, matching the
+`( cd "$REPO" && … )` pattern already used elsewhere in `bin/periscope`:
+
+```sh
+resurrect-rewrite)
+  ( cd "$REPO" && exec python3 -m periscope.resurrect "$1" )
+  ;;
+```
+
+`periscope/__init__.py` is empty and `periscope/config.py` imports only stdlib, so
+this runs under the system `python3` with no `uv`/venv and no new dependencies.
 
 ## Testing
 
@@ -181,13 +228,20 @@ Monkeypatch the `tmux list-panes` call and point `config.ACTIVITY_DB` at a temp
 SQLite DB seeded with a `pane_sessions` table (`pane_id → session_id` rows).
 Fixture save-file lines:
 
-- A claude pane with `--system-prompt` + both `server:periscope` and `server:lgtm`
+- A claude pane with `--system-prompt` + both `server:lgtm` then `server:periscope`
   channels → rewritten to `claude --resume <uuid>` with **both** channel flags
-  preserved in order and the system-prompt dropped.
+  preserved in their original order and the system-prompt dropped.
+- A claude pane with a single channel (`server:lgtm` alone) → rewritten keeping
+  just that one channel (no periscope assumed).
+- A claude pane that **already** carries `--resume <old>` *between* two channel
+  flags → the old uuid is stripped and the current uuid injected, channels intact
+  (the resume-in-the-middle case).
 - An `nvim` pane line and a `zsh` pane line → untouched.
-- A claude pane whose position has no `pane_sessions` entry → untouched.
+- A claude pane whose position has no `pane_sessions` row → untouched.
 - A `window`/`state` (non-pane) line → untouched.
 - Idempotency: feeding the rewritten output back in produces the same result.
+- Missing DB (point `config.ACTIVITY_DB` at a nonexistent path) → all lines
+  untouched, no exception.
 
 This is the regression guard for the next time Claude's TUI/process format shifts
 — the same class of breakage that just silently disabled the old hook.
