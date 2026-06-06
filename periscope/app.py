@@ -22,8 +22,8 @@ from periscope.usage import cached_scraped_usage, kill_orphan_usage_sessions
 
 # Routes — each module owns an APIRouter that we mount into `app` below.
 from periscope.routes import (
-    alerts, auto_rename, channel, fs, healthz, history, pane, paste_image, prefs,
-    send, sessions, state, ws,
+    alerts, auto_rename, channel, events, fs, healthz, history, pane, paste_image,
+    prefs, send, sessions, state, ws,
 )
 from periscope.routes import lgtm as lgtm_route
 from periscope.routes import projects as projects_routes
@@ -44,6 +44,7 @@ async def lifespan(_app: FastAPI):
     from periscope import activity
     from periscope.panes import list_windows
     _bg("activity-prune", activity.prune)
+    _bg("ui-events-prune", activity.prune_ui_events)
 
     def _pane_sessions_housekeeping() -> None:
         imported = activity.migrate_legacy_pane_sessions()
@@ -114,7 +115,7 @@ app = FastAPI(lifespan=lifespan)
 # by path — but we mount them before the static catch-all below so
 # `/api/*` and `/ws/*` paths take precedence over `StaticFiles`.
 for r in (
-    alerts, auto_rename, channel, cleanup_routes, fs, healthz, history, lgtm_route,
+    alerts, auto_rename, channel, events, cleanup_routes, fs, healthz, history, lgtm_route,
     pane, paste_image, prefs, projects_routes, send, sessions, settings_routes,
     state, ws,
 ):
