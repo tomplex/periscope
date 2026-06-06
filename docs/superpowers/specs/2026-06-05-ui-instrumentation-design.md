@@ -1,7 +1,7 @@
 # UI instrumentation — design
 
 **Date:** 2026-06-05
-**Status:** approved (brainstorming), pending spec-review
+**Status:** spec-reviewed (findings addressed), pending plan
 
 ## Goal
 
@@ -65,10 +65,15 @@ CREATE INDEX IF NOT EXISTS idx_ui_events_name ON ui_events (name, at);
 
 - `at` is the **client** timestamp (unix seconds). Same machine, so clock
   skew is a non-issue; the client value is more accurate than server-receipt
-  time given 5 s batching + unload beacons.
-- `dev` is stamped **server-side** from the `PERISCOPE_DEV` env var — the
-  client can't know which instance it's talking to. Real-usage queries filter
-  `WHERE dev=0`.
+  time given 5 s batching + unload beacons. On the wire the client field is
+  named `t` (see §4); `record_ui_events` writes it to the `at` column.
+- `dev` is stamped **server-side** from `config.PORT != 8765` — the same
+  prod/dev discriminator the rest of the package already trusts (`app.py`
+  gates the MCP listener and activity worker on `config.PORT == 8765`). The
+  client can't know which instance it's talking to, and `PERISCOPE_DEV` is
+  only read in `server.py`'s `__main__` block (uvicorn `--reload` gating),
+  never in the package — and nothing enforces it on a dev launch. Port is the
+  load-bearing signal. Real-usage queries filter `WHERE dev=0`.
 - `detail` is a JSON string or `NULL`. Light context only:
   `{pane, session, target, tab, view, which, key}` as relevant per event.
   Never message text, search/filter strings, or transcript content.
@@ -86,7 +91,8 @@ def prune_ui_events(max_age_days: int = 90) -> None:
 ```
 
 - `record_ui_events` holds `_LOCK`, uses `c.executemany(...)`, single commit.
-- `t` is coerced to `int`; a missing/invalid `t` falls back to `time.time()`.
+- The client wire field `t` is coerced to `int` and written to the `at`
+  column; a missing/invalid `t` falls back to `time.time()`.
 - `detail` accepts a dict (serialized) or None; anything else -> None.
 - Both functions follow the existing `record()` / `prune()` patterns in the
   module (lazy `_conn()`, WAL, `_LOCK`).
@@ -96,19 +102,25 @@ def prune_ui_events(max_age_days: int = 90) -> None:
 `POST /api/events`:
 
 - Body shape: `{"events": [{"name": str, "detail": object|null, "t": int}, ...]}`.
-- Parses the **raw request body** as JSON (not a Pydantic body param) so
-  `navigator.sendBeacon`'s `Blob` payload — which may arrive without a clean
-  `application/json` content-type negotiation — is accepted. Empty/garbage
-  body -> treated as zero events.
-- Reads `PERISCOPE_DEV` from the environment to derive `dev: bool`.
+- Parses the **raw request body** as JSON (not a Pydantic body model). A
+  Pydantic body model would raise `422` on malformed input *before the
+  handler runs*, so the handler couldn't swallow it — and a single raw-parse
+  path also covers both transports (`sendBeacon` Blob and the `fetch`
+  keepalive fallback) identically. Empty/garbage body -> treated as zero
+  events.
+- Derives `dev: bool` from `config.PORT != 8765` (not from an env var — see
+  §1).
 - Caps the batch at 1000 events (drops the overflow; this is a backstop, the
   client caps its buffer at 500).
 - Calls `activity.record_ui_events(events, dev)`.
 - Returns `{"ok": True, "n": <inserted>}`. Never raises on a malformed batch
-  — instrumentation must never surface an error toast to the user. (This is
-  the one deliberate exception to the project's `raise HTTPException` route
-  convention: a 4xx/5xx here would trigger `apiCall`'s error toast for a
-  fire-and-forget beacon. The route is not called through `apiCall`.)
+  — instrumentation must never surface an error toast to the user. A
+  malformed/undecodable body is `log.warning`'d server-side (so silently
+  broken instrumentation is noticeable) and still returns `200` with `n=0`.
+  (This is the one deliberate exception to the project's `raise HTTPException`
+  route convention: the route is not called through `apiCall`, so a 4xx/5xx
+  would be silently swallowed by `sendBeacon`/`fetch().catch()` anyway —
+  raising buys nothing and risks a future caller wiring it through `apiCall`.)
 
 Registered in `periscope/app.py`'s `include_router` loop, following the
 existing one-router-per-file pattern.
@@ -147,9 +159,9 @@ addEventListener("pagehide", () => flush(true));
 ```
 
 - The interval + unload listeners are installed once when the module is first
-  imported (it's a singleton ES module). Imported for side effect from
-  `src/main.jsx` so the flush loop starts at boot even before the first
-  `track()` call.
+  imported (it's a singleton ES module). Imported from `src/main.jsx` so the
+  flush loop starts at boot; `main.jsx` also calls `track("app.open")` once at
+  boot (the session heartbeat, §6).
 - `flush()` swallows all errors. Instrumentation failure is silent by design.
 
 ### 5. `apiCall` auto-track (one edit to `static/src/util.js`)
@@ -168,6 +180,7 @@ addEventListener("pagehide", () => flush(true));
 
 | Name | Fires when | detail |
 |---|---|---|
+| `app.open` | the app boots (one `track()` in `main.jsx`) | `{}` — session heartbeat, lets queries normalize per-session / per-active-day |
 | `modal.open` | the pane modal opens | `{tab}` |
 | `modal.close` | the pane modal closes | `{tab}` |
 | `modal.tab` | switching tabs within the modal | `{tab}` |
@@ -186,13 +199,21 @@ contract; the plan maps each row to its call site.
 
 ### 7. Retention
 
-`prune_ui_events(max_age_days=90)` is called once at startup, alongside the
-existing `activity.prune()` call (locate that call site during planning —
-likely the lifespan in `app.py`). Low event volume; 90 days gives trend room.
+`prune_ui_events(max_age_days=90)` is called once at startup via
+`_bg("ui-events-prune", activity.prune_ui_events)`, next to the existing
+`_bg("activity-prune", activity.prune)` in the lifespan at `app.py:46`. Like
+the existing prune, it runs unconditionally on **both** prod and dev
+instances — that's fine, a DELETE-by-age is idempotent and harmless to
+double-run (unlike the activity *worker* beside it, which is prod-gated to
+avoid two writers racing). Low event volume; 90 days gives trend room.
 
-WAL growth is already bounded by `activity.checkpoint()` in the existing
-worker tick; `ui_events` writes share that connection and need no new
-checkpoint handling.
+WAL growth is bounded by `activity.checkpoint()` (TRUNCATE) in the existing
+worker tick, which runs every ~30 s on the **prod** instance and truncates
+the shared `periscope.db` WAL file regardless of which process wrote the
+frames. `ui_events` writes go through the same `_conn()`/`_LOCK` and need no
+new checkpoint handling. The dev instance never checkpoints (worker is
+prod-only), but it shares the one DB file, so prod's checkpoint bounds the
+WAL for both — same as today's `pane_sessions` writes.
 
 ## Readout — canned queries
 
@@ -215,19 +236,32 @@ WHERE dev=0 AND name LIKE '%rename%' GROUP BY name;
 -- Daily volume
 SELECT date(at,'unixepoch','localtime') d, COUNT(*) n
 FROM ui_events WHERE dev=0 GROUP BY d ORDER BY d DESC;
+
+-- Sessions per day (app.open heartbeat)
+SELECT date(at,'unixepoch','localtime') d, COUNT(*) sessions
+FROM ui_events WHERE dev=0 AND name='app.open' GROUP BY d ORDER BY d DESC;
 ```
+
+**Namespacing caveat:** `api:<label>` events (the *effect* of a mutation) and
+dotted gesture events (the *entry point*) coexist. A single rename produces
+both an `api:rename tab` row and a gesture row. Never `COUNT(*)`/`SUM` across
+the two namespaces as if they were one total — group within a namespace, or
+deliberately compare across them (as the rename query above does).
 
 ## Testing
 
-- `tests/test_instrument.py` — `record_ui_events` inserts a batch; `dev`
-  flag persists; rows missing `name` are skipped; invalid `t` falls back;
+- `tests/test_activity.py` (extend — the functions live in `activity.py`, so
+  they test there, mirroring the one-test-per-module convention) — new cases:
+  `record_ui_events` inserts a batch; `dev` flag persists; rows missing
+  `name` are skipped; invalid/missing `t` falls back to `time.time()`;
   `detail` dict serializes and `None` -> NULL; `prune_ui_events` drops old
-  rows and keeps recent ones. Uses a temp DB via the existing test fixture
-  pattern for `activity`.
+  rows and keeps recent ones. Reuses the existing `fresh_db` fixture
+  (monkeypatches `config.ACTIVITY_DB`, resets `activity._CONN`).
 - `tests/routes/test_events.py` — `POST /api/events` inserts a batch and
   returns `{ok, n}`; empty body -> `n=0`, no error; malformed JSON body ->
-  `n=0`, no error (no raised 4xx); batch over 1000 is capped; `dev` reflects
-  the `PERISCOPE_DEV` env at request time.
+  `n=0`, no error (no raised 4xx) and a `log.warning`; batch over 1000 is
+  capped; `dev` reflects `config.PORT` (monkeypatch to 8766 -> rows stamped
+  `dev=1`; default 8765 -> `dev=0`).
 - `static/src/track.js` — verified in the browser per project convention
   (timer + `sendBeacon` plumbing is a poor unit-test target). Manual check:
   perform actions, confirm rows land in `ui_events` with correct names.
