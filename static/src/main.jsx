@@ -8,6 +8,7 @@ import { Split } from "./split/Split.jsx";
 import { Overlays } from "./overlays/Overlays.jsx";
 import { loadPrefs, getLastSelected } from "./prefs.js";
 import { railSelection } from "./store.js";
+import { track } from "./track.js";
 
 function App() {
   // Overlays are always mounted; each overlay manages its own open state.
@@ -26,6 +27,7 @@ async function boot() {
   // Prefs must load before first render: collapsed sessions, rail order,
   // commands, and last-selected all read from prefs.
   await loadPrefs();
+  track("app.open");
 
   // Restore the persisted rail selection. last_selected is an OBJECT in prefs;
   // railSelection is a STRING highlight-key — deliberately different shapes.
