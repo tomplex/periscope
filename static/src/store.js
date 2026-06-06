@@ -23,14 +23,14 @@ export const modalRenaming = signal(false);
 export const modalAutoRenaming = signal(false);
 
 // Transcript-seen flag (split-view detail). Set once a Claude pane's first
-// poll returns real turns. Currently consumed by Sidebar's FilesSection as a
+// poll returns real turns. Currently consumed by Inspector's FilesSection as a
 // "transcript data exists for this pid" gate. The detail-mode toggle itself
 // (Transcript/Terminal) is persisted via UI prefs (detail_mode_by_pid).
 export const transcriptSeen = signal({});   // { [pid]: true }
 
 // Shared transcript messages — written by useTranscriptPoll in
 // Transcript.jsx (the kept-mounted instance for each opened Claude pid),
-// read by both TranscriptView (own messages) and Sidebar's Files section
+// read by both TranscriptView (own messages) and Inspector's Files section
 // (selected pane's messages). One poll per selected pid; no duplicate
 // fetches. Evicted alongside transcript-host pruning in Detail.jsx.
 export const paneTranscript = signal({});   // { [pid]: { messages, sessionId } }
@@ -44,7 +44,7 @@ export const paneTabs = signal({});         // { [pid]: [{ path, line, target },
 export const paneActiveTab = signal({});    // { [pid]: "pane" | "file:<path>" }
 
 // Add (or focus, if already open) a file tab for the currently-active
-// pane. Callers are: terminal Cmd+click (Detail.jsx), Sidebar Files row,
+// pane. Callers are: terminal Cmd+click (Detail.jsx), Inspector Files row,
 // Transcript tool-call chip Cmd+click. All share activeTarget — the
 // per-callsite pid lookup is done here so the call sites stay terse.
 export function openFileTab(entry) {

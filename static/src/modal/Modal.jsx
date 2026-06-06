@@ -30,7 +30,7 @@ import { targetQuery, apiCall, prUrl, rewriteLgtmHost } from "../util.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { writeTerminalLine } from "../terminal/terminalCore.js";
 import { poll } from "../poll.js";
-import { Sidebar } from "../sidebar/Sidebar.jsx";
+import { Inspector } from "../inspector/Inspector.jsx";
 
 const MODAL_POLL_MS = 1500;
 const MOUNTED_DOCS_KEY_PREFIX = "periscope-lgtm-mounted:";
@@ -612,7 +612,7 @@ function ModalBody({ target }) {
               onPaste={onPaste}
             />
             {data && (
-              <Sidebar
+              <Inspector
                 data={data}
                 onRefresh={refresh}
                 containerId="modal-side"

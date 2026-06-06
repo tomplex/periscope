@@ -28,7 +28,7 @@ import { getDetailMode, setDetailMode } from "../prefs.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
 import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom, setTerminalFileCallback } from "../terminal/terminalCore.js";
-import { Sidebar } from "../sidebar/Sidebar.jsx";
+import { Inspector } from "../inspector/Inspector.jsx";
 import { TranscriptView } from "./Transcript.jsx";
 import { PreviewTab } from "../preview/PreviewTab.jsx";
 
@@ -261,12 +261,12 @@ function PaneHeader({ w, mode, onMode }) {
   return <header id="detail-pane-header" class="detail-pane-header">{parts.map((p, i) => <>{p}</>)}</header>;
 }
 
-// Rich per-pane sidebar — Linked / Notes / Activity, fed by a 1.5s poll of
-// /api/pane (the same endpoint the modal sidebar uses). The poll restarts on
+// Rich per-pane Inspector — Linked / Notes / Activity, fed by a 1.5s poll of
+// /api/pane. The poll restarts on
 // `target` change and tears down when the pane is deselected or the user
 // switches to a review row (Detail unmounts <PaneDetail>, killing this).
 //
-// Pitfall: the inner <Sidebar> mounts <NotesEditor> uncontrolled + keyed on
+// Pitfall: the inner <Inspector> mounts <NotesEditor> uncontrolled + keyed on
 // pid, and the activity-stream scrollTop is preserved across renders. Both
 // behaviors are coupling-#5 lessons from the modal port; the shared module
 // preserves them so we don't have to re-derive here.
@@ -294,7 +294,7 @@ function SidePanel({ target }) {
   if (!paneData) return <aside id="detail-side" class="detail-side" />;
 
   return (
-    <Sidebar
+    <Inspector
       data={paneData}
       onRefresh={() => {}}
       containerId="detail-side"

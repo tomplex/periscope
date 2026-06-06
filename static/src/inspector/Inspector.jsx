@@ -411,7 +411,7 @@ function opGlyph(op) {
 // `#detail-side.detail-side`. The activity-stream scrollTop is captured during
 // render and restored after each commit so the timeline doesn't snap to top
 // every 1.5s.
-export function Sidebar({ data, onRefresh, containerId, containerClass, idPrefix }) {
+export function Inspector({ data, onRefresh, containerId, containerClass, idPrefix }) {
   const streamRef = useRef(null);
   const priorScroll = useRef(0);
   const pid = data?.pid || "";

@@ -22,13 +22,16 @@ def _pidfile_path() -> Path:
     return Path(base) / "periscope" / f"periscope-{config.PORT}.pid"
 
 
-def _pid_is_periscope(pid: int) -> bool:
-    """True if `pid` is alive and looks like a periscope process. Checks
+def _pid_is_periscope(os_pid: int) -> bool:
+    """True if `os_pid` is alive and looks like a periscope process. Checks
     the command line for 'server.py' to avoid SIGTERMing some unrelated
-    process that happens to have inherited an old pid."""
+    process that happens to have inherited an old pid.
+
+    `os_pid` is an OS process id — distinct from the codebase's `pid`,
+    which everywhere else is the periscope per-window id (@periscope_id)."""
     try:
         out = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
+            ["ps", "-p", str(os_pid), "-o", "command="],
             capture_output=True, text=True, timeout=2.0,
         )
     except (subprocess.SubprocessError, OSError):

@@ -222,7 +222,7 @@ export async function deleteAnnotation(pid) {
   return true;
 }
 
-// ── Per-pane pinned files (Sidebar's Files section) ─────────────────────
+// ── Per-pane pinned files (Inspector's Files section) ─────────────────────
 // Pins are stored as `pinned_files` on the window annotation blob. The order
 // in the array IS the display order in the Pinned group (insertion order).
 

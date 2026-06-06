@@ -13,7 +13,7 @@ const TURNS_POLL_MS = 2000;
 
 // Poll /api/pane/turns while THIS pane is the current selection. Writes
 // the response to the shared `paneTranscript` signal (one entry per pid)
-// so both TranscriptView (rendered messages) and Sidebar's Files section
+// so both TranscriptView (rendered messages) and Inspector's Files section
 // (selected pane's messages) read from the same store. Also flips
 // transcriptSeen[pid] on first non-empty response — load-bearing for the
 // auto-promote toggle (see computeMode in Detail.jsx). Eviction lives in

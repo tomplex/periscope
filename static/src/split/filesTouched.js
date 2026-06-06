@@ -1,5 +1,5 @@
 // Pure selector: collapses /api/pane/turns messages into a per-path
-// ordered list, most-recent op first. Used by Sidebar's Files section.
+// ordered list, most-recent op first. Used by Inspector's Files section.
 //
 // Tool scope is intentional: Read / Edit / Write / MultiEdit / NotebookEdit
 // — the tools whose `input.file_path` cleanly names the touched path.
