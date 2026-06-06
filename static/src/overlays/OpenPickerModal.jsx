@@ -22,7 +22,7 @@ import { windows } from "../store.js";
 
 const open = signal(false);
 
-export function openPicker() {
+function openPicker() {
   open.value = true;
 }
 function close() {

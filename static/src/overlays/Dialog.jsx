@@ -10,7 +10,6 @@
 // Promise-returning public API and return contracts are preserved exactly:
 //   confirmDialog → boolean (false on cancel / backdrop / Esc)
 //   promptDialog  → string | null (null on cancel)
-//   alertDialog   → void (resolves on dismiss)
 // All CSS classes (.confirm-dialog, .prompt-dialog, .confirm-dialog-msg,
 // .confirm-dialog-actions, .confirm-dialog-cancel, .confirm-dialog-ok,
 // .is-danger, .prompt-dialog-input) carry over unchanged. Escape-to-cancel
@@ -56,14 +55,6 @@ export function promptDialog(label, opts = {}) {
     placeholder: opts.placeholder || "",
     okLabel: opts.okLabel || "OK",
     cancelLabel: opts.cancelLabel || "Cancel",
-  });
-}
-
-export function alertDialog(message, opts = {}) {
-  return open({
-    type: "alert",
-    message,
-    okLabel: opts.okLabel || "OK",
   });
 }
 

@@ -20,7 +20,7 @@ import { windows } from "../store.js";
 
 const open = signal(false);
 
-export function openNewProjectModal() {
+function openNewProjectModal() {
   open.value = true;
 }
 function close() {

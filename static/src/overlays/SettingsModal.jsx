@@ -14,7 +14,7 @@ import { modalRequest } from "./modalRequest.js";
 
 const open = signal(false);
 
-export function openSettingsModal() {
+function openSettingsModal() {
   open.value = true;
 }
 function close() {

@@ -19,7 +19,7 @@ import * as prefs from "../prefs.js";
 
 const open = signal(false);
 
-export function openCommandsModal() {
+function openCommandsModal() {
   open.value = true;
 }
 function close() {

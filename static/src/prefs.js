@@ -53,15 +53,6 @@ export async function loadPrefs() {
 
 // ── UI prefs ────────────────────────────────────────────────────────────
 
-export function getSessionOrder() {
-  return P().ui.session_order || [];
-}
-
-export function getCollapsed() {
-  // grid consumes a Set — keep the existing call sites unchanged.
-  return new Set(P().ui.collapsed_sessions || []);
-}
-
 export function getCommands() {
   return P().commands || [];
 }
@@ -134,14 +125,6 @@ export async function patchUI(patch) {
   return true;
 }
 
-export function setSessionOrder(order) {
-  return patchUI({ session_order: order });
-}
-
-export function setCollapsed(set) {
-  return patchUI({ collapsed_sessions: [...set] });
-}
-
 // ── Window annotations ──────────────────────────────────────────────────
 
 export function getAnnotation(pid) {
@@ -153,10 +136,6 @@ export function getAnnotation(pid) {
   const pinned_files = entry.pinned_files || [];
   if (!notes && !tags.length && !pinned_files.length) return null;
   return { notes, tags, pinned_files };
-}
-
-export function hasAnnotation(pid) {
-  return getAnnotation(pid) !== null;
 }
 
 export async function setAnnotation(pid, { notes, tags, pinned_files }) {
@@ -202,26 +181,6 @@ export async function setAnnotation(pid, { notes, tags, pinned_files }) {
   return true;
 }
 
-export async function deleteAnnotation(pid) {
-  if (!P().loaded) return false;
-  const previous = P().windows[pid];
-  if (P().windows[pid]) {
-    const next = { ...P().windows[pid] };
-    delete next.notes;
-    delete next.tags;
-    delete next.pinned_files;
-    prefsSignal.value = { ...P(), windows: { ...P().windows, [pid]: next } };
-  }
-  const data = await apiCall("clear annotation", `/api/prefs/windows/${encodeURIComponent(pid)}`, {
-    method: "DELETE",
-  });
-  if (!data) {
-    prefsSignal.value = { ...P(), windows: { ...P().windows, [pid]: previous } };
-    return false;
-  }
-  return true;
-}
-
 // ── Per-pane pinned files (Inspector's Files section) ─────────────────────
 // Pins are stored as `pinned_files` on the window annotation blob. The order
 // in the array IS the display order in the Pinned group (insertion order).
@@ -230,10 +189,6 @@ export function getPinnedFiles(pid) {
   if (!pid) return [];
   const entry = P().windows[pid];
   return [...(entry?.pinned_files || [])];
-}
-
-export function isPinnedFile(pid, path) {
-  return getPinnedFiles(pid).includes(path);
 }
 
 export function togglePinnedFile(pid, path) {
@@ -373,28 +328,6 @@ export async function addWorktreeToRail({ repoKey, worktreeKey, paneIds, hasRevi
     panes[worktreeKey] = [...paneIds];
     if (hasReview) panes[worktreeKey].push("review");
   }
-
-  await patchUI({
-    repo_order: order,
-    worktrees_by_repo: wts,
-    panes_by_worktree: panes,
-  });
-}
-
-export async function removeWorktreeFromRail({ repoKey, worktreeKey }) {
-  const wts = getWorktreesByRepo();
-  const panes = getPanesByWorktree();
-  const order = getRepoOrder();
-
-  if (wts[repoKey]) {
-    wts[repoKey] = wts[repoKey].filter(w => w !== worktreeKey);
-    if (wts[repoKey].length === 0) {
-      delete wts[repoKey];
-      const idx = order.indexOf(repoKey);
-      if (idx >= 0) order.splice(idx, 1);
-    }
-  }
-  delete panes[worktreeKey];
 
   await patchUI({
     repo_order: order,

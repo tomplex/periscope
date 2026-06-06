@@ -17,7 +17,7 @@ import { modalRequest } from "./modalRequest.js";
 
 const open = signal(false);
 
-export function openCleanupModal() {
+function openCleanupModal() {
   open.value = true;
 }
 function close() {

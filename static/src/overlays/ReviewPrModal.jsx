@@ -17,7 +17,7 @@ import { windows } from "../store.js";
 
 const open = signal(false);
 
-export function openReviewPRModal() {
+function openReviewPRModal() {
   open.value = true;
 }
 function close() {

@@ -61,7 +61,6 @@ export function setTerminalContainer(el) {
 }
 
 let fileLinkCallback = null;
-let urlLinkCallback = null;
 
 // Register a callback for absolute/relative file path clicks. Callback
 // signature: (rawPath: string) => void. .md paths take this route too
@@ -69,13 +68,6 @@ let urlLinkCallback = null;
 // register this to open the preview overlay.
 export function setTerminalFileCallback(cb) {
   fileLinkCallback = cb;
-}
-
-// Register a callback for URL clicks. Callback signature: (url: string)
-// => void. Default unwired — terminalCore hands URLs to openExternal
-// (browser: new tab; Tauri: OS browser via plugin-opener).
-export function setTerminalUrlCallback(cb) {
-  urlLinkCallback = cb;
 }
 
 // URL: http/https/ws/wss with no embedded whitespace; conservative on what
@@ -172,7 +164,6 @@ function installUrlClickHandler(t) {
     const { url } = pendingUrlClick;
     pendingUrlClick = null;
     if (dx > 4 || dy > 4) return;
-    if (urlLinkCallback) { urlLinkCallback(url); return; }
     const ok = openExternal(url);
     if (!ok) {
       t.writeln(`\r\n\x1b[31m[periscope: failed to open ${url}]\x1b[0m`);

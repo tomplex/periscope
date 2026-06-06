@@ -36,7 +36,6 @@ from periscope import config
 _PANE_FIELDS = 11
 
 _CHANNEL_RE = re.compile(r"--dangerously-load-development-channels (\S+)")
-_RESUME_RE = re.compile(r"\s*--resume \S+")
 
 
 def _live_pane_map() -> dict[str, str]:
@@ -94,9 +93,10 @@ def _rewrite_line(line: str, pane_map: dict[str, str], session_map: dict[str, st
     if not uuid:
         return line, False
 
-    # Preserve the original channel flags in their on-disk order; drop the stale
-    # --system-prompt and any pre-existing --resume (which can sit anywhere, even
-    # between two channel flags). Rebuild as resume-then-channels.
+    # Rebuild the command from scratch: `claude --resume <uuid>` followed by the
+    # original channel flags in their on-disk order. Rebuilding (not editing in
+    # place) inherently drops the stale --system-prompt and any pre-existing
+    # --resume without needing to match them explicitly.
     channels = _CHANNEL_RE.findall(cmd)
     new_cmd = f"claude --resume {uuid}"
     for ch in channels:
