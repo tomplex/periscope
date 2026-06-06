@@ -5,6 +5,7 @@
 // auto-escapes, so escapeHtml only survives for the few imperative
 // string-building call sites (e.g. md-link injection); most uses drop.
 
+import { track } from "./track.js";
 import { showToast } from "./overlays/Toast.jsx";
 
 export function escapeHtml(s) {
@@ -96,19 +97,23 @@ export function rewriteLgtmHost(url) {
 // Toasts give the user a 6-second window to read the failure without
 // stealing focus from whatever they're typing into.
 export async function apiCall(label, path, opts = {}) {
+  const method = opts.method || "GET";
   let res;
   try {
     res = await fetch(path, opts);
   } catch (err) {
+    track("api:" + label, { path, method, ok: false });
     showToast(`${label} failed: ${err.message}`, "bad", 6000);
     return null;
   }
   let data = {};
   try { data = await res.json(); } catch (_) {}
   if (!res.ok || data.ok === false) {
+    track("api:" + label, { path, method, ok: false });
     const err = data.error || data.detail || `HTTP ${res.status}`;
     showToast(`${label} failed: ${err}`, "bad", 6000);
     return null;
   }
+  track("api:" + label, { path, method, ok: true });
   return data;
 }
