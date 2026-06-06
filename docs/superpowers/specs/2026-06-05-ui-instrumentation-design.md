@@ -182,10 +182,10 @@ addEventListener("pagehide", () => flush(true));
 |---|---|---|
 | `app.open` | the app boots (one `track()` in `main.jsx`) | `{}` — session heartbeat, lets queries normalize per-session / per-active-day |
 | `modal.open` | the pane modal opens | `{tab}` |
-| `modal.close` | the pane modal closes | `{tab}` |
+| `modal.close` | the pane modal closes | — (no detail) |
 | `modal.tab` | switching tabs within the modal | `{tab}` |
 | `view.switch` | split detail view-mode change | `{view}` (`terminal`\|`transcript`\|`review`) |
-| `pane.focus` | clicking a rail row to focus a pane | `{target}` |
+| `pane.focus` | clicking a rail row to focus a pane | `{key}` (highlight-key: `pane:<pid>` \| `review:<worktree>`) |
 | `overlay.open` | any overlay opens | `{which}` (`commands`\|`launcher`\|`cleanup`\|`settings`\|`newproject`\|`openpicker`\|`reviewpr`) |
 | `filter.use` | the filter bar is edited (debounced ~500 ms) | `{}` — **no string** |
 | `key.shortcut` | a keyboard shortcut fires | `{key}` |

@@ -551,13 +551,11 @@ In `closeModal` (line 640-642), inside the function, before/after `modalTarget.v
 
 - [ ] **Step 2: `modal.tab` (Modal.jsx)**
 
-There are two tab-switch handlers calling `setActiveTab(id)` (lines ~546 and ~553 — the `onSwitch` / dropdown-pick handlers). At each call site, alongside `setActiveTab(id);` add:
+There are **two distinct handlers** that make a tab active — `switchTab(id)` (~line 545) and `mountDoc(id)` (~line 553, which calls `setActiveTab(id)` after mounting a doc tab). Add the emit to **each** (one emit per entry point; this does not double-count a single gesture). Alongside the `setActiveTab(id);` in both, add:
 
 ```js
     track("modal.tab", { tab: id });
 ```
-
-(If both share one handler, add it once in that handler.)
 
 - [ ] **Step 3: `view.switch` (Detail.jsx)**
 
@@ -611,7 +609,7 @@ Add the import at the top of `static/src/chrome/Header.jsx`:
 import { track } from "../track.js";
 ```
 
-In the `onKey` handler at line ~93, inside the `if ((e.metaKey || e.ctrlKey) && e.key === "/")` block, add:
+In the `onKey` handler at line ~93, inside the `if ((e.metaKey || e.ctrlKey) && e.key === "/")` block, add this as the **first statement** in the block — before `e.preventDefault()` and the `window.location.href` navigation, so the event is buffered before the synchronous page change:
 
 ```js
         track("key.shortcut", { key: "cmd+/" });
@@ -619,10 +617,10 @@ In the `onKey` handler at line ~93, inside the `if ((e.metaKey || e.ctrlKey) && 
 
 - [ ] **Step 7: `terminal.open` (terminalCore.js)**
 
-Add the import at the top of `static/src/terminal/terminalCore.js`:
+Add the import at the top of `static/src/terminal/terminalCore.js` — note it's a **subdirectory**, so the path is `../track.js` (one level up to `static/src/`), NOT `./track.js`:
 
 ```js
-import { track } from "./track.js";
+import { track } from "../track.js";
 ```
 
 In `startLiveTerminal(target)` at line ~256, as the first statement of the function body, add:
@@ -645,21 +643,21 @@ git commit -m "instrument: modal/view/focus/filter/shortcut/terminal gesture sea
 **Files:**
 - Modify: `static/src/overlays/CleanupModal.jsx`, `LauncherModal.jsx`, `CommandsModal.jsx`, `OpenPickerModal.jsx`, `NewProjectModal.jsx`, `ReviewPrModal.jsx`, `SettingsModal.jsx`
 
-Each overlay has an exported opener that flips `open.value = true`. Add the import `import { track } from "../track.js";` to each file, then add one `track()` inside each opener.
+Six of the overlays have an exported opener that flips `open.value = true`; **`LauncherModal.jsx` is the exception** — its `openLauncher(worktreeKey)` sets `target.value = worktreeKey;` instead (no `open` signal). Add the import `import { track } from "../track.js";` to each file, then add one `track()` inside each opener (after the signal it sets — see the per-file anchor column).
 
 - [ ] **Step 1: Add track to each opener**
 
-| File | Opener (line) | Add inside opener |
-|---|---|---|
-| `CleanupModal.jsx` | `openCleanupModal` (20) | `track("overlay.open", { which: "cleanup" });` |
-| `LauncherModal.jsx` | `openLauncher` (28) | `track("overlay.open", { which: "launcher" });` |
-| `CommandsModal.jsx` | `openCommandsModal` (22) | `track("overlay.open", { which: "commands" });` |
-| `OpenPickerModal.jsx` | `openPicker` (25) | `track("overlay.open", { which: "openpicker" });` |
-| `NewProjectModal.jsx` | `openNewProjectModal` (23) | `track("overlay.open", { which: "newproject" });` |
-| `ReviewPrModal.jsx` | `openReviewPRModal` (20) | `track("overlay.open", { which: "reviewpr" });` |
-| `SettingsModal.jsx` | `openSettingsModal` (17) | `track("overlay.open", { which: "settings" });` |
+| File | Opener (line) | Anchor (line to add after) | Add inside opener |
+|---|---|---|---|
+| `CleanupModal.jsx` | `openCleanupModal` (20) | `open.value = true;` | `track("overlay.open", { which: "cleanup" });` |
+| `LauncherModal.jsx` | `openLauncher` (28) | `target.value = worktreeKey;` | `track("overlay.open", { which: "launcher" });` |
+| `CommandsModal.jsx` | `openCommandsModal` (22) | `open.value = true;` | `track("overlay.open", { which: "commands" });` |
+| `OpenPickerModal.jsx` | `openPicker` (25) | `open.value = true;` | `track("overlay.open", { which: "openpicker" });` |
+| `NewProjectModal.jsx` | `openNewProjectModal` (23) | `open.value = true;` | `track("overlay.open", { which: "newproject" });` |
+| `ReviewPrModal.jsx` | `openReviewPRModal` (20) | `open.value = true;` | `track("overlay.open", { which: "reviewpr" });` |
+| `SettingsModal.jsx` | `openSettingsModal` (17) | `open.value = true;` | `track("overlay.open", { which: "settings" });` |
 
-For each file: add `import { track } from "../track.js";` at the top, and add the `track(...)` line right after `open.value = true;` in the opener.
+For each file: add `import { track } from "../track.js";` at the top, and add the `track(...)` line right after the **Anchor** statement in that opener (all are `open.value = true;` except `LauncherModal.jsx`, which is `target.value = worktreeKey;`).
 
 - [ ] **Step 2: Commit**
 
@@ -753,5 +751,7 @@ git commit -m "instrument: rebuild bundle with track() instrumentation"
 
 - **Spec coverage:** §1 table → Task 1; §2 functions → Task 1; §3 route → Task 2; §4 track.js → Task 3; §5 apiCall → Task 4; §6 seams (`app.open` Task 3; modal/view/focus/filter/shortcut/terminal Task 5; overlays Task 6); §7 retention → Task 2 Step 6; Readout → Task 7; Testing → Tasks 1–2 (unit) + Task 8 (browser).
 - **dev flag** derived from `config.PORT != 8765` everywhere (route + test), never `PERISCOPE_DEV`.
-- **Import path** for `track` is `./track.js` relative to each importer (`../track.js` from subdirs, `./track.js` from `static/src/` root and from `terminal/`). Task 5 Step 1 flags the one easy-to-get-wrong case explicitly.
+- **Import path** for `track`: `./track.js` from importers in `static/src/` root (`main.jsx`, `util.js`); `../track.js` from every subdirectory importer (`modal/`, `split/`, `chrome/`, `overlays/`, **and `terminal/`** — `terminalCore.js` is a subdir, so `../track.js`, not `./track.js`).
+- **`api:rename tab` label** (Task 8 verification) is confirmed real: `Rail.jsx:232` calls `apiCall("rename tab", …)`, so the auto-track emits `api:rename tab`.
+- **Contract alignment with spec §6:** `pane.focus` detail is `{key}` (the value at `Rail.jsx:198` is a highlight-key like `pane:<pid>`, not a `session:index` target — spec updated to match); `modal.close` carries no detail (closing doesn't need the tab — spec updated). `app.open` passes no detail → stored NULL (harmless).
 - **No double-namespace summing** — warned in Task 7 and the spec.
