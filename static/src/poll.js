@@ -72,12 +72,3 @@ export function startPolling() {
     started = false;
   };
 }
-
-// Bridge to the (still-vanilla, Task 6) modal while the grid surface is
-// Preact-owned but the modal is not. Vanilla app.js exposes its `openModal`
-// on window when "grid" is a Preact surface; once <Modal> lands (Task 6) this
-// resolves to the Preact opener instead. No-op if nothing is wired yet.
-export function openModal(target, opts) {
-  const fn = window.__periscopeOpenModal;
-  if (typeof fn === "function") fn(target, opts);
-}

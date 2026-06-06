@@ -4,20 +4,17 @@ import { render } from "preact";
 import { Toaster } from "./overlays/Toast.jsx";
 import { DialogHost } from "./overlays/Dialog.jsx";
 import { Header } from "./chrome/Header.jsx";
-import { Modal } from "./modal/Modal.jsx";
 import { Split } from "./split/Split.jsx";
 import { Overlays } from "./overlays/Overlays.jsx";
 import { loadPrefs, getLastSelected } from "./prefs.js";
 import { railSelection } from "./store.js";
 
 function App() {
-  // Modal + Overlays are always mounted (the modal shows itself when
-  // modalTarget is set; overlays manage their own open state).
+  // Overlays are always mounted; each overlay manages its own open state.
   return (
     <>
       <Header />
       <Split />
-      <Modal />
       <Overlays />
       <Toaster />
       <DialogHost />
