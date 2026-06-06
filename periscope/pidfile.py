@@ -18,8 +18,7 @@ from periscope.log import log
 def _pidfile_path() -> Path:
     # config.PORT accessed via module attribute (not snapshot import) so
     # tests can monkeypatch periscope.config.PORT and observe new paths.
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "periscope" / f"periscope-{config.PORT}.pid"
+    return config.config_dir() / f"periscope-{config.PORT}.pid"
 
 
 def _pid_is_periscope(os_pid: int) -> bool:

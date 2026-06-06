@@ -9,7 +9,6 @@ fire-and-forget threads / coroutines into the log so they don't vanish.
 import asyncio
 import logging
 import logging.handlers
-import os
 import sys
 import threading
 from pathlib import Path
@@ -20,8 +19,7 @@ from periscope import config
 def _log_path() -> Path:
     # Read config.PORT via the module (not a snapshot import) so tests
     # can monkeypatch periscope.config.PORT and see the new value here.
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "periscope" / f"periscope-{config.PORT}.log"
+    return config.config_dir() / f"periscope-{config.PORT}.log"
 
 
 _LOG_PATH = _log_path()

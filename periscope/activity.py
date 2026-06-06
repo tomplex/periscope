@@ -20,7 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from periscope import config
-from periscope.git_pr import cached_git_state, github_origin, shared_activity_for
+from periscope.git_pr import cached_git_state, shared_activity_for
+from periscope.gitutil import github_slug
 from periscope.log import _bg, log
 from periscope.panes import _acted_at, list_windows, parse_pane
 from periscope.rename_ai import claude_complete
@@ -170,9 +171,7 @@ def migrate_legacy_pane_sessions() -> int:
     file layout into the pane_sessions table. Removes the directory on
     success. Returns the number of rows imported. No-op if the directory
     is absent. Idempotent: rows use INSERT OR REPLACE."""
-    import os
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    legacy = Path(base) / "periscope" / "pane_sessions"
+    legacy = config.config_dir() / "pane_sessions"
     if not legacy.is_dir():
         return 0
     now = int(time.time())
@@ -567,7 +566,7 @@ def maybe_emit_milestone(path: str, branch: str, settled: bool) -> None:
         log.warning("milestone summary returned empty; will retry next tick")
         return  # degenerate success — do NOT advance the cursor
     text = line.splitlines()[0][:90]
-    slug = github_origin(path)
+    slug = github_slug(path)
     url = (f"https://github.com/{slug}/compare/{last}...{head}"
            if slug and last else None)
     record("branch", branch_key, "milestone", text,

@@ -57,7 +57,7 @@ import time
 from pathlib import Path
 from typing import TypedDict
 
-from periscope.config import CLAUDE_EXEC
+from periscope.config import CLAUDE_EXEC, config_dir
 from periscope.log import log
 
 
@@ -87,8 +87,7 @@ class Command(TypedDict):
 
 
 def _state_path() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "periscope" / "state.json"
+    return config_dir() / "state.json"
 
 
 MAIN_KEY_LITERAL = "__main__"

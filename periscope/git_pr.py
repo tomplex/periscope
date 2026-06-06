@@ -37,6 +37,12 @@ _pr_fetching: set[tuple[str, str]] = set()
 _pr_lock = threading.Lock()
 _GH_AVAILABLE = shutil.which("gh") is not None
 
+# GitHub check conclusions that mean "failed". Shared by the PR-rollup glyph
+# (pr_state_for) and the activity-timeline run state (_gh_run_state) so a new
+# failure conclusion is added in one place. The "running" and "success/neutral"
+# buckets intentionally differ between those two callers and are NOT shared.
+_CI_FAILED_CONCLUSIONS = frozenset({"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"})
+
 
 def git_state_for(path: str) -> dict | None:
     """Return {branch, git} for the git repo at `path`, or None."""
@@ -121,7 +127,7 @@ def pr_state_for(path: str, branch: str) -> dict | None:
     states = {(c.get("conclusion") or c.get("status") or "").upper() for c in rollup}
     states.discard("")
     ci = None
-    if states & {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}:
+    if states & _CI_FAILED_CONCLUSIONS:
         ci = "✗"
     elif states & {"PENDING", "QUEUED", "IN_PROGRESS", "WAITING"}:
         ci = "⟳"
@@ -171,23 +177,13 @@ def _gh_run_state(run: dict) -> str | None:
     c = (run.get("conclusion") or "").upper()
     if c == "SUCCESS":
         return "passed"
-    if c in ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"):
+    if c in _CI_FAILED_CONCLUSIONS:
         return "failed"
     if c in ("NEUTRAL", "SKIPPED"):
         return None
     if s in ("QUEUED", "IN_PROGRESS", "WAITING"):
         return "running"
     return None
-
-
-def github_origin(path: str) -> str | None:
-    """'owner/repo' for the repo's GitHub `origin` remote, or None for a
-    non-GitHub remote or no remote. Handles git@ and https forms."""
-    code, url = _run(["git", "-C", path, "remote", "get-url", "origin"])
-    if code != 0 or not url:
-        return None
-    m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?\s*$", url)
-    return m.group(1) if m else None
 
 
 def shared_activity_for(path: str, branch: str) -> list[dict]:
@@ -199,7 +195,7 @@ def shared_activity_for(path: str, branch: str) -> list[dict]:
     code, _ = _run(["git", "-C", path, "rev-parse", "--git-dir"])
     if code != 0:
         return events
-    slug = github_origin(path)
+    slug = github_slug(path)
     # %ct = committer unix time, %H = full sha, %s = subject. Tab-separated
     # so subjects with spaces survive the split.
     code, out = _run(

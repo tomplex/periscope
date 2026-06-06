@@ -13,11 +13,11 @@ router = APIRouter()
 
 
 @router.post("/api/channel/clear-unread")
-def channel_clear_unread(pane: str = Query(...)):
-    if not pane.startswith("%"):
-        raise HTTPException(400, "pane must be a %N tmux pane id")
+def channel_clear_unread(pane_id: str = Query(...)):
+    if not pane_id.startswith("%"):
+        raise HTTPException(400, "pane_id must be a %N tmux pane id")
     with _CHANNELS_LOCK:
-        _CHANNEL_UNREAD[pane] = 0
+        _CHANNEL_UNREAD[pane_id] = 0
     return {"ok": True}
 
 
@@ -26,14 +26,14 @@ class PushBody(BaseModel):
 
 
 @router.post("/api/channel/push")
-async def channel_push(body: PushBody, pane: str = Query(...)):
+async def channel_push(body: PushBody, pane_id: str = Query(...)):
     # Surfaces in Claude's prompt as a <channel source="periscope"> block.
     # Frontend uses this for the "Push to Claude..." composer and for the
-    # sidebar's "+ link pull request" / "+ link Linear ticket" buttons.
-    if not pane.startswith("%"):
-        raise HTTPException(400, "pane must be a %N tmux pane id")
+    # Inspector's "+ link pull request" / "+ link Linear ticket" buttons.
+    if not pane_id.startswith("%"):
+        raise HTTPException(400, "pane_id must be a %N tmux pane id")
     content = body.content.strip()
     if not content:
         raise HTTPException(400, "content required")
-    sent = await emit_channel_event(pane, content)
+    sent = await emit_channel_event(pane_id, content)
     return {"ok": sent}

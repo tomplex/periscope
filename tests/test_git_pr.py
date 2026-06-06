@@ -102,7 +102,7 @@ def test_gh_run_state_returns_none_for_unknown():
     assert _gh_run_state({}) is None
 
 
-from periscope.git_pr import github_origin
+from periscope.gitutil import github_slug
 
 
 def _git(repo, *args):
@@ -110,30 +110,30 @@ def _git(repo, *args):
                    capture_output=True)
 
 
-def test_github_origin_ssh_form(tmp_path):
+def test_github_slug_ssh_form(tmp_path):
     _git(tmp_path, "init")
     _git(tmp_path, "remote", "add", "origin",
          "git@github.com:faradayio/periscope.git")
-    assert github_origin(str(tmp_path)) == "faradayio/periscope"
+    assert github_slug(str(tmp_path)) == "faradayio/periscope"
 
 
-def test_github_origin_https_form(tmp_path):
+def test_github_slug_https_form(tmp_path):
     _git(tmp_path, "init")
     _git(tmp_path, "remote", "add", "origin",
          "https://github.com/faradayio/periscope.git")
-    assert github_origin(str(tmp_path)) == "faradayio/periscope"
+    assert github_slug(str(tmp_path)) == "faradayio/periscope"
 
 
-def test_github_origin_none_for_non_github(tmp_path):
+def test_github_slug_none_for_non_github(tmp_path):
     _git(tmp_path, "init")
     _git(tmp_path, "remote", "add", "origin",
          "https://gitlab.com/x/y.git")
-    assert github_origin(str(tmp_path)) is None
+    assert github_slug(str(tmp_path)) is None
 
 
-def test_github_origin_none_when_no_remote(tmp_path):
+def test_github_slug_none_when_no_remote(tmp_path):
     _git(tmp_path, "init")
-    assert github_origin(str(tmp_path)) is None
+    assert github_slug(str(tmp_path)) is None
 
 
 def test_git_state_includes_repo_key_and_label(tmp_path, mocker):

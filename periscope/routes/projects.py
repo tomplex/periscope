@@ -37,6 +37,19 @@ from periscope.worktrees import invalidate as worktrees_invalidate
 router = APIRouter()
 
 
+def resolve_repo_toplevel_or_400(raw: str) -> str:
+    """Resolve a user-supplied repo path to its realpath git toplevel, or
+    raise HTTPException(400). Shared by the project-creation routes so the
+    'must be an existing git repo' validation lives in one place."""
+    repo = os.path.realpath(raw)
+    if not os.path.isdir(repo):
+        raise HTTPException(400, f"repo does not exist: {raw}")
+    code, toplevel = _run(["git", "-C", repo, "rev-parse", "--show-toplevel"])
+    if code != 0 or not toplevel:
+        raise HTTPException(400, f"not a git repo: {raw}")
+    return os.path.realpath(toplevel)
+
+
 @router.get("/api/projects")
 def projects_list():
     return {"projects": [
@@ -218,13 +231,7 @@ class PRReviewBody(BaseModel):
 def projects_create(body: CreateBody):
     """Create a new project: spawn worktree if branch != default,
     create tmux session, apply 2-window layout, register project."""
-    repo = os.path.realpath(body.repo)
-    if not os.path.isdir(repo):
-        raise HTTPException(400, f"repo does not exist: {body.repo}")
-    code, toplevel = _run(["git", "-C", repo, "rev-parse", "--show-toplevel"])
-    if code != 0 or not toplevel:
-        raise HTTPException(400, f"not a git repo: {body.repo}")
-    repo = os.path.realpath(toplevel)
+    repo = resolve_repo_toplevel_or_400(body.repo)
 
     branch = body.branch.strip()
     if not branch:
@@ -510,13 +517,7 @@ def projects_pr_review(body: PRReviewBody):
             project already exists at pinned_dir
       500 — git/tmux mutation failed for any other reason
     """
-    repo = os.path.realpath(body.repo)
-    if not os.path.isdir(repo):
-        raise HTTPException(400, f"repo does not exist: {body.repo}")
-    code, toplevel = _run(["git", "-C", repo, "rev-parse", "--show-toplevel"])
-    if code != 0 or not toplevel:
-        raise HTTPException(400, f"not a git repo: {body.repo}")
-    repo = os.path.realpath(toplevel)
+    repo = resolve_repo_toplevel_or_400(body.repo)
 
     pr = body.pr_number
     if pr <= 0:

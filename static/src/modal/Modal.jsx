@@ -678,7 +678,7 @@ export function Modal() {
         const content = e.data.content;
         const pane = lastModalPaneId;
         if (!content || !pane) return;
-        fetch(`/api/channel/push?pane=${encodeURIComponent(pane)}`, {
+        fetch(`/api/channel/push?pane_id=${encodeURIComponent(pane)}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ content }),

@@ -52,6 +52,19 @@ def capture(target: str, lines: int = 100) -> str:
     return tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
 
 
+def pane_meta(target: str) -> tuple[str, str]:
+    """`(window_name, cwd)` for a tmux target via display-message. Raises on
+    tmux failure — callers decide whether to swallow it (pane detail) or
+    surface it (auto-rename). For `(pane_id, cwd)` see turns.py, which queries
+    a different field."""
+    meta = tmux(
+        "display-message", "-t", target, "-p",
+        "#{window_name}\t#{pane_current_path}",
+    ).strip()
+    window_name, _, cwd = meta.partition("\t")
+    return window_name, cwd
+
+
 # Threshold below which `send-keys -H` is used (single subprocess, fast path).
 # Above this we go via load-buffer + paste-buffer to avoid argv bloat — each
 # input byte becomes a 2-char hex arg, so ARG_MAX caps the -H path well below

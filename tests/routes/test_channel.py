@@ -7,7 +7,7 @@ def test_clear_unread_resets_count(client):
     from periscope.channels import _CHANNEL_UNREAD, _CHANNELS_LOCK
     with _CHANNELS_LOCK:
         _CHANNEL_UNREAD["%42"] = 5
-    r = client.post("/api/channel/clear-unread?pane=%2542")
+    r = client.post("/api/channel/clear-unread?pane_id=%2542")
     assert r.status_code == 200
     assert r.json() == {"ok": True}
     with _CHANNELS_LOCK:
@@ -15,7 +15,7 @@ def test_clear_unread_resets_count(client):
 
 
 def test_clear_unread_rejects_non_pane_id(client):
-    r = client.post("/api/channel/clear-unread?pane=not-a-pane")
+    r = client.post("/api/channel/clear-unread?pane_id=not-a-pane")
     assert r.status_code == 400
     assert "pane" in r.json()["detail"]
 
@@ -26,7 +26,7 @@ def test_push_forwards_to_emit_channel_event(client):
         new=AsyncMock(return_value=True),
     ) as emit:
         r = client.post(
-            "/api/channel/push?pane=%2542",
+            "/api/channel/push?pane_id=%2542",
             json={"content": "hello claude"},
         )
         assert r.status_code == 200
@@ -40,7 +40,7 @@ def test_push_returns_ok_false_when_no_session(client):
         new=AsyncMock(return_value=False),
     ):
         r = client.post(
-            "/api/channel/push?pane=%2542",
+            "/api/channel/push?pane_id=%2542",
             json={"content": "hi"},
         )
         assert r.status_code == 200
@@ -49,7 +49,7 @@ def test_push_returns_ok_false_when_no_session(client):
 
 def test_push_rejects_non_pane_id(client):
     r = client.post(
-        "/api/channel/push?pane=not-a-pane",
+        "/api/channel/push?pane_id=not-a-pane",
         json={"content": "hi"},
     )
     assert r.status_code == 400
@@ -58,7 +58,7 @@ def test_push_rejects_non_pane_id(client):
 
 def test_push_rejects_empty_content(client):
     r = client.post(
-        "/api/channel/push?pane=%2542",
+        "/api/channel/push?pane_id=%2542",
         json={"content": "   "},
     )
     assert r.status_code == 400

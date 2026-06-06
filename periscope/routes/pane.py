@@ -19,7 +19,7 @@ from periscope.panes import (
 )
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.store import get_window
-from periscope.tmux import tmux
+from periscope.tmux import pane_meta, tmux
 from periscope.turns import get_turns_for_pane
 
 router = APIRouter()
@@ -47,11 +47,7 @@ def pane(session: str, index: int, lines: int = 200):
     if parsed.get("is_claude") and parsed.get("spinner") and parsed.get("state") not in ("working", "needs-input"):
         parsed["state"] = "working"
     try:
-        meta = tmux(
-            "display-message", "-t", target, "-p",
-            "#{window_name}\t#{pane_current_path}",
-        ).strip()
-        window_name, _, cwd = meta.partition("\t")
+        window_name, cwd = pane_meta(target)
     except Exception:
         window_name, cwd = "", ""
     git = cached_git_state(cwd) or {}

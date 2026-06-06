@@ -14,7 +14,7 @@ from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.panes import list_windows, parse_pane
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.rename_ai import build_rename_prompt, claude_complete, transcript_summary
-from periscope.tmux import capture, tmux
+from periscope.tmux import capture, pane_meta, tmux
 
 router = APIRouter()
 
@@ -101,11 +101,7 @@ def auto_rename_window(session: str, index: int):
     perturbing siblings."""
     target = f"{session}:{index}"
     try:
-        meta = tmux(
-            "display-message", "-t", target, "-p",
-            "#{window_name}\t#{pane_current_path}",
-        ).strip()
-        current_name, _, cwd = meta.partition("\t")
+        current_name, cwd = pane_meta(target)
     except Exception as e:
         raise HTTPException(500, str(e))
 

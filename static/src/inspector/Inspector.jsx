@@ -425,14 +425,14 @@ export function Inspector({ data, onRefresh, containerId, containerClass, idPref
   // Clear unread when the sidebar shows replies (fire-and-forget).
   useEffect(() => {
     if (data?.pane_id && (data.channel_unread || 0) > 0) {
-      fetch(`/api/channel/clear-unread?pane=${encodeURIComponent(data.pane_id)}`, { method: "POST" });
+      fetch(`/api/channel/clear-unread?pane_id=${encodeURIComponent(data.pane_id)}`, { method: "POST" });
     }
   }, [data?.pane_id, data?.channel_unread]);
 
   function onLinkAsk(kind) {
     const content = LINK_ASK_PROMPTS[kind];
     if (!content || !data?.pane_id) return;
-    fetch(`/api/channel/push?pane=${encodeURIComponent(data.pane_id)}`, {
+    fetch(`/api/channel/push?pane_id=${encodeURIComponent(data.pane_id)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ content }),
