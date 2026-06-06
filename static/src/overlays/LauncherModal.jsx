@@ -19,6 +19,7 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
+import { track } from "../track.js";
 import * as prefs from "../prefs.js";
 import { apiCall } from "../util.js";
 
@@ -27,6 +28,7 @@ const target = signal(null);
 
 export function openLauncher(worktreeKey) {
   target.value = worktreeKey;
+  track("overlay.open", { which: "launcher" });
 }
 function close() {
   target.value = null;

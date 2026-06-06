@@ -17,6 +17,7 @@
 import { signal } from "@preact/signals";
 import { useEffect, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
+import { track } from "../track.js";
 import * as prefs from "../prefs.js";
 import { windows } from "../store.js";
 
@@ -24,6 +25,7 @@ const open = signal(false);
 
 function openPicker() {
   open.value = true;
+  track("overlay.open", { which: "openpicker" });
 }
 function close() {
   open.value = false;

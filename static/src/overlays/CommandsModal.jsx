@@ -15,12 +15,14 @@
 import { signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
+import { track } from "../track.js";
 import * as prefs from "../prefs.js";
 
 const open = signal(false);
 
 function openCommandsModal() {
   open.value = true;
+  track("overlay.open", { which: "commands" });
 }
 function close() {
   open.value = false;

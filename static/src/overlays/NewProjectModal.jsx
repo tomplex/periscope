@@ -14,6 +14,7 @@
 import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
+import { track } from "../track.js";
 import { modalRequest } from "./modalRequest.js";
 import { addWorktreeToRail } from "../prefs.js";
 import { windows } from "../store.js";
@@ -22,6 +23,7 @@ const open = signal(false);
 
 function openNewProjectModal() {
   open.value = true;
+  track("overlay.open", { which: "newproject" });
 }
 function close() {
   open.value = false;

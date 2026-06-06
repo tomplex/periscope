@@ -13,12 +13,14 @@
 import { signal } from "@preact/signals";
 import { useEffect, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
+import { track } from "../track.js";
 import { modalRequest } from "./modalRequest.js";
 
 const open = signal(false);
 
 function openCleanupModal() {
   open.value = true;
+  track("overlay.open", { which: "cleanup" });
 }
 function close() {
   open.value = false;
