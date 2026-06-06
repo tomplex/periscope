@@ -19,6 +19,7 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useRef, useEffect, useState } from "preact/hooks";
+import { track } from "../track.js";
 import {
   windows, activeTarget, railSelection, paneTranscript,
   paneTabs, paneActiveTab, openFileTab, closeFileTab, setActiveTab,
@@ -390,7 +391,7 @@ function PaneDetail({ w }) {
 
   return (
     <div id="detail-pane" class="detail-pane">
-      <PaneHeader w={w} mode={mode} onMode={(next) => setDetailMode(w.pid, next)} />
+      <PaneHeader w={w} mode={mode} onMode={(next) => { track("view.switch", { view: next }); setDetailMode(w.pid, next); }} />
       <TabStrip pid={w.pid} paneLabel={paneLabel} />
       <div class="detail-pane-body">
         <div class="detail-term-host" style={paneTabActive && mode === "terminal" ? "display:contents" : "display:none"}>

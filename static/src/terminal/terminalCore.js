@@ -17,6 +17,7 @@
 // to it through the exported functions.
 
 import { targetQuery } from "../util.js";
+import { track } from "../track.js";
 import { terminalTheme } from "./theme.js";
 import { openExternal } from "../tauri.js";
 
@@ -245,6 +246,7 @@ function registerRoutingLinkProvider(t) {
 }
 
 export function startLiveTerminal(target) {
+  track("terminal.open", { target });
   // Fresh xterm.js instance per mount. Dispose any leftover from a prior
   // session before creating a new one.
   if (term) {

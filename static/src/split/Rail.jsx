@@ -23,6 +23,7 @@
 // OTHER_REPO_KEY is pinned to the bottom at all four enforcement points: merge
 // (railTree), isValidDropTarget, reorderRepos, repoRow draggable gate (RailRows).
 import { useRef, useState } from "preact/hooks";
+import { track } from "../track.js";
 import { windows, currentFilter, railSelection, dragState } from "../store.js";
 import * as prefs from "../prefs.js";
 import { passesFilter } from "../filter.js";
@@ -196,6 +197,7 @@ export function Rail() {
   // --- Selection -----------------------------------------------------------
   function selectKey(key) {
     railSelection.value = key;       // STRING highlight-key (signal)
+    track("pane.focus", { key });
     if (key.startsWith("pane:")) {
       prefs.setLastSelected({ kind: "pane", pid: key.slice("pane:".length) });  // OBJECT (pref)
     } else if (key.startsWith("review:")) {

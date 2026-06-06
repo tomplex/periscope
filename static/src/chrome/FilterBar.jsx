@@ -9,6 +9,7 @@
 // openDropdown/closeDropdown, but Escape goes through the LIFO useEscape hook
 // instead of the old pushEscape/popEscape registry.
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
+import { track } from "../track.js";
 import { currentFilter } from "../store.js";
 import { useEscape } from "../hooks/useEscape.js";
 
@@ -46,6 +47,7 @@ export function FilterBar() {
 
   function pick(key) {
     currentFilter.value = key;
+    track("filter.use");
     setOpen(false);
   }
 

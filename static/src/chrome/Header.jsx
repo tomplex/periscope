@@ -13,6 +13,7 @@
 // Task 8). They are inert placeholders until then; the vanilla path still owns
 // those surfaces while only chrome is Preact-mounted.
 import { useEffect, useState, useRef, useCallback } from "preact/hooks";
+import { track } from "../track.js";
 import { windows } from "../store.js";
 import { useEscape } from "../hooks/useEscape.js";
 import { UsagePill } from "./UsagePill.jsx";
@@ -91,6 +92,7 @@ export function Header() {
   useEffect(() => {
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key === "/") {
+        track("key.shortcut", { key: "cmd+/" });
         e.preventDefault();
         window.location.href = "/history";
       }
