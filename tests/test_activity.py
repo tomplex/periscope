@@ -290,3 +290,72 @@ def test_maybe_emit_milestone_empty_completion_does_not_advance(tmp_path, monkey
     activity.maybe_emit_milestone(str(repo), "main", settled=True)
     # Empty completion: no junk milestone, cursor not advanced.
     assert activity.events_for(None, str(repo), "main") == []
+
+
+# --- UI instrumentation ------------------------------------------------
+
+def test_record_ui_events_inserts_and_stamps_dev():
+    n = activity.record_ui_events(
+        [{"name": "modal.open", "detail": {"tab": "terminal"}, "t": 100}],
+        dev=True,
+    )
+    assert n == 1
+    c = activity._conn()
+    row = c.execute("SELECT at, name, dev, detail FROM ui_events").fetchone()
+    assert row[0] == 100
+    assert row[1] == "modal.open"
+    assert row[2] == 1
+    assert row[3] == '{"tab": "terminal"}'
+
+
+def test_record_ui_events_dev_false_stamps_zero():
+    activity.record_ui_events([{"name": "app.open", "t": 5}], dev=False)
+    c = activity._conn()
+    assert c.execute("SELECT dev FROM ui_events").fetchone()[0] == 0
+
+
+def test_record_ui_events_skips_rows_missing_name():
+    n = activity.record_ui_events(
+        [{"detail": {"x": 1}, "t": 1}, {"name": "", "t": 1}, {"name": "ok", "t": 1}],
+        dev=False,
+    )
+    assert n == 1
+    c = activity._conn()
+    assert c.execute("SELECT name FROM ui_events").fetchone()[0] == "ok"
+
+
+def test_record_ui_events_skips_non_dict_elements():
+    n = activity.record_ui_events(["nope", 42, {"name": "ok", "t": 1}], dev=False)
+    assert n == 1
+
+
+def test_record_ui_events_invalid_t_falls_back_to_now():
+    activity.record_ui_events([{"name": "x"}, {"name": "y", "t": "bad"}], dev=False)
+    c = activity._conn()
+    ats = [r[0] for r in c.execute("SELECT at FROM ui_events")]
+    assert all(a > 1_000_000_000 for a in ats)  # real unix timestamps
+
+
+def test_record_ui_events_detail_none_and_empty_become_null():
+    activity.record_ui_events(
+        [{"name": "a", "t": 1}, {"name": "b", "detail": {}, "t": 1}],
+        dev=False,
+    )
+    c = activity._conn()
+    details = [r[0] for r in c.execute("SELECT detail FROM ui_events ORDER BY name")]
+    assert details == [None, None]
+
+
+def test_record_ui_events_empty_batch_returns_zero():
+    assert activity.record_ui_events([], dev=False) == 0
+
+
+def test_prune_ui_events_drops_old_keeps_recent():
+    import time
+    now = int(time.time())
+    activity.record_ui_events([{"name": "old", "t": now - 200 * 86400}], dev=False)
+    activity.record_ui_events([{"name": "new", "t": now}], dev=False)
+    activity.prune_ui_events(max_age_days=90)
+    c = activity._conn()
+    names = [r[0] for r in c.execute("SELECT name FROM ui_events")]
+    assert names == ["new"]

@@ -47,6 +47,14 @@ CREATE TABLE IF NOT EXISTS pane_sessions (
   session_id  TEXT NOT NULL,         -- Claude CLAUDE_CODE_SESSION_ID (JSONL stem)
   updated_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ui_events (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at     INTEGER NOT NULL,
+  name   TEXT NOT NULL,
+  dev    INTEGER NOT NULL,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ui_events_name ON ui_events (name, at);
 """
 
 _CONN: sqlite3.Connection | None = None
@@ -206,6 +214,58 @@ def migrate_legacy_pane_sessions() -> int:
     except OSError:
         log.warning("could not remove legacy pane_sessions dir %s", legacy)
     return len(rows)
+
+
+# --- UI instrumentation ------------------------------------------------
+#
+# Lightweight usage telemetry: which dashboard actions get used most, so
+# UX work is data-driven. The client (static/src/track.js) batches events
+# to POST /api/events (routes/events.py), which calls record_ui_events.
+# Single-user, low volume; SQLite-by-hand is the readout (no UI). ui_events
+# is a separate tenant in periscope.db, like pane_sessions above.
+
+def record_ui_events(events: list, dev: bool) -> int:
+    """Bulk-insert UI instrumentation rows. Each event is a dict with keys
+    name (str), detail (dict|None), t (int unix seconds, client clock).
+    Non-dict elements and rows with no non-empty `name` are skipped.
+    `detail` is JSON-serialized (None / empty / non-dict -> NULL). `t` is
+    coerced to int, falling back to time.time() when missing/invalid. `dev`
+    stamps every row in the batch. Returns the number of rows inserted."""
+    now = int(time.time())
+    dev_flag = 1 if dev else 0
+    rows: list[tuple] = []
+    for e in events:
+        if not isinstance(e, dict):
+            continue
+        name = e.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        try:
+            at = int(e.get("t"))
+        except (TypeError, ValueError):
+            at = now
+        detail = e.get("detail")
+        detail_json = json.dumps(detail) if isinstance(detail, dict) and detail else None
+        rows.append((at, name, dev_flag, detail_json))
+    if not rows:
+        return 0
+    with _LOCK:
+        c = _conn()
+        c.executemany(
+            "INSERT INTO ui_events (at, name, dev, detail) VALUES (?,?,?,?)",
+            rows,
+        )
+        c.commit()
+    return len(rows)
+
+
+def prune_ui_events(max_age_days: int = 90) -> None:
+    """Drop ui_events older than max_age_days. Called once at startup."""
+    cutoff = int(time.time()) - max_age_days * 86400
+    with _LOCK:
+        c = _conn()
+        c.execute("DELETE FROM ui_events WHERE at < ?", (cutoff,))
+        c.commit()
 
 
 def _row_to_event(event_kind, at, text, detail, url):
