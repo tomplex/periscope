@@ -31,6 +31,26 @@ function renderUrl(target, absPath) {
   return `/api/fs/render/${paneToken(target)}${encoded}`;
 }
 
+// Resolve doc-relative URLs (image src, link href) against the directory of
+// the rendered file, served through /api/fs/render. ./ and ../ are
+// normalized client-side for clean URLs; the server's safe_resolve still
+// gates traversal, so this is cosmetic, not security.
+function makeResolveUrl(target, resolvedPath) {
+  const dir = resolvedPath.slice(0, resolvedPath.lastIndexOf("/"));
+  return (raw) => {
+    const out = [];
+    for (const p of `${dir}/${raw}`.split("/")) {
+      if (p === "." || (p === "" && out.length)) continue;
+      if (p === "..") {
+        if (out.length > 1) out.pop();
+        continue;
+      }
+      out.push(p);
+    }
+    return renderUrl(target, out.join("/"));
+  };
+}
+
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { markdown } from "@codemirror/lang-markdown";
@@ -40,6 +60,7 @@ import { json } from "@codemirror/lang-json";
 import { rust } from "@codemirror/lang-rust";
 
 import { renderMarkdown } from "../split/markdown.jsx";
+import { highlightCode } from "./highlightCode.jsx";
 
 // Languages with a "rendered" view (toggleable to source). Everything
 // else collapses to source-only — no toggle button.
@@ -241,11 +262,19 @@ export function PreviewTabInner({ entry }) {
           />
         )}
         {!state.loading && !state.error && effectiveView === "rendered" && state.lang === "markdown" && (
-          // turn-prose re-uses the transcript's markdown styles (.md-h /
-          // .md-p / .md-code / .md-ul ...) so we don't duplicate a parallel
-          // stylesheet. preview-md-host adds the scroll/padding chrome.
-          <div class="preview-md-host turn-prose">
-            {renderMarkdown(state.content || "")}
+          // Document mode: real heading scale (no demote), CommonMark soft
+          // breaks (hard-wrapped READMEs reflow), lezer-highlighted fences,
+          // and doc-relative image/link URLs served via /api/fs/render.
+          // .md-doc is a full parallel skin to the transcript's .turn-prose.
+          <div class="preview-md-host">
+            <div class="md-doc">
+              {renderMarkdown(state.content || "", {
+                demote: false,
+                softBreaks: "space",
+                highlight: highlightCode,
+                resolveUrl: state.resolved ? makeResolveUrl(target, state.resolved) : null,
+              })}
+            </div>
           </div>
         )}
         {!state.loading && !state.error && effectiveView === "source" && (
