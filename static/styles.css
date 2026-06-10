@@ -2290,6 +2290,8 @@ body.modal-open { overflow: hidden; }
 .turn-prose .md-hr { border: 0; border-top: 1px solid var(--line-soft); margin: 13px 0; }
 .turn-prose strong { color: var(--fg-0); font-weight: 650; }
 .md-icode { font-family: var(--mono); font-size: 0.86em; background: var(--bg-2); padding: 1px 5px; border-radius: 3px; color: var(--fg-0); }
+.turn-prose .md-img { max-width: 100%; border-radius: var(--r-sm); }
+.turn-prose del { color: var(--fg-2); }
 .turn-prose .md-code {
   font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
   background: var(--bg-term); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
@@ -2575,12 +2577,85 @@ body.modal-open { overflow: hidden; }
   position: absolute;
   inset: 0;
   overflow: auto;
-  padding: 16px 24px;
-  font-family: var(--sans);
-  font-size: 13.5px;
-  line-height: 1.55;
+  padding: 20px 28px 40px;
+}
+/* ── rendered-markdown document skin (file viewer) ──
+   Complete parallel to the .turn-prose .md-* rules — document-scale
+   typography instead of transcript-compact. */
+.md-doc {
+  max-width: 72ch; margin: 0 auto;
+  font-family: var(--sans); font-size: 15px; line-height: 1.65;
   color: var(--fg-1);
 }
+.md-doc .md-p { margin: 0 0 12px; }
+.md-doc .md-h {
+  font-family: var(--sans); color: var(--fg-0); line-height: 1.3;
+  margin: 22px 0 10px; font-weight: 650; letter-spacing: -0.01em;
+}
+.md-doc .md-h:first-child { margin-top: 0; }
+.md-doc h1.md-h { font-size: 26px; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }
+.md-doc h2.md-h { font-size: 20px; padding-bottom: 5px; border-bottom: 1px solid var(--line-soft); }
+.md-doc h3.md-h { font-size: 17px; }
+.md-doc h4.md-h { font-size: 15px; }
+.md-doc h5.md-h, .md-doc h6.md-h { font-size: 13.5px; color: var(--fg-1); }
+.md-doc .md-ul, .md-doc .md-ol { margin: 10px 0; padding-left: 24px; }
+.md-doc .md-ul li, .md-doc .md-ol li { margin: 3px 0; }
+.md-doc .md-ul li::marker, .md-doc .md-ol li::marker { color: var(--fg-3); }
+.md-doc .md-quote { border-left: 3px solid var(--line); padding-left: 14px; color: var(--fg-2); margin: 12px 0; }
+.md-doc .md-link { color: var(--accent); text-decoration: none; }
+.md-doc .md-link:hover { text-decoration: underline; }
+.md-doc .md-hr { border: 0; border-top: 1px solid var(--line-soft); margin: 22px 0; }
+.md-doc strong { color: var(--fg-0); font-weight: 650; }
+.md-doc .md-code {
+  font-family: var(--mono); font-size: 13px; line-height: 1.55;
+  background: var(--bg-term); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  padding: 11px 14px; overflow-x: auto; margin: 12px 0; color: var(--fg-1);
+}
+.md-doc .md-code code { font-family: inherit; white-space: pre; }
+.md-doc .md-img { max-width: 100%; border-radius: var(--r-sm); }
+.md-doc .md-table {
+  border-collapse: collapse; margin: 12px 0; font-size: 14px;
+  border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden;
+}
+.md-doc .md-table th, .md-doc .md-table td {
+  padding: 6px 13px; text-align: left; border-bottom: 1px solid var(--line-soft);
+  border-right: 1px solid var(--line-soft); vertical-align: top;
+}
+.md-doc .md-table th:last-child, .md-doc .md-table td:last-child { border-right: 0; }
+.md-doc .md-table tbody tr:last-child td { border-bottom: 0; }
+.md-doc .md-table thead th {
+  background: var(--bg-2); color: var(--fg-0); font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.md-doc .md-table tbody tr:nth-child(even) td { background: color-mix(in oklch, var(--bg-1) 50%, transparent); }
+
+/* task lists (both skins) */
+li.md-task { list-style: none; margin-left: -20px; }
+li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(--accent); }
+
+/* lezer classHighlighter token palette — One-Dark, matches the
+   PREVIEW_HIGHLIGHT colors used by CodeMirror source view. tok-punctuation
+   deliberately unstyled (falls back to --fg-1, like PREVIEW_HIGHLIGHT).
+   Order matters: tok-definition must come after tok-variableName — lezer
+   emits the compound "tok-variableName tok-definition" and equal
+   specificity means last-declared wins. */
+.md-doc .tok-keyword { color: #c678dd; }
+.md-doc .tok-atom, .md-doc .tok-bool, .md-doc .tok-number, .md-doc .tok-literal { color: #d19a66; }
+.md-doc .tok-string { color: #98c379; }
+.md-doc .tok-string2 { color: #56b6c2; }
+.md-doc .tok-variableName { color: #e06c75; }
+.md-doc .tok-variableName2 { color: #d19a66; }
+.md-doc .tok-definition { color: #e6edf3; }
+.md-doc .tok-propertyName { color: #e6edf3; }
+.md-doc .tok-typeName, .md-doc .tok-className, .md-doc .tok-namespace { color: #e5c07b; }
+.md-doc .tok-comment { color: #7f848e; font-style: italic; }
+.md-doc .tok-operator { color: #56b6c2; }
+.md-doc .tok-meta { color: #7f848e; }
+.md-doc .tok-url, .md-doc .tok-link { color: #61afef; }
+.md-doc .tok-heading { color: #e06c75; font-weight: 650; }
+.md-doc .tok-emphasis { font-style: italic; }
+.md-doc .tok-strong { font-weight: 700; }
+.md-doc .tok-invalid { color: #ff6b6b; }
 /* Text-labeled toggle (Source/Rendered) — same hover affordance as the
    icon buttons but sized for a short word. */
 .preview-btn-text {
