@@ -26,14 +26,24 @@ export default defineConfig({
         // stable hash-free names so they can be committed alongside app.js.
         // PreviewTabInner (CodeMirror) is the only such chunk today.
         chunkFileNames: "chunks/[name].js",
-        // Roll every CodeMirror dep + the lazy inner component into a single
-        // chunk. Without this Vite splits each lang pack out separately and
-        // PreviewTabInner ends up importing from a sibling CodeMirror chunk
-        // — fragile, and broke once already during the overlay→tab rename.
+        // Roll every CodeMirror/lezer dep + the lazy preview modules into a
+        // single chunk. Without this Vite splits each lang pack out
+        // separately and PreviewTabInner ends up importing from a sibling
+        // CodeMirror chunk — fragile, and broke once already during the
+        // overlay→tab rename. Matched by name, NOT by directory:
+        // preview/PreviewTab.jsx is the EAGER wrapper that dynamic-imports
+        // the rest; routing it here would make app.js import the chunk
+        // statically and defeat the lazy split.
         manualChunks(id) {
-          if (id.includes("/@codemirror/") || id.includes("/preview/PreviewTabInner")) {
+          if (
+            id.includes("/@codemirror/") ||
+            id.includes("/@lezer/") ||
+            id.includes("/preview/PreviewTabInner") ||
+            id.includes("/preview/highlightCode")
+          ) {
             return "preview";
           }
+          return "app";
         },
       },
     },
