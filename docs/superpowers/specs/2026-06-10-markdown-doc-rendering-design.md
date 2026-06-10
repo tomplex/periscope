@@ -95,7 +95,9 @@ The viewer passes `resolveUrl` backed by the existing
 directory of the doc's resolved path and serve via `/api/fs/render/...`;
 absolute `http(s)`/`data:`/`#` values pass through untouched. Relative links
 thus open the raw target file in a new tab — not doc-to-doc navigation, but
-never a dashboard-origin 404.
+not broken either. Root-absolute paths (`/docs/x.md`, GitHub repo-root
+style) also pass through and will 404 at the dashboard origin — the client
+can't know the repo root; accepted.
 
 ## Testing
 
