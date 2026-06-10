@@ -1,147 +1,173 @@
-// Minimal markdown -> Preact vnodes. No innerHTML (convention #8), so this
-// renders the subset Claude actually emits — fenced code, inline code, bold,
-// italic, links, headings, ordered/unordered lists, blockquotes, hr, hard line
-// breaks — directly to vnodes. Not a full CommonMark parser; pragmatic and
-// good enough for transcript prose. Nested formatting inside code spans is not
-// processed (code is verbatim), matching markdown semantics.
+// Markdown -> Preact vnodes via mdast (micromark). No innerHTML (convention
+// #8) — raw HTML nodes render as literal text. One parser, two skins:
+// transcript (demoted headings, soft breaks as <br>) and the file viewer's
+// document mode (real heading scale, CommonMark soft breaks, highlighted
+// fences, doc-relative URL resolution).
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfm } from "micromark-extension-gfm";
+import { gfmFromMarkdown } from "mdast-util-gfm";
 
-// First inline token: code | bold | italic | link. Code first so * / _ inside
-// backticks stay literal.
-const INLINE_RE =
-  /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)|(\[[^\]]+\]\([^)\s]+\))/;
+// Scheme-qualified, root-absolute, and fragment URLs pass through untouched;
+// everything else is doc-relative and goes through ctx.resolveUrl.
+const ABSOLUTE_RE = /^([a-z][a-z0-9+.-]*:|\/|#)/i;
 
-function renderInline(text) {
-  const out = [];
-  let rest = String(text);
-  let guard = 0;
-  while (rest && guard++ < 500) {
-    const m = rest.match(INLINE_RE);
-    if (!m) {
-      out.push(rest);
-      break;
-    }
-    if (m.index > 0) out.push(rest.slice(0, m.index));
-    const tok = m[0];
-    if (tok[0] === "`") {
-      out.push(<code class="md-icode">{tok.slice(1, -1)}</code>);
-    } else if (tok.startsWith("**") || tok.startsWith("__")) {
-      out.push(<strong>{renderInline(tok.slice(2, -2))}</strong>);
-    } else if (tok[0] === "*" || tok[0] === "_") {
-      out.push(<em>{renderInline(tok.slice(1, -1))}</em>);
-    } else {
-      const lm = tok.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
-      out.push(
-        <a class="md-link" href={lm[2]} target="_blank" rel="noopener">{lm[1]}</a>
-      );
-    }
-    rest = rest.slice(m.index + tok.length);
-  }
-  return out;
+function url(raw, ctx) {
+  if (!ctx.resolveUrl || ABSOLUTE_RE.test(raw)) return raw;
+  return ctx.resolveUrl(raw);
 }
 
-const BLOCK_START_RE = /^```|^#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|^>\s?|^(?:---|\*\*\*|___)\s*$/;
+function inlineAll(children, ctx) {
+  return (children || []).map((c, i) => inline(c, ctx, i));
+}
+
+function inline(node, ctx, key) {
+  switch (node.type) {
+    case "text": {
+      // Soft breaks survive in mdast as literal \n inside text values.
+      // Transcript mode renders them as <br> (Claude uses them
+      // intentionally); document mode lets them collapse to whitespace.
+      if (ctx.softBreaks !== "br" || !node.value.includes("\n")) return node.value;
+      const out = [];
+      node.value.split("\n").forEach((part, i) => {
+        if (i) out.push(<br key={`${key}b${i}`} />);
+        out.push(part);
+      });
+      return out;
+    }
+    case "inlineCode":
+      return <code class="md-icode" key={key}>{node.value}</code>;
+    case "strong":
+      return <strong key={key}>{inlineAll(node.children, ctx)}</strong>;
+    case "emphasis":
+      return <em key={key}>{inlineAll(node.children, ctx)}</em>;
+    case "delete":
+      return <del key={key}>{inlineAll(node.children, ctx)}</del>;
+    case "link":
+      return (
+        <a class="md-link" href={url(node.url, ctx)} target="_blank" rel="noopener" key={key}>
+          {inlineAll(node.children, ctx)}
+        </a>
+      );
+    case "image":
+      if (!ABSOLUTE_RE.test(node.url) && !ctx.resolveUrl) {
+        // Transcript: repo-relative paths would 404 against the dashboard
+        // origin — show the alt text, not a broken image icon.
+        return node.alt || node.url;
+      }
+      return <img class="md-img" src={url(node.url, ctx)} alt={node.alt || ""} key={key} />;
+    case "break":
+      return <br key={key} />;
+    case "html":
+      return node.value; // literal text, never innerHTML
+    case "footnoteReference":
+      return <sup key={key}>[{node.label || node.identifier}]</sup>;
+    default:
+      return node.children ? inlineAll(node.children, ctx) : (node.value ?? null);
+  }
+}
+
+function listItem(item, ctx, key) {
+  // Tight list items carry a paragraph wrapper in mdast; unwrap it so <li>
+  // doesn't inherit paragraph margins.
+  const inner = (item.children || []).map((c, i) =>
+    c.type === "paragraph" && !item.spread ? inlineAll(c.children, ctx) : block(c, ctx, i)
+  );
+  if (item.checked == null) return <li key={key}>{inner}</li>;
+  return (
+    <li class="md-task" key={key}>
+      <input type="checkbox" checked={item.checked} disabled /> {inner}
+    </li>
+  );
+}
+
+function table(node, ctx, key) {
+  const align = node.align || [];
+  const [head, ...rows] = node.children;
+  const width = head.children.length;
+  const style = (j) => (align[j] ? `text-align:${align[j]}` : undefined);
+  // Pad ragged rows to header width — the td:last-child / last-row border
+  // CSS depends on full rows.
+  const cells = (row) => Array.from({ length: width }, (_, j) => row.children[j] ?? null);
+  return (
+    <table class="md-table" key={key}>
+      <thead>
+        <tr>
+          {cells(head).map((c, j) => (
+            <th key={j} style={style(j)}>{c ? inlineAll(c.children, ctx) : ""}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, ri) => (
+          <tr key={ri}>
+            {cells(row).map((c, j) => (
+              <td key={j} style={style(j)}>{c ? inlineAll(c.children, ctx) : ""}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function block(node, ctx, key) {
+  switch (node.type) {
+    case "paragraph":
+      return <p class="md-p" key={key}>{inlineAll(node.children, ctx)}</p>;
+    case "heading": {
+      // Transcript demotes so a top-level # doesn't shout inside a turn.
+      const lvl = ctx.demote ? Math.min(node.depth + 2, 6) : node.depth;
+      const Tag = `h${lvl}`;
+      return <Tag class={`md-h md-h${node.depth}`} key={key}>{inlineAll(node.children, ctx)}</Tag>;
+    }
+    case "code":
+      return (
+        <pre class="md-code" key={key}>
+          <code>
+            {ctx.highlight && node.lang ? ctx.highlight(node.value, node.lang) : node.value}
+          </code>
+        </pre>
+      );
+    case "blockquote":
+      return (
+        <blockquote class="md-quote" key={key}>
+          {(node.children || []).map((c, i) => block(c, ctx, i))}
+        </blockquote>
+      );
+    case "list": {
+      const items = (node.children || []).map((c, i) => listItem(c, ctx, i));
+      return node.ordered ? (
+        <ol class="md-ol" start={node.start !== 1 ? node.start : undefined} key={key}>{items}</ol>
+      ) : (
+        <ul class="md-ul" key={key}>{items}</ul>
+      );
+    }
+    case "thematicBreak":
+      return <hr class="md-hr" key={key} />;
+    case "table":
+      return table(node, ctx, key);
+    case "html":
+      return <p class="md-p" key={key}>{node.value}</p>;
+    default:
+      // Unknown blocks (footnoteDefinition, ...): render their text rather
+      // than dropping content. Link-reference definitions have neither
+      // children nor value and vanish, which is correct.
+      if (node.children) return <p class="md-p" key={key}>{inlineAll(node.children, ctx)}</p>;
+      return node.value ? <p class="md-p" key={key}>{node.value}</p> : null;
+  }
+}
 
 // Render a markdown string into an array of block-level vnodes.
-export function renderMarkdown(text) {
-  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
-  const blocks = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-
-    const fence = line.match(/^```(\w*)\s*$/);
-    if (fence) {
-      const buf = [];
-      i++;
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) buf.push(lines[i++]);
-      i++; // closing fence
-      blocks.push(
-        <pre class="md-code" key={blocks.length}><code>{buf.join("\n")}</code></pre>
-      );
-      continue;
-    }
-
-    if (!line.trim()) { i++; continue; }
-
-    const h = line.match(/^(#{1,6})\s+(.*)$/);
-    if (h) {
-      // Demote so a top-level # doesn't shout inside a turn: # -> h3.
-      const lvl = Math.min(h[1].length + 2, 6);
-      const Tag = `h${lvl}`;
-      blocks.push(
-        <Tag class={`md-h md-h${h[1].length}`} key={blocks.length}>{renderInline(h[2])}</Tag>
-      );
-      i++; continue;
-    }
-
-    if (/^(?:---|\*\*\*|___)\s*$/.test(line)) {
-      blocks.push(<hr class="md-hr" key={blocks.length} />);
-      i++; continue;
-    }
-
-    if (/^>\s?/.test(line)) {
-      const buf = [];
-      while (i < lines.length && /^>\s?/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, ""));
-      blocks.push(
-        <blockquote class="md-quote" key={blocks.length}>{renderInline(buf.join(" "))}</blockquote>
-      );
-      continue;
-    }
-
-    if (/^\s*[-*+]\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-        items.push(<li key={items.length}>{renderInline(lines[i++].replace(/^\s*[-*+]\s+/, ""))}</li>);
-      }
-      blocks.push(<ul class="md-ul" key={blocks.length}>{items}</ul>);
-      continue;
-    }
-
-    if (/^\s*\d+\.\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(<li key={items.length}>{renderInline(lines[i++].replace(/^\s*\d+\.\s+/, ""))}</li>);
-      }
-      blocks.push(<ol class="md-ol" key={blocks.length}>{items}</ol>);
-      continue;
-    }
-
-    // GFM table: a `| … |` row immediately followed by a `|---|---|` separator.
-    if (line.includes("|") && i + 1 < lines.length &&
-        /-/.test(lines[i + 1]) && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
-      const cells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
-      const headers = cells(line);
-      i += 2; // header + separator
-      const rows = [];
-      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
-        rows.push(cells(lines[i]));
-        i++;
-      }
-      blocks.push(
-        <table class="md-table" key={blocks.length}>
-          <thead><tr>{headers.map((h, j) => <th key={j}>{renderInline(h)}</th>)}</tr></thead>
-          <tbody>
-            {rows.map((r, ri) => (
-              <tr key={ri}>{headers.map((_, j) => <td key={j}>{renderInline(r[j] || "")}</td>)}</tr>
-            ))}
-          </tbody>
-        </table>
-      );
-      continue;
-    }
-
-    // Paragraph: gather contiguous non-blank, non-block-start lines. Preserve
-    // hard line breaks within the paragraph (Claude uses them intentionally).
-    const buf = [];
-    while (i < lines.length && lines[i].trim() && !BLOCK_START_RE.test(lines[i])) {
-      buf.push(lines[i++]);
-    }
-    const inner = [];
-    buf.forEach((l, idx) => {
-      if (idx) inner.push(<br key={`br${idx}`} />);
-      inner.push(...renderInline(l));
-    });
-    blocks.push(<p class="md-p" key={blocks.length}>{inner}</p>);
-  }
-  return blocks;
+export function renderMarkdown(text, opts = {}) {
+  const ctx = {
+    demote: opts.demote ?? true,
+    softBreaks: opts.softBreaks ?? "br",
+    highlight: opts.highlight ?? null,
+    resolveUrl: opts.resolveUrl ?? null,
+  };
+  const tree = fromMarkdown(String(text || ""), {
+    extensions: [gfm()],
+    mdastExtensions: [gfmFromMarkdown()],
+  });
+  return tree.children.map((node, i) => block(node, ctx, i));
 }
