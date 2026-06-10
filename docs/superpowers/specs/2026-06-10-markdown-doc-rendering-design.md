@@ -24,18 +24,29 @@ New deps: `mdast-util-from-markdown`, `mdast-util-gfm`,
 `micromark-extension-gfm` (eager bundle — the transcript imports this module).
 
 `renderMarkdown(text, opts)` keeps its name and vnode-array return.
-`opts = { demote = true, highlight = null, resolveUrl = null }`:
+`opts = { demote = true, softBreaks = "br", highlight = null, resolveUrl = null }`:
 
 - Internals become an mdast → vnode walker emitting the same `md-*` classes
   the existing CSS targets. `demote: true` (default) preserves today's
   `#` → h3 transcript behavior, so `Transcript.jsx` call sites are unchanged.
+- `softBreaks: "br"` (default) renders intra-paragraph newlines as `<br>`,
+  matching today's renderer (Claude emits them intentionally; mdast treats
+  them as soft breaks that would otherwise collapse to spaces and reflow
+  every transcript turn). The file viewer passes `"space"` — CommonMark
+  semantics, correct for hard-wrapped READMEs.
 - New node types: nested lists, task-list items (disabled
   `<input type="checkbox">`), strikethrough (`<del>`), images
   (`<img class="md-img">`), multi-paragraph blockquotes, table cell alignment
-  (mdast `align` → `text-align` style).
+  (mdast `align` → `text-align` style). GFM autolinks make bare URLs
+  clickable in both views (accepted transcript change).
+- Ragged table rows are padded to header length in the walker — the
+  `td:last-child` / last-row border CSS depends on full rows.
 - `highlight(code, lang)` — optional callback returning vnodes for fenced
   code; absent → plain text fence (transcript behavior).
-- `resolveUrl(src)` — optional callback rewriting image `src` values.
+- `resolveUrl(src)` — optional callback rewriting relative image `src` AND
+  link `href` values (absolute `http(s)`/`data:`/`#` pass through). When
+  absent and an image src is relative, render the alt text instead of a
+  broken `<img>` (transcript turns reference repo-relative paths).
 - Raw HTML nodes (`html` in mdast) render as literal text. No innerHTML
   anywhere (existing convention #8).
 
@@ -51,12 +62,25 @@ nothing. Exports `highlightCode(code, lang) → vnodes`:
 - `highlightTree(parser.parse(code), classHighlighter)` → spans with stable
   `tok-*` classes. ~15 lines of plain CSS map `tok-*` to the One-Dark palette
   used by `PREVIEW_HIGHLIGHT` (plain classes because `HighlightStyle`'s
-  CSS-in-JS only mounts with an EditorView).
+  CSS-in-JS only mounts with an EditorView). Note: `highlightTree` invokes a
+  callback for highlighted ranges only and skips gaps — the implementation
+  must emit plain-text nodes for unhighlighted ranges or whitespace and
+  identifiers vanish.
 - Unknown/missing lang → plain text.
+- Chunking: `vite.config.js` `manualChunks` currently matches
+  `/preview/PreviewTabInner` by name; widen it to
+  `id.includes("/src/preview/")` so `highlightCode.js` reliably lands in the
+  lazy preview chunk (this pattern broke once during the overlay→tab rename).
+  Verify chunk contents / eager-bundle size delta after build.
 
 ### 3. Document skin (`.md-doc` in `static/styles.css`)
 
-`PreviewTabInner` swaps `turn-prose` → `md-doc` on the preview host:
+`PreviewTabInner` swaps `turn-prose` → `md-doc` on the preview host. All
+existing block styling is descendant-scoped under `.turn-prose`, so `.md-doc`
+needs a **complete parallel rule set** (tables, code fences, quotes, links,
+lists, hr — not just the deltas below). `.preview-md-host` keeps only
+scroll/padding chrome; its current `font-size`/`line-height` move into
+`.md-doc` so equal-specificity ordering isn't load-bearing.
 
 - ~72ch max-width, centered; 15px base; line-height ~1.65.
 - Heading scale: h1 ~26px with bottom rule, h2 ~20px, h3 ~17px, h4 ~15px.
@@ -67,17 +91,21 @@ nothing. Exports `highlightCode(code, lang) → vnodes`:
 ### 4. Relative image resolution
 
 The viewer passes `resolveUrl` backed by the existing
-`renderUrl(target, absPath)` helper: relative srcs resolve against the
+`renderUrl(target, absPath)` helper: relative srcs/hrefs resolve against the
 directory of the doc's resolved path and serve via `/api/fs/render/...`;
-absolute `http(s)`/`data:` srcs pass through untouched.
+absolute `http(s)`/`data:`/`#` values pass through untouched. Relative links
+thus open the raw target file in a new tab — not doc-to-doc navigation, but
+never a dashboard-origin 404.
 
 ## Testing
 
 New `static/src/split/__tests__/markdown.test.jsx` (vitest;
 `preact-render-to-string` added as devDependency). Cases: demote on/off,
-nested lists, task lists, multi-paragraph blockquote, strikethrough, image
-with and without `resolveUrl`, fence with and without `highlight`, raw HTML
-rendered as text, GFM table with alignment.
+soft breaks as `<br>` (default) vs space, nested lists, task lists,
+multi-paragraph blockquote, strikethrough, image with and without
+`resolveUrl` (relative src + no resolver → alt text), relative link href
+through `resolveUrl`, fence with and without `highlight`, raw HTML rendered
+as text, GFM table with alignment and ragged-row padding.
 
 Manual verification: open a real README in the file viewer (dev server),
 check headings/fences/images render; confirm transcript view is visually
@@ -88,3 +116,4 @@ unchanged.
 - Raw HTML rendering (kept as literal text).
 - Highlighting fences in the transcript view.
 - New languages beyond the lezer parsers already bundled.
+- Doc-to-doc navigation for relative links (they open the raw file).
