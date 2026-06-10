@@ -303,7 +303,7 @@ git commit -m "feat: tmux_mirror control-mode parser + octal decoder"
 - Modify: `periscope/tmux_mirror.py` (append after `decode_octal`)
 - Modify: `tests/test_tmux_mirror.py` (append)
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_tmux_mirror.py`; extend the import to add `GridSnapshot, build_reconcile_frame, snapshot_from_replies, DISPLAY_FMT`)
+- [ ] **Step 1: Write the failing tests** (append to `tests/test_tmux_mirror.py`; extend the import to add `GridSnapshot, build_reconcile_frame, snapshot_from_replies`)
 
 ```python
 # --- frame builder ---
@@ -594,6 +594,7 @@ def test_reconcile_frame_enqueued_synchronously_on_display_reply():
     # already in the queue — no task switch in between.
     async def drive():
         m = _SessionMirror("sess")
+        m._proc = object()   # _fire_reconcile guards on a live client
         sent = []
         m._send_command = lambda cmd, cb: (sent.append(cmd), m._reply_callbacks.append(cb))
         sub = m.subscribe("%7")
@@ -611,6 +612,7 @@ def test_reconcile_frame_enqueued_synchronously_on_display_reply():
 def test_reply_error_ends_pane_subscriptions():
     async def drive():
         m = _SessionMirror("sess")
+        m._proc = object()   # _fire_reconcile guards on a live client
         m._send_command = lambda cmd, cb: m._reply_callbacks.append(cb)
         sub = m.subscribe("%7")
         m._fire_reconcile("%7")
@@ -851,6 +853,7 @@ class _SessionMirror:
         # reader sees EOF → _finalize
 
     def _finalize(self) -> None:
+        self._proc = None  # a late __aexit__ must not re-arm the linger
         for subs in self._subs.values():
             for s in subs:
                 s._q.put_nowait(None)
@@ -939,8 +942,8 @@ dev = [
 ]
 ```
 
-Run: `uv sync && uv run python -c "import pyte; print(pyte.__version__)"`
-Expected: prints a version ≥ 0.8
+Run: `uv sync && uv run python -c "from importlib.metadata import version; print(version('pyte'))"`
+Expected: prints a version ≥ 0.8 (note: `pyte.__version__` does not exist — don't use it)
 
 - [ ] **Step 2: Write the integration tests** (append to `tests/test_tmux_mirror.py`)
 
@@ -948,6 +951,9 @@ These run a real tmux server on a dedicated socket (`-L periscope-mirror-test`),
 
 ```python
 # --- integration: real tmux, pyte as the client-side oracle ---
+# (hoist these imports to the top of the file with the others; asyncio in
+# particular is used by _drain and the test bodies)
+import asyncio
 import shutil
 import subprocess
 import uuid
@@ -967,7 +973,9 @@ def _t(*args):
 
 def _mk_session():
     name = f"mtest-{uuid.uuid4().hex[:8]}"
-    _t("new-session", "-d", "-s", name, "-x", "80", "-y", "24")
+    # /bin/sh, not the login shell: zsh prompt segments can repaint AFTER
+    # the last reconcile frame and break the final grid comparison.
+    _t("new-session", "-d", "-s", name, "-x", "80", "-y", "24", "/bin/sh")
     pane_id = _t("display-message", "-p", "-t", name, "#{pane_id}").strip()
     return name, pane_id
 
@@ -999,9 +1007,6 @@ async def _drain(sub, seconds):
             chunks.append(await asyncio.wait_for(sub.__anext__(), timeout))
         except (asyncio.TimeoutError, StopAsyncIteration):
             return chunks
-
-
-import asyncio
 
 
 @needs_tmux
@@ -1042,14 +1047,22 @@ def test_thesis_byte_drops_converge_after_reconcile(monkeypatch):
         async with sub:
             _t("send-keys", "-t", pane_id, "seq 100 140", "Enter")
             burst = await _drain(sub, 1.0)
-            kept = [c for i, c in enumerate(burst) if i % 3 != 0]  # drop 1/3
+            # The burst contains reconcile frames too (connect-time +
+            # quiesce). Drop deterministically and grid-affectingly:
+            # exclude ALL frames (they start with the 1049 mode prefix),
+            # then drop the LAST output chunk — it carries the final
+            # lines/prompt, which are on the final grid. Index-mod
+            # dropping would flake: a surviving frame self-heals the
+            # control, and early drops only lose lines that scroll away.
+            outs = [c for c in burst if not c.startswith(b"\x1b[?1049")]
+            kept = outs[:-1]
             sub.request_reconcile()
             heal = await _drain(sub, 1.0)
             screen = pyte.Screen(80, 24)
             _feed_pyte(screen, kept + heal)
             assert _grids_equal(screen, pane_id)
 
-            # Control: without the healing frames, the dropped bytes DO
+            # Control: without the healing frames, the dropped tail DOES
             # corrupt — proving the reconcile is what fixes it.
             corrupt = pyte.Screen(80, 24)
             _feed_pyte(corrupt, kept)
@@ -1126,8 +1139,14 @@ import json
 class FakeSubscription:
     def __init__(self):
         self.q = asyncio.Queue()
+        self.loop = None        # captured in fake_subscribe (app's loop)
         self.reconciles = 0
         self.exited = False
+
+    def push(self, chunk):
+        # TestClient runs the app loop in another thread; a plain
+        # put_nowait from the test thread rides on anyio internals.
+        self.loop.call_soon_threadsafe(self.q.put_nowait, chunk)
 
     def request_reconcile(self):
         self.reconciles += 1
@@ -1153,6 +1172,7 @@ def _patch_mirror(mocker):
 
     async def fake_subscribe(session, pane_id):
         sub.session, sub.pane_id = session, pane_id
+        sub.loop = asyncio.get_running_loop()
         return sub
 
     mocker.patch("periscope.routes.ws.tmux_mirror.subscribe",
@@ -1225,7 +1245,7 @@ def test_ws_streams_subscription_bytes(client, mocker):
     with client.websocket_connect("/ws/pane?session=main&index=0") as ws:
         _ = ws.receive_text()
         _ = ws.receive_bytes()
-        sub.q.put_nowait(b"live-bytes")
+        sub.push(b"live-bytes")
         assert ws.receive_bytes() == b"live-bytes"
 
 
@@ -1238,7 +1258,7 @@ def test_ws_closes_on_subscription_eof(client, mocker):
     with client.websocket_connect("/ws/pane?session=main&index=0") as ws:
         _ = ws.receive_text()
         _ = ws.receive_bytes()
-        sub.q.put_nowait(None)  # EOF sentinel
+        sub.push(None)  # EOF sentinel
         with pytest.raises(Exception):  # starlette raises on closed ws
             ws.receive_bytes()
 
