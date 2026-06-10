@@ -71,6 +71,8 @@ class WindowAnnotation(TypedDict, total=False):
     acked_at: int
     alias: str
     is_fork: bool  # phase 4: set on PR-review projects' claude window
+    open_tabs: list  # [{"path": str, "line": int|None}], see periscope.tabs
+    active_tab: str  # "file:<path>"; absent means "pane"
 
 
 class Settings(TypedDict, total=False):

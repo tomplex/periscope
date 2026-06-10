@@ -35,6 +35,7 @@ from periscope.log import log
 from periscope.panes import list_windows, note_focus, note_action
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.store import set_window_fields
+from periscope.tabs import open_tab
 from periscope.tmux import tmux, _run, _tmux_mutate
 
 CHANNEL_INSTRUCTIONS = """\
@@ -107,12 +108,6 @@ _CHANNEL_UNREAD: dict[str, int] = {}
 # at module load (we lazy-load mcp); attribute access happens in
 # emit_channel_event where the runtime shape is what matters.
 _MCP_SESSIONS: dict[str, Any] = {}
-# pane_id -> list[dict]   pending open-document requests (id, path, line, ts).
-# The frontend consumes these from /api/state and dedupes by id; entries
-# expire after _OPEN_DOC_TTL_S instead of being acked (a reload that
-# re-applies one just re-activates an already-open tab — harmless).
-_CHANNEL_OPEN_DOCS: dict[str, list[dict]] = {}
-_OPEN_DOC_TTL_S = 60
 
 
 def channel_state_for(pane_id: str) -> dict:
@@ -121,22 +116,12 @@ def channel_state_for(pane_id: str) -> dict:
     is blank. Holds `_CHANNELS_LOCK` internally so callers (window_view,
     routes/pane) need not reach into the channel dicts directly."""
     if not pane_id:
-        return {"attached": False, "unread": 0, "alerts": [], "open_docs": []}
-    now = time.time()
+        return {"attached": False, "unread": 0, "alerts": []}
     with _CHANNELS_LOCK:
-        docs = _CHANNEL_OPEN_DOCS.get(pane_id)
-        if docs:
-            live = [d for d in docs if now - d["ts"] < _OPEN_DOC_TTL_S]
-            if live:
-                _CHANNEL_OPEN_DOCS[pane_id] = live
-            else:
-                _CHANNEL_OPEN_DOCS.pop(pane_id, None)
-            docs = live
         return {
             "attached": pane_id in _MCP_SESSIONS,
             "unread": _CHANNEL_UNREAD.get(pane_id, 0),
             "alerts": list(_CHANNEL_ALERTS.get(pane_id, [])),
-            "open_docs": list(docs or []),
         }
 
 
@@ -153,7 +138,7 @@ def _channel_gc(known_pane_ids: set[str]) -> None:
     """Drop alert state for panes that no longer exist. Session registry is
     GC'd by the connection handler on disconnect, not here."""
     with _CHANNELS_LOCK:
-        for d in (_CHANNEL_ALERTS, _CHANNEL_UNREAD, _CHANNEL_OPEN_DOCS):
+        for d in (_CHANNEL_ALERTS, _CHANNEL_UNREAD):
             for stale in [k for k in d if k not in known_pane_ids]:
                 d.pop(stale, None)
 
@@ -271,10 +256,12 @@ def _do_link_linear_tool(pane: str, arguments: dict):
 
 
 def _do_open_document_tool(pane: str, arguments: dict):
-    """Queue an open-document request for the pane. The browser consumes it
-    from /api/state on its next poll (≤3s) and opens the file as a preview
-    tab on this pane's card — same as the user clicking the file in the
-    Inspector's Files section. Quiet: no rail-selection change."""
+    """Open a file as a preview tab on the pane's card — same as the user
+    clicking it in the Inspector's Files section. Tabs are server-owned
+    state (periscope.tabs, persisted per-pid in state.json), so the open
+    lands on the browser's next /api/state poll, survives page refresh and
+    server restart, and works even when no browser is currently open.
+    Quiet: no rail-selection change."""
     path = str(arguments.get("path", "")).strip()
     if not path:
         body = {"ok": False, "error": "path is required and must be non-empty"}
@@ -299,16 +286,13 @@ def _do_open_document_tool(pane: str, arguments: dict):
         body = {"ok": False, "error": f"no such file: {path}"}
         return _tool_result(body)
 
-    entry = {
-        "id": uuid.uuid4().hex,
-        "path": path,
-        "line": line,
-        "ts": time.time(),
-    }
-    with _CHANNELS_LOCK:
-        _CHANNEL_OPEN_DOCS.setdefault(pane, []).append(entry)
+    pid = _resolve_pid_for_pane(pane)
+    if not pid:
+        body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
+        return _tool_result(body)
 
-    body = {"ok": True, "path": path, "line": line}
+    open_tab(pid, path, line)
+    body = {"ok": True, "path": path, "line": line, "pid": pid}
     return _tool_result(body)
 
 

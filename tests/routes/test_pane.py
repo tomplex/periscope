@@ -108,3 +108,31 @@ def test_pane_turns_null_when_no_transcript(client, mocker, tmp_path, monkeypatc
     r = client.get("/api/pane/turns?session=main&index=0")
     assert r.status_code == 200
     assert r.json() == {"turns": None}
+
+
+def test_tabs_open_close_activate_roundtrip(client, clean_state, mocker):
+    mocker.patch("periscope.store._write_state")
+
+    r = client.post("/api/pane/tabs/open", json={"pid": "p1", "path": "/a/b.md", "line": 3})
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "open_tabs": [{"path": "/a/b.md", "line": 3}],
+        "active_tab": "file:/a/b.md",
+    }
+
+    r = client.post("/api/pane/tabs/activate", json={"pid": "p1", "tab": "pane"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "active_tab": "pane"}
+
+    r = client.post("/api/pane/tabs/close", json={"pid": "p1", "path": "/a/b.md"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "open_tabs": [], "active_tab": "pane"}
+    assert clean_state["windows"]["p1"] == {}
+
+
+def test_tabs_open_rejects_blank_fields(client):
+    r = client.post("/api/pane/tabs/open", json={"pid": " ", "path": "/a/b.md"})
+    assert r.status_code == 400
+    r = client.post("/api/pane/tabs/open", json={"pid": "p1", "path": ""})
+    assert r.status_code == 400

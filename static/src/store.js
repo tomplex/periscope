@@ -35,21 +35,44 @@ export const paneTranscript = signal({});   // { [pid]: { messages, sessionId } 
 // File-preview TABS (browser-style). Each pane has its own set of open
 // file tabs and a currently-active tab. The Pane's own terminal/transcript
 // is always the implicit first tab (key "pane"); file tabs are keyed by
-// "file:<path>". Setters all go through openFileTab below — keeps the
-// add-or-focus + activate behavior identical across callers.
+// "file:<path>". The tab state is SERVER-OWNED (persisted per-pid in
+// state.json, surfaced as `open_tabs` / `active_tab` on /api/state
+// windows): these signals are the local read model, hydrated by
+// syncTabsFromWindows each poll. User actions update them optimistically
+// and POST the mutation; the open_document MCP tool writes server state
+// directly and lands here on the next poll.
 export const paneTabs = signal({});         // { [pid]: [{ path, line, target }, ...] }
 export const paneActiveTab = signal({});    // { [pid]: "pane" | "file:<path>" }
 
-// Add (or focus, if already open) a file tab for an explicit pane. Used by
-// the poll loop to apply MCP open_document requests against the calling
-// pane regardless of which pane is currently selected.
-export function openFileTabForPane(pid, target, entry) {
-  const tabs = paneTabs.value[pid] || [];
-  const has = tabs.some((t) => t.path === entry.path);
-  if (!has) {
-    paneTabs.value = { ...paneTabs.value, [pid]: [...tabs, { ...entry, target }] };
+// Timestamp of the last optimistic tab mutation. Hydration skips one poll
+// period after a mutation so an /api/state response that was already
+// in flight when the user clicked can't briefly revert the optimistic
+// update before the POST's effect is polled back.
+let lastTabMutation = 0;
+
+export function syncTabsFromWindows(ws) {
+  if (Date.now() - lastTabMutation < 3000) return;
+  const tabs = {};
+  const active = {};
+  for (const w of ws) {
+    if (!w.pid) continue;
+    const list = w.open_tabs || [];
+    if (list.length) {
+      tabs[w.pid] = list.map((t) => ({ ...t, target: w.target }));
+    }
+    if (w.active_tab && w.active_tab !== "pane") active[w.pid] = w.active_tab;
   }
-  paneActiveTab.value = { ...paneActiveTab.value, [pid]: `file:${entry.path}` };
+  paneTabs.value = tabs;
+  paneActiveTab.value = active;
+}
+
+function postTabMutation(action, body) {
+  lastTabMutation = Date.now();
+  fetch(`/api/pane/tabs/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {});
 }
 
 // Add (or focus, if already open) a file tab for the currently-active
@@ -61,7 +84,13 @@ export function openFileTab(entry) {
   if (!tgt) return;
   const w = (windows.value || []).find((x) => x.target === tgt);
   if (!w) return;
-  openFileTabForPane(w.pid, tgt, entry);
+  const pid = w.pid;
+  const tabs = paneTabs.value[pid] || [];
+  if (!tabs.some((t) => t.path === entry.path)) {
+    paneTabs.value = { ...paneTabs.value, [pid]: [...tabs, { ...entry, target: tgt }] };
+  }
+  paneActiveTab.value = { ...paneActiveTab.value, [pid]: `file:${entry.path}` };
+  postTabMutation("open", { pid, path: entry.path, line: entry.line ?? null });
 }
 
 export function closeFileTab(pid, path) {
@@ -71,10 +100,12 @@ export function closeFileTab(pid, path) {
   if (paneActiveTab.value[pid] === `file:${path}`) {
     paneActiveTab.value = { ...paneActiveTab.value, [pid]: "pane" };
   }
+  postTabMutation("close", { pid, path });
 }
 
 export function setActiveTab(pid, tabKey) {
   paneActiveTab.value = { ...paneActiveTab.value, [pid]: tabKey };
+  postTabMutation("activate", { pid, tab: tabKey });
 }
 
 // Dismissed need_human alert ids (transient — resets on restart, the feed is

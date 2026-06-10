@@ -11,25 +11,10 @@ import {
   usage,
   editingTarget,
   dragState,
-  openFileTabForPane,
+  syncTabsFromWindows,
 } from "./store.js";
 
 const POLL_MS = 3000;
-
-// MCP open_document request ids already applied. The server expires
-// requests by TTL rather than acks, so the same id can show up on several
-// consecutive polls — dedupe here so a tab opens (and re-activates) once.
-const appliedOpenDocs = new Set();
-
-function consumeOpenDocs(ws) {
-  for (const w of ws) {
-    for (const d of w.channel_open_docs || []) {
-      if (appliedOpenDocs.has(d.id)) continue;
-      appliedOpenDocs.add(d.id);
-      openFileTabForPane(w.pid, w.target, { path: d.path, line: d.line ?? null });
-    }
-  }
-}
 
 // Consecutive failed /api/state polls. Banner shows at ≥2 (≈6s of
 // detection) to avoid flicker on a single transient hiccup.
@@ -53,7 +38,7 @@ export async function poll() {
     const data = await res.json();
     windows.value = data.windows || [];
     projects.value = data.projects || [];
-    consumeOpenDocs(windows.value);
+    syncTabsFromWindows(windows.value);
     // UsagePill reads { scraped, fallback }.
     usage.value = { scraped: data.usage_scrape, fallback: data.usage };
     const lu = lastUpdateEl();

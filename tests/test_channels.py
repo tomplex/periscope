@@ -10,8 +10,7 @@ import pytest
 
 from periscope.channels import (
     _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
-    _CHANNEL_OPEN_DOCS, _OPEN_DOC_TTL_S,
-    _channel_gc, channel_state_for,
+    _channel_gc,
     _do_notify_tool, _do_link_pr_tool, _do_link_linear_tool,
     _do_open_document_tool,
 )
@@ -25,13 +24,11 @@ def reset_channel_state():
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
-        _CHANNEL_OPEN_DOCS.clear()
     yield
     with _CHANNELS_LOCK:
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
-        _CHANNEL_OPEN_DOCS.clear()
 
 
 def test_notify_tool_appends_alert_and_bumps_unread():
@@ -115,31 +112,34 @@ def test_link_linear_tool_clears_stale_metadata_on_relink(clean_state, mocker):
     assert "linked_linear_status" not in entry
 
 
-def test_open_document_tool_queues_request(tmp_path):
+def test_open_document_tool_opens_persisted_tab(clean_state, mocker, tmp_path):
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    mocker.patch("periscope.store._write_state")
     f = tmp_path / "spec.md"
     f.write_text("hi")
 
     _do_open_document_tool("%5", {"path": str(f), "line": 12})
 
-    docs = _CHANNEL_OPEN_DOCS["%5"]
-    assert len(docs) == 1
-    assert docs[0]["path"] == str(f)
-    assert docs[0]["line"] == 12
-    assert docs[0]["id"]
-    # surfaced through channel_state_for (→ window view → /api/state)
-    assert channel_state_for("%5")["open_docs"] == docs
+    entry = clean_state["windows"]["abc123"]
+    assert entry["open_tabs"] == [{"path": str(f), "line": 12}]
+    assert entry["active_tab"] == f"file:{f}"
 
 
-def test_open_document_tool_resolves_relative_against_pane_cwd(tmp_path, mocker):
+def test_open_document_tool_resolves_relative_against_pane_cwd(
+    clean_state, mocker, tmp_path
+):
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    mocker.patch("periscope.store._write_state")
     (tmp_path / "doc.md").write_text("hi")
     mocker.patch("periscope.channels.tmux", return_value=f"{tmp_path}\n")
 
     _do_open_document_tool("%5", {"path": "doc.md"})
 
-    assert _CHANNEL_OPEN_DOCS["%5"][0]["path"] == str(tmp_path / "doc.md")
+    entry = clean_state["windows"]["abc123"]
+    assert entry["open_tabs"][0]["path"] == str(tmp_path / "doc.md")
 
 
-def test_open_document_tool_rejects_missing_file(tmp_path):
+def test_open_document_tool_rejects_missing_file(clean_state, tmp_path):
     import json
 
     result = _do_open_document_tool("%5", {"path": str(tmp_path / "nope.md")})
@@ -147,17 +147,24 @@ def test_open_document_tool_rejects_missing_file(tmp_path):
     body = json.loads(result[0].text)
     assert body["ok"] is False
     assert "no such file" in body["error"]
-    assert "%5" not in _CHANNEL_OPEN_DOCS
+    assert clean_state["windows"] == {}
 
 
-def test_open_document_requests_expire_by_ttl(tmp_path):
+def test_open_document_tool_errors_when_pane_unresolvable(
+    clean_state, mocker, tmp_path
+):
+    import json
+
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="")
     f = tmp_path / "spec.md"
     f.write_text("hi")
-    _do_open_document_tool("%5", {"path": str(f)})
-    _CHANNEL_OPEN_DOCS["%5"][0]["ts"] -= _OPEN_DOC_TTL_S + 1
 
-    assert channel_state_for("%5")["open_docs"] == []
-    assert "%5" not in _CHANNEL_OPEN_DOCS
+    result = _do_open_document_tool("%5", {"path": str(f)})
+
+    body = json.loads(result[0].text)
+    assert body["ok"] is False
+    assert "could not resolve pid" in body["error"]
+    assert clean_state["windows"] == {}
 
 
 def test_notify_tool_stamps_unique_id():

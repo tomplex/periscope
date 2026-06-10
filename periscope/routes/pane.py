@@ -19,6 +19,7 @@ from periscope.panes import (
 )
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.store import get_window
+from periscope.tabs import activate_tab, close_tab, open_tab
 from periscope.tmux import pane_meta, tmux
 from periscope.turns import get_turns_for_pane
 
@@ -27,6 +28,22 @@ router = APIRouter()
 
 class RenameBody(BaseModel):
     name: str
+
+
+class TabOpenBody(BaseModel):
+    pid: str
+    path: str
+    line: int | None = None
+
+
+class TabCloseBody(BaseModel):
+    pid: str
+    path: str
+
+
+class TabActivateBody(BaseModel):
+    pid: str
+    tab: str
 
 
 @router.get("/api/pane")
@@ -114,6 +131,30 @@ def pane_turns(session: str, index: int):
     slash-bearing session names don't collide with path routing (invariant 6)."""
     out = get_turns_for_pane(session, index)
     return out if out is not None else {"turns": None}
+
+
+# Tab mutations are granular (open/close/activate) rather than a whole-state
+# PUT so a browser action and an MCP open_document landing in the same poll
+# window can't clobber each other — the server merges per-operation.
+@router.post("/api/pane/tabs/open")
+def pane_tabs_open(body: TabOpenBody):
+    if not body.pid.strip() or not body.path.strip():
+        raise HTTPException(400, "pid and path must be non-empty")
+    return {"ok": True, **open_tab(body.pid, body.path, body.line)}
+
+
+@router.post("/api/pane/tabs/close")
+def pane_tabs_close(body: TabCloseBody):
+    if not body.pid.strip() or not body.path.strip():
+        raise HTTPException(400, "pid and path must be non-empty")
+    return {"ok": True, **close_tab(body.pid, body.path)}
+
+
+@router.post("/api/pane/tabs/activate")
+def pane_tabs_activate(body: TabActivateBody):
+    if not body.pid.strip() or not body.tab.strip():
+        raise HTTPException(400, "pid and tab must be non-empty")
+    return {"ok": True, **activate_tab(body.pid, body.tab)}
 
 
 @router.post("/api/rename")
