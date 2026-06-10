@@ -27,8 +27,12 @@ function flush(beacon) {
   }
 }
 
-setInterval(() => flush(false), 5000);
-addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") flush(true);
-});
-addEventListener("pagehide", () => flush(true));
+// Guarded so importing this module (via util.js) doesn't blow up in
+// node-environment vitest, where there's no global addEventListener.
+if (typeof addEventListener === "function") {
+  setInterval(() => flush(false), 5000);
+  addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flush(true);
+  });
+  addEventListener("pagehide", () => flush(true));
+}
