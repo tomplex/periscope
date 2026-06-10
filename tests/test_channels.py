@@ -10,8 +10,10 @@ import pytest
 
 from periscope.channels import (
     _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
-    _channel_gc,
+    _CHANNEL_OPEN_DOCS, _OPEN_DOC_TTL_S,
+    _channel_gc, channel_state_for,
     _do_notify_tool, _do_link_pr_tool, _do_link_linear_tool,
+    _do_open_document_tool,
 )
 
 
@@ -23,11 +25,13 @@ def reset_channel_state():
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
+        _CHANNEL_OPEN_DOCS.clear()
     yield
     with _CHANNELS_LOCK:
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
+        _CHANNEL_OPEN_DOCS.clear()
 
 
 def test_notify_tool_appends_alert_and_bumps_unread():
@@ -109,6 +113,51 @@ def test_link_linear_tool_clears_stale_metadata_on_relink(clean_state, mocker):
     assert entry["linked_linear"] == "FAR-2"
     assert "linked_linear_title" not in entry
     assert "linked_linear_status" not in entry
+
+
+def test_open_document_tool_queues_request(tmp_path):
+    f = tmp_path / "spec.md"
+    f.write_text("hi")
+
+    _do_open_document_tool("%5", {"path": str(f), "line": 12})
+
+    docs = _CHANNEL_OPEN_DOCS["%5"]
+    assert len(docs) == 1
+    assert docs[0]["path"] == str(f)
+    assert docs[0]["line"] == 12
+    assert docs[0]["id"]
+    # surfaced through channel_state_for (→ window view → /api/state)
+    assert channel_state_for("%5")["open_docs"] == docs
+
+
+def test_open_document_tool_resolves_relative_against_pane_cwd(tmp_path, mocker):
+    (tmp_path / "doc.md").write_text("hi")
+    mocker.patch("periscope.channels.tmux", return_value=f"{tmp_path}\n")
+
+    _do_open_document_tool("%5", {"path": "doc.md"})
+
+    assert _CHANNEL_OPEN_DOCS["%5"][0]["path"] == str(tmp_path / "doc.md")
+
+
+def test_open_document_tool_rejects_missing_file(tmp_path):
+    import json
+
+    result = _do_open_document_tool("%5", {"path": str(tmp_path / "nope.md")})
+
+    body = json.loads(result[0].text)
+    assert body["ok"] is False
+    assert "no such file" in body["error"]
+    assert "%5" not in _CHANNEL_OPEN_DOCS
+
+
+def test_open_document_requests_expire_by_ttl(tmp_path):
+    f = tmp_path / "spec.md"
+    f.write_text("hi")
+    _do_open_document_tool("%5", {"path": str(f)})
+    _CHANNEL_OPEN_DOCS["%5"][0]["ts"] -= _OPEN_DOC_TTL_S + 1
+
+    assert channel_state_for("%5")["open_docs"] == []
+    assert "%5" not in _CHANNEL_OPEN_DOCS
 
 
 def test_notify_tool_stamps_unique_id():

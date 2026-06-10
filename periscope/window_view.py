@@ -190,6 +190,7 @@ def build_window_view(
         "channel_attached": channel["attached"],
         "channel_unread": channel["unread"],
         "channel_alerts": channel["alerts"],
+        "channel_open_docs": channel["open_docs"],
         "linked_linear": linked_linear,
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,

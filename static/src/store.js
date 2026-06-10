@@ -40,6 +40,18 @@ export const paneTranscript = signal({});   // { [pid]: { messages, sessionId } 
 export const paneTabs = signal({});         // { [pid]: [{ path, line, target }, ...] }
 export const paneActiveTab = signal({});    // { [pid]: "pane" | "file:<path>" }
 
+// Add (or focus, if already open) a file tab for an explicit pane. Used by
+// the poll loop to apply MCP open_document requests against the calling
+// pane regardless of which pane is currently selected.
+export function openFileTabForPane(pid, target, entry) {
+  const tabs = paneTabs.value[pid] || [];
+  const has = tabs.some((t) => t.path === entry.path);
+  if (!has) {
+    paneTabs.value = { ...paneTabs.value, [pid]: [...tabs, { ...entry, target }] };
+  }
+  paneActiveTab.value = { ...paneActiveTab.value, [pid]: `file:${entry.path}` };
+}
+
 // Add (or focus, if already open) a file tab for the currently-active
 // pane. Callers are: terminal Cmd+click (Detail.jsx), Inspector Files row,
 // Transcript tool-call chip Cmd+click. All share activeTarget — the
@@ -49,13 +61,7 @@ export function openFileTab(entry) {
   if (!tgt) return;
   const w = (windows.value || []).find((x) => x.target === tgt);
   if (!w) return;
-  const pid = w.pid;
-  const tabs = paneTabs.value[pid] || [];
-  const has = tabs.some((t) => t.path === entry.path);
-  if (!has) {
-    paneTabs.value = { ...paneTabs.value, [pid]: [...tabs, { ...entry, target: tgt }] };
-  }
-  paneActiveTab.value = { ...paneActiveTab.value, [pid]: `file:${entry.path}` };
+  openFileTabForPane(w.pid, tgt, entry);
 }
 
 export function closeFileTab(pid, path) {
