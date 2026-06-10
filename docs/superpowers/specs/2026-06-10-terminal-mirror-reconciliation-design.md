@@ -50,10 +50,13 @@ Key facts constraining the design:
 Two layers, each doing what it's good at:
 
 1. **Transport** — replace pipe-pane/FIFO with per-session control-mode
-   clients. `%output` notifications are line-framed, octal-escaped, and
-   flow-controlled (the mechanism iTerm2's tmux integration is built
-   on): no attach gap, no FIFO backpressure loss. Decoded bytes relay to
-   xterm exactly as today → instant echo, natural scrollback
+   clients. `%output` notifications are line-framed and octal-escaped
+   (the mechanism iTerm2's tmux integration is built on), delivered over
+   a socket whose backpressure lands in tmux's buffer rather than
+   dropping bytes: no attach gap, no FIFO loss. (True `%pause` flow
+   control requires the `pause-after` client flag, which we don't set —
+   plain socket backpressure is the actual guarantee.) Decoded bytes
+   relay to xterm exactly as today → instant echo, natural scrollback
    accumulation, client untouched.
 2. **Convergence** — the mirror periodically ships an unconditional
    **reconciliation repaint** built from tmux's own grid
@@ -84,18 +87,33 @@ One responsibility: "give me a correct byte stream for pane X."
 - API: `subscribe(pane_id) → async-iterable of bytes` + unsubscribe
   (context-manager or explicit). Multiple subscribers to one pane
   multiplex off the same client.
-- Spawns/reuses a control client per session on first subscription;
-  kills it when the session's last subscription ends.
+- Spawns/reuses a control client per session on first subscription.
+  When the session's last subscription ends, the client lingers ~20s
+  before being killed (timer cancelled on resubscribe) — rail
+  navigation unmounts the old terminal before mounting the new one, so
+  without a linger every pane switch within a session would thrash
+  attach/detach.
 - Protocol parsing: `%output %<pane> <octal>` → decoded raw bytes →
-  subscriber queues. Octal escapes decode at the byte level (UTF-8
-  multibyte arrives as escaped bytes and may split across
+  subscriber queues. Route by pane-id prefix *before* octal-decoding so
+  unviewed panes (a log-spewing dev server in the same session) cost
+  one string comparison, not a decode. Octal escapes decode at the byte
+  level (UTF-8 multibyte arrives as escaped bytes and may split across
   notifications — decode to bytes, never to str). `%begin/%end` blocks
-  are command replies, matched FIFO-order to pending command futures
-  (tmux replies in command order — same guarantee `tmux_input` relies
-  on, except now we read the replies instead of discarding them).
-- Reconciliation frames are pushed into the same per-pane queue as
-  relayed output, so ordering versus the relay is preserved by
-  construction (same socket, same queue).
+  are command replies, matched FIFO-order in command order; match the
+  `<time> <number>` tokens echoed from `%begin`, not a bare `%end`
+  prefix — a capture-pane *body* line can legitimately begin with
+  `%end`.
+- **Ordering rule (load-bearing):** tmux guarantees notifications never
+  occur inside a reply block and replies come in command order — but
+  that wire ordering must not be laundered through a future.
+  `set_result` at `%end` only *schedules* the awaiting task; the reader
+  keeps parsing, and `%output` arriving after the reply could reach the
+  subscriber queue before the woken task enqueues its frame, making the
+  frame revert newer output. Reconcile frames are therefore built and
+  pushed **synchronously inside the reader task's processing of the
+  final `%end` line** (a registered reply callback), never in a task
+  woken by a future. Futures are fine for callers that only need reply
+  *data* and do their own sequencing.
 
 ### Reconciliation
 
@@ -105,19 +123,35 @@ reconcile fires:
 - when output **quiesces** (~150ms with no bytes after activity),
 - at a **max interval** (~1s) during sustained streaming so long bursts
   still converge,
-- once after every resize,
+- once after every resize and on `%layout-change` (arrives on the same
+  client for free; catches tmux-side grid changes that produce no pty
+  output, e.g. `clear-history` or an external resize),
+- once at connect (heals the initial-blob gap, see ws.py below),
 - never while fully idle.
 
 Frame construction, all through the control client (no forks):
-`display-message` for cursor x/y, `alternate_on`, cursor visibility;
-`capture-pane -e` for the visible grid with colors. Frame bytes:
+`capture-pane -e` for the visible grid with colors, then
+`display-message` for cursor x/y, `alternate_on`, cursor visibility —
+capture first so the cursor is the fresher of the two samples.
 
-- **alt-screen pane:** `\x1b[?1049h` (re-entry clears the alt buffer —
-  fine, the frame repaints all of it), then per row
-  `\x1b[<r>;1H<content>\x1b[0m\x1b[K`, then park cursor (1-indexed; tmux
-  reports 0-indexed) and set cursor visibility.
-- **normal-screen pane:** same per-row repaint, **no** clear/`2J`
-  (scrollback must not be touched), cursor park.
+**Coverage requirement:** the frame iterates rows 1..pane_height —
+padding with empty rows if capture ever returns short — each written as
+`\x1b[<r>;1H<content>\x1b[0m\x1b[K`. The row loop is the mechanism that
+guarantees every cell of the grid is overwritten; nothing else clears.
+(Verified: the vendored xterm.js gates `activateAltBuffer` /
+`activateNormalBuffer` on a buffer *change* — DECSET 1049 re-entry is a
+no-op and clears nothing, so the frame cannot rely on it.)
+
+Frame bytes:
+
+- **alt-screen pane:** `\x1b[?1049h` (no-op if already in alt; switches
+  if the client missed the app's transition), then the row loop, then
+  park cursor (1-indexed; tmux reports 0-indexed) and set cursor
+  visibility.
+- **normal-screen pane:** `\x1b[?1049l` first (no-op if already normal;
+  heals the stuck-in-alt class, where a missed `1049l` would otherwise
+  break scrollback accumulation *forever*), then the row loop, **no**
+  clear/`2J` (scrollback must not be touched), cursor park.
 
 Each frame is one atomic write/WS message, so xterm parses it as a
 single frame: no flicker.
@@ -128,6 +162,8 @@ Accepted cosmetic costs:
   continuing relay corrects it.
 - The frame resets the app's SGR/pending-wrap state to clean; TUIs
   re-assert attributes constantly, so this is invisible in practice.
+- `1049h` re-entry clobbers xterm's saved-cursor slot; the app's next
+  real `1049l` restores a reconcile-time cursor. Heals next cycle.
 - If the relay genuinely drops bytes on a normal-screen pane, scrollback
   has a gap (the visible grid still heals). Rare gap in shell scrollback
   beats garbled screen.
@@ -139,13 +175,26 @@ Same endpoint, same client wire protocol. Connect sequence:
 1. resize-to-hint (unchanged `set_pane_size`),
 2. resolve pane id, subscribe to the mirror,
 3. send `{"type":"size"}`,
-4. initial paint — today's `-S -10000` capture-with-scrollback blob, now
-   issued through the control client,
-5. drain the subscription to the WS.
+4. initial paint — today's `-S -10000` capture-with-scrollback blob,
+   still issued via the **fork path** (run_in_executor, as today),
+5. drain the subscription to the WS; the mirror's connect-time reconcile
+   follows within ~150ms.
 
-The attach-vs-capture race disappears twice over: same-socket
-serialization orders `%output` against the capture reply, and even a
-missed byte heals at the next reconcile.
+The initial blob deliberately does *not* go through the control client:
+with a 50k history-limit, a `-e` capture body can run multi-MB, and
+tmux holds **all** `%output` for **every** pane in the session until a
+reply block completes — head-of-line blocking the whole mirror on every
+connect (and reconnects fire constantly during dev reloads). The old
+capture-vs-pipe gap this reintroduces is now harmless: the connect-time
+reconcile (visible grid only, ≤ pane_height rows, cheap) heals the
+screen moments later. Scrollback may miss the few bytes from the
+connect window — the same loss the old design had, minus the permanent
+garbling.
+
+Reply bodies on the control client are therefore always small (visible
+grid), but the reader still sets an explicit asyncio StreamReader limit
+well above 64KB — a heavily-SGR'd wide row or large `%output` burst
+line can exceed the default.
 
 Deleted: mkfifo, FIFO reader, `pipe-pane` start/stop, FIFO cleanup.
 Input path (keystroke queue → `tmux_input`) and resize handling are
@@ -168,20 +217,29 @@ scrollback, selection, search, link handling, and the reconnect FSM.
   retries; a fresh control client spawns on the next subscribe.
 - **Pane killed while viewed:** capture fails → close the WS (today the
   FIFO just goes silent; a close is strictly more honest and feeds the
-  reconnect FSM).
+  reconnect FSM). Note the client FSM never gives up — steady 4s
+  retries against a dead pane until the user navigates away. Bounded
+  and invisible; accepted.
 - **Control-client spawn failure:** the WS fails. No fork-path fallback
-  and no `_disabled` latch — byte relay without reconciliation *is* the
-  bug this design removes, and a tmux that can't `-C attach` already
-  broke `tmux_input`.
+  and no `_disabled` latch. (`tmux_input` *does* degrade to forks on
+  spawn failure — input has a working degraded mode. Mirroring
+  deliberately does not: byte relay without reconciliation is exactly
+  the bug this design removes, so a fallback would silently reintroduce
+  it. This makes the mirror the first hard dependency on `-C attach`,
+  which is fine on tmux 3.6a for a single-user tool.)
+- **Lifespan shutdown:** `tmux_mirror.shutdown()` is registered in the
+  lifespan next to `tmux_input.shutdown()` (app.py) — without it,
+  control clients leak across dev reloads.
 
 ## Verify at implementation start
 
-- `attach -f ignore-size,read-only` on this tmux version (keeps the
-  mirror client from influencing window sizing — viewed panes are
-  already `window-size manual`; this covers the session's other
-  windows). Fallback: `refresh-client -C <big>x<big>` after attach.
 - Exact format variable for cursor visibility (`#{cursor_flag}` or
   equivalent).
+- (`attach -f ignore-size,read-only` is confirmed available on the
+  installed tmux 3.6a — spec review verified against the man page;
+  `ignore-size` keeps the mirror client from influencing window sizing
+  for the session's non-viewed windows, viewed panes being
+  `window-size manual` already.)
 
 ## Testing (`tests/test_tmux_mirror.py`)
 
@@ -197,7 +255,12 @@ scrollback, selection, search, link handling, and the reconnect FSM.
    `capture-pane`'s grid. Then the thesis-as-assertion test: inject
    random byte drops into the relay path and assert the grid still
    converges after reconciliation.
-3. **Manual:** dev periscope on 8766, open a pane running an
+3. **Existing tests:** `tests/routes/test_ws.py` mocks
+   mkfifo/pipe-pane/add_reader throughout and is rewritten against the
+   mirror API; the resize-before-initial-paint ordering assertion in it
+   protects behavior this design keeps and must be re-expressed, not
+   dropped.
+4. **Manual:** dev periscope on 8766, open a pane running an
    AskUserQuestion-heavy Claude session, watch for ghost rows.
 
 ## Out of scope
