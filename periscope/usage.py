@@ -429,7 +429,7 @@ def _refresh_burn_into_cache(pane_ids: list[str]) -> None:
         cutoff = time.time() - _PANE_BURN_WINDOW_S
         for pid in pane_ids:
             sid = turns.session_id_for_pane(pid)
-            jsonl = turns._jsonl_for_session(sid) if sid else None
+            jsonl = turns.jsonl_for_session(sid) if sid else None
             if jsonl:
                 rates[pid] = _weighted_burn_from_jsonl(jsonl, cutoff) / (
                     _PANE_BURN_WINDOW_S / 60.0)

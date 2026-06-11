@@ -19,10 +19,12 @@ import os
 import re
 import time
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Literal
 
 import periscope.activity as activity
 from periscope.activity import PaneStatusRow
+from periscope.turns import jsonl_for_session
 # Imported into this namespace so tests monkeypatch narrator.claude_complete,
 # narrator.tmux, etc. — the tests/test_activity.py pattern.
 from periscope.git_pr import cached_git_state, cached_pr_state
@@ -37,7 +39,7 @@ MAX_PER_TICK = 5
 RENAME_COOLDOWN_S = 1800
 STATUS_MAX_LEN = 72
 
-Regen = Literal["session_switch", "grew", "first_sight"]
+Regen = Literal["session_switch", "size_changed", "first_sight"]
 
 # 1-3 lowercase dash-words — the build_rename_prompt taste rules, enforced.
 _NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+){0,2}$")
@@ -79,7 +81,7 @@ def should_regenerate(row: PaneStatusRow | None, *, session_id: str,
     if row.session_id is not None and session_id != row.session_id:
         return "session_switch"
     if jsonl_size != row.jsonl_size:
-        return "grew"
+        return "size_changed"
     return None
 
 
@@ -101,7 +103,7 @@ def parse_response(raw: str) -> NarratorResult | None:
                          flags=re.MULTILINE)
     try:
         d = json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
         return None
     if not isinstance(d, dict):
         return None
@@ -201,7 +203,7 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
     # needs them all anyway, and a per-pane SELECT would acquire
     # activity._LOCK N times per tick.
     rows = {r.pane_id: r for r in activity.all_pane_statuses()}
-    work: dict[str, tuple] = {}
+    work: dict[str, tuple[dict, str, Path, int, PaneStatusRow | None, Regen]] = {}
     candidates: list[tuple[int, str]] = []
     for w, _parsed in panes:
         pane_id = w.get("pane_id") or ""
@@ -214,12 +216,9 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
                 # on a shared cwd a wrong-session status is worse than no
                 # status, and the hook self-corrects on the next prompt.
                 continue
-            # Same glob turns._jsonl_for_session uses — the JSONL dir is
-            # keyed on the session's START cwd, not the pane's current one.
-            matches = list(activity._PROJECTS_DIR.glob(f"*/{sid}.jsonl"))
-            if not matches:
+            jsonl = jsonl_for_session(sid)
+            if jsonl is None:
                 continue
-            jsonl = matches[0]
             size = jsonl.stat().st_size
             row = rows.get(pane_id)
             reason = should_regenerate(row, session_id=sid,
@@ -239,7 +238,7 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
             log.exception("narrator generation failed for %s", pane_id)
 
 
-def _generate(w: dict, *, pane_id: str, sid: str, jsonl, size: int,
+def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
               row: PaneStatusRow | None, reason: Regen, now: int) -> None:
     """One pane's regeneration: signals → one Haiku call → persist row,
     maybe rename. Raises freely; tick()'s per-pane guard logs and keeps
@@ -272,6 +271,26 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl, size: int,
     gate_row = replace(row, renamed_at=renamed_at) if row is not None else None
     new_name = rename_decision(suggestion, current_name=current_name,
                                row=gate_row, now=now)
+    if new_name:
+        # current_name and row are snapshots from tick start, and a tick can
+        # run many seconds (sequential Haiku calls). Re-read the live window
+        # name and the live row immediately before applying: a human rename
+        # mid-tick — direct tmux, or a rename route that stamped the cooldown
+        # — must win over our stale snapshot.
+        live_name = tmux("display-message", "-t",
+                         f"{w['session']}:{w['index']}", "-p",
+                         "#{window_name}").strip()
+        live_row = activity.get_pane_status(pane_id)
+        stamped = (live_row is not None and live_row.renamed_at is not None
+                   and now - live_row.renamed_at < RENAME_COOLDOWN_S)
+        if live_name != current_name or stamped:
+            log.info("narrator: rename of %s preempted mid-tick; keeping %r",
+                     pane_id, live_name)
+            new_name = None
+            if live_row is not None and live_row.renamed_at is not None:
+                renamed_at = live_row.renamed_at
+            if live_row is not None and live_row.seen_name is not None:
+                seen_name = live_row.seen_name
     if new_name:
         tmux("rename-window", "-t", f"{w['session']}:{w['index']}", new_name)
         activity.record("pane", pane_id, "rename",

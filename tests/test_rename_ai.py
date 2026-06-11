@@ -1,8 +1,13 @@
 """Auto-rename via the Anthropic SDK."""
 
+import json as _json
 from unittest.mock import MagicMock
 
-from periscope.rename_ai import build_rename_prompt, claude_complete
+from periscope.narrator import build_narrator_prompt
+from periscope.rename_ai import (
+    RENAME_RULES, build_rename_prompt, claude_complete, transcript_summary,
+    transcript_summary_from_path,
+)
 
 
 def test_build_rename_prompt_includes_window_indices_and_names():
@@ -64,9 +69,6 @@ def test_claude_complete_skips_non_text_blocks(mocker):
 
 # ---- transcript_summary ----
 
-from periscope.rename_ai import transcript_summary
-
-
 def test_transcript_summary_extracts_recent_signals(monkeypatch):
     fake = {
         "messages": [
@@ -126,11 +128,6 @@ def test_build_rename_prompt_uses_transcript_signals():
 
 
 # ---- transcript_summary_from_path + RENAME_RULES ----
-
-import json as _json
-
-from periscope.rename_ai import RENAME_RULES, transcript_summary_from_path
-
 
 def _write_jsonl(path, entries):
     path.write_text("\n".join(_json.dumps(e) for e in entries) + "\n")
@@ -205,7 +202,6 @@ def test_rename_rules_constant_is_spliced_into_rename_prompt():
 def test_rename_rules_shared_by_narrator_prompt():
     # The no-drift guard: every taste rule must appear verbatim in BOTH
     # prompt builders, so rename taste can't fork between the two surfaces.
-    from periscope.narrator import build_narrator_prompt
     narrator_prompt = build_narrator_prompt(
         window_name="claude", branch=None, pr=None, cwd="/repo", signals={})
     for rule in RENAME_RULES:

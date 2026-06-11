@@ -1,10 +1,12 @@
 """Tests for periscope/narrator.py — pure decision core (this task) and
 the impure tick (Task 4)."""
+import json as _json
 import logging
+import time as _time
 
 import pytest
 
-from periscope import narrator
+from periscope import activity, config, narrator
 from periscope.activity import PaneStatusRow
 
 
@@ -40,13 +42,14 @@ def test_unchanged_size_and_session_never_regenerates():
 
 def test_grown_jsonl_regenerates():
     assert narrator.should_regenerate(
-        _row(), session_id="sid-a", jsonl_size=4096, now=NOW) == "grew"
+        _row(), session_id="sid-a", jsonl_size=4096, now=NOW) == "size_changed"
 
 
 def test_shrunk_jsonl_also_regenerates():
-    # Size DIFFERS, not "grew" numerically — covers truncate/rewrite cases.
+    # Size DIFFERS, not grew numerically — covers truncate/rewrite cases,
+    # hence the reason is "size_changed".
     assert narrator.should_regenerate(
-        _row(), session_id="sid-a", jsonl_size=10, now=NOW) == "grew"
+        _row(), session_id="sid-a", jsonl_size=10, now=NOW) == "size_changed"
 
 
 def test_session_switch_detected():
@@ -72,7 +75,7 @@ def test_placeholder_row_is_not_a_session_switch():
     placeholder = _row(session_id=None, status="", generated_at=0,
                        jsonl_size=0, renamed_at=5000)
     assert narrator.should_regenerate(
-        placeholder, session_id="sid-a", jsonl_size=100, now=NOW) == "grew"
+        placeholder, session_id="sid-a", jsonl_size=100, now=NOW) == "size_changed"
 
 
 # ---- parse_response ----
@@ -238,12 +241,6 @@ def test_disabled_without_key_logs_once(monkeypatch, caplog):
 # monkeypatched (claude_complete / tmux / transcript_summary_from_path /
 # git caches) — all patched on the narrator namespace, where they're bound.
 
-import json as _json
-import time as _time
-
-from periscope import activity, config
-
-
 @pytest.fixture
 def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "t.db")
@@ -281,6 +278,9 @@ def tick_env(fresh_db, tmp_path, monkeypatch):
         "haiku_calls": [],
         "tmux_calls": [],
         "response": '{"status": "fixing flaky reconcile test", "rename": null}',
+        # What the pre-apply display-message recheck sees; defaults to the
+        # _pane() default name so the snapshot matches and renames apply.
+        "live_name": "claude",
     }
 
     def fake_complete(prompt, model="claude-haiku-4-5"):
@@ -290,9 +290,12 @@ def tick_env(fresh_db, tmp_path, monkeypatch):
             raise r
         return r
 
+    def fake_tmux(*a):
+        env["tmux_calls"].append(a)
+        return env["live_name"] if a[0] == "display-message" else ""
+
     monkeypatch.setattr(narrator, "claude_complete", fake_complete)
-    monkeypatch.setattr(narrator, "tmux",
-                        lambda *a: env["tmux_calls"].append(a) or "")
+    monkeypatch.setattr(narrator, "tmux", fake_tmux)
     monkeypatch.setattr(narrator, "transcript_summary_from_path",
                         lambda p, **kw: {"recent_user_prompts": ["hi"]})
     monkeypatch.setattr(narrator, "cached_git_state", lambda cwd: {"branch": "main"})
@@ -403,6 +406,27 @@ def test_tick_rename_cooldown_blocks_but_status_updates(tick_env):
     assert row.renamed_at == now - 60             # cooldown preserved
 
 
+def test_tick_recheck_drops_rename_when_live_name_moved(tick_env):
+    # TOCTOU: current_name is a tick-start snapshot and a tick can run many
+    # seconds; a human rename landing mid-tick must win. The pre-apply
+    # display-message recheck sees a different live name → no rename-window,
+    # but the new status still lands and the stored cooldown stamp survives.
+    size = tick_env["jsonl"].stat().st_size
+    now = int(_time.time())
+    old_stamp = now - narrator.RENAME_COOLDOWN_S - 100   # expired: gate passes
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%1", session_id="sid-a", status="old", generated_at=1,
+        jsonl_size=size + 1, seen_name="claude", renamed_at=old_stamp))
+    tick_env["response"] = '{"status": "new status", "rename": "fs-liveness"}'
+    tick_env["live_name"] = "human-renamed"              # moved mid-tick
+    narrator.tick([_pane()])
+    assert not any(c[0] == "rename-window" for c in tick_env["tmux_calls"])
+    row = activity.get_pane_status("%1")
+    assert row.status == "new status"                    # status still upserted
+    assert row.renamed_at == old_stamp                   # re-read stamp preserved
+    assert row.seen_name == "claude"                     # re-read row's seen_name
+
+
 def test_tick_session_switch_resets_cooldown(tick_env):
     size = tick_env["jsonl"].stat().st_size
     now = int(_time.time())
@@ -424,6 +448,25 @@ def test_tick_caps_regenerations_per_tick(tick_env):
         panes.append(_pane(pane_id=f"%{i}", index=i))
     narrator.tick(panes)
     assert len(tick_env["haiku_calls"]) == narrator.MAX_PER_TICK
+
+
+def test_tick_scan_failure_on_one_pane_doesnt_starve_others(tick_env, monkeypatch):
+    # The per-pane guard in the candidate scan: pane A's scan blowing up must
+    # not prevent pane B from generating.
+    (tick_env["jsonl"].parent / "sid-b.jsonl").write_text("{}\n")
+    tick_env["set_session"]("%2", "sid-b")
+    real = activity.get_pane_session
+
+    def boom(pane_id):
+        if pane_id == "%1":
+            raise RuntimeError("db hiccup")
+        return real(pane_id)
+
+    monkeypatch.setattr(activity, "get_pane_session", boom)
+    narrator.tick([_pane(), _pane(pane_id="%2", index=2)])
+    assert len(tick_env["haiku_calls"]) == 1
+    assert activity.get_pane_status("%1") is None
+    assert activity.get_pane_status("%2") is not None
 
 
 def test_tick_disabled_makes_no_calls(tick_env, monkeypatch):
