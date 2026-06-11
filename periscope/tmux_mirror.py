@@ -362,7 +362,9 @@ class _SessionMirror:
         elif isinstance(event, (Reply, ReplyError)):
             if self._reply_callbacks:
                 self._reply_callbacks.popleft()(event)
-            # else: the unsolicited attach-handshake block — drop.
+            # else: belt-and-braces — the attach handshake is dropped in
+            # _read_loop before dispatch; this guards a hypothetical
+            # second unsolicited block.
         elif isinstance(event, LayoutChange):
             # Window→pane mapping isn't tracked; reconciling every
             # subscribed pane is cheap and layout changes are rare.
