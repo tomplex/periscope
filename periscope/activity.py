@@ -16,6 +16,7 @@ import sqlite3
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -62,6 +63,16 @@ CREATE TABLE IF NOT EXISTS ui_events (
   detail TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ui_events_name ON ui_events (name, at);
+CREATE TABLE IF NOT EXISTS pane_status (
+  pane_id      TEXT PRIMARY KEY,   -- tmux %id
+  session_id   TEXT,               -- Claude JSONL stem at generation time
+  status       TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,   -- unix seconds
+  jsonl_size   INTEGER NOT NULL,   -- size at generation (change check)
+  seen_name    TEXT,               -- window name at last generation
+  renamed_at   INTEGER             -- rename-cooldown stamp (narrator,
+                                   -- manual routes, or detected external)
+);
 """
 
 _CONN: sqlite3.Connection | None = None
@@ -221,6 +232,108 @@ def migrate_legacy_pane_sessions() -> int:
     except OSError:
         log.warning("could not remove legacy pane_sessions dir %s", legacy)
     return len(rows)
+
+
+# --- pane_status: narrator storage --------------------------------------
+#
+# One row per Claude pane: the narrator's last generated status line plus
+# the bookkeeping it needs to decide when to regenerate (jsonl_size,
+# generated_at) and when renaming is allowed (seen_name, renamed_at).
+# Writer is periscope/narrator.py (worker tick); readers are the narrator
+# and routes/state.py's bulk merge. Statuses survive restarts by design.
+
+_PANE_STATUS_COLS = ("pane_id, session_id, status, generated_at, "
+                     "jsonl_size, seen_name, renamed_at")
+
+
+@dataclass(frozen=True)
+class PaneStatusRow:
+    pane_id: str
+    session_id: str | None
+    status: str
+    generated_at: int
+    jsonl_size: int
+    seen_name: str | None
+    renamed_at: int | None
+
+
+def get_pane_status(pane_id: str) -> PaneStatusRow | None:
+    with _LOCK:
+        c = _conn()
+        row = c.execute(
+            f"SELECT {_PANE_STATUS_COLS} FROM pane_status WHERE pane_id=?",
+            (pane_id,),
+        ).fetchone()
+    return PaneStatusRow(*row) if row else None
+
+
+def all_pane_statuses() -> list[PaneStatusRow]:
+    """Every stored row — the narrator tick's bulk read (one SELECT per
+    tick; oldest-first cap selection happens narrator-side)."""
+    with _LOCK:
+        c = _conn()
+        rows = c.execute(f"SELECT {_PANE_STATUS_COLS} FROM pane_status").fetchall()
+    return [PaneStatusRow(*r) for r in rows]
+
+
+def upsert_pane_status(row: PaneStatusRow) -> None:
+    with _LOCK:
+        c = _conn()
+        c.execute(
+            f"INSERT INTO pane_status ({_PANE_STATUS_COLS}) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(pane_id) DO UPDATE SET "
+            "  session_id=excluded.session_id, status=excluded.status, "
+            "  generated_at=excluded.generated_at, jsonl_size=excluded.jsonl_size, "
+            "  seen_name=excluded.seen_name, renamed_at=excluded.renamed_at",
+            (row.pane_id, row.session_id, row.status, row.generated_at,
+             row.jsonl_size, row.seen_name, row.renamed_at),
+        )
+        c.commit()
+
+
+def stamp_pane_rename(pane_id: str, *, name: str, at: int) -> None:
+    """Start the narrator's rename cooldown for this pane. Called from the
+    manual/auto rename routes. The pane may have no row yet (rename before
+    first generation) — insert a placeholder (status='', jsonl_size=0)
+    that the read paths skip and that regenerates promptly (size differs)."""
+    with _LOCK:
+        c = _conn()
+        c.execute(
+            f"INSERT INTO pane_status ({_PANE_STATUS_COLS}) "
+            "VALUES (?, NULL, '', 0, 0, ?, ?) "
+            "ON CONFLICT(pane_id) DO UPDATE SET "
+            "  seen_name=excluded.seen_name, renamed_at=excluded.renamed_at",
+            (pane_id, name, at),
+        )
+        c.commit()
+
+
+def pane_status_lines() -> dict[str, tuple[str, int]]:
+    """Bulk read for routes/state.py: pane_id -> (status, generated_at).
+    One SELECT per poll — never a per-pane query inside the 32-thread
+    fan-out (it would serialize on _LOCK). Skips placeholder rows."""
+    with _LOCK:
+        c = _conn()
+        rows = c.execute(
+            "SELECT pane_id, status, generated_at FROM pane_status "
+            "WHERE status != ''"
+        ).fetchall()
+    return {p: (s, int(g)) for p, s, g in rows}
+
+
+def prune_pane_status(alive_pane_ids: set[str]) -> int:
+    """Drop pane_status rows for panes no longer in tmux. Mirror of
+    prune_pane_sessions; caller passes the live set."""
+    with _LOCK:
+        c = _conn()
+        existing = {r[0] for r in c.execute("SELECT pane_id FROM pane_status")}
+        dead = existing - alive_pane_ids
+        if not dead:
+            return 0
+        c.executemany("DELETE FROM pane_status WHERE pane_id=?",
+                      [(p,) for p in dead])
+        c.commit()
+        return len(dead)
 
 
 # --- usage_samples: plan-usage time series ------------------------------

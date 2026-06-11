@@ -394,3 +394,82 @@ def test_prune_usage_samples_drops_old_rows():
     ])
     activity.prune_usage_samples(max_age_days=14)
     assert activity.usage_samples_since("session", 0) == [(now, 2.0)]
+
+
+# --- pane_status: narrator storage ---------------------------------------
+
+def _status_row(pane_id="%1", **over):
+    base = dict(pane_id=pane_id, session_id="sid-a",
+                status="fixing flaky reconcile test", generated_at=1000,
+                jsonl_size=2048, seen_name="claude", renamed_at=None)
+    base.update(over)
+    return activity.PaneStatusRow(**base)
+
+
+def test_pane_status_upsert_then_get_roundtrips():
+    row = _status_row()
+    activity.upsert_pane_status(row)
+    assert activity.get_pane_status("%1") == row
+    assert activity.get_pane_status("%nope") is None
+
+
+def test_pane_status_upsert_overwrites_existing():
+    activity.upsert_pane_status(_status_row(status="old", generated_at=1))
+    activity.upsert_pane_status(_status_row(status="new", generated_at=2))
+    got = activity.get_pane_status("%1")
+    assert got.status == "new"
+    assert got.generated_at == 2
+
+
+def test_all_pane_statuses_returns_every_row():
+    activity.upsert_pane_status(_status_row("%1"))
+    activity.upsert_pane_status(_status_row("%2"))
+    assert {r.pane_id for r in activity.all_pane_statuses()} == {"%1", "%2"}
+
+
+def test_stamp_pane_rename_inserts_placeholder_row():
+    # A manual rename can land before the narrator's first generation — the
+    # cooldown must still stick (spec: never clobber a human-chosen name).
+    activity.stamp_pane_rename("%7", name="my-name", at=5000)
+    got = activity.get_pane_status("%7")
+    assert got.status == ""            # placeholder
+    assert got.jsonl_size == 0
+    assert got.generated_at == 0
+    assert got.seen_name == "my-name"
+    assert got.renamed_at == 5000
+    assert got.session_id is None
+
+
+def test_stamp_pane_rename_updates_existing_row_only_in_place():
+    activity.upsert_pane_status(_status_row(status="working on x", generated_at=900))
+    activity.stamp_pane_rename("%1", name="human-name", at=6000)
+    got = activity.get_pane_status("%1")
+    assert got.status == "working on x"   # status untouched
+    assert got.generated_at == 900        # generation clock untouched
+    assert got.seen_name == "human-name"
+    assert got.renamed_at == 6000
+
+
+def test_pane_status_lines_bulk_read_skips_placeholders():
+    activity.upsert_pane_status(_status_row("%1", status="doing a thing", generated_at=42))
+    activity.stamp_pane_rename("%2", name="n", at=1)   # placeholder, status=''
+    assert activity.pane_status_lines() == {"%1": ("doing a thing", 42)}
+
+
+def test_prune_pane_status_drops_dead_panes():
+    activity.upsert_pane_status(_status_row("%1"))
+    activity.upsert_pane_status(_status_row("%2"))
+    assert activity.prune_pane_status({"%1"}) == 1
+    assert activity.get_pane_status("%2") is None
+    assert activity.get_pane_status("%1") is not None
+    assert activity.prune_pane_status({"%1"}) == 0
+
+
+def test_rename_event_kind_maps_to_session_src():
+    # 'rename' is a free-form event kind: _row_to_event must pass it through
+    # as src=session/kind=rename with no code change in the mapper.
+    activity.record("pane", "%1", "rename", "renamed: claude → fs-liveness", at=10)
+    out = activity.events_for("%1", "/repo", "main")
+    assert out[0] == {"src": "session", "kind": "rename", "at": 10,
+                      "text": "renamed: claude → fs-liveness",
+                      "state": None, "url": None}
