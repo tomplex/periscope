@@ -1,0 +1,186 @@
+# Narrator: semantic pane status + auto-rename on divergence
+
+**Date:** 2026-06-11
+**Status:** Approved (design review with Tom; execution delegated as autonomous)
+
+## Problem
+
+The dashboard shows *which* panes are busy (spinner, attention states) but
+not *what* they're doing. Tom runs 10-25 Claude panes; knowing "this one is
+migrating the usage scrape, that one is blocked on a schema question"
+currently requires opening each pane. Window names also drift: a pane named
+for last week's task quietly becomes this week's different task.
+
+## What this builds
+
+1. **Narrator status line** — a live, AI-generated one-liner per Claude
+   pane ("fixing flaky reconcile test in tmux_mirror"), surfaced in the
+   rail (muted line under the pane name, truncated) and the detail header
+   (untruncated).
+2. **Auto-rename on divergence** — when the narrator's view of the work
+   meaningfully diverges from the window's current name, the window is
+   renamed automatically (`tmux rename-window`), with an entry in the
+   pane's activity feed. Windows only; session names untouched.
+
+Deferred, explicitly out of scope: stuck-pane babysitter (semantic
+blocked/looping detection), narrator for non-Claude panes, any frontend
+state beyond rendering the line.
+
+## Architecture
+
+```
+activity.run_worker (existing 30s loop, prod-only — port-8765 guard)
+  └─ _worker_tick(...)  — existing reset/milestone checks
+       └─ narrator.tick(panes)            NEW — one call, same thread
+            per Claude pane:
+              1. resolve session JSONL (activity.get_pane_session +
+                 the same glob turns.py uses)
+              2. stat it — skip unless grown since last status
+                 AND ≥ MIN_INTERVAL_S since last generation
+              3. signals = rename_ai.transcript_summary(...)  (existing:
+                 recent prompts, tool calls, files) + current window
+                 name, branch/PR (cached_git_state), cwd
+              4. ONE Haiku call → {"status": ..., "rename": null | name}
+              5. write pane_status row; maybe rename the window
+
+/api/state (routes/state.py)
+  └─ merge status_line from pane_status into each window's payload
+       (db read per poll — also how a dev instance on 8766 sees
+        prod-generated statuses; no shared in-process state)
+
+frontend (static/src/)
+  ├─ RailRows: muted one-line status under the pane name (CSS truncate)
+  └─ Detail header: same line, untruncated
+```
+
+### `periscope/narrator.py` (new module)
+
+One responsibility: per-tick, decide which panes need a fresh status,
+generate it, persist it, and apply guarded renames. Called synchronously
+from `_worker_tick` (which already runs off-loop via `asyncio.to_thread`).
+`activity.py` gains only the `pane_status` schema, the `'rename'` event
+kind, and the one-line tick call.
+
+Decision core is pure and unit-testable:
+- `should_regenerate(row, jsonl_size, now)` — true when the JSONL grew
+  past the stored `jsonl_size` AND `now - generated_at >= MIN_INTERVAL_S`
+  (90s). A pane with no stored row regenerates on first sight (if it has
+  a transcript). Idle panes (no growth) never regenerate — zero cost.
+- Per-tick cap: at most `MAX_PER_TICK` (5) regenerations, oldest
+  `generated_at` first. A 25-pane storm degrades to slightly-stale
+  statuses, never a Haiku bill spike.
+
+### Storage
+
+`pane_status` table in periscope.db (schema owned by `activity.py`, like
+`pane_sessions` / `usage_samples`):
+
+```sql
+CREATE TABLE IF NOT EXISTS pane_status (
+  pane_id      TEXT PRIMARY KEY,   -- tmux %id
+  session_id   TEXT,               -- Claude JSONL stem at generation time
+  status       TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,   -- unix seconds
+  jsonl_size   INTEGER NOT NULL,   -- size at generation (growth check)
+  renamed_at   INTEGER             -- last narrator rename (cooldown)
+);
+```
+
+Pruned alongside the existing dead-pane pruning in lifespan housekeeping
+(same `alive` set as `prune_pane_sessions`). Statuses survive restarts;
+the `jsonl_size` comparison resumes cleanly.
+
+### Model contract
+
+One call per regeneration via the existing
+`rename_ai.claude_complete(prompt, model="claude-haiku-4-5")`. The prompt
+carries the same signal block `build_rename_prompt` uses today (priority:
+recent user prompts → tool calls/files → branch/PR), plus the current
+window name. Response is strict JSON:
+
+```json
+{"status": "fixing flaky reconcile test in tmux_mirror", "rename": null}
+```
+
+**Status rules (in-prompt):** ≤72 chars; present-progressive;
+concept-level ("migrating usage scrape to OAuth endpoint", not "editing
+usage.py"); no terminal/pane/window jargon; describes the most recent
+*work* even if the pane has gone idle — the card's existing state chip
+already conveys busy/idle, the narrator never duplicates it.
+
+**Rename rules (in-prompt):** suggest only on *meaningful* divergence;
+existing taste constraints (1-3 words, lowercase-with-dashes, ≤25 chars,
+concept over mechanism, never generic); an explicit few-shot example of
+returning `rename: null` when the current name is still apt. The failure
+mode to fear is name churn, not staleness.
+
+**Code-side guards (model output is an external boundary — defensive
+parsing is justified here and only here):** drop the rename if it equals
+the current name, if `renamed_at` is within `RENAME_COOLDOWN_S` (30 min),
+or if it fails format constraints (length, charset). Drop the whole
+response if JSON is malformed or `status` is missing/over-length (keep
+the previous status; retry next tick naturally).
+
+**Renames apply** via `tmux("rename-window", "-t", target, name)` and
+record an activity event — new `'rename'` kind in the existing events
+table — so the pane's feed shows `renamed: claude → fs-liveness`.
+
+### Signal hygiene: isMeta filter
+
+Slash-command/skill expansions appear in Claude transcripts as user-role
+entries with `isMeta: true` + `sourceToolUseID` (journal-documented,
+2026-06-10). If they leak into `recent_user_prompts`, the narrator's
+top-priority signal becomes harness noise ("/loop 5m /foo" expansions).
+**Verify at implementation start** whether `turns.py` already strips
+`isMeta` entries; if not, filter them in `transcript_summary` (which
+benefits the existing manual rename path too).
+
+### API + frontend
+
+- `routes/state.py`: each window dict gains `status_line` (string or
+  absent) and `status_at` (unix seconds), read from `pane_status` by
+  `pane_id` at poll time. SQLite read of ≤~25 rows per 3s poll is noise.
+- `RailRows.jsx`: render `status_line` as a second, muted, CSS-truncated
+  line when present.
+- `Detail.jsx` header: render it untruncated.
+- Rebuild + commit `static/dist/app.js` (project convention).
+
+## Failure modes
+
+- **No `ANTHROPIC_API_KEY`:** narrator disables itself with one log line
+  at first tick; dashboard works exactly as today.
+- **Haiku error / garbage JSON:** previous status kept, exception logged,
+  natural retry next tick. Never crash the worker tick (the existing
+  milestone check sets the pattern: per-pane try/except with
+  `log.exception`).
+- **Pane with no transcript** (shell, hook never fired): no row, no UI
+  line.
+- **tmux rename failure** (window died mid-tick): logged, dropped.
+
+## Cost
+
+Haiku, ~1-2k input tokens + ~60 output per regeneration. A pane
+completing turns continuously regenerates at most every 90s →
+~$0.10/hour; idle panes cost nothing; per-tick cap bounds the worst case
+at 5 calls / 30s regardless of pane count.
+
+## Testing
+
+- Unit (no API): `should_regenerate` matrix; response parsing/validation
+  (garbage JSON, over-length status, malformed rename, rename==current);
+  cooldown + format guards; oldest-first per-tick cap selection.
+- Snapshot: prompt builder output for a fixture pane.
+- Route: seeded `pane_status` row appears as `status_line`/`status_at` in
+  the `/api/state` window payload.
+- UI: verified in the browser (project convention — no component unit
+  tests).
+- No live-API tests anywhere.
+
+## Verify at implementation start
+
+- Does `turns.py` strip `isMeta` user entries? (Filter in
+  `transcript_summary` if not.)
+- Exact shape `events_for`/`_row_to_event` expects for a new `'rename'`
+  event kind (the kinds today: `'alert' | 'milestone' | 'reset'`).
+- Where `routes/state.py` assembles the per-window dict (merge point for
+  `status_line`).
