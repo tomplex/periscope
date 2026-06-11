@@ -155,6 +155,14 @@ html, body {
   min-width: 28px;
   text-align: right;
 }
+/* Pace projection ("→118%"): where the meter lands at reset on the
+   whole-window average. Red = on track to blow the limit. */
+.usage-item-proj {
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  margin-left: -2px;
+}
+.usage-item-proj.blow { color: var(--s-danger); }
 
 /* Fallback single-pill (used when only the JSONL estimator has data). */
 .usage.usage-fallback {

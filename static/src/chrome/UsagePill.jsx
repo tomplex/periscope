@@ -29,26 +29,49 @@ function fmtResetCountdown(epochSec) {
   return `resets in ${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-// "resets in 2h 15m (6:39 PM)" — countdown plus the wall-clock reset time,
-// with a weekday prefix when the reset lands on a different day.
-function fmtReset(epochSec) {
-  if (!epochSec) return "";
+// "6:39 PM", weekday-prefixed when not today.
+function fmtClock(epochSec) {
   const d = new Date(epochSec * 1000);
   const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const sameDay = d.toDateString() === new Date().toDateString();
-  const clock = sameDay ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
-  return `${fmtResetCountdown(epochSec)} (${clock})`;
+  return sameDay ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
 }
 
-function MeterBar({ label, pct, resets }) {
+// "resets in 2h 15m (6:39 PM)" — countdown plus the wall-clock reset time.
+function fmtReset(epochSec) {
+  if (!epochSec) return "";
+  return `${fmtResetCountdown(epochSec)} (${fmtClock(epochSec)})`;
+}
+
+// Pace lines for a meter's tooltip — the "on track to blow the limit"
+// heuristics computed server-side (usage.py attach_projections).
+function paceLines(m) {
+  const lines = [];
+  if (m.projected_percent != null)
+    lines.push(`on pace for ${m.projected_percent}% at reset`);
+  if (m.limit_at) {
+    const diff = m.limit_at - Math.floor(Date.now() / 1000);
+    const dur = diff < 3600
+      ? `${Math.max(1, Math.floor(diff / 60))}m`
+      : `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`;
+    lines.push(`at current burn, limit in ~${dur} (${fmtClock(m.limit_at)})`);
+  }
+  return lines;
+}
+
+function MeterBar({ label, pct, proj, resets, pace }) {
   const tone = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "ok";
+  const title = [`${label} — ${pct}% used. ${resets || ""}`, ...pace].join("\n");
   return (
-    <div class="usage-item" title={`${label} — ${pct}% used. ${resets || ""}`}>
+    <div class="usage-item" title={title}>
       <span class="usage-item-label">{label}</span>
       <span class="usage-item-bar">
         <span class={`usage-item-fill ${tone}`} style={`width:${pct}%`}></span>
       </span>
       <b>{pct}%</b>
+      {proj != null && (
+        <span class={`usage-item-proj${proj >= 100 ? " blow" : ""}`}>→{proj}%</span>
+      )}
     </div>
   );
 }
@@ -72,7 +95,11 @@ export function UsagePill() {
     };
     const present = order.filter((k) => m[k]);
     const title = present
-      .map((k) => `${m[k].label}: ${m[k].percent}% used\n  ${fmtReset(m[k].resets_at)}`)
+      .map((k) =>
+        [`${m[k].label}: ${m[k].percent}% used`, fmtReset(m[k].resets_at), ...paceLines(m[k])]
+          .filter(Boolean)
+          .join("\n  "),
+      )
       .join("\n\n");
     return (
       <div id="usage" class="usage" title={title}>
@@ -81,7 +108,9 @@ export function UsagePill() {
             key={k}
             label={compactLabels[k]}
             pct={m[k].percent}
+            proj={m[k].projected_percent}
             resets={fmtReset(m[k].resets_at)}
+            pace={paceLines(m[k])}
           />
         ))}
       </div>
