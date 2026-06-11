@@ -52,6 +52,13 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
         return None
     mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)
     mocker.patch("periscope.app._mcp_listener", side_effect=_noop)
+    # The activity worker's FIRST tick runs immediately on startup — with
+    # the real one, every pytest run on this machine executed a live tick
+    # against the developer's actual tmux server: real capture-pane, real
+    # milestone/narrator Haiku calls, and (post-narrator) real renames of
+    # real windows. PORT defaults to 8765 here, so the prod-only guard
+    # does not protect tests.
+    mocker.patch("periscope.activity.run_worker", side_effect=_noop)
     # Lifespan teardown still calls os.unlink(MCP_SOCKET_PATH) regardless
     # of whether the listener was real; without this patch, running pytest
     # while prod periscope is up deletes its live /tmp/periscope-mcp.sock
@@ -105,6 +112,9 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
     async def _noop():
         return None
     mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)
+    # See test_lifespan_starts_and_shuts_down_cleanly: the real worker
+    # fires a live tick against the developer's tmux on every test run.
+    mocker.patch("periscope.activity.run_worker", side_effect=_noop)
     # Teardown unlinks MCP_SOCKET_PATH — no-op so we don't touch /tmp.
     mocker.patch("os.unlink")
 
