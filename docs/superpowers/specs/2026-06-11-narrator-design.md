@@ -62,10 +62,25 @@ from `_worker_tick` (which already runs off-loop via `asyncio.to_thread`).
 kind, and the one-line tick call.
 
 Decision core is pure and unit-testable:
-- `should_regenerate(row, jsonl_size, now)` — true when the JSONL grew
-  past the stored `jsonl_size` AND `now - generated_at >= MIN_INTERVAL_S`
-  (90s). A pane with no stored row regenerates on first sight (if it has
-  a transcript). Idle panes (no growth) never regenerate — zero cost.
+- `should_regenerate(row, session_id, jsonl_size, now)` — true when
+  EITHER the pane's current session id differs from `row.session_id`
+  (covers `/clear`, which mints a new smaller JSONL — a size-only "grew"
+  check would freeze the pre-clear status indefinitely — and tmux pane-id
+  recycling across server restarts), OR the JSONL size differs from the
+  stored `jsonl_size`; in both cases gated by
+  `now - generated_at >= MIN_INTERVAL_S` (90s). On session switch the
+  row's `jsonl_size` and `renamed_at` are reset. A pane with no stored
+  row regenerates on first sight (if it has a transcript). Idle panes
+  never regenerate — zero cost.
+- **JSONL resolution happens once, in the narrator** (via
+  `activity.get_pane_session` + the `<id>.jsonl` glob), and the resolved
+  path is threaded into signal extraction — a `transcript_summary`
+  variant that takes the path directly and tail-bounds its parse (the
+  existing variant re-resolves via `get_turns_for_pane`, which falls back
+  to newest-mtime-in-cwd and full-file-parses transcripts that can run
+  tens of MB). **No cwd fallback for the narrator**: on a shared cwd a
+  wrong-session status is worse than no status, and the hook
+  self-corrects on the next prompt.
 - Per-tick cap: at most `MAX_PER_TICK` (5) regenerations, oldest
   `generated_at` first. A 25-pane storm degrades to slightly-stale
   statuses, never a Haiku bill spike.
@@ -81,8 +96,10 @@ CREATE TABLE IF NOT EXISTS pane_status (
   session_id   TEXT,               -- Claude JSONL stem at generation time
   status       TEXT NOT NULL,
   generated_at INTEGER NOT NULL,   -- unix seconds
-  jsonl_size   INTEGER NOT NULL,   -- size at generation (growth check)
-  renamed_at   INTEGER             -- last narrator rename (cooldown)
+  jsonl_size   INTEGER NOT NULL,   -- size at generation (change check)
+  seen_name    TEXT,               -- window name at last generation
+  renamed_at   INTEGER             -- rename-cooldown stamp (narrator,
+                                   -- manual routes, or detected external)
 );
 ```
 
@@ -121,34 +138,60 @@ or if it fails format constraints (length, charset). Drop the whole
 response if JSON is malformed or `status` is missing/over-length (keep
 the previous status; retry next tick naturally).
 
+**Manual renames start the cooldown too** — the narrator must never
+clobber a name a human just chose. Two mechanisms, both cheap:
+(a) the in-process rename surfaces — `POST /api/rename` (routes/pane.py)
+and both `/api/auto-rename-*` routes — stamp `pane_status.renamed_at`
+when they apply a name; (b) the narrator stores the window name it last
+observed (`seen_name`): if the current name differs from both `seen_name`
+and any name the narrator itself applied, someone renamed it externally
+(including tmux-native `rename-window`) — record the new name and start
+the cooldown instead of renaming. Note: the cooldown is keyed per pane
+while renames are per window; a window whose active pane changes gets a
+fresh row and bypasses the cooldown — accepted edge case in a
+one-pane-per-window workflow.
+
+**Shared taste rules:** the rename constraints currently live in
+`build_rename_prompt`; the narrator prompt reuses them. Extract the
+shared rule block into a module-level constant in `rename_ai.py` consumed
+by both prompts, so the taste can't drift.
+
 **Renames apply** via `tmux("rename-window", "-t", target, name)` and
 record an activity event — new `'rename'` kind in the existing events
 table — so the pane's feed shows `renamed: claude → fs-liveness`.
 
-### Signal hygiene: isMeta filter
+### Signal hygiene
 
-Slash-command/skill expansions appear in Claude transcripts as user-role
-entries with `isMeta: true` + `sourceToolUseID` (journal-documented,
-2026-06-10). If they leak into `recent_user_prompts`, the narrator's
-top-priority signal becomes harness noise ("/loop 5m /foo" expansions).
-**Verify at implementation start** whether `turns.py` already strips
-`isMeta` entries; if not, filter them in `transcript_summary` (which
-benefits the existing manual rename path too).
+isMeta is already handled: `messages_from_jsonl` skips
+`isMeta`/`isSidechain` raw entries (history/search.py), so
+slash-command/skill expansions never reach `recent_user_prompts`. The
+narrator's tail-bounded `transcript_summary` variant must preserve that
+filtering.
 
 ### API + frontend
 
-- `routes/state.py`: each window dict gains `status_line` (string or
-  absent) and `status_at` (unix seconds), read from `pane_status` by
-  `pane_id` at poll time. SQLite read of ≤~25 rows per 3s poll is noise.
+- `routes/state.py`: ONE bulk
+  `SELECT pane_id, status, generated_at FROM pane_status` per poll,
+  dict-merged by `pane_id` into the window payloads in the route — NOT a
+  per-pane SELECT inside `window_view.build_window_view` (that runs on a
+  32-thread fan-out and would serialize on `activity._LOCK`). Each window
+  dict gains `status_line` (string or absent) and `status_at` (unix
+  seconds — consumed by the UI as a dim-when-stale signal, below).
 - `RailRows.jsx`: render `status_line` as a second, muted, CSS-truncated
-  line when present.
-- `Detail.jsx` header: render it untruncated.
+  line when present; dim it when `status_at` is older than ~15 min (work
+  moved on, narrator hasn't caught up or pane went quiet).
+- `Detail.jsx` header: render it untruncated, with an "as of Nm ago"
+  title-attr tooltip from `status_at`.
+- `Inspector.jsx`: one label/color case for the new `'rename'` event
+  kind (the fallback would render it generic-grey otherwise).
 - Rebuild + commit `static/dist/app.js` (project convention).
 
 ## Failure modes
 
 - **No `ANTHROPIC_API_KEY`:** narrator disables itself with one log line
-  at first tick; dashboard works exactly as today.
+  at first tick; dashboard works exactly as today. (Implementation note:
+  `get_anthropic` raises per call — the narrator needs its own one-shot
+  env check to deliver the disable-once behavior.)
 - **Haiku error / garbage JSON:** previous status kept, exception logged,
   natural retry next tick. Never crash the worker tick (the existing
   milestone check sets the pattern: per-pane try/except with
@@ -176,11 +219,20 @@ at 5 calls / 30s regardless of pane count.
   tests).
 - No live-API tests anywhere.
 
-## Verify at implementation start
+## Facts settled during spec review (do not re-litigate)
 
-- Does `turns.py` strip `isMeta` user entries? (Filter in
-  `transcript_summary` if not.)
-- Exact shape `events_for`/`_row_to_event` expects for a new `'rename'`
-  event kind (the kinds today: `'alert' | 'milestone' | 'reset'`).
-- Where `routes/state.py` assembles the per-window dict (merge point for
-  `status_line`).
+- isMeta/isSidechain entries are already filtered by
+  `messages_from_jsonl` (history/search.py:242) and
+  `activity._recent_user_prompts`.
+- The per-window dict is assembled in `window_view.build_window_view`
+  (32-thread fan-out from routes/state.py); `pane_id` is present in it.
+- A new `'rename'` event kind flows through `events_for`/`_row_to_event`
+  unmodified (non-alert kinds map to `src:"session"`); only Inspector.jsx
+  needs a label/color case.
+- The worker tick is strictly sequential (await tick → sleep 30s), the
+  reset check is cadence-insensitive, and `maybe_emit_milestone` already
+  makes a blocking Haiku call in-tick — added narrator latency degrades
+  cadence only.
+- Dev (8766) reads the same XDG `periscope.db` (WAL mode), and the
+  worker guard is `config.PORT == 8765` — dev shows prod-generated
+  statuses with no extra plumbing.
