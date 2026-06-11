@@ -123,3 +123,80 @@ def test_build_rename_prompt_uses_transcript_signals():
     assert "anthology/liveness.py" in prompt
     # Signal priority hint that steers the model.
     assert "recent_user_prompts" in prompt
+
+
+# ---- transcript_summary_from_path + RENAME_RULES ----
+
+import json as _json
+
+from periscope.rename_ai import RENAME_RULES, transcript_summary_from_path
+
+
+def _write_jsonl(path, entries):
+    path.write_text("\n".join(_json.dumps(e) for e in entries) + "\n")
+
+
+def test_transcript_summary_from_path_extracts_signals(tmp_path):
+    tf = tmp_path / "s.jsonl"
+    _write_jsonl(tf, [
+        {"type": "user", "message": {"role": "user", "content": "implement liveness check"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "ok"},
+            {"type": "tool_use", "name": "Edit",
+             "input": {"file_path": "/repo/anthology/liveness.py"}},
+        ]}},
+        {"type": "user", "message": {"role": "user", "content": "now wire it up"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "uv run pytest -k liveness"}},
+        ]}},
+    ])
+    out = transcript_summary_from_path(tf)
+    assert out["recent_user_prompts"] == ["implement liveness check", "now wire it up"]
+    assert "Edit /repo/anthology/liveness.py" in out["recent_tool_calls"]
+    assert any("Bash uv run pytest" in tc for tc in out["recent_tool_calls"])
+    assert out["files_touched"] == ["/repo/anthology/liveness.py"]
+
+
+def test_transcript_summary_from_path_skips_meta_and_sidechain(tmp_path):
+    tf = tmp_path / "s.jsonl"
+    _write_jsonl(tf, [
+        {"type": "user", "isMeta": True,
+         "message": {"role": "user", "content": "<expanded skill junk>"}},
+        {"type": "user", "isSidechain": True,
+         "message": {"role": "user", "content": "subagent chatter"}},
+        {"type": "user", "message": {"role": "user", "content": "the real ask"}},
+        # tool-result turns have list content — not a typed prompt; skipped.
+        {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result"}]}},
+    ])
+    out = transcript_summary_from_path(tf)
+    assert out["recent_user_prompts"] == ["the real ask"]
+
+
+def test_transcript_summary_from_path_respects_tail_bound(tmp_path):
+    tf = tmp_path / "big.jsonl"
+    entries = [{"type": "user", "message": {"role": "user", "content": "early prompt"}}]
+    entries += [{"type": "assistant", "message": {"role": "assistant", "content": []}}
+                for _ in range(600)]
+    _write_jsonl(tf, entries)
+    # 601 lines, tail of 500 — the line-1 prompt is outside the window.
+    out = transcript_summary_from_path(tf, tail_lines=500)
+    assert out["recent_user_prompts"] == []
+
+
+def test_transcript_summary_from_path_missing_file_returns_empty(tmp_path):
+    assert transcript_summary_from_path(tmp_path / "nope.jsonl") == {}
+
+
+def test_transcript_summary_from_path_tolerates_garbage_lines(tmp_path):
+    tf = tmp_path / "s.jsonl"
+    tf.write_text('not json\n'
+                  + _json.dumps({"type": "user",
+                                 "message": {"role": "user", "content": "ok"}}) + "\n")
+    assert transcript_summary_from_path(tf)["recent_user_prompts"] == ["ok"]
+
+
+def test_rename_rules_constant_is_spliced_into_rename_prompt():
+    prompt = build_rename_prompt([{"index": 0, "current_name": "claude"}])
+    for rule in RENAME_RULES:
+        assert rule.strip() in prompt
