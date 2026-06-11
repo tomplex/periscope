@@ -23,7 +23,7 @@ from pathlib import Path
 import httpx
 
 from periscope import activity
-from periscope.log import _bg
+from periscope.log import _bg, log
 
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
@@ -178,8 +178,24 @@ def _claude_user_agent() -> str:
     return f"claude-code/{_claude_version}"
 
 
+_KNOWN_USAGE_FIELDS = {f for f, _, _ in _PLAN_METERS} | {"extra_usage"}
+_warned_unknown_fields: set[str] = set()
+
+
 def parse_plan_usage(data: dict) -> dict:
     """Map the OAuth usage response onto the dashboard's meters shape."""
+    # The response carries codename fields for unreleased meters (all null
+    # until Anthropic ships them — seven_day_opus appeared this way). Warn
+    # once per process when one goes live so a new per-model meter (Fable?)
+    # doesn't get silently dropped from the dashboard.
+    for field, entry in data.items():
+        if (field not in _KNOWN_USAGE_FIELDS
+                and field not in _warned_unknown_fields
+                and isinstance(entry, dict)
+                and entry.get("utilization") is not None):
+            _warned_unknown_fields.add(field)
+            log.warning("usage endpoint has live unmapped meter %r: %s",
+                        field, entry)
     meters: dict[str, dict] = {}
     for field, key, label in _PLAN_METERS:
         entry = data.get(field)

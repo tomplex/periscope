@@ -284,3 +284,22 @@ def test_weekly_hot_means_a_full_hot_day():
     samples = lambda k, since: [(NOW - 86400, 10.0), (NOW, 30.0)]
     attach_projections(warm, NOW, samples_for=samples)
     assert warm["week_all"]["hot"] is False
+
+
+def test_parse_plan_usage_warns_once_on_live_unknown_meter(caplog):
+    """A codename field going non-null logs a warning (once) instead of
+    being silently dropped; null codename fields stay quiet."""
+    import logging
+    import periscope.usage as usage
+    usage._warned_unknown_fields.clear()
+    sample = {
+        "five_hour": {"utilization": 10.0, "resets_at": "2026-06-11T18:00:00+00:00"},
+        "seven_day_omelette": {"utilization": 12.0, "resets_at": "2026-06-14T14:00:00+00:00"},
+        "cinder_cove": None,
+    }
+    with caplog.at_level(logging.WARNING):
+        parse_plan_usage(sample)
+        parse_plan_usage(sample)  # second call must not re-warn
+    hits = [r for r in caplog.records if "unmapped meter" in r.message]
+    assert len(hits) == 1
+    assert "seven_day_omelette" in hits[0].getMessage()
