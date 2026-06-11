@@ -1,22 +1,22 @@
-"""WS /ws/pane — bridges xterm.js to a tmux pane via pipe-pane FIFO.
+"""WS /ws/pane — bridges xterm.js to a tmux pane via the control-mode mirror.
 
-Initial paint mirrors tmux's screen state (size, cursor, alt-screen) so
-incremental updates from the FIFO land at the right cursor and don't
-leave ghost text. Resize messages from the client snapshot the window's
-original size/mode the first time and restore on disconnect.
+Initial paint mirrors tmux's screen state (size, cursor, alt-screen) so the
+blob renders into an xterm state matching tmux's. Live bytes and
+self-healing reconcile frames come from periscope.tmux_mirror — any mirror
+desync heals at the next frame, so this handler no longer needs the byte
+stream to be perfect, only the frames to keep coming. Design spec:
+docs/superpowers/specs/2026-06-10-terminal-mirror-reconciliation-design.md
 """
 
 import asyncio
 import json
-import os
-import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from periscope.log import _task
 from periscope.panes import note_action
 from periscope.tmux import tmux
-from periscope import tmux_input
+from periscope import tmux_input, tmux_mirror
 
 router = APIRouter()
 
@@ -31,24 +31,18 @@ async def ws_pane(
 ):
     await websocket.accept()
     target = f"{session}:{index}"
-    # Modal-open is the canonical "opened in periscope" event. The grid view's
-    # `focused_at` doesn't move (no tmux focus shift here), but the stream view
-    # should treat this as engagement with the window.
+    # Modal-open is the canonical "opened in periscope" event.
     note_action(target)
-    fifo_path = f"/tmp/periscope.{uuid.uuid4().hex}.fifo"
-    fd = None
     loop = asyncio.get_running_loop()
-    pipe_active = False
 
     # Periscope owns the pane width. Once we resize a window to the modal's
     # dims, we LEAVE IT THERE — no restore on disconnect. Rationale: the
     # save/restore dance only matters if a real terminal is also attached
     # at a different size, but in periscope-primary workflows the restore
     # just causes churn — each modal open/close pair would reflow the
-    # buffer twice (down to modal, back up to "original"), and reflows
-    # during streaming are what produce duplicated table fragments in
-    # Claude's scrollback. Holding the pane at periscope's size means
-    # subsequent opens at the same width are no-ops on tmux's side.
+    # buffer twice, and reflows during streaming produce duplicated table
+    # fragments in Claude's scrollback. Holding the pane at periscope's
+    # size means subsequent opens at the same width are no-ops.
     def set_pane_size(c: int, r: int) -> None:
         try:
             tmux("setw", "-t", target, "window-size", "manual")
@@ -56,108 +50,84 @@ async def ws_pane(
         except Exception:
             pass
 
+    # 1) Resize tmux to the client's hint BEFORE capture-pane, so the
+    #    initial blob is rendered at the width xterm will display it at —
+    #    otherwise box-drawing TUIs mangle on the first frame.
+    if cols > 0 and rows > 0:
+        await loop.run_in_executor(None, lambda: set_pane_size(cols, rows))
+
+    # 2) tmux's view of the pane: size, cursor, alt-screen — all three are
+    #    needed to render the initial blob into an xterm state matching
+    #    tmux's — plus #{pane_id} for the mirror subscription. If the pane
+    #    is gone, close: the client's reconnect FSM handles it.
     try:
-        # 1) If the client told us up front what cols/rows it can display,
-        #    resize tmux to match BEFORE capture-pane. Otherwise the initial
-        #    blob is rendered for tmux's current pane width (often a real
-        #    terminal also attached to this session at 200+ cols) and xterm
-        #    has to reflow it down to the modal's width — which mangles
-        #    box-drawing TUIs (Claude's tables, Ink frames) for the first
-        #    frame until the next full repaint.
-        if cols > 0 and rows > 0:
-            await loop.run_in_executor(None, lambda: set_pane_size(cols, rows))
+        meta = await loop.run_in_executor(None, lambda: tmux(
+            "display-message", "-t", target, "-p",
+            "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}"
+            "|#{alternate_on}|#{pane_id}",
+        ))
+        cols_s, rows_s, cx_s, cy_s, alt_s, pane_id = meta.strip().split("|")
+        cols, rows = int(cols_s), int(rows_s)
+        cx, cy = int(cx_s), int(cy_s)
+        alt_on = alt_s == "1"
+    except Exception:
+        await websocket.close()
+        return
 
-        # 2) Get tmux's view of the pane: size, cursor position, alt-screen
-        #    state. We need all three to render the initial blob into an xterm
-        #    state that matches what tmux thinks the pane currently looks like.
-        #    If we don't, incremental updates from the stream (e.g. "cursor to
-        #    row 5 col 15, write '20s'") land at xterm's stale cursor and
-        #    leave ghost text from the old buffer.
-        try:
-            meta = tmux(
-                "display-message", "-t", target, "-p",
-                "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{alternate_on}",
-            ).strip()
-            cols_s, rows_s, cx_s, cy_s, alt_s = meta.split("|")
-            cols, rows = int(cols_s), int(rows_s)
-            cx, cy = int(cx_s), int(cy_s)
-            alt_on = alt_s == "1"
-        except Exception:
-            cols, rows, cx, cy, alt_on = 120, 40, 0, 0, False
-
+    sub = await tmux_mirror.subscribe(session, pane_id)
+    async with sub:
         await websocket.send_text(
             json.dumps({"type": "size", "cols": cols, "rows": rows})
         )
 
-        # `-S -N` asks for N lines of scrollback above the visible region;
-        # tmux clamps to the pane's own history-limit (default 2000, Tom's
-        # tmux is 50k). A few thousand makes the modal genuinely useful for
-        # scrolling back through long Claude turns — the prior 200 lines
-        # only covered the most recent screen-ful or two.
-        initial = tmux("capture-pane", "-t", target, "-p", "-e", "-S", "-10000")
-        # capture-pane separates lines with \n AND appends one more \n after
-        # the final line. We strip exactly that final terminator (not any
-        # blank-line content above it) and convert internal \n to \r\n so
-        # xterm wraps each new line back to column 0 instead of staircasing.
-        # If we strip too many, blank lines at the bottom of the pane vanish
-        # and the cursor lands one row above where tmux says it is. If we
-        # strip too few, the trailing \r\n scrolls xterm one row past the
-        # bottom and the cursor lands one row below.
+        # 3) Initial paint, via the fork path — NOT the control client: a
+        #    50k-history `-e` capture can run multi-MB, and tmux holds all
+        #    %output for the whole session until a reply block completes.
+        #    The capture-vs-subscribe byte gap this allows is healed by the
+        #    mirror's connect-time reconcile moments later; only scrollback
+        #    can miss those few bytes.
+        #    `-S -N` asks for N lines of scrollback; tmux clamps to the
+        #    pane's history-limit.
+        initial = await loop.run_in_executor(None, lambda: tmux(
+            "capture-pane", "-t", target, "-p", "-e", "-S", "-10000"))
+        # capture-pane separates lines with \n AND appends one more \n
+        # after the final line. Strip exactly that final terminator and
+        # convert internal \n to \r\n so xterm wraps each line back to
+        # column 0 instead of staircasing. Strip too many → blank lines at
+        # the bottom vanish and the cursor lands a row high; too few → the
+        # trailing \r\n scrolls one row past the bottom.
         if initial:
             if initial.endswith("\n"):
                 initial = initial[:-1]
             body = initial.replace("\n", "\r\n")
         else:
             body = ""
-        # Build a prefix that puts xterm into the same screen mode tmux is in,
-        # clears any stale rendering, then a suffix that parks the cursor
-        # where tmux thinks it is.
         prefix = ""
         if alt_on:
-            prefix += "\x1b[?1049h"  # enter alt-screen buffer
-        prefix += "\x1b[2J\x1b[H"     # clear screen, home cursor
-        # ANSI cursor positioning is 1-indexed; tmux's #{cursor_x/y} are 0-indexed.
+            prefix += "\x1b[?1049h"   # enter alt-screen buffer
+        prefix += "\x1b[2J\x1b[H"      # clear screen, home cursor
+        # ANSI positioning is 1-indexed; tmux's #{cursor_x/y} are 0-indexed.
         suffix = f"\x1b[{cy + 1};{cx + 1}H"
-        blob = (prefix + body + suffix).encode("utf-8", errors="replace")
-        await websocket.send_bytes(blob)
+        await websocket.send_bytes(
+            (prefix + body + suffix).encode("utf-8", errors="replace"))
 
-        # 2) Set up the pipe. mkfifo + open(O_RDONLY|O_NONBLOCK) returns
-        #    immediately; tmux opens the write end via the cat subprocess.
-        os.mkfifo(fifo_path)
-        tmux("pipe-pane", "-O", "-t", target, f"cat > {fifo_path}")
-        pipe_active = True
-        fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
-
-        # 3) Bridge FIFO → queue → websocket. asyncio.add_reader notifies us
-        #    when the fd is readable; we drain in non-blocking chunks.
-        out_queue: asyncio.Queue[bytes] = asyncio.Queue()
-
-        def on_readable():
-            try:
-                chunk = os.read(fd, 8192)
-            except BlockingIOError:
-                return
-            if chunk:
-                out_queue.put_nowait(chunk)
-
-        loop.add_reader(fd, on_readable)
-
+        # 4) Mirror → websocket. On EOF (pane died, mirror died, shutdown)
+        #    close the socket — strictly more honest than the old silent
+        #    FIFO; the client's reconnect FSM takes it from there.
         async def forward_out():
-            while True:
-                chunk = await out_queue.get()
+            async for chunk in sub:
                 await websocket.send_bytes(chunk)
+            try:
+                await websocket.close()
+            except Exception:
+                pass
 
         forward_task = _task("ws-forward", forward_out())
 
-        # 4) Main loop: receive keystrokes from the client and push to tmux.
-        #    xterm.js's onData sends raw input including escape sequences
-        #    (e.g. "\x1b[A" for up arrow). Each tmux subprocess costs ~20-80ms
-        #    of fork+exec on a loaded host, so we queue keystrokes and let a
-        #    single drain task batch whatever piled up while the previous
-        #    tmux call was in flight. Slow typing still triggers one call
-        #    per key; fast typing / autorepeat / paste coalesces into one
-        #    call per drain cycle. Order is preserved because the queue puts
-        #    and gets all happen on the same asyncio loop.
+        # 5) Keystrokes from the client → tmux. xterm.js's onData sends raw
+        #    input including escape sequences. Queue + single drain task so
+        #    fast typing / paste coalesces into one control-mode send per
+        #    drain cycle while the previous send is in flight.
         keystroke_q: asyncio.Queue[str] = asyncio.Queue()
 
         async def drain_input():
@@ -180,10 +150,8 @@ async def ws_pane(
                     text = msg["bytes"].decode("utf-8", errors="replace")
                 if not text:
                     continue
-                # Resize control message: client measured how many cols/rows
-                # fit in its modal and asks tmux to match. Sent as JSON text
-                # ({"type":"resize","cols":N,"rows":M}). Plain keystrokes are
-                # always non-JSON, so the json.loads path filters them out.
+                # Resize control message ({"type":"resize",...}). Plain
+                # keystrokes are never JSON, so the parse filters them.
                 if text.startswith("{"):
                     try:
                         ctrl = json.loads(text)
@@ -196,6 +164,9 @@ async def ws_pane(
                             await loop.run_in_executor(
                                 None, lambda c=rc, r=rr: set_pane_size(c, r)
                             )
+                            # Reflow redraws can race the relay; an
+                            # authoritative frame settles the result.
+                            sub.request_reconcile()
                         continue
                 keystroke_q.put_nowait(text)
         except WebSocketDisconnect:
@@ -203,27 +174,3 @@ async def ws_pane(
         finally:
             forward_task.cancel()
             drain_task.cancel()
-    finally:
-        # Cleanup in reverse setup order. Each step is best-effort because
-        # any of them could fail mid-teardown if the pane already died.
-        # We intentionally do NOT restore the window size here — see
-        # set_pane_size above for why periscope holds the pane.
-        if pipe_active:
-            try:
-                tmux("pipe-pane", "-t", target)  # no command = stop piping
-            except Exception:
-                pass
-        if fd is not None:
-            try:
-                loop.remove_reader(fd)
-            except Exception:
-                pass
-            try:
-                os.close(fd)
-            except Exception:
-                pass
-        if os.path.exists(fifo_path):
-            try:
-                os.unlink(fifo_path)
-            except Exception:
-                pass
