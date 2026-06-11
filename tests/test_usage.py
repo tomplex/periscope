@@ -239,3 +239,48 @@ def test_annotate_hot_panes_noop_when_meter_not_hot(monkeypatch):
     usage.annotate_hot_panes(views)
     assert not called  # burn never even computed
     assert "burn_hot" not in views[0]
+
+
+# --- weekly meters: duty-cycle-adjusted recent burn (24h slope) -----------
+
+def _week(utilization, resets_at):
+    return {"week_all": {"label": "x", "percent": round(utilization),
+                         "utilization": float(utilization),
+                         "resets_at": resets_at}}
+
+
+def test_weekly_recent_burn_uses_24h_slope_window():
+    seen = []
+    def samples(k, since):
+        seen.append(since)
+        return []
+    meters = _week(50.0, NOW + 3 * 86400)
+    attach_projections(meters, NOW, samples_for=samples)
+    assert seen == [NOW - 86400]
+
+
+def test_weekly_recent_burn_needs_12h_of_samples():
+    """A hot 6 active hours must NOT extrapolate across the whole week —
+    suppressed until the slope spans a sleep/work cycle."""
+    meters = _week(50.0, NOW + 3 * 86400)
+    samples = lambda k, since: [(NOW - 6 * 3600, 40.0), (NOW, 50.0)]
+    attach_projections(meters, NOW, samples_for=samples)
+    assert meters["week_all"]["projected_recent"] is None
+    assert meters["week_all"]["hot"] is False
+    assert meters["week_all"]["limit_at"] is None
+
+
+def test_weekly_hot_means_a_full_hot_day():
+    """Even-burn for the week is ~14.3%/day. 30%/day over the last 24h
+    (sleep included) is hot; 20%/day is not."""
+    hot = _week(40.0, NOW + 3 * 86400)
+    samples = lambda k, since: [(NOW - 86400, 10.0), (NOW, 40.0)]
+    attach_projections(hot, NOW, samples_for=samples)
+    assert hot["week_all"]["hot"] is True
+    # 40% + 30%/day * 3 days = 130
+    assert hot["week_all"]["projected_recent"] == 130
+
+    warm = _week(30.0, NOW + 3 * 86400)
+    samples = lambda k, since: [(NOW - 86400, 10.0), (NOW, 30.0)]
+    attach_projections(warm, NOW, samples_for=samples)
+    assert warm["week_all"]["hot"] is False

@@ -211,15 +211,23 @@ def parse_plan_usage(data: dict) -> dict:
 #     Suppressed early in the window (elapsed < 5%) where the ratio explodes.
 #
 #   projected_recent / limit_at — recent burn rate. Slope of the persisted
-#     samples over the last hour (6h for weeklies — 1% of a week is too
-#     coarse for an hourly slope). projected_recent extrapolates that rate
-#     to reset; limit_at is when it crosses 100%, reported only when that
-#     lands before resets_at (a pace that hits 100% after reset never blows
-#     the limit). Usage is bursty, so avg and recent disagree often — the
+#     samples: last hour for the session meter (5h horizon — you're at the
+#     desk, extrapolating active burn is right), last 24h for the weeklies.
+#     The 24h window spans a full sleep/work cycle, so the weekly slope is
+#     duty-cycle-adjusted for free — a shorter window measures active-hours
+#     burn and extrapolating THAT across every remaining wall-clock hour of
+#     the week over-projects ~3x. projected_recent extrapolates the rate to
+#     reset; limit_at is when it crosses 100%, reported only when that lands
+#     before resets_at (a pace that hits 100% after reset never blows the
+#     limit). Usage is bursty, so avg and recent disagree often — the
 #     frontend renders both as a range instead of pretending one number.
+#     Each meter needs samples spanning at least half its slope window
+#     before recent-burn outputs activate (12h for weeklies).
 #
 #   hot — recent rate >= 2x the even-burn rate for the window (the pace
 #     that would consume exactly 100% by reset). The burst signal: 🔥.
+#     With the 24h weekly slope this means "burning >2x sustainable for a
+#     full day", not "had a hot morning".
 
 _METER_WINDOW_S = {
     "session": 5 * 3600,
@@ -229,12 +237,17 @@ _METER_WINDOW_S = {
 }
 _SLOPE_WINDOW_S = {
     "session": 3600,
-    "week_all": 6 * 3600,
-    "week_opus": 6 * 3600,
-    "week_sonnet": 6 * 3600,
+    "week_all": 24 * 3600,
+    "week_opus": 24 * 3600,
+    "week_sonnet": 24 * 3600,
 }
 _MIN_ELAPSED_FRAC = 0.05
-_MIN_SLOPE_SPAN_S = 600
+_MIN_SLOPE_SPAN_S = {
+    "session": 600,
+    "week_all": 12 * 3600,
+    "week_opus": 12 * 3600,
+    "week_sonnet": 12 * 3600,
+}
 
 
 def attach_projections(meters: dict, now: float,
@@ -262,7 +275,7 @@ def attach_projections(meters: dict, now: float,
         if len(samples) < 2:
             continue
         (t0, p0), (t1, p1) = samples[0], samples[-1]
-        if t1 - t0 < _MIN_SLOPE_SPAN_S or p1 <= p0:
+        if t1 - t0 < _MIN_SLOPE_SPAN_S[key] or p1 <= p0:
             continue
         rate = (p1 - p0) / (t1 - t0)
         m["projected_recent"] = round(m["utilization"] + rate * (resets_at - now))
