@@ -200,3 +200,13 @@ def test_rename_rules_constant_is_spliced_into_rename_prompt():
     prompt = build_rename_prompt([{"index": 0, "current_name": "claude"}])
     for rule in RENAME_RULES:
         assert rule.strip() in prompt
+
+
+def test_rename_rules_shared_by_narrator_prompt():
+    # The no-drift guard: every taste rule must appear verbatim in BOTH
+    # prompt builders, so rename taste can't fork between the two surfaces.
+    from periscope.narrator import build_narrator_prompt
+    narrator_prompt = build_narrator_prompt(
+        window_name="claude", branch=None, pr=None, cwd="/repo", signals={})
+    for rule in RENAME_RULES:
+        assert rule.strip() in narrator_prompt
