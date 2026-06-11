@@ -325,6 +325,13 @@ class _SessionMirror:
 
     async def _read_loop(self) -> None:
         assert self._proc is not None and self._proc.stdout is not None
+        # The attach handshake is one unsolicited %begin/%end block — and
+        # the connect-time reconcile usually wins the race against it, so
+        # by the time it arrives the callback queue already holds that
+        # reconcile's callbacks. Drop the FIRST reply block here (replies
+        # arrive in command order; attach's implicit command is first) so
+        # it can't shift every queued callback off by one.
+        handshake_pending = True
         try:
             while True:
                 line = await self._proc.stdout.readline()
@@ -335,6 +342,9 @@ class _SessionMirror:
                     continue
                 if isinstance(event, Exit):
                     break
+                if handshake_pending and isinstance(event, (Reply, ReplyError)):
+                    handshake_pending = False
+                    continue
                 self._dispatch(event)
         finally:
             self._finalize()
