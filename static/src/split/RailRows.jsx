@@ -18,6 +18,10 @@
 import { useState, useRef, useEffect } from "preact/hooks";
 import { prUrl } from "../util.js";
 
+// Narrator status dims after 15 min: the work moved on (or the pane went
+// quiet) and the one-liner no longer reflects "now".
+const STATUS_STALE_S = 900;
+
 export function statusDotClass(s) {
   if (s === "needs-input") return "dot dot-alert dot-pulse";
   if (s === "working") return "dot dot-green";
@@ -108,6 +112,8 @@ export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, drag
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
   const label = w.name || (w.is_claude ? "claude" : "shell");
+  const statusStale =
+    w.status_at && Math.floor(Date.now() / 1000) - w.status_at > STATUS_STALE_S;
   return (
     <div
       class={`rail-row child-row${sel}${dimCls}${drop}`}
@@ -119,7 +125,15 @@ export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, drag
       {w.is_claude
         ? <span class="rail-icon icon-claude">✻</span>
         : <span class="rail-icon icon-shell">$</span>}
-      <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
+      <span class="rail-label-col">
+        <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
+        {w.status_line && (
+          <span
+            class={`rail-status${statusStale ? " stale" : ""}`}
+            title={w.status_line}
+          >{w.status_line}</span>
+        )}
+      </span>
       {w.burn_hot && (
         <span
           class="rail-burn"

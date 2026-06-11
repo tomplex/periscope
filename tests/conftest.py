@@ -35,6 +35,23 @@ def fake_tmux(mocker):
 
 
 @pytest.fixture
+def fresh_activity_db(tmp_path, monkeypatch):
+    """Point periscope.activity's lazy SQLite connection at a per-test
+    tmp_path DB and clear its in-module caches, so tests never touch the
+    user's real ~/.config/periscope/periscope.db. Yields the activity
+    module for convenience."""
+    from periscope import activity, config
+    monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "periscope.db")
+    activity._CONN = None
+    activity._git_cache.clear()
+    activity._git_fetching.clear()
+    yield activity
+    if activity._CONN is not None:
+        activity._CONN.close()
+        activity._CONN = None
+
+
+@pytest.fixture
 def clean_state(tmp_xdg_home, monkeypatch):
     """Reset periscope.store._STATE to a fresh defaults dict for the test.
     Returns the dict so the test can prepopulate fields before exercising

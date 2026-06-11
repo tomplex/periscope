@@ -114,7 +114,8 @@ One file per subsystem:
 | `periscope/git_pr.py` | Git state + GitHub PR cache + activity timeline + `prewarm_pr_cache` |
 | `periscope/lgtm.py` | LGTM mirror (poll + per-session SSE) |
 | `periscope/usage.py` | Claude plan usage (JSONL parse + OAuth usage-endpoint fetch) |
-| `periscope/rename_ai.py` | Anthropic SDK plumbing for auto-rename |
+| `periscope/rename_ai.py` | Anthropic SDK plumbing for auto-rename (`RENAME_RULES` taste block shared with the narrator) |
+| `periscope/narrator.py` | Per-pane AI status lines + divergence renames (pure decision core + worker-driven tick; see "Narrator" below) |
 | `periscope/routes/*.py` | One APIRouter per file (11 modules: state, prefs, pane, send, sessions, paste_image, channel, history, auto_rename, lgtm, ws) |
 
 Tests live under `tests/` mirroring the package structure (one
@@ -350,6 +351,35 @@ the only authoritative, current source.
 Resolution falls back to newest-mtime-in-cwd when a pane has no recorded session
 yet. The earlier `channel_shim.py` recorder was removed — the hook's payload is
 strictly better (current vs spawn-frozen).
+
+## Narrator (semantic pane status + auto-rename)
+
+`periscope/narrator.py`, driven by the activity worker's 30s tick (prod
+only). Per Claude pane: when the session JSONL changes (≥90s apart), one
+Haiku call returns `{"status", "rename"}` — the status line surfaces in
+the rail and detail header (`status_line`/`status_at` merged into
+`/api/state` windows from the `pane_status` table); a non-null rename
+applies via `tmux rename-window` with a `'rename'` activity event.
+
+Invariants worth knowing before touching it:
+
+- **Regeneration is session-id-first, size-second.** `/clear` mints a new
+  smaller JSONL; a pure "grew" check would freeze the pre-clear status
+  forever. Placeholder rows (`session_id` NULL, written by rename-route
+  stamps) must NOT count as a session switch or they'd wipe the cooldown
+  they exist to carry.
+- **Humans win renames.** All three manual rename surfaces stamp
+  `pane_status.renamed_at` (30-min cooldown); `seen_name` catches
+  tmux-native renames; and `_generate` re-reads the live window name +
+  row immediately before applying (a tick spans multi-second Haiku
+  calls — the snapshot goes stale).
+- **No cwd fallback** when a pane has no `pane_sessions` row — on a
+  shared cwd a wrong-session status is worse than none; the hook
+  self-corrects on the next prompt.
+- **The lifespan tests mock `activity.run_worker`.** The real worker's
+  first tick runs immediately, and in tests `PORT` defaults to 8765 — an
+  unmocked worker executes a LIVE narrator tick (real Haiku, real
+  renames of real windows) on every pytest run. This actually happened.
 
 ## LGTM integration
 

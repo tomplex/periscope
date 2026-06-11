@@ -14,7 +14,6 @@ import uuid
 import pytest
 
 from periscope import tmux_input
-from periscope.config import INPUT_CTL_SESSION
 
 
 def test_cmd_wire_format():
@@ -43,37 +42,51 @@ def test_disabled_falls_back_to_fork(monkeypatch):
     assert seen == {"target": "sess:1.0", "text": "x"}
 
 
+# Dedicated server, unique per run (test_tmux_mirror's TEST_SOCKET pattern):
+# the default server hosts prod periscope's live INPUT_CTL_SESSION — killing
+# it there tears down real dashboard input — and a fixed socket name lets
+# concurrent suites kill each other's test servers.
+TEST_SOCKET = f"periscope-input-test-{uuid.uuid4().hex[:8]}"
+
+
+def _t(*args):
+    # -f /dev/null: the first _t() call boots a fresh server on the test
+    # socket, which would otherwise source ~/.tmux.conf (tmux-continuum
+    # restore-on-start would resurrect the user's real sessions onto it).
+    return subprocess.run(
+        ["tmux", "-L", TEST_SOCKET, "-f", "/dev/null", *args],
+        capture_output=True, text=True, check=False,
+    ).stdout
+
+
 @pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")
-def test_roundtrip_into_real_pane():
+def test_roundtrip_into_real_pane(monkeypatch):
+    monkeypatch.setattr(tmux_input, "_TMUX", ("tmux", "-L", TEST_SOCKET))
+
+    # The fork fallback runs periscope.tmux.deliver_input against the DEFAULT
+    # server — fail loudly instead of silently escaping the test sandbox.
+    async def no_fork(target, text):
+        pytest.fail("control-mode path failed; fork fallback would hit the default server")
+    monkeypatch.setattr(tmux_input, "_fork_fallback", no_fork)
+
     target_session = f"pstest-{uuid.uuid4().hex[:8]}"
 
     async def drive():
         # A throwaway target pane running `cat` so sent bytes echo into its
         # capture-pane output verbatim (no shell prompt interpretation).
-        subprocess.run(
-            ["tmux", "new-session", "-d", "-s", target_session, "-x", "80", "-y", "24", "cat"],
-            check=True,
-        )
+        _t("new-session", "-d", "-s", target_session, "-x", "80", "-y", "24", "cat")
         # base-index may be 0 or 1 depending on the host's tmux config; ask
         # tmux for the real window index rather than assuming.
-        idx = subprocess.run(
-            ["tmux", "list-windows", "-t", target_session, "-F", "#{window_index}"],
-            capture_output=True, text=True,
-        ).stdout.strip()
+        idx = _t("list-windows", "-t", target_session, "-F", "#{window_index}").strip()
         target = f"{target_session}:{idx}"
         await asyncio.sleep(0.2)
         await tmux_input.send(target, "hello")
         await asyncio.sleep(0.3)
-        out = subprocess.run(
-            ["tmux", "capture-pane", "-t", target, "-p"],
-            capture_output=True, text=True,
-        ).stdout
-        return out
+        return _t("capture-pane", "-t", target, "-p")
 
     try:
         out = asyncio.run(drive())
         assert "hello" in out
     finally:
         asyncio.run(tmux_input.shutdown())
-        subprocess.run(["tmux", "kill-session", "-t", target_session], check=False)
-        subprocess.run(["tmux", "kill-session", "-t", INPUT_CTL_SESSION], check=False)
+        _t("kill-server")

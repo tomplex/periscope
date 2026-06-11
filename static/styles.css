@@ -1853,6 +1853,17 @@ body.modal-open { overflow: hidden; }
 .rail-row.wt-row { padding-left: calc(10px + var(--rail-indent)); }
 .rail-row.child-row { padding-left: calc(10px + 2 * var(--rail-indent)); }
 
+/* Narrator status — second muted row under the pane name. The col wrapper
+   takes over .rail-label's flex slot so the status truncates on its own.
+   .stale = generated >15 min ago (poll keeps it; the work likely moved on). */
+.rail-row .rail-label-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rail-row .rail-label-col .rail-label { flex: none; }
+.rail-status {
+  font-size: 11px; color: var(--fg-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rail-status.stale { opacity: .5; }
+
 /* Worktree metadata strip — appears below the worktree label, aligned
    with the icon column so it visually nests with the parent. PR/CI/Linear
    chips stay quiet (muted color, small font) so they don't compete with
@@ -1951,6 +1962,10 @@ body.modal-open { overflow: hidden; }
 .detail-pane-header .header-ci.ci-running { color: var(--s-working); }
 .detail-pane-header .header-git { color: var(--s-needs); font-family: var(--mono); }
 .detail-pane-header .header-api-error { color: var(--s-danger); }
+
+/* Narrator status in the detail header — untruncated, own wrapped line
+   (flex-basis 100% forces the wrap in the flex-wrap header). */
+.detail-pane-header .header-status { flex-basis: 100%; color: var(--fg-3); }
 
 /* Auto-rename button inline at the left of the detail-pane-header, before
    the session name. Mirrors the modal-title-rename behavior (POST

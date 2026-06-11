@@ -6,13 +6,14 @@ mirror). Mostly an aggregator over already-cached subsystems.
 """
 
 import os
+import time
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from periscope.channels import channel_state_for
 from periscope.git_pr import cached_git_state, cached_pr_state
-from periscope.activity import cached_pane_activity
+from periscope.activity import cached_pane_activity, stamp_pane_rename
 from periscope.lgtm import cached_lgtm_state
 from periscope.panes import (
     list_windows, note_action, parse_pane, smooth_is_claude, smooth_spinner,
@@ -165,4 +166,11 @@ def rename(session: str, index: int, body: RenameBody):
         raise HTTPException(400, "empty name")
     tmux("rename-window", "-t", target, name)
     note_action(target)
+    # A human chose this name — start the narrator's rename cooldown so it
+    # can't clobber it. The route only has session:index; resolve the
+    # active pane id from tmux. Empty means the window died between the
+    # two tmux calls — nothing to stamp.
+    pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
+    if pane_id:
+        stamp_pane_rename(pane_id, name=name, at=int(time.time()))
     return {"ok": True, "target": target, "name": name}

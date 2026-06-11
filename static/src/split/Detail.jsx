@@ -24,7 +24,7 @@ import {
   windows, activeTarget, railSelection, paneTranscript,
   paneTabs, paneActiveTab, openFileTab, closeFileTab, setActiveTab,
 } from "../store.js";
-import { apiCall, rewriteLgtmHost, prUrl, targetQuery } from "../util.js";
+import { apiCall, rewriteLgtmHost, prUrl, targetQuery, relTime } from "../util.js";
 import { getDetailMode, setDetailMode } from "../prefs.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
@@ -259,7 +259,17 @@ function PaneHeader({ w, mode, onMode }) {
       </span>
     );
   }
-  return <header id="detail-pane-header" class="detail-pane-header">{parts.map((p, i) => <>{p}</>)}</header>;
+  return (
+    <header id="detail-pane-header" class="detail-pane-header">
+      {parts.map((p, i) => <>{p}</>)}
+      {w.status_line && (
+        <span
+          class="header-status"
+          title={w.status_at ? `as of ${relTime(w.status_at)} ago` : undefined}
+        >{w.status_line}</span>
+      )}
+    </header>
+  );
 }
 
 // Rich per-pane Inspector — Linked / Notes / Activity, fed by a 1.5s poll of

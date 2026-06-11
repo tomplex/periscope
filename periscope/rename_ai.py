@@ -8,7 +8,10 @@ without an API key as long as nothing triggers an auto-rename); the cached
 client is reused for subsequent calls.
 """
 
+import json
 import os
+from collections import deque
+from pathlib import Path
 
 _anthropic_client = None
 
@@ -25,6 +28,23 @@ _TOOL_PATH_FIELD = {
     "Glob": "pattern",
     "Grep": "pattern",
 }
+
+
+# Shared rename taste rules — spliced into build_rename_prompt AND the
+# narrator prompt (periscope/narrator.py) so the two can't drift. A list
+# of lines, not a joined string: both builders assemble line-lists and
+# apply their own indentation.
+RENAME_RULES = [
+    "- 1-3 words, lowercase-with-dashes preferred (e.g. 'fs-build', 'cohort-inv')",
+    "- Max 25 characters",
+    "- Prefer the CONCEPT being worked on over the mechanism. e.g. if recent",
+    "  prompts talk about 'feature store liveness' and tool calls touch",
+    "  files in anthology/liveness/, name it 'fs-liveness' — not 'edit-py'.",
+    "- Bad: 'claude', 'shell', 'zsh', 'work', generic verbs.",
+    "- Good: 'postcode-ingestion', 'monitoring-cert', 'rust-port', 'fs-liveness'",
+    "- If the existing name still captures the work accurately, KEEP IT.",
+    "  Don't change names just to feel like progress.",
+]
 
 
 def get_anthropic():
@@ -77,46 +97,86 @@ def transcript_summary(session: str, index: int, *,
         turns = get_turns_for_pane(session, index)
         if not turns or not turns.get("messages"):
             return {}
-        messages = turns["messages"]
-
-        # Walk newest-first; collect until we have what we need.
-        user_prompts: list[str] = []
-        tool_calls: list[str] = []
-        files: list[str] = []
-        seen_files: set[str] = set()
-        for msg in reversed(messages):
-            role = msg.get("role")
-            if role == "user" and len(user_prompts) < n_user:
-                text = (msg.get("text") or "").strip()
-                if text:
-                    user_prompts.append(text[:240])
-            elif role == "assistant":
-                for tu in reversed(msg.get("tool_uses") or []):
-                    if len(tool_calls) >= n_tools:
-                        break
-                    name = tu.get("name") or ""
-                    inp = tu.get("input") or {}
-                    summary = _summarize_tool_call(name, inp)
-                    if summary:
-                        tool_calls.append(summary)
-                    field = _TOOL_PATH_FIELD.get(name)
-                    if field == "file_path" or field == "notebook_path":
-                        p = inp.get(field)
-                        if p and p not in seen_files and len(files) < n_tools:
-                            seen_files.add(p)
-                            files.append(p)
-            if len(user_prompts) >= n_user and len(tool_calls) >= n_tools:
-                break
-
-        # Newest-first iteration above gave us reverse order; flip so the
-        # prompt reads in chronological order (older → newer).
-        return {
-            "recent_user_prompts": list(reversed(user_prompts)),
-            "recent_tool_calls": list(reversed(tool_calls)),
-            "files_touched": files,
-        }
+        return _collect_signals(turns["messages"], n_user=n_user, n_tools=n_tools)
     except Exception:
         return {}
+
+
+def _collect_signals(messages: list[dict], *, n_user: int, n_tools: int) -> dict:
+    """Shared signal-collection walk over {role, text, tool_uses} messages.
+    Used by both transcript_summary variants so they can't drift."""
+    # Walk newest-first; collect until we have what we need.
+    user_prompts: list[str] = []
+    tool_calls: list[str] = []
+    files: list[str] = []
+    seen_files: set[str] = set()
+    for msg in reversed(messages):
+        role = msg.get("role")
+        if role == "user" and len(user_prompts) < n_user:
+            text = (msg.get("text") or "").strip()
+            if text:
+                user_prompts.append(text[:240])
+        elif role == "assistant":
+            for tu in reversed(msg.get("tool_uses") or []):
+                if len(tool_calls) >= n_tools:
+                    break
+                name = tu.get("name") or ""
+                inp = tu.get("input") or {}
+                summary = _summarize_tool_call(name, inp)
+                if summary:
+                    tool_calls.append(summary)
+                field = _TOOL_PATH_FIELD.get(name)
+                if field == "file_path" or field == "notebook_path":
+                    p = inp.get(field)
+                    if p and p not in seen_files and len(files) < n_tools:
+                        seen_files.add(p)
+                        files.append(p)
+        if len(user_prompts) >= n_user and len(tool_calls) >= n_tools:
+            break
+
+    # Newest-first iteration above gave us reverse order; flip so the
+    # prompt reads in chronological order (older → newer).
+    return {
+        "recent_user_prompts": list(reversed(user_prompts)),
+        "recent_tool_calls": list(reversed(tool_calls)),
+        "files_touched": files,
+    }
+
+
+def transcript_summary_from_path(jsonl_path: Path, *, n_user: int = 3,
+                                 n_tools: int = 8, tail_lines: int = 500) -> dict:
+    """Same return shape as transcript_summary, but from an already-resolved
+    JSONL path with a bounded tail read — transcripts run tens of MB and the
+    narrator calls this per regenerating pane per worker tick. Does NOT use
+    history.search.messages_from_jsonl (full-file two-pass with tool-result
+    back-patching the narrator doesn't need). Skips isMeta/isSidechain raw
+    entries so slash-command/skill expansions never look like user intent
+    (same filter messages_from_jsonl applies)."""
+    try:
+        with open(jsonl_path) as fh:
+            tail = deque(fh, maxlen=tail_lines)
+    except OSError:
+        return {}
+    messages: list[dict] = []
+    for line in tail:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("isMeta") is True or d.get("isSidechain") is True:
+            continue
+        content = (d.get("message") or {}).get("content")
+        if d.get("type") == "user":
+            # Typed prompts are strings; tool-result/image turns are block
+            # lists — only the former is user intent.
+            if isinstance(content, str) and content.strip():
+                messages.append({"role": "user", "text": content})
+        elif d.get("type") == "assistant":
+            tool_uses = ([b for b in content
+                          if isinstance(b, dict) and b.get("type") == "tool_use"]
+                         if isinstance(content, list) else [])
+            messages.append({"role": "assistant", "tool_uses": tool_uses})
+    return _collect_signals(messages, n_user=n_user, n_tools=n_tools)
 
 
 def _summarize_tool_call(name: str, inp: dict) -> str:
@@ -150,15 +210,7 @@ def build_rename_prompt(windows: list[dict]) -> str:
         "",
         "For each window below, suggest a SHORT name that captures the SEMANTIC focus",
         "of the work — what is the developer actually trying to accomplish? Constraints:",
-        "  - 1-3 words, lowercase-with-dashes preferred (e.g. 'fs-build', 'cohort-inv')",
-        "  - Max 25 characters",
-        "  - Prefer the CONCEPT being worked on over the mechanism. e.g. if recent",
-        "    prompts talk about 'feature store liveness' and tool calls touch",
-        "    files in anthology/liveness/, name it 'fs-liveness' — not 'edit-py'.",
-        "  - Bad: 'claude', 'shell', 'zsh', 'work', generic verbs.",
-        "  - Good: 'postcode-ingestion', 'monitoring-cert', 'rust-port', 'fs-liveness'",
-        "  - If the existing name still captures the work accurately, KEEP IT.",
-        "    Don't change names just to feel like progress.",
+        *[f"  {r}" for r in RENAME_RULES],
         "  - Signal priority (highest first):",
         "    1. recent_user_prompts — what the developer is asking for right now",
         "    2. recent_tool_calls + files_touched — what's actually being done",

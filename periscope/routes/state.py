@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 
+from periscope.activity import pane_status_lines
 from periscope.channels import _channel_gc
 from periscope.panes import (
     _resuming, RESUME_EXPIRY_S,
@@ -67,6 +68,17 @@ def state():
 
     result = [view for view, _ in built]
     annotate_hot_panes(result)
+
+    # Narrator status merge: ONE bulk read here, NOT per-pane inside
+    # build_window_view — the 32-thread fan-out would serialize on
+    # activity._LOCK. status_at lets the UI dim stale lines.
+    statuses = pane_status_lines()
+    if statuses:
+        for view in result:
+            s = statuses.get(view.get("pane_id") or "")
+            if s:
+                view["status_line"], view["status_at"] = s
+
     stamp_updates: list[tuple[str, int, int]] = [
         stamp for _, stamp in built if stamp is not None
     ]

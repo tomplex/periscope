@@ -7,15 +7,9 @@ from periscope import activity, config
 
 
 @pytest.fixture(autouse=True)
-def isolated_db(tmp_path, monkeypatch):
-    """Isolate periscope.db and force prod port (dev=0) by default."""
-    monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "t.db")
+def isolated_db(fresh_activity_db, monkeypatch):
+    """DB isolation via the shared fixture; force prod port (dev=0) by default."""
     monkeypatch.setattr(config, "PORT", 8765)
-    activity._CONN = None
-    yield
-    if activity._CONN is not None:
-        activity._CONN.close()
-        activity._CONN = None
 
 
 def _count(name=None):

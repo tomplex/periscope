@@ -130,3 +130,36 @@ def test_state_isolates_one_pane_build_failure(client, mocker, clean_state):
     views = {v["index"]: v for v in resp.json()["windows"]}
     assert views[0]["state"] == "error"   # _safe_build caught the raise
     assert views[1]["state"] == "idle"
+
+
+def test_state_merges_narrator_status_lines(client, mocker, clean_state,
+                                            fresh_activity_db):
+    activity = fresh_activity_db
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%7", session_id="sid", status="fixing flaky reconcile test",
+        generated_at=1234, jsonl_size=10, seen_name="claude", renamed_at=None))
+    windows = [
+        {"session": "s", "index": 0, "active": True, "activity": 0,
+         "pane_id": "%7", "cwd": ""},
+        {"session": "s", "index": 1, "active": False, "activity": 0,
+         "pane_id": "%8", "cwd": ""},
+    ]
+    _patch(mocker, "list_windows", return_value=windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "all_projects", return_value={})
+    # Hermeticity: left unmocked, the first call walks the real
+    # ~/.claude/projects and spawns a real OAuth HTTP thread (same patches
+    # as test_state_empty / test_state_with_window).
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value=None)
+    _patch(mocker, "build_window_view",
+           side_effect=lambda w, now_ts: (
+               {"index": w["index"], "pane_id": w["pane_id"]}, None))
+
+    body = client.get("/api/state").json()
+    views = {v["index"]: v for v in body["windows"]}
+    assert views[0]["status_line"] == "fixing flaky reconcile test"
+    assert views[0]["status_at"] == 1234
+    assert "status_line" not in views[1]
+    assert "status_at" not in views[1]

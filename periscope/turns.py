@@ -21,7 +21,7 @@ def session_id_for_pane(pane_id: str) -> str | None:
     return activity.get_pane_session(pane_id)
 
 
-def _jsonl_for_session(session_id: str):
+def jsonl_for_session(session_id: str):
     """The <session_id>.jsonl anywhere under ~/.claude/projects, or None. Search
     by glob, NOT by encoding the pane's current cwd: Claude keys the JSONL dir on
     the cwd the session STARTED in, so a pane that has since `cd`'d (e.g. into a
@@ -49,7 +49,7 @@ def get_turns_for_pane(session: str, index: int) -> dict | None:
         return None
 
     sid = session_id_for_pane(pane_id)
-    jsonl = _jsonl_for_session(sid) if sid else None
+    jsonl = jsonl_for_session(sid) if sid else None
     if jsonl is None:
         jsonl = activity.live_transcript_for(cwd)
     if jsonl is None:
