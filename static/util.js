@@ -1,7 +1,33 @@
-// Pure helpers, plus the shared apiCall wrapper. The pure ones don't
-// touch the DOM; apiCall does, since it surfaces errors via toast.
+// Pure helpers, plus the shared apiCall wrapper, for the vanilla /history
+// SPA. The Preact dashboard has its own copies under src/ — this module
+// must stay self-contained (no sibling imports): the Preact cutover deleted
+// vanilla toast.js while this file still imported it, which killed the
+// whole /history module graph and blanked the page.
 
-import { showToast } from "./toast.js";
+// Tiny toast surface — bottom-right stack, auto-dismissing (.toast styles
+// in styles.css, which history.html includes). Not alert(): blocking, and
+// silently no-ops in WKWebView/Tauri.
+let _toastContainer = null;
+
+export function showToast(message, kind = "info", ms = 4000) {
+  if (!_toastContainer) {
+    _toastContainer = document.createElement("div");
+    _toastContainer.id = "toast-container";
+    document.body.appendChild(_toastContainer);
+  }
+  const t = document.createElement("div");
+  t.className = `toast toast-${kind}`;
+  t.textContent = message;
+  _toastContainer.appendChild(t);
+  // Two-step add: insert off-screen, then flip the show class on the next
+  // frame so the transition actually runs.
+  requestAnimationFrame(() => t.classList.add("toast-show"));
+  setTimeout(() => {
+    t.classList.remove("toast-show");
+    setTimeout(() => t.remove(), 200);
+  }, ms);
+  return t;
+}
 
 export function escapeHtml(s) {
   if (s == null) return "";
