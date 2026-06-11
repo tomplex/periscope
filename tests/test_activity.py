@@ -473,3 +473,18 @@ def test_rename_event_kind_maps_to_session_src():
     assert out[0] == {"src": "session", "kind": "rename", "at": 10,
                       "text": "renamed: claude → fs-liveness",
                       "state": None, "url": None}
+
+
+def test_worker_tick_invokes_narrator_with_claude_panes(monkeypatch):
+    import periscope.narrator as narrator
+    calls = []
+    monkeypatch.setattr(narrator, "tick", lambda panes: calls.append(panes))
+    monkeypatch.setattr(activity, "list_windows", lambda: [
+        {"session": "s", "index": 0, "pane_id": "%1", "cwd": ""}])
+    monkeypatch.setattr(activity, "tmux", lambda *a: "pane content")
+    monkeypatch.setattr(activity, "parse_pane",
+                        lambda c: {"is_claude": True, "context_pct": None,
+                                   "state": "idle"})
+    activity._worker_tick({})
+    assert len(calls) == 1
+    assert calls[0][0][0]["pane_id"] == "%1"

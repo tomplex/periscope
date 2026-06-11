@@ -230,3 +230,204 @@ def test_disabled_without_key_logs_once(monkeypatch, caplog):
         assert narrator._enabled() is False
     disable_lines = [r for r in caplog.records if "narrator disabled" in r.message]
     assert len(disable_lines) == 1
+
+
+# ---- tick (impure shell) ------------------------------------------------
+#
+# Real SQLite via the fresh_db pattern; only the IO boundaries are
+# monkeypatched (claude_complete / tmux / transcript_summary_from_path /
+# git caches) — all patched on the narrator namespace, where they're bound.
+
+import json as _json
+import time as _time
+
+from periscope import activity, config
+
+
+@pytest.fixture
+def fresh_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "t.db")
+    activity._CONN = None
+    yield
+    if activity._CONN is not None:
+        activity._CONN.close()
+        activity._CONN = None
+
+
+@pytest.fixture
+def tick_env(fresh_db, tmp_path, monkeypatch):
+    """A projects dir with one transcript, a pane mapped to it, and every
+    IO boundary stubbed. Returns a dict of knobs the tests adjust."""
+    projects = tmp_path / "projects"
+    d = projects / "-repo"
+    d.mkdir(parents=True)
+    jsonl = d / "sid-a.jsonl"
+    jsonl.write_text(_json.dumps(
+        {"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", projects)
+
+    def set_session(pane_id, sid):
+        with activity._LOCK:
+            c = activity._conn()
+            c.execute("INSERT OR REPLACE INTO pane_sessions "
+                      "(pane_id, session_id, updated_at) VALUES (?,?,0)",
+                      (pane_id, sid))
+            c.commit()
+    set_session("%1", "sid-a")
+
+    env = {
+        "jsonl": jsonl,
+        "set_session": set_session,
+        "haiku_calls": [],
+        "tmux_calls": [],
+        "response": '{"status": "fixing flaky reconcile test", "rename": null}',
+    }
+
+    def fake_complete(prompt, model="claude-haiku-4-5"):
+        env["haiku_calls"].append(prompt)
+        r = env["response"]
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(narrator, "claude_complete", fake_complete)
+    monkeypatch.setattr(narrator, "tmux",
+                        lambda *a: env["tmux_calls"].append(a) or "")
+    monkeypatch.setattr(narrator, "transcript_summary_from_path",
+                        lambda p, **kw: {"recent_user_prompts": ["hi"]})
+    monkeypatch.setattr(narrator, "cached_git_state", lambda cwd: {"branch": "main"})
+    monkeypatch.setattr(narrator, "cached_pr_state", lambda cwd, b: {})
+    return env
+
+
+def _pane(pane_id="%1", name="claude", session="s", index=0, cwd="/repo"):
+    return ({"pane_id": pane_id, "name": name, "session": session,
+             "index": index, "cwd": cwd}, {"is_claude": True, "state": "idle"})
+
+
+def test_tick_generates_first_status(tick_env):
+    narrator.tick([_pane()])
+    assert len(tick_env["haiku_calls"]) == 1
+    row = activity.get_pane_status("%1")
+    assert row.status == "fixing flaky reconcile test"
+    assert row.session_id == "sid-a"
+    assert row.jsonl_size == tick_env["jsonl"].stat().st_size
+    assert row.seen_name == "claude"
+    assert row.renamed_at is None
+    assert tick_env["tmux_calls"] == []   # rename: null → no tmux
+
+
+def test_tick_skips_pane_without_session_mapping(tick_env):
+    narrator.tick([_pane(pane_id="%99")])   # no pane_sessions row, NO cwd fallback
+    assert tick_env["haiku_calls"] == []
+    assert activity.get_pane_status("%99") is None
+
+
+def test_tick_skips_when_jsonl_missing(tick_env):
+    tick_env["set_session"]("%1", "sid-gone")
+    narrator.tick([_pane()])
+    assert tick_env["haiku_calls"] == []
+
+
+def test_tick_idle_pane_never_regenerates(tick_env):
+    narrator.tick([_pane()])
+    tick_env["haiku_calls"].clear()
+    # Same size, same session, interval long past — still no call.
+    row = activity.get_pane_status("%1")
+    activity.upsert_pane_status(
+        activity.PaneStatusRow(**{**row.__dict__, "generated_at": 1}))
+    narrator.tick([_pane()])
+    assert tick_env["haiku_calls"] == []
+
+
+def test_tick_applies_rename_and_records_event(tick_env):
+    tick_env["response"] = '{"status": "s", "rename": "fs-liveness"}'
+    narrator.tick([_pane()])
+    assert ("rename-window", "-t", "s:0", "fs-liveness") in tick_env["tmux_calls"]
+    row = activity.get_pane_status("%1")
+    assert row.renamed_at is not None
+    assert row.seen_name == "fs-liveness"   # narrator-applied name becomes seen
+    events = activity.events_for("%1", None, None)
+    assert any(e["kind"] == "rename" and "claude → fs-liveness" in e["text"]
+               for e in events)
+
+
+def test_tick_haiku_exception_keeps_previous_row(tick_env):
+    narrator.tick([_pane()])
+    before = activity.get_pane_status("%1")
+    # Make it a candidate again: bigger file, interval long past.
+    tick_env["jsonl"].write_text(tick_env["jsonl"].read_text() + "x" * 100)
+    activity.upsert_pane_status(
+        activity.PaneStatusRow(**{**before.__dict__, "generated_at": 1}))
+    tick_env["response"] = RuntimeError("haiku down")
+    narrator.tick([_pane()])   # must not raise
+    assert activity.get_pane_status("%1").status == before.status
+
+
+def test_tick_garbage_response_keeps_previous_row(tick_env):
+    narrator.tick([_pane()])
+    tick_env["jsonl"].write_text(tick_env["jsonl"].read_text() + "x" * 100)
+    row = activity.get_pane_status("%1")
+    activity.upsert_pane_status(
+        activity.PaneStatusRow(**{**row.__dict__, "generated_at": 1}))
+    tick_env["response"] = "not json at all"
+    narrator.tick([_pane()])
+    assert activity.get_pane_status("%1").status == "fixing flaky reconcile test"
+
+
+def test_tick_external_rename_starts_cooldown_instead_of_renaming(tick_env):
+    size = tick_env["jsonl"].stat().st_size
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%1", session_id="sid-a", status="old", generated_at=1,
+        jsonl_size=size + 1, seen_name="claude", renamed_at=None))
+    tick_env["response"] = '{"status": "s", "rename": "fs-liveness"}'
+    now = int(_time.time())
+    narrator.tick([_pane(name="human-chosen")])   # differs from seen_name
+    assert tick_env["tmux_calls"] == []           # never clobber the human
+    row = activity.get_pane_status("%1")
+    assert row.renamed_at >= now                  # cooldown started
+    assert row.seen_name == "human-chosen"        # new name recorded
+
+
+def test_tick_rename_cooldown_blocks_but_status_updates(tick_env):
+    size = tick_env["jsonl"].stat().st_size
+    now = int(_time.time())
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%1", session_id="sid-a", status="old", generated_at=1,
+        jsonl_size=size + 1, seen_name="claude", renamed_at=now - 60))
+    tick_env["response"] = '{"status": "new status", "rename": "fs-liveness"}'
+    narrator.tick([_pane()])
+    assert tick_env["tmux_calls"] == []
+    row = activity.get_pane_status("%1")
+    assert row.status == "new status"
+    assert row.renamed_at == now - 60             # cooldown preserved
+
+
+def test_tick_session_switch_resets_cooldown(tick_env):
+    size = tick_env["jsonl"].stat().st_size
+    now = int(_time.time())
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%1", session_id="sid-OLD", status="old", generated_at=1,
+        jsonl_size=size, seen_name="claude", renamed_at=now - 60))
+    narrator.tick([_pane()])                      # mapped session is sid-a
+    row = activity.get_pane_status("%1")
+    assert row.session_id == "sid-a"
+    assert row.renamed_at is None                 # recycled-pane cooldown gone
+
+
+def test_tick_caps_regenerations_per_tick(tick_env):
+    panes = []
+    for i in range(2, 9):                         # %2..%8: 7 candidates
+        sid = f"sid-{i}"
+        (tick_env["jsonl"].parent / f"{sid}.jsonl").write_text("{}\n")
+        tick_env["set_session"](f"%{i}", sid)
+        panes.append(_pane(pane_id=f"%{i}", index=i))
+    narrator.tick(panes)
+    assert len(tick_env["haiku_calls"]) == narrator.MAX_PER_TICK
+
+
+def test_tick_disabled_makes_no_calls(tick_env, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(narrator, "_enabled_checked", None)
+    narrator.tick([_pane()])
+    assert tick_env["haiku_calls"] == []

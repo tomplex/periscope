@@ -186,3 +186,101 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
         "No markdown fences, no commentary, just the JSON object.",
     ]
     return "\n".join(lines)
+
+# --- impure shell --------------------------------------------------------
+
+def tick(panes: list[tuple[dict, dict]]) -> None:
+    """One narrator pass over the worker's (window, parsed) Claude panes.
+    Called synchronously from activity._worker_tick (already off-loop).
+    Per-pane try/except — one bad pane never starves the rest (the
+    maybe_emit_milestone resilience pattern)."""
+    if not _enabled():
+        return
+    now = int(time.time())
+    # ONE bulk read of every stored status — the oldest-first cap selection
+    # needs them all anyway, and a per-pane SELECT would acquire
+    # activity._LOCK N times per tick.
+    rows = {r.pane_id: r for r in activity.all_pane_statuses()}
+    work: dict[str, tuple] = {}
+    candidates: list[tuple[int, str]] = []
+    for w, _parsed in panes:
+        pane_id = w.get("pane_id") or ""
+        if not pane_id:
+            continue
+        try:
+            sid = activity.get_pane_session(pane_id)
+            if not sid:
+                # No hook-recorded session. Deliberately NO cwd fallback:
+                # on a shared cwd a wrong-session status is worse than no
+                # status, and the hook self-corrects on the next prompt.
+                continue
+            # Same glob turns._jsonl_for_session uses — the JSONL dir is
+            # keyed on the session's START cwd, not the pane's current one.
+            matches = list(activity._PROJECTS_DIR.glob(f"*/{sid}.jsonl"))
+            if not matches:
+                continue
+            jsonl = matches[0]
+            size = jsonl.stat().st_size
+            row = rows.get(pane_id)
+            reason = should_regenerate(row, session_id=sid,
+                                       jsonl_size=size, now=now)
+            if reason is None:
+                continue
+            work[pane_id] = (w, sid, jsonl, size, row, reason)
+            candidates.append((row.generated_at if row else 0, pane_id))
+        except Exception:
+            log.exception("narrator candidate scan failed for %s", pane_id)
+    for pane_id in pick_regenerations(candidates):
+        w, sid, jsonl, size, row, reason = work[pane_id]
+        try:
+            _generate(w, pane_id=pane_id, sid=sid, jsonl=jsonl, size=size,
+                      row=row, reason=reason, now=now)
+        except Exception:
+            log.exception("narrator generation failed for %s", pane_id)
+
+
+def _generate(w: dict, *, pane_id: str, sid: str, jsonl, size: int,
+              row: PaneStatusRow | None, reason: Regen, now: int) -> None:
+    """One pane's regeneration: signals → one Haiku call → persist row,
+    maybe rename. Raises freely; tick()'s per-pane guard logs and keeps
+    the previous row (natural retry next tick)."""
+    current_name = w.get("name") or ""
+    cwd = w.get("cwd") or ""
+    signals = transcript_summary_from_path(jsonl)
+    git = cached_git_state(cwd) or {}
+    pr = (cached_pr_state(cwd, git.get("branch")) or {}).get("pr")
+    raw = claude_complete(build_narrator_prompt(
+        window_name=current_name, branch=git.get("branch"), pr=pr,
+        cwd=cwd, signals=signals))
+    result = parse_response(raw)
+    if result is None:
+        log.warning("narrator: unparseable response for %s; keeping previous "
+                    "status", pane_id)
+        return
+    # Session switch resets the cooldown AND the external-rename memory: a
+    # recycled pane id (or /clear) must not inherit the previous occupant's
+    # renamed_at, and its seen_name is equally stale.
+    fresh_session = reason == "session_switch"
+    renamed_at = None if fresh_session else (row.renamed_at if row else None)
+    seen_name = current_name
+    suggestion = result.rename
+    if not fresh_session and row is not None and is_external_rename(row, current_name):
+        # Someone renamed the window since we last looked — never clobber;
+        # record the new name and start the cooldown instead of renaming.
+        renamed_at = now
+        suggestion = None
+    gate_row = replace(row, renamed_at=renamed_at) if row is not None else None
+    new_name = rename_decision(suggestion, current_name=current_name,
+                               row=gate_row, now=now)
+    if new_name:
+        tmux("rename-window", "-t", f"{w['session']}:{w['index']}", new_name)
+        activity.record("pane", pane_id, "rename",
+                        f"renamed: {current_name} → {new_name}")
+        log.info("narrator: renamed %s %r → %r", pane_id, current_name, new_name)
+        renamed_at = now
+        seen_name = new_name
+    activity.upsert_pane_status(PaneStatusRow(
+        pane_id=pane_id, session_id=sid, status=result.status,
+        generated_at=now, jsonl_size=size, seen_name=seen_name,
+        renamed_at=renamed_at))
+    log.info("narrator: %s status %r", pane_id, result.status)

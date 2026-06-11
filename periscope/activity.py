@@ -655,6 +655,14 @@ def _worker_tick(last_ctx: dict) -> None:
             maybe_emit_milestone(cwd, branch, settled)
         except Exception:
             log.exception("maybe_emit_milestone failed for %s", cwd)
+    # Narrator: one semantic-status pass over the same Claude panes.
+    try:
+        # Function-level import — narrator imports activity; a top-level
+        # import here would be a cycle.
+        from periscope import narrator
+        narrator.tick(panes)
+    except Exception:
+        log.exception("narrator tick failed")
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()
