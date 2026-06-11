@@ -460,6 +460,70 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+def _do_search_history_tool(pane: str, arguments: dict):
+    """FTS search over the history index, trimmed for token economy: the
+    full normalized row carries UI-only fields (counts, rerank metadata,
+    jsonl_path); an LLM caller needs just enough to pick a session to
+    drill into."""
+    query = str(arguments.get("query", "")).strip()
+    if not query:
+        return _tool_result({"ok": False, "error": "query is required"})
+
+    # Lazy import, same as routes/history.py — keeps channel startup
+    # independent of the history package's sqlite deps.
+    import history
+    rows = history.search(
+        query,
+        project=arguments.get("project") or None,
+        since=arguments.get("since"),
+        limit=int(arguments.get("limit", 10)),
+    )
+    results = [{
+        "session_id": r["session_id"],
+        "project_path": r["project_path"],
+        "branch": r["branch"],
+        "started_at": r["started_at"],
+        "duration_s": r["duration_s"],
+        "summary": r["summary"],
+        "tags": r["tags"],
+        "files_touched": r["files_touched"][:10],
+        "first_user_msg": r["first_user_msg"],
+    } for r in rows]
+    return _tool_result({"ok": True, "results": results})
+
+
+def _do_get_history_session_tool(pane: str, arguments: dict):
+    """One indexed session: metadata + a compact slice of its messages.
+
+    Slicing happens on the compacted list (post tool-result stripping) so
+    offset/limit count meaningful messages, and the default tail-30 lands
+    on the end of the conversation where resolutions live."""
+    session_id = str(arguments.get("session_id", "")).strip()
+    if not session_id:
+        return _tool_result({"ok": False, "error": "session_id is required"})
+
+    from history.search import compact_messages, get_session
+    data = get_session(session_id)
+    if data is None:
+        return _tool_result({"ok": False, "error": "unknown session_id"})
+
+    msgs = compact_messages(data["messages"])
+    total = len(msgs)
+    offset = int(arguments.get("offset", -30))
+    limit = max(1, int(arguments.get("limit", 30)))
+    start = offset if offset >= 0 else max(0, total + offset)
+    meta = {k: v for k, v in data.items()
+            if k not in ("messages", "jsonl_path")}
+    body = {
+        "ok": True,
+        **meta,
+        "total_messages": total,
+        "offset": start,
+        "messages": msgs[start:start + limit],
+    }
+    return _tool_result(body)
+
+
 async def emit_channel_event(pane: str, content: str, meta: dict | None = None) -> bool:
     """Push a `notifications/claude/channel` event to the Claude connected
     on `pane`. Returns True on send, False if no session attached.
@@ -710,6 +774,68 @@ _CHANNEL_TOOLS = [
             "required": ["prompt"],
         },
         "handler": _do_spawn_claude_tool,
+    },
+    {
+        "name": "search_history",
+        "description": (
+            "Full-text search over past Claude Code sessions on this "
+            "machine — every project, indexed when each session ends "
+            "(the current session and other live panes are NOT in it). "
+            "Use before re-debugging something that feels familiar, or "
+            "to find how a past session solved a problem. Returns "
+            "summaries + session ids; drill in with get_history_session."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Keywords — error text, command names, file names, "
+                        "concepts. Tokens are prefix-matched and ANDed."
+                    ),
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Absolute project path to filter to. Omit for "
+                        "cross-project search."
+                    ),
+                },
+                "since": {
+                    "type": "integer",
+                    "description": "Unix timestamp lower bound on session start.",
+                },
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["query"],
+        },
+        "handler": _do_search_history_tool,
+    },
+    {
+        "name": "get_history_session",
+        "description": (
+            "Fetch one indexed session by id: metadata plus a slice of "
+            "its conversation (text + one-line tool summaries, results "
+            "stripped). Sessions can run hundreds of messages — fetch a "
+            "slice, not the whole thing. Default is the last 30 messages "
+            "(resolutions usually live at the end); pass offset/limit to "
+            "page. Negative offset counts from the end."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "offset": {
+                    "type": "integer",
+                    "default": -30,
+                    "description": "Message slice start; negative = from the end.",
+                },
+                "limit": {"type": "integer", "default": 30},
+            },
+            "required": ["session_id"],
+        },
+        "handler": _do_get_history_session_tool,
     },
 ]
 
