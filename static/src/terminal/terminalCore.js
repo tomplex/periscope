@@ -275,6 +275,29 @@ export function startLiveTerminal(target) {
     // CSS ligatures aren't a runtime xterm setting in the vendored bundle,
     // but the parent container's CSS sets font-feature-settings so JetBrains
     // Mono / SF Mono show their ligatures when present.
+    //
+    // OSC 8 hyperlinks (Claude Code wraps file paths in file:// links).
+    // Without a handler, xterm's fallback confirm()s then window.open()s
+    // the raw URI — in the Tauri shell that escapes to LaunchServices and
+    // the .md opens in whatever app owns the extension (Warp, as it
+    // happens) instead of a periscope preview tab. Route file:// into the
+    // same Cmd+click preview path as regex-matched paths; everything else
+    // through openExternal like plain URLs.
+    linkHandler: {
+      allowNonHttpProtocols: true,
+      activate(event, uri) {
+        if (uri.startsWith("file://")) {
+          if (!event.metaKey && !event.ctrlKey) return;
+          if (!fileLinkCallback) return;
+          let path = uri.slice("file://".length);
+          if (path.startsWith("localhost/")) path = path.slice("localhost".length);
+          try { path = decodeURIComponent(path); } catch (_) {}
+          fileLinkCallback(path);
+          return;
+        }
+        openExternal(uri);
+      },
+    },
   });
   term.open(containerEl);
   term.focus();
