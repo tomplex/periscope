@@ -36,6 +36,19 @@ def test_patch_prefs_ui_detail_mode_by_pid(client, clean_state):
     }
 
 
+def test_patch_prefs_ui_pinned_pids(client, clean_state):
+    # Rail conversation pinning: the star toggle PATCHes pinned_pids; the
+    # field must round-trip or the client's optimistic pin reverts on the
+    # server response.
+    r = client.patch("/api/prefs/ui", json={"pinned_pids": ["abc123", "def456"]})
+    assert r.status_code == 200
+    assert r.json()["ui"]["pinned_pids"] == ["abc123", "def456"]
+    # unpin (empty list) round-trips too — must not be dropped as falsy
+    r = client.patch("/api/prefs/ui", json={"pinned_pids": []})
+    assert r.status_code == 200
+    assert r.json()["ui"]["pinned_pids"] == []
+
+
 def test_patch_prefs_ui_rejects_bogus_detail_mode(client, clean_state):
     r = client.patch(
         "/api/prefs/ui",

@@ -45,6 +45,10 @@ class UIPatch(BaseModel):
     # Per-pane detail-mode toggle (split view): "terminal" | "transcript".
     # Keyed by periscope pid; entries persist until the pid is reaped.
     detail_mode_by_pid: dict[str, str] | None = None
+    # Attention-rail PINNED section: periscope pids in pin order. Unknown
+    # fields are silently dropped by Pydantic, so a missing declaration here
+    # makes the client's optimistic pin revert on the server echo.
+    pinned_pids: list[str] | None = None
 
 
 @router.patch("/api/prefs/ui")
