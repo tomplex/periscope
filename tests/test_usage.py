@@ -65,3 +65,87 @@ def test_compute_claude_usage_returns_zero_for_empty_dir(monkeypatch, tmp_path):
     assert out["messages"] == 0
     assert out["total_tokens"] == 0
     assert out["reset_at"] is None
+
+
+# --- attach_projections: "on track to blow the limit" heuristics ---------
+
+from periscope.usage import attach_projections
+
+NOW = 1_800_000_000
+
+
+def _meter(utilization, resets_at, key="session"):
+    return {key: {"label": "x", "percent": round(utilization),
+                  "utilization": float(utilization), "resets_at": resets_at}}
+
+
+def _no_samples(_meter_key, _since):
+    return []
+
+
+def test_projected_percent_average_pace():
+    """Halfway through the 5h window at 60% -> on pace for 120%."""
+    meters = _meter(60.0, NOW + int(2.5 * 3600))
+    attach_projections(meters, NOW, samples_for=_no_samples)
+    assert meters["session"]["projected_percent"] == 120
+    assert meters["session"]["limit_at"] is None
+
+
+def test_projected_percent_suppressed_early_in_window():
+    """10 minutes into a 5h window (3% elapsed) the ratio explodes — None."""
+    meters = _meter(2.0, NOW + 5 * 3600 - 600)
+    attach_projections(meters, NOW, samples_for=_no_samples)
+    assert meters["session"]["projected_percent"] is None
+
+
+def test_projections_none_without_resets_at():
+    meters = _meter(50.0, None)
+    attach_projections(meters, NOW, samples_for=_no_samples)
+    assert meters["session"]["projected_percent"] is None
+    assert meters["session"]["limit_at"] is None
+
+
+def test_limit_at_from_recent_slope():
+    """40% -> 70% over the last hour; at that rate 100% lands in 1h,
+    before the reset 2.5h out."""
+    meters = _meter(70.0, NOW + int(2.5 * 3600))
+    samples = lambda k, since: [(NOW - 3600, 40.0), (NOW, 70.0)]
+    attach_projections(meters, NOW, samples_for=samples)
+    assert meters["session"]["limit_at"] == NOW + 3600
+
+
+def test_limit_at_none_when_eta_lands_after_reset():
+    """Slow burn: 100% would land after resets_at -> never blows -> None."""
+    meters = _meter(52.0, NOW + int(2.5 * 3600))
+    samples = lambda k, since: [(NOW - 3600, 40.0), (NOW, 52.0)]  # 4h to 100
+    attach_projections(meters, NOW, samples_for=samples)
+    assert meters["session"]["limit_at"] is None
+
+
+def test_limit_at_none_for_flat_or_falling_slope():
+    meters = _meter(50.0, NOW + 4 * 3600)
+    samples = lambda k, since: [(NOW - 3600, 50.0), (NOW, 50.0)]
+    attach_projections(meters, NOW, samples_for=samples)
+    assert meters["session"]["limit_at"] is None
+
+
+def test_limit_at_none_when_samples_span_too_short():
+    meters = _meter(50.0, NOW + 4 * 3600)
+    samples = lambda k, since: [(NOW - 300, 40.0), (NOW, 50.0)]
+    attach_projections(meters, NOW, samples_for=samples)
+    assert meters["session"]["limit_at"] is None
+
+
+def test_limit_at_clamped_to_now_when_already_at_100():
+    meters = _meter(101.0, NOW + 3600)
+    samples = lambda k, since: [(NOW - 3600, 80.0), (NOW, 101.0)]
+    attach_projections(meters, NOW, samples_for=samples)
+    assert meters["session"]["limit_at"] == NOW
+
+
+def test_weekly_meter_uses_seven_day_window():
+    """3.5 days into the week at 80% -> on pace for 160%."""
+    meters = {"week_all": {"label": "x", "percent": 80, "utilization": 80.0,
+                           "resets_at": NOW + int(3.5 * 86400)}}
+    attach_projections(meters, NOW, samples_for=_no_samples)
+    assert meters["week_all"]["projected_percent"] == 160

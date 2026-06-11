@@ -22,6 +22,7 @@ from pathlib import Path
 
 import httpx
 
+from periscope import activity
 from periscope.log import _bg
 
 
@@ -194,9 +195,71 @@ def parse_plan_usage(data: dict) -> dict:
         meters[key] = {
             "label": label,
             "percent": round(float(entry["utilization"])),
+            "utilization": float(entry["utilization"]),
             "resets_at": resets_at,
         }
     return {"available": bool(meters), "meters": meters}
+
+
+# --- "On track to blow the limit" projections ---
+#
+# Two heuristics per meter, attached at fetch time (so at most 5 min stale):
+#
+#   projected_percent — average pace. The meter's window has a known length
+#     and a known end (resets_at), so percent / fraction-of-window-elapsed
+#     is where you land at reset if the whole-window average continues.
+#     Suppressed early in the window (elapsed < 5%) where the ratio explodes.
+#
+#   limit_at — recent burn rate. Slope of the persisted samples over the
+#     last hour (6h for weeklies — 1% of a week is too coarse for an hourly
+#     slope), extrapolated to 100%. Only reported when it lands before
+#     resets_at; a pace that hits 100% after reset never blows the limit.
+
+_METER_WINDOW_S = {
+    "session": 5 * 3600,
+    "week_all": 7 * 86400,
+    "week_opus": 7 * 86400,
+    "week_sonnet": 7 * 86400,
+}
+_SLOPE_WINDOW_S = {
+    "session": 3600,
+    "week_all": 6 * 3600,
+    "week_opus": 6 * 3600,
+    "week_sonnet": 6 * 3600,
+}
+_MIN_ELAPSED_FRAC = 0.05
+_MIN_SLOPE_SPAN_S = 600
+
+
+def attach_projections(meters: dict, now: float,
+                       samples_for=None) -> None:
+    """Annotate each meter dict in place with projected_percent / limit_at.
+    samples_for(meter_key, since) -> [(at, percent)] is injectable for tests;
+    defaults to the persisted usage_samples series."""
+    if samples_for is None:
+        samples_for = activity.usage_samples_since
+    for key, m in meters.items():
+        m["projected_percent"] = None
+        m["limit_at"] = None
+        window = _METER_WINDOW_S.get(key)
+        resets_at = m.get("resets_at")
+        if not window or not resets_at:
+            continue
+        window_start = resets_at - window
+        elapsed = now - window_start
+        if window >= elapsed >= window * _MIN_ELAPSED_FRAC:
+            m["projected_percent"] = round(m["utilization"] * window / elapsed)
+        since = int(max(window_start, now - _SLOPE_WINDOW_S[key]))
+        samples = samples_for(key, since)
+        if len(samples) < 2:
+            continue
+        (t0, p0), (t1, p1) = samples[0], samples[-1]
+        if t1 - t0 < _MIN_SLOPE_SPAN_S or p1 <= p0:
+            continue
+        rate = (p1 - p0) / (t1 - t0)
+        eta = max(now, now + (100.0 - m["utilization"]) / rate)
+        if eta < resets_at:
+            m["limit_at"] = int(eta)
 
 
 def fetch_plan_usage() -> dict | None:
@@ -223,6 +286,13 @@ def _refresh_plan_usage_into_cache() -> None:
     global _plan_cache, _plan_in_flight
     try:
         result = fetch_plan_usage()
+        if result:
+            now = int(time.time())
+            activity.record_usage_samples([
+                (now, k, m["utilization"], m.get("resets_at"))
+                for k, m in result["meters"].items()
+            ])
+            attach_projections(result["meters"], now)
     except Exception:
         result = None
     with _plan_lock:

@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS pane_sessions (
   session_id  TEXT NOT NULL,         -- Claude CLAUDE_CODE_SESSION_ID (JSONL stem)
   updated_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage_samples (
+  at        INTEGER NOT NULL,
+  meter     TEXT NOT NULL,           -- 'session' | 'week_all' | 'week_opus' | 'week_sonnet'
+  percent   REAL NOT NULL,           -- unrounded utilization
+  resets_at INTEGER,
+  PRIMARY KEY (meter, at)
+);
 CREATE TABLE IF NOT EXISTS ui_events (
   id     INTEGER PRIMARY KEY AUTOINCREMENT,
   at     INTEGER NOT NULL,
@@ -214,6 +221,48 @@ def migrate_legacy_pane_sessions() -> int:
     except OSError:
         log.warning("could not remove legacy pane_sessions dir %s", legacy)
     return len(rows)
+
+
+# --- usage_samples: plan-usage time series ------------------------------
+#
+# One row per meter per successful OAuth usage fetch (~5 min cadence, from
+# periscope/usage.py). Stores the unrounded utilization so burn-rate slopes
+# aren't quantized to integer steps. Both prod and a dev instance may write;
+# the (meter, at) PK + INSERT OR IGNORE makes same-second collisions benign.
+
+def record_usage_samples(rows: list[tuple[int, str, float, int | None]]) -> None:
+    """Bulk-insert (at, meter, percent, resets_at) samples."""
+    if not rows:
+        return
+    with _LOCK:
+        c = _conn()
+        c.executemany(
+            "INSERT OR IGNORE INTO usage_samples (at, meter, percent, resets_at) "
+            "VALUES (?,?,?,?)",
+            rows,
+        )
+        c.commit()
+
+
+def usage_samples_since(meter: str, since: int) -> list[tuple[int, float]]:
+    """(at, percent) samples for one meter at/after `since`, oldest first."""
+    with _LOCK:
+        c = _conn()
+        rows = c.execute(
+            "SELECT at, percent FROM usage_samples "
+            "WHERE meter=? AND at>=? ORDER BY at",
+            (meter, since),
+        ).fetchall()
+    return [(int(a), float(p)) for a, p in rows]
+
+
+def prune_usage_samples(max_age_days: int = 14) -> None:
+    """Drop usage_samples older than max_age_days. Called once at startup."""
+    cutoff = int(time.time()) - max_age_days * 86400
+    with _LOCK:
+        c = _conn()
+        c.execute("DELETE FROM usage_samples WHERE at < ?", (cutoff,))
+        c.commit()
 
 
 # --- UI instrumentation ------------------------------------------------

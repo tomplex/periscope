@@ -359,3 +359,38 @@ def test_prune_ui_events_drops_old_keeps_recent():
     c = activity._conn()
     names = [r[0] for r in c.execute("SELECT name FROM ui_events")]
     assert names == ["new"]
+
+
+# --- usage_samples ------------------------------------------------------
+
+def test_usage_samples_roundtrip_oldest_first():
+    activity.record_usage_samples([
+        (200, "session", 42.5, 1000),
+        (100, "session", 40.0, 1000),
+        (150, "week_all", 7.0, 2000),
+    ])
+    out = activity.usage_samples_since("session", 0)
+    assert out == [(100, 40.0), (200, 42.5)]
+
+
+def test_usage_samples_since_filters_by_time():
+    activity.record_usage_samples([(100, "session", 1.0, None),
+                                   (200, "session", 2.0, None)])
+    assert activity.usage_samples_since("session", 150) == [(200, 2.0)]
+
+
+def test_usage_samples_duplicate_at_is_ignored():
+    activity.record_usage_samples([(100, "session", 1.0, None)])
+    activity.record_usage_samples([(100, "session", 9.0, None)])
+    assert activity.usage_samples_since("session", 0) == [(100, 1.0)]
+
+
+def test_prune_usage_samples_drops_old_rows():
+    import time
+    now = int(time.time())
+    activity.record_usage_samples([
+        (now - 20 * 86400, "session", 1.0, None),
+        (now, "session", 2.0, None),
+    ])
+    activity.prune_usage_samples(max_age_days=14)
+    assert activity.usage_samples_since("session", 0) == [(now, 2.0)]

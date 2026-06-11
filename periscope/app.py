@@ -42,6 +42,7 @@ async def lifespan(_app: FastAPI):
     from periscope.panes import list_windows
     _bg("activity-prune", activity.prune)
     _bg("ui-events-prune", activity.prune_ui_events)
+    _bg("usage-samples-prune", activity.prune_usage_samples)
 
     def _pane_sessions_housekeeping() -> None:
         imported = activity.migrate_legacy_pane_sessions()
