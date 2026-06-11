@@ -173,3 +173,50 @@ def build_reconcile_frame(snap: GridSnapshot) -> bytes:
     parts.append(b"\x1b[%d;%dH" % (snap.cursor_y + 1, snap.cursor_x + 1))
     parts.append(b"\x1b[?25h" if snap.cursor_visible else b"\x1b[?25l")
     return b"".join(parts)
+
+
+class ReconcileTimer:
+    """Quiesce/max-interval scheduling for one pane's reconciles.
+
+    Armed only by output or an explicit request — a fully idle pane never
+    reconciles. `now` is injectable (fake-clock unit tests); scheduling
+    goes through `_arm`, a single patchable seam over loop.call_later.
+    `fire` must be sync: it only *initiates* the capture commands — the
+    frame itself is built later, inside the reader task (ordering rule).
+    """
+
+    def __init__(self, fire: Callable[[], None], *,
+                 now: Callable[[], float] | None = None) -> None:
+        self._fire = fire
+        self._now = now
+        self._handle: asyncio.TimerHandle | None = None
+        self._streaming_since: float | None = None
+
+    def _time(self) -> float:
+        return self._now() if self._now else asyncio.get_running_loop().time()
+
+    def note_output(self) -> None:
+        t = self._time()
+        if self._streaming_since is None:
+            self._streaming_since = t
+        deadline = min(t + QUIESCE_S, self._streaming_since + MAX_INTERVAL_S)
+        self._arm(max(0.0, deadline - t))
+
+    def note_reconciled(self) -> None:
+        self._streaming_since = None
+
+    def request(self) -> None:
+        self._arm(0.0)
+
+    def cancel(self) -> None:
+        if self._handle is not None:
+            self._handle.cancel()
+            self._handle = None
+
+    def _arm(self, delay: float) -> None:
+        self.cancel()
+        self._handle = asyncio.get_running_loop().call_later(delay, self._fired)
+
+    def _fired(self) -> None:
+        self._handle = None
+        self._fire()

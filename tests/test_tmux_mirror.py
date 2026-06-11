@@ -12,6 +12,7 @@ from periscope.tmux_mirror import (
     ControlParser, Output, Reply, ReplyError, LayoutChange, Exit,
     decode_octal,
     GridSnapshot, build_reconcile_frame, snapshot_from_replies,
+    ReconcileTimer, QUIESCE_S, MAX_INTERVAL_S,
 )
 
 
@@ -149,3 +150,46 @@ def test_snapshot_from_replies():
     assert (snap.cursor_x, snap.cursor_y) == (3, 1)
     assert snap.alt_on is False
     assert snap.cursor_visible is True
+
+
+# --- ReconcileTimer ---
+# The deadline math is the unit under test; _arm is patched to record the
+# computed delay so no event loop is needed.
+
+def _timer_with_recorder(t0=0.0):
+    clock = [t0]
+    delays = []
+    timer = ReconcileTimer(fire=lambda: None, now=lambda: clock[0])
+    timer._arm = lambda d: delays.append(d)
+    return timer, clock, delays
+
+
+def test_quiesce_rearms_on_each_output():
+    timer, clock, delays = _timer_with_recorder()
+    timer.note_output()
+    clock[0] = 0.10
+    timer.note_output()
+    assert delays == [pytest.approx(QUIESCE_S), pytest.approx(QUIESCE_S)]
+
+
+def test_max_interval_caps_sustained_streaming():
+    timer, clock, delays = _timer_with_recorder()
+    timer.note_output()                  # streaming_since = 0.0
+    clock[0] = 0.95
+    timer.note_output()                  # quiesce→1.10 capped to max→1.0
+    assert delays[-1] == pytest.approx(0.05)
+
+
+def test_reconcile_resets_streaming_window():
+    timer, clock, delays = _timer_with_recorder()
+    timer.note_output()
+    clock[0] = 0.95
+    timer.note_reconciled()              # window resets
+    timer.note_output()                  # streaming_since = 0.95 → plain quiesce
+    assert delays[-1] == pytest.approx(QUIESCE_S)
+
+
+def test_request_fires_immediately():
+    timer, clock, delays = _timer_with_recorder()
+    timer.request()
+    assert delays == [0.0]
