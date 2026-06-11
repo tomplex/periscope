@@ -281,3 +281,16 @@ def test_get_history_session_tool_explicit_offset_and_clamp(mocker):
     body = _body(_do_get_history_session_tool(
         "%5", {"session_id": "abc123", "offset": -50, "limit": 5}))
     assert body["messages"][0]["text"] == "msg 0"
+
+
+def test_get_history_session_tool_caps_notable_cmds(mocker):
+    from periscope.channels import _do_get_history_session_tool
+    data = _session_data(5)
+    data["notable_cmds"] = ["x" * 500] * 25
+    mocker.patch("history.search.get_session", return_value=data)
+
+    body = _body(_do_get_history_session_tool("%5", {"session_id": "abc123"}))
+
+    assert len(body["notable_cmds"]) == 10
+    assert all(len(c) < 200 and c.endswith("…[truncated]")
+               for c in body["notable_cmds"])

@@ -524,6 +524,12 @@ def _do_get_history_session_tool(pane: str, arguments: dict):
     start = offset if offset >= 0 else max(0, total + offset)
     meta = {k: v for k, v in data.items()
             if k not in ("messages", "jsonl_path")}
+    # notable_cmds entries are full multi-line scripts — live testing showed
+    # them dominating the payload (~25 scripts dwarfed the 30-message slice).
+    meta["notable_cmds"] = [
+        c if len(c) <= 150 else c[:150] + "…[truncated]"
+        for c in (meta.get("notable_cmds") or [])[:10]
+    ]
     body = {
         "ok": True,
         **meta,
