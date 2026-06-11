@@ -87,8 +87,10 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         log.info("periscope shutting down (pid=%d)", os.getpid())
-        from periscope import tmux_input
+        from periscope import tmux_input, tmux_mirror
         await tmux_input.shutdown()
+        await tmux_mirror.shutdown()   # control clients must not leak
+                                       # across dev reloads
         if mcp_task is not None:
             mcp_task.cancel()
         lgtm_task.cancel()
