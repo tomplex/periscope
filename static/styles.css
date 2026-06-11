@@ -163,6 +163,10 @@ html, body {
   margin-left: -2px;
 }
 .usage-item-proj.blow { color: var(--s-danger); }
+.usage-item-hot { cursor: help; }
+/* Pane card flame: this pane carries >=40% of the current token burn while
+   the session meter is hot. */
+.rail-burn { flex: 0 0 auto; font-size: 10px; cursor: help; }
 
 /* Fallback single-pill (used when only the JSONL estimator has data). */
 .usage.usage-fallback {

@@ -48,7 +48,9 @@ function fmtReset(epochSec) {
 function paceLines(m) {
   const lines = [];
   if (m.projected_percent != null)
-    lines.push(`on pace for ${m.projected_percent}% at reset`);
+    lines.push(`window average → ${m.projected_percent}% at reset`);
+  if (m.projected_recent != null)
+    lines.push(`current burn → ${m.projected_recent}% at reset`);
   if (m.limit_at) {
     const diff = m.limit_at - Math.floor(Date.now() / 1000);
     const dur = diff < 3600
@@ -56,12 +58,26 @@ function paceLines(m) {
       : `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`;
     lines.push(`at current burn, limit in ~${dur} (${fmtClock(m.limit_at)})`);
   }
+  if (m.hot) lines.push("🔥 burning ≥2× the even-burn pace for this window");
   return lines;
 }
 
-function MeterBar({ label, pct, proj, resets, pace }) {
+// "→102%" when the two heuristics agree (within 10 points), "→83–160%" when
+// bursty usage makes them disagree. Red = on track to blow by either one.
+function projText(m) {
+  const cands = [m.projected_percent, m.projected_recent].filter((v) => v != null);
+  if (!cands.length) return null;
+  const lo = Math.min(...cands);
+  const hi = Math.max(...cands);
+  if (hi <= m.percent) return null; // adds nothing over the current bar
+  return { text: hi - lo > 10 ? `→${lo}–${hi}%` : `→${hi}%`, blow: hi >= 100 };
+}
+
+function MeterBar({ label, m, resets, pace }) {
+  const pct = m.percent;
   const tone = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "ok";
   const title = [`${label} — ${pct}% used. ${resets || ""}`, ...pace].join("\n");
+  const proj = projText(m);
   return (
     <div class="usage-item" title={title}>
       <span class="usage-item-label">{label}</span>
@@ -69,9 +85,10 @@ function MeterBar({ label, pct, proj, resets, pace }) {
         <span class={`usage-item-fill ${tone}`} style={`width:${pct}%`}></span>
       </span>
       <b>{pct}%</b>
-      {proj != null && proj > pct && (
-        <span class={`usage-item-proj${proj >= 100 ? " blow" : ""}`}>→{proj}%</span>
+      {proj && (
+        <span class={`usage-item-proj${proj.blow ? " blow" : ""}`}>{proj.text}</span>
       )}
+      {m.hot && <span class="usage-item-hot">🔥</span>}
     </div>
   );
 }
@@ -107,8 +124,7 @@ export function UsagePill() {
           <MeterBar
             key={k}
             label={compactLabels[k]}
-            pct={m[k].percent}
-            proj={m[k].projected_percent}
+            m={m[k]}
             resets={fmtReset(m[k].resets_at)}
             pace={paceLines(m[k])}
           />

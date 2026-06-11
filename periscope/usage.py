@@ -210,10 +210,16 @@ def parse_plan_usage(data: dict) -> dict:
 #     is where you land at reset if the whole-window average continues.
 #     Suppressed early in the window (elapsed < 5%) where the ratio explodes.
 #
-#   limit_at — recent burn rate. Slope of the persisted samples over the
-#     last hour (6h for weeklies — 1% of a week is too coarse for an hourly
-#     slope), extrapolated to 100%. Only reported when it lands before
-#     resets_at; a pace that hits 100% after reset never blows the limit.
+#   projected_recent / limit_at — recent burn rate. Slope of the persisted
+#     samples over the last hour (6h for weeklies — 1% of a week is too
+#     coarse for an hourly slope). projected_recent extrapolates that rate
+#     to reset; limit_at is when it crosses 100%, reported only when that
+#     lands before resets_at (a pace that hits 100% after reset never blows
+#     the limit). Usage is bursty, so avg and recent disagree often — the
+#     frontend renders both as a range instead of pretending one number.
+#
+#   hot — recent rate >= 2x the even-burn rate for the window (the pace
+#     that would consume exactly 100% by reset). The burst signal: 🔥.
 
 _METER_WINDOW_S = {
     "session": 5 * 3600,
@@ -240,7 +246,9 @@ def attach_projections(meters: dict, now: float,
         samples_for = activity.usage_samples_since
     for key, m in meters.items():
         m["projected_percent"] = None
+        m["projected_recent"] = None
         m["limit_at"] = None
+        m["hot"] = False
         window = _METER_WINDOW_S.get(key)
         resets_at = m.get("resets_at")
         if not window or not resets_at:
@@ -257,6 +265,8 @@ def attach_projections(meters: dict, now: float,
         if t1 - t0 < _MIN_SLOPE_SPAN_S or p1 <= p0:
             continue
         rate = (p1 - p0) / (t1 - t0)
+        m["projected_recent"] = round(m["utilization"] + rate * (resets_at - now))
+        m["hot"] = rate >= 2 * 100.0 / window
         eta = max(now, now + (100.0 - m["utilization"]) / rate)
         if eta < resets_at:
             m["limit_at"] = int(eta)
@@ -321,3 +331,113 @@ def cached_plan_usage() -> dict | None:
             _plan_in_flight = True
             _bg("plan-usage", _refresh_plan_usage_into_cache)
         return data
+
+
+# --- Per-pane burn attribution ---
+#
+# Which pane is eating the quota? Each Claude pane maps to its session JSONL
+# (pane_sessions table, via periscope.turns); summing the usage blocks in the
+# last 30 minutes gives a per-pane burn rate. Tokens are weighted to roughly
+# match how the plan meters count them — output dominates, cache reads are
+# nearly free. The absolute scale is meaningless (Anthropic's weighting is
+# opaque); only the per-pane SHARES are used, so weighting errors mostly
+# cancel.
+
+PANE_BURN_REFRESH_S = 60.0
+_PANE_BURN_WINDOW_S = 1800
+_BURN_TAIL_BYTES = 4_000_000
+_HOT_PANE_SHARE = 0.4
+_W_INPUT, _W_CACHE_W, _W_OUT, _W_CACHE_R = 1.0, 1.25, 5.0, 0.1
+
+_burn_cache: tuple[float, dict[str, float]] = (0.0, {})
+_burn_in_flight = False
+_burn_lock = threading.Lock()
+
+
+def _weighted_burn_from_jsonl(path: Path, cutoff: float) -> float:
+    """Weighted token total from usage records newer than cutoff. Bounded
+    tail read — transcripts can be tens of MB and 4MB comfortably covers a
+    heavy 30 minutes."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > _BURN_TAIL_BYTES:
+                f.seek(size - _BURN_TAIL_BYTES)
+                f.readline()  # discard the partial line
+            data = f.read()
+    except OSError:
+        return 0.0
+    total = 0.0
+    for line in data.splitlines():
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        ts_str = rec.get("timestamp")
+        if not isinstance(ts_str, str):
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if ts < cutoff:
+            continue
+        u = ((rec.get("message") or {}).get("usage")) or {}
+        if not u:
+            continue
+        total += (_W_INPUT * int(u.get("input_tokens") or 0)
+                  + _W_CACHE_W * int(u.get("cache_creation_input_tokens") or 0)
+                  + _W_OUT * int(u.get("output_tokens") or 0)
+                  + _W_CACHE_R * int(u.get("cache_read_input_tokens") or 0))
+    return total
+
+
+def _refresh_burn_into_cache(pane_ids: list[str]) -> None:
+    global _burn_cache, _burn_in_flight
+    from periscope import turns
+    rates: dict[str, float] = {}
+    try:
+        cutoff = time.time() - _PANE_BURN_WINDOW_S
+        for pid in pane_ids:
+            sid = turns.session_id_for_pane(pid)
+            jsonl = turns._jsonl_for_session(sid) if sid else None
+            if jsonl:
+                rates[pid] = _weighted_burn_from_jsonl(jsonl, cutoff) / (
+                    _PANE_BURN_WINDOW_S / 60.0)
+    finally:
+        with _burn_lock:
+            _burn_cache = (time.time(), rates)
+            _burn_in_flight = False
+
+
+def pane_burn_rates(pane_ids: list[str]) -> dict[str, float]:
+    """Stale-while-revalidate: weighted tokens/min per pane over the last
+    30 minutes. Serves the last computed rates immediately; refreshes in a
+    background thread when older than PANE_BURN_REFRESH_S."""
+    global _burn_in_flight
+    now = time.time()
+    with _burn_lock:
+        ts, rates = _burn_cache
+        if now - ts >= PANE_BURN_REFRESH_S and not _burn_in_flight:
+            _burn_in_flight = True
+            _bg("pane-burn", _refresh_burn_into_cache, list(pane_ids))
+        return rates
+
+
+def annotate_hot_panes(views: list[dict]) -> None:
+    """Stamp burn_hot/burn_wtpm on the pane views eating the quota: only
+    while the session meter is hot, and only on panes carrying >=40% of the
+    current weighted burn across Claude panes (so at most two flames)."""
+    plan = cached_plan_usage() or {}
+    if not ((plan.get("meters") or {}).get("session") or {}).get("hot"):
+        return
+    ids = [v["pane_id"] for v in views if v.get("is_claude") and v.get("pane_id")]
+    rates = pane_burn_rates(ids)
+    total = sum(rates.get(i, 0.0) for i in ids)
+    if total <= 0:
+        return
+    for v in views:
+        r = rates.get(v.get("pane_id") or "", 0.0)
+        if r / total >= _HOT_PANE_SHARE:
+            v["burn_hot"] = True
+            v["burn_wtpm"] = round(r)

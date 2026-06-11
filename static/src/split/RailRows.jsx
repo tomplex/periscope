@@ -120,6 +120,12 @@ export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, drag
         ? <span class="rail-icon icon-claude">✻</span>
         : <span class="rail-icon icon-shell">$</span>}
       <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
+      {w.burn_hot && (
+        <span
+          class="rail-burn"
+          title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
+        >🔥</span>
+      )}
       <button
         class={`rail-pin${pinned ? " pinned" : ""}`}
         title={pinned ? "unpin" : "pin"}
