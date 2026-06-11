@@ -69,7 +69,7 @@ function MeterBar({ label, pct, proj, resets, pace }) {
         <span class={`usage-item-fill ${tone}`} style={`width:${pct}%`}></span>
       </span>
       <b>{pct}%</b>
-      {proj != null && (
+      {proj != null && proj > pct && (
         <span class={`usage-item-proj${proj >= 100 ? " blow" : ""}`}>→{proj}%</span>
       )}
     </div>
