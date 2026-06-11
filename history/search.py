@@ -276,6 +276,79 @@ def messages_from_jsonl(jsonl_path: str) -> list[dict]:
     return messages
 
 
+# Housekeeping tools with zero retrieval value in a past-session transcript.
+_COMPACT_SKIP_TOOLS = frozenset({
+    "Skill", "ToolSearch", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList",
+    "TodoWrite",
+})
+
+# The one input key that summarizes a call for known tools; unknown tools
+# fall back to their first string input value.
+_COMPACT_SUMMARY_KEYS = {
+    "Bash": "command",
+    "Read": "file_path",
+    "Edit": "file_path",
+    "Write": "file_path",
+    "NotebookEdit": "notebook_path",
+    "Agent": "description",
+    "Task": "description",
+    "Grep": "pattern",
+    "Glob": "pattern",
+    "WebFetch": "url",
+    "WebSearch": "query",
+}
+
+_COMPACT_TEXT_CAP = 2000
+_COMPACT_TOOL_CAP = 200
+
+
+def _cap(s: str, cap: int) -> str:
+    return s if len(s) <= cap else s[:cap] + "…[truncated]"
+
+
+def compact_messages(messages: list[dict]) -> list[dict]:
+    """Reshape `messages_from_jsonl` output for LLM consumption (the MCP
+    history tools). The UI shape inlines full tool results — measured at
+    ~250k chars for one real session, dominated by Agent/Read results — so
+    an MCP caller gets text plus one-line tool summaries instead. Bash
+    results keep a 200-char head ("3 passed" style evidence); all other
+    results are dropped. Messages left with no text and no tools vanish."""
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "system":
+            out.append({"role": "system", "kind": m.get("kind"),
+                        "ts_ms": m.get("ts_ms")})
+            continue
+        if role == "user":
+            out.append({"role": "user", "ts_ms": m.get("ts_ms"),
+                        "text": _cap(m.get("text") or "", _COMPACT_TEXT_CAP)})
+            continue
+        tools: list[dict] = []
+        for tu in m.get("tool_uses") or []:
+            name = tu.get("name") or "?"
+            if name in _COMPACT_SKIP_TOOLS:
+                continue
+            inp = tu.get("input") or {}
+            summary = inp.get(_COMPACT_SUMMARY_KEYS.get(name, ""))
+            if not isinstance(summary, str):
+                summary = next(
+                    (v for v in inp.values() if isinstance(v, str)), "")
+            entry = {"name": name, "summary": _cap(summary, _COMPACT_TOOL_CAP)}
+            if name == "Bash" and isinstance(tu.get("result"), str):
+                entry["result"] = _cap(tu["result"], _COMPACT_TOOL_CAP)
+            tools.append(entry)
+        text = m.get("text") or ""
+        if not text and not tools:
+            continue
+        msg: dict = {"role": "assistant", "ts_ms": m.get("ts_ms"),
+                     "text": _cap(text, _COMPACT_TEXT_CAP)}
+        if tools:
+            msg["tools"] = tools
+        out.append(msg)
+    return out
+
+
 def get_session(session_id: str, *,
                 db_path: Path | str | None = None) -> dict | None:
     """Return the full session row + parsed conversation messages.

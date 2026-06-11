@@ -233,3 +233,82 @@ def test_messages_from_jsonl_pairs_filters_and_stamps_uuid(fixture_dir):
     # deterministic: a second parse yields the same uuids in the same order
     again = [m["uuid"] for m in messages_from_jsonl(str(fixture_dir / "turns_session.jsonl"))]
     assert again == ["u1", "a1", "a2", "c1", "u3"]
+
+
+# --- compact_messages (MCP shaping) ---
+
+def _assistant(text="", tool_uses=None, ts=1000):
+    return {"role": "assistant", "uuid": "a", "ts_ms": ts,
+            "text": text, "tool_uses": tool_uses or []}
+
+
+def test_compact_messages_keeps_text_and_summarizes_tools():
+    from history.search import compact_messages
+    msgs = compact_messages([
+        {"role": "user", "uuid": "u", "ts_ms": 1, "text": "fix the bug"},
+        _assistant("on it", [
+            {"id": "t1", "name": "Bash", "input": {"command": "pytest -q"},
+             "result": "3 passed"},
+            {"id": "t2", "name": "Read", "input": {"file_path": "/a/b.py"},
+             "result": "x" * 9000},
+        ]),
+    ])
+    assert msgs[0] == {"role": "user", "ts_ms": 1, "text": "fix the bug"}
+    a = msgs[1]
+    assert a["text"] == "on it"
+    assert a["tools"][0] == {"name": "Bash", "summary": "pytest -q",
+                             "result": "3 passed"}
+    # non-Bash results are dropped entirely, summary comes from file_path
+    assert a["tools"][1] == {"name": "Read", "summary": "/a/b.py"}
+
+
+def test_compact_messages_skips_housekeeping_tools_and_empty_messages():
+    from history.search import compact_messages
+    msgs = compact_messages([
+        _assistant("", [
+            {"id": "t1", "name": "Skill", "input": {"skill": "tdd"}, "result": "ok"},
+            {"id": "t2", "name": "TaskUpdate", "input": {"taskId": "1"}, "result": ""},
+            {"id": "t3", "name": "ToolSearch", "input": {"query": "x"}, "result": ""},
+            {"id": "t4", "name": "TodoWrite", "input": {}, "result": ""},
+        ]),
+        _assistant("real text", [
+            {"id": "t5", "name": "Skill", "input": {"skill": "tdd"}, "result": "ok"},
+        ]),
+    ])
+    # first message had nothing left -> dropped wholesale
+    assert len(msgs) == 1
+    assert msgs[0]["text"] == "real text"
+    assert "tools" not in msgs[0]
+
+
+def test_compact_messages_truncates_long_fields():
+    from history.search import compact_messages
+    msgs = compact_messages([
+        {"role": "user", "uuid": "u", "ts_ms": 1, "text": "y" * 5000},
+        _assistant("", [
+            {"id": "t1", "name": "Bash", "input": {"command": "z" * 900},
+             "result": "r" * 900},
+        ]),
+    ])
+    assert len(msgs[0]["text"]) < 2100 and msgs[0]["text"].endswith("…[truncated]")
+    tool = msgs[1]["tools"][0]
+    assert len(tool["summary"]) < 300 and tool["summary"].endswith("…[truncated]")
+    assert len(tool["result"]) < 300 and tool["result"].endswith("…[truncated]")
+
+
+def test_compact_messages_summary_fallback_and_compact_divider():
+    from history.search import compact_messages
+    msgs = compact_messages([
+        {"role": "system", "kind": "compact", "uuid": "c", "ts_ms": 5},
+        _assistant("", [
+            # unknown tool: summary falls back to first string input value
+            {"id": "t1", "name": "mcp__foo__bar",
+             "input": {"n": 3, "query": "deploy logs"}, "result": "stuff"},
+            # in-flight Bash (result None) must not emit a result key
+            {"id": "t2", "name": "Bash", "input": {"command": "ls"}, "result": None},
+        ]),
+    ])
+    assert msgs[0] == {"role": "system", "kind": "compact", "ts_ms": 5}
+    tools = msgs[1]["tools"]
+    assert tools[0] == {"name": "mcp__foo__bar", "summary": "deploy logs"}
+    assert tools[1] == {"name": "Bash", "summary": "ls"}
