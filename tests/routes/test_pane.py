@@ -136,3 +136,20 @@ def test_tabs_open_rejects_blank_fields(client):
     assert r.status_code == 400
     r = client.post("/api/pane/tabs/open", json={"pid": "p1", "path": ""})
     assert r.status_code == 400
+
+
+def test_rename_stamps_narrator_cooldown(client, mocker):
+    def fake_tmux(*args):
+        if args[0] == "display-message":
+            return "%5\n"
+        return ""
+    mocker.patch("periscope.routes.pane.tmux", side_effect=fake_tmux)
+    stamp = mocker.patch("periscope.routes.pane.stamp_pane_rename")
+
+    r = client.post("/api/rename?session=main&index=0", json={"name": "my-name"})
+    assert r.status_code == 200
+    stamp.assert_called_once()
+    args, kwargs = stamp.call_args
+    assert args[0] == "%5"
+    assert kwargs["name"] == "my-name"
+    assert isinstance(kwargs["at"], int)

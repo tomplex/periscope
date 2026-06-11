@@ -7,9 +7,11 @@ claude_complete, then apply the returned names via tmux rename-window.
 
 import json
 import re
+import time
 
 from fastapi import APIRouter, HTTPException
 
+from periscope.activity import stamp_pane_rename
 from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.panes import list_windows, parse_pane
 from periscope.pids import _attach_git_then_resolve_pids
@@ -89,6 +91,12 @@ def auto_rename_session(session: str):
             continue
         target = f"{session}:{index}"
         tmux("rename-window", "-t", target, new_name)
+        # AI renames start the narrator cooldown too — same contract as a
+        # manual rename. pane_id comes from the list_windows dicts.
+        pane_id = next((x.get("pane_id") for x in target_windows
+                        if x["index"] == index), None)
+        if pane_id:
+            stamp_pane_rename(pane_id, name=new_name, at=int(time.time()))
         applied.append({"index": index, "old": old, "new": new_name})
 
     return {"ok": True, "applied": applied, "session": session}
@@ -153,4 +161,9 @@ def auto_rename_window(session: str, index: int):
     if new_name == current_name:
         return {"ok": True, "applied": False, "old": current_name, "new": current_name, "pid": pid}
     tmux("rename-window", "-t", target, new_name)
+    # Same cooldown contract as /api/rename; this route has no list_windows
+    # dict, so resolve the pane id the same way that route does.
+    pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
+    if pane_id:
+        stamp_pane_rename(pane_id, name=new_name, at=int(time.time()))
     return {"ok": True, "applied": True, "old": current_name, "new": new_name, "pid": pid}
