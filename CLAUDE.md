@@ -119,7 +119,7 @@ One file per subsystem:
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
-`tests/routes/test_<route>.py` per route). 353 pytest tests on a
+`tests/routes/test_<route>.py` per route). 495 pytest tests on a
 clean run. Run with `uv run pytest -q`.
 
 Five modules deviate from the one-test-per-module mirror.
