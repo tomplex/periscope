@@ -6,7 +6,7 @@ import time as _time
 
 import pytest
 
-from periscope import activity, config, narrator
+from periscope import activity, narrator
 from periscope.activity import PaneStatusRow
 
 
@@ -237,22 +237,13 @@ def test_disabled_without_key_logs_once(monkeypatch, caplog):
 
 # ---- tick (impure shell) ------------------------------------------------
 #
-# Real SQLite via the fresh_db pattern; only the IO boundaries are
-# monkeypatched (claude_complete / tmux / transcript_summary_from_path /
-# git caches) — all patched on the narrator namespace, where they're bound.
+# Real SQLite via the shared fresh_activity_db fixture; only the IO
+# boundaries are monkeypatched (claude_complete / tmux /
+# transcript_summary_from_path / git caches) — all patched on the narrator
+# namespace, where they're bound.
 
 @pytest.fixture
-def fresh_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "t.db")
-    activity._CONN = None
-    yield
-    if activity._CONN is not None:
-        activity._CONN.close()
-        activity._CONN = None
-
-
-@pytest.fixture
-def tick_env(fresh_db, tmp_path, monkeypatch):
+def tick_env(fresh_activity_db, tmp_path, monkeypatch):
     """A projects dir with one transcript, a pane mapped to it, and every
     IO boundary stubbed. Returns a dict of knobs the tests adjust."""
     projects = tmp_path / "projects"

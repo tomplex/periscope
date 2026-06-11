@@ -1,20 +1,12 @@
 """Tests for periscope/activity.py."""
 import pytest
 
-from periscope import config, activity
+from periscope import activity
 
 
 @pytest.fixture(autouse=True)
-def fresh_db(tmp_path, monkeypatch):
-    """Every test gets an isolated periscope.db and empty caches."""
-    monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "t.db")
-    activity._CONN = None
-    activity._git_cache.clear()
-    activity._git_fetching.clear()
-    yield
-    if activity._CONN is not None:
-        activity._CONN.close()
-        activity._CONN = None
+def fresh_db(fresh_activity_db):
+    """Every test here hits the DB — make the shared isolation autouse."""
 
 
 def test_record_then_events_for_roundtrips():

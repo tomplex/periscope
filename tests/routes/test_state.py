@@ -132,20 +132,6 @@ def test_state_isolates_one_pane_build_failure(client, mocker, clean_state):
     assert views[1]["state"] == "idle"
 
 
-import pytest
-
-
-@pytest.fixture
-def fresh_activity_db(tmp_path, monkeypatch):
-    from periscope import activity, config
-    monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "t.db")
-    activity._CONN = None
-    yield activity
-    if activity._CONN is not None:
-        activity._CONN.close()
-        activity._CONN = None
-
-
 def test_state_merges_narrator_status_lines(client, mocker, clean_state,
                                             fresh_activity_db):
     activity = fresh_activity_db

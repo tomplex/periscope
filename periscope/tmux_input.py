@@ -25,6 +25,11 @@ from periscope.config import INPUT_CTL_SESSION
 from periscope.log import log, _task
 from periscope.tmux import deliver_input, _SEND_KEYS_H_MAX
 
+# Test seam (same shape as tmux_mirror._TMUX): the integration test points
+# this at a dedicated `-L` socket so the control client never touches the
+# default server, where prod periscope's live INPUT_CTL_SESSION lives.
+_TMUX: tuple[str, ...] = ("tmux",)
+
 _proc: asyncio.subprocess.Process | None = None
 _drain: asyncio.Task | None = None
 _lock = asyncio.Lock()
@@ -47,13 +52,13 @@ async def _spawn() -> asyncio.subprocess.Process:
     # creates so a respawn after a tmux restart reuses it; detached, an idle
     # shell, shares no windows with user panes.
     create = await asyncio.create_subprocess_exec(
-        "tmux", "new-session", "-d", "-A", "-s", INPUT_CTL_SESSION,
+        *_TMUX, "new-session", "-d", "-A", "-s", INPUT_CTL_SESSION,
         "-x", "80", "-y", "24",
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
     )
     await create.wait()
     proc = await asyncio.create_subprocess_exec(
-        "tmux", "-C", "attach", "-t", INPUT_CTL_SESSION,
+        *_TMUX, "-C", "attach", "-t", INPUT_CTL_SESSION,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,

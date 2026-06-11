@@ -2,8 +2,6 @@
 pane_session_hook producer that records the pane -> session mapping."""
 import json
 
-import pytest
-
 import periscope.activity as activity
 import periscope.turns as turns
 
@@ -22,19 +20,6 @@ def _seed_projects(tmp_path, monkeypatch, cwd):
     enc.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)
     return enc
-
-
-@pytest.fixture
-def fresh_activity_db(tmp_path, monkeypatch):
-    """Point activity's lazy connection at a tmp_path/periscope.db, ensuring
-    every test gets an empty pane_sessions table without touching the user's
-    real ~/.config/periscope/periscope.db."""
-    monkeypatch.setattr(activity.config, "ACTIVITY_DB", tmp_path / "periscope.db")
-    monkeypatch.setattr(activity, "_CONN", None)
-    yield
-    if activity._CONN is not None:
-        activity._CONN.close()
-        activity._CONN = None
 
 
 # ── session_id_for_pane reads pane_sessions ──────────────────────────────

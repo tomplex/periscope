@@ -119,3 +119,4 @@ def test_auto_rename_window_stamps_cooldown(client, mocker):
     stamp.assert_called_once()
     assert stamp.call_args.args[0] == "%9"
     assert stamp.call_args.kwargs["name"] == "newname"
+    assert isinstance(stamp.call_args.kwargs["at"], int)
