@@ -11,6 +11,7 @@ import pytest
 from periscope.tmux_mirror import (
     ControlParser, Output, Reply, ReplyError, LayoutChange, Exit,
     decode_octal,
+    GridSnapshot, build_reconcile_frame, snapshot_from_replies,
 )
 
 
@@ -90,3 +91,61 @@ def test_decode_split_multibyte_concatenates():
     raw = "🐍".encode()
     half = decode_octal(raw[:2]) + decode_octal(raw[2:])
     assert half.decode() == "🐍"
+
+
+# --- frame builder ---
+
+def _snap(**kw):
+    base = dict(rows=(b"row1", b"row2"), height=2, cursor_x=3, cursor_y=1,
+                alt_on=False, cursor_visible=True)
+    base.update(kw)
+    from periscope.tmux_mirror import GridSnapshot
+    return GridSnapshot(**base)
+
+
+def test_frame_normal_screen_exact_bytes():
+    frame = build_reconcile_frame(_snap())
+    assert frame == (
+        b"\x1b[?1049l"                      # heal stuck-in-alt; no-op if normal
+        b"\x1b[1;1Hrow1\x1b[0m\x1b[K"
+        b"\x1b[2;1Hrow2\x1b[0m\x1b[K"
+        b"\x1b[2;4H"                        # cursor 0-indexed (3,1) → 1-indexed (4,2)
+        b"\x1b[?25h"
+    )
+
+
+def test_frame_normal_screen_never_clears():
+    # 2J would be visually harmless but J-class erases are banned on the
+    # normal screen as a guard rail: scrollback must not be touched.
+    frame = build_reconcile_frame(_snap())
+    assert b"\x1b[2J" not in frame
+
+
+def test_frame_alt_screen_prefix():
+    frame = build_reconcile_frame(_snap(alt_on=True))
+    assert frame.startswith(b"\x1b[?1049h")
+    assert b"\x1b[?1049l" not in frame
+
+
+def test_frame_pads_short_capture_to_height():
+    # The row loop is the coverage mechanism (xterm.js treats 1049h
+    # re-entry as a no-op — it clears nothing). Every row to height must
+    # be written even if capture returned fewer lines.
+    frame = build_reconcile_frame(_snap(rows=(b"only",), height=3))
+    assert b"\x1b[2;1H\x1b[0m\x1b[K" in frame
+    assert b"\x1b[3;1H\x1b[0m\x1b[K" in frame
+
+
+def test_frame_cursor_hidden():
+    assert build_reconcile_frame(_snap(cursor_visible=False)).endswith(b"\x1b[?25l")
+
+
+def test_snapshot_from_replies():
+    cap = Reply(body=(b"r1", b"r2"))
+    disp = Reply(body=(b"2|3|1|0|1",))     # height|cx|cy|alt|cursor_flag
+    snap = snapshot_from_replies(cap, disp)
+    assert snap.rows == (b"r1", b"r2")
+    assert snap.height == 2
+    assert (snap.cursor_x, snap.cursor_y) == (3, 1)
+    assert snap.alt_on is False
+    assert snap.cursor_visible is True

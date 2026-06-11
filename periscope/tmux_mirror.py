@@ -125,3 +125,51 @@ def decode_octal(raw: bytes) -> bytes:
         out.append(c)
         i += 1
     return bytes(out)
+
+
+@dataclass(frozen=True, kw_only=True)
+class GridSnapshot:
+    rows: tuple[bytes, ...]   # capture-pane -e body lines (raw — reply
+                              # bodies are NOT octal-escaped, verified)
+    height: int
+    cursor_x: int             # 0-indexed, as tmux reports
+    cursor_y: int
+    alt_on: bool
+    cursor_visible: bool
+
+
+# Queried per reconcile; pane_height is included so the frame's row loop
+# tracks resizes without trusting a stale subscribe-time value.
+DISPLAY_FMT = "#{pane_height}|#{cursor_x}|#{cursor_y}|#{alternate_on}|#{cursor_flag}"
+
+
+def snapshot_from_replies(capture: Reply, display: Reply) -> GridSnapshot:
+    height, cx, cy, alt, cvis = display.body[0].decode().split("|")
+    return GridSnapshot(
+        rows=capture.body,
+        height=int(height),
+        cursor_x=int(cx),
+        cursor_y=int(cy),
+        alt_on=alt == "1",
+        cursor_visible=cvis == "1",
+    )
+
+
+def build_reconcile_frame(snap: GridSnapshot) -> bytes:
+    """One blindly-idempotent repaint — correct regardless of client state.
+
+    The 1..height row loop is the coverage mechanism: every cell gets
+    overwritten. (xterm.js gates DECSET 1049 on an actual buffer change —
+    re-entry is a no-op and clears nothing, so the mode prefix only fixes
+    a missed screen *switch*.) Normal-screen frames lead with 1049l to
+    heal the stuck-in-alt class and never emit 2J: scrollback stays
+    untouched. One frame = one atomic WS message = no flicker.
+    """
+    parts = [b"\x1b[?1049h" if snap.alt_on else b"\x1b[?1049l"]
+    rows = list(snap.rows[: snap.height])
+    rows += [b""] * (snap.height - len(rows))
+    for i, row in enumerate(rows):
+        parts.append(b"\x1b[%d;1H" % (i + 1) + row + b"\x1b[0m\x1b[K")
+    parts.append(b"\x1b[%d;%dH" % (snap.cursor_y + 1, snap.cursor_x + 1))
+    parts.append(b"\x1b[?25h" if snap.cursor_visible else b"\x1b[?25l")
+    return b"".join(parts)
