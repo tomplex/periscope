@@ -13,6 +13,7 @@ from periscope.tmux_mirror import (
     decode_octal,
     GridSnapshot, build_reconcile_frame, snapshot_from_replies,
     ReconcileTimer, QUIESCE_S, MAX_INTERVAL_S,
+    _SessionMirror, Subscription,
 )
 
 
@@ -193,3 +194,82 @@ def test_request_fires_immediately():
     timer, clock, delays = _timer_with_recorder()
     timer.request()
     assert delays == [0.0]
+
+
+# --- _SessionMirror dispatch (no subprocess: feed events into _dispatch) ---
+import asyncio as _asyncio
+
+
+def test_dispatch_output_routes_decoded_bytes_to_subscribers():
+    async def drive():
+        m = _SessionMirror("sess")
+        sub = m.subscribe("%7")
+        m._dispatch(Output(pane_id="%7", raw=rb"hi\033[m"))
+        m._dispatch(Output(pane_id="%99", raw=b"other-pane"))  # cheap skip
+        assert sub._q.get_nowait() == b"hi\x1b[m"
+        assert sub._q.empty()
+    _asyncio.run(drive())
+
+
+def test_dispatch_reply_with_empty_callback_queue_is_dropped():
+    # The attach handshake emits an unsolicited %begin/%end block.
+    async def drive():
+        m = _SessionMirror("sess")
+        m._dispatch(Reply(body=()))        # must not raise
+    _asyncio.run(drive())
+
+
+def test_reconcile_frame_enqueued_synchronously_on_display_reply():
+    # The ordering rule: after the display reply dispatches, the frame is
+    # already in the queue — no task switch in between.
+    async def drive():
+        m = _SessionMirror("sess")
+        m._proc = object()   # _fire_reconcile guards on a live client
+        sent = []
+        m._send_command = lambda cmd, cb: (sent.append(cmd), m._reply_callbacks.append(cb))
+        sub = m.subscribe("%7")
+        m._fire_reconcile("%7")
+        assert sent[0].startswith("capture-pane -p -e -t %7")
+        assert sent[1].startswith("display-message -p -t %7")
+        m._dispatch(Reply(body=(b"row",)))                # capture reply
+        m._dispatch(Reply(body=(b"1|0|0|0|1",)))          # display reply
+        frame = sub._q.get_nowait()
+        assert frame.startswith(b"\x1b[?1049l")
+        assert b"row" in frame
+    _asyncio.run(drive())
+
+
+def test_reply_error_ends_pane_subscriptions():
+    async def drive():
+        m = _SessionMirror("sess")
+        m._proc = object()   # _fire_reconcile guards on a live client
+        m._send_command = lambda cmd, cb: m._reply_callbacks.append(cb)
+        sub = m.subscribe("%7")
+        m._fire_reconcile("%7")
+        m._dispatch(ReplyError(body=(b"can't find pane",)))
+        m._dispatch(ReplyError(body=(b"can't find pane",)))
+        assert sub._q.get_nowait() is None                # EOF sentinel
+    _asyncio.run(drive())
+
+
+def test_layout_change_requests_reconcile_for_subscribed_panes():
+    async def drive():
+        m = _SessionMirror("sess")
+        m.subscribe("%7")
+        fired = []
+        m._timers["%7"].request = lambda: fired.append(True)
+        m._dispatch(LayoutChange(window_id="@1"))
+        assert fired == [True]
+    _asyncio.run(drive())
+
+
+def test_unsubscribe_last_viewer_arms_linger():
+    async def drive():
+        m = _SessionMirror("sess")
+        m._proc = object()   # pretend a client is running (linger guard)
+        sub = m.subscribe("%7")
+        async with sub:
+            pass
+        assert m._linger is not None
+        m._linger.cancel()
+    _asyncio.run(drive())

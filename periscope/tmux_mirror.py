@@ -220,3 +220,256 @@ class ReconcileTimer:
     def _fired(self) -> None:
         self._handle = None
         self._fire()
+
+
+class Subscription:
+    """Async iterator of decoded pane bytes; None sentinel = EOF (pane
+    died, client died, shutdown). Async context manager — exit
+    unsubscribes."""
+
+    def __init__(self, mirror: "_SessionMirror", pane_id: str) -> None:
+        self._mirror = mirror
+        self.pane_id = pane_id
+        self._q: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+    def request_reconcile(self) -> None:
+        self._mirror.request_reconcile(self.pane_id)
+
+    async def __aenter__(self) -> "Subscription":
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        self._mirror._unsubscribe(self)
+
+    def __aiter__(self) -> "Subscription":
+        return self
+
+    async def __anext__(self) -> bytes:
+        chunk = await self._q.get()
+        if chunk is None:
+            raise StopAsyncIteration
+        return chunk
+
+
+class _SessionMirror:
+    """One control-mode client (`tmux -C attach`) for one session.
+
+    Owns the subprocess, the reader task, the FIFO reply-callback queue,
+    per-pane subscriber lists, and per-pane reconcile timers.
+    """
+
+    def __init__(self, session: str) -> None:
+        self.session = session
+        self._parser = ControlParser()
+        self._subs: dict[str, list[Subscription]] = {}
+        self._timers: dict[str, ReconcileTimer] = {}
+        self._reply_callbacks: deque[Callable[[Reply | ReplyError], None]] = deque()
+        self._proc: asyncio.subprocess.Process | None = None
+        self._reader: asyncio.Task | None = None
+        self._linger: asyncio.TimerHandle | None = None
+
+    async def start(self) -> None:
+        # ignore-size: a control client is a real client; without the flag
+        # it would participate in window sizing for the session's
+        # non-viewed windows (viewed panes are already window-size manual).
+        # read-only: belt and braces — the mirror only ever reads.
+        self._proc = await asyncio.create_subprocess_exec(
+            *_TMUX, "-C", "attach", "-t", self.session,
+            "-f", "ignore-size,read-only",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            limit=STREAM_LIMIT,
+        )
+        self._reader = _task(f"tmux-mirror:{self.session}", self._read_loop())
+        log.info("tmux mirror client up for session %r (pid=%s)",
+                 self.session, self._proc.pid)
+
+    # -- subscriptions --
+
+    def subscribe(self, pane_id: str) -> Subscription:
+        if self._linger is not None:
+            self._linger.cancel()
+            self._linger = None
+        sub = Subscription(self, pane_id)
+        self._subs.setdefault(pane_id, []).append(sub)
+        if pane_id not in self._timers:
+            self._timers[pane_id] = ReconcileTimer(
+                fire=lambda p=pane_id: self._fire_reconcile(p))
+        # Connect-time reconcile: ws.py sends the initial blob via the
+        # fork path (a multi-MB reply here would head-of-line-block every
+        # %output in the session); this heals the capture-vs-subscribe gap
+        # moments later.
+        self._timers[pane_id].request()
+        return sub
+
+    def _unsubscribe(self, sub: Subscription) -> None:
+        subs = self._subs.get(sub.pane_id, [])
+        if sub in subs:
+            subs.remove(sub)
+        if not subs:
+            self._subs.pop(sub.pane_id, None)
+            timer = self._timers.pop(sub.pane_id, None)
+            if timer:
+                timer.cancel()
+        if not self._subs and self._proc is not None and self._linger is None:
+            self._linger = asyncio.get_running_loop().call_later(
+                LINGER_S, self._kill)
+
+    def request_reconcile(self, pane_id: str) -> None:
+        timer = self._timers.get(pane_id)
+        if timer:
+            timer.request()
+
+    # -- reader / dispatch --
+
+    async def _read_loop(self) -> None:
+        assert self._proc is not None and self._proc.stdout is not None
+        try:
+            while True:
+                line = await self._proc.stdout.readline()
+                if not line:
+                    break
+                event = self._parser.feed_line(line.rstrip(b"\r\n"))
+                if event is None:
+                    continue
+                if isinstance(event, Exit):
+                    break
+                self._dispatch(event)
+        finally:
+            self._finalize()
+
+    def _dispatch(
+        self, event: Output | Reply | ReplyError | LayoutChange
+    ) -> None:
+        if isinstance(event, Output):
+            subs = self._subs.get(event.pane_id)
+            if subs:  # pane-id check before decode: unviewed panes are free
+                data = decode_octal(event.raw)
+                for s in subs:
+                    s._q.put_nowait(data)
+                self._timers[event.pane_id].note_output()
+        elif isinstance(event, (Reply, ReplyError)):
+            if self._reply_callbacks:
+                self._reply_callbacks.popleft()(event)
+            # else: the unsolicited attach-handshake block — drop.
+        elif isinstance(event, LayoutChange):
+            # Window→pane mapping isn't tracked; reconciling every
+            # subscribed pane is cheap and layout changes are rare.
+            for timer in self._timers.values():
+                timer.request()
+
+    # -- reconciliation --
+
+    def _send_command(
+        self, cmd: str, on_reply: Callable[[Reply | ReplyError], None]
+    ) -> None:
+        assert self._proc is not None and self._proc.stdin is not None
+        self._reply_callbacks.append(on_reply)
+        # No drain(): commands are tens of bytes; a full OS pipe here
+        # would mean tmux itself is wedged.
+        self._proc.stdin.write(cmd.encode() + b"\n")
+
+    def _fire_reconcile(self, pane_id: str) -> None:
+        if pane_id not in self._subs or self._proc is None:
+            return
+        got: dict[str, Reply | ReplyError] = {}
+
+        def on_capture(reply: Reply | ReplyError) -> None:
+            got["capture"] = reply
+
+        def on_display(reply: Reply | ReplyError) -> None:
+            # Runs synchronously inside the reader task at this reply's
+            # %end — the ordering rule. No %output can leapfrog the frame.
+            cap = got.get("capture")
+            if isinstance(cap, ReplyError) or isinstance(reply, ReplyError):
+                self._end_pane(pane_id)  # pane died mid-capture
+                return
+            subs = self._subs.get(pane_id)
+            if not subs:
+                return  # unsubscribed while the commands were in flight
+            frame = build_reconcile_frame(snapshot_from_replies(cap, reply))
+            for s in subs:
+                s._q.put_nowait(frame)
+            timer = self._timers.get(pane_id)
+            if timer:
+                timer.note_reconciled()
+
+        # Capture first so the cursor sample (display-message) is the
+        # fresher of the two.
+        self._send_command(f"capture-pane -p -e -t {pane_id}", on_capture)
+        self._send_command(
+            f"display-message -p -t {pane_id} '{DISPLAY_FMT}'", on_display)
+
+    # -- teardown --
+
+    def _end_pane(self, pane_id: str) -> None:
+        for s in self._subs.pop(pane_id, []):
+            s._q.put_nowait(None)
+        timer = self._timers.pop(pane_id, None)
+        if timer:
+            timer.cancel()
+        if not self._subs and self._proc is not None and self._linger is None:
+            self._linger = asyncio.get_running_loop().call_later(
+                LINGER_S, self._kill)
+
+    def _kill(self) -> None:
+        if self._proc is not None and self._proc.returncode is None:
+            try:
+                self._proc.terminate()
+            except ProcessLookupError:
+                pass
+        # reader sees EOF → _finalize
+
+    def _finalize(self) -> None:
+        self._proc = None  # a late __aexit__ must not re-arm the linger
+        for subs in self._subs.values():
+            for s in subs:
+                s._q.put_nowait(None)
+        self._subs.clear()
+        for timer in self._timers.values():
+            timer.cancel()
+        self._timers.clear()
+        if self._linger is not None:
+            self._linger.cancel()
+            self._linger = None
+        if _MIRRORS.get(self.session) is self:
+            del _MIRRORS[self.session]
+        log.info("tmux mirror client for session %r closed", self.session)
+
+
+# -- module API (surface style mirrors tmux_input) --
+
+_MIRRORS: dict[str, _SessionMirror] = {}
+_lock = asyncio.Lock()
+
+
+async def subscribe(session: str, pane_id: str) -> Subscription:
+    """Subscribe to a pane's mirrored byte stream, spawning or reusing the
+    session's control client. No fork-path fallback by design: byte relay
+    without reconciliation is exactly the bug this module removes
+    (tmux_input degrades to forks because input has a working degraded
+    mode; mirroring does not)."""
+    async with _lock:
+        mirror = _MIRRORS.get(session)
+        if mirror is None:
+            mirror = _SessionMirror(session)
+            _MIRRORS[session] = mirror
+            try:
+                await mirror.start()
+            except Exception:
+                _MIRRORS.pop(session, None)
+                raise
+        return mirror.subscribe(pane_id)
+
+
+async def shutdown() -> None:
+    for mirror in list(_MIRRORS.values()):
+        if mirror._reader is not None:
+            mirror._reader.cancel()
+        if mirror._proc is not None and mirror._proc.returncode is None:
+            try:
+                mirror._proc.terminate()
+            except ProcessLookupError:
+                pass
+    _MIRRORS.clear()
