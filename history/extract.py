@@ -27,6 +27,25 @@ _FILE_KEYS = ("file_path", "notebook_path")
 MAX_FIRST_LAST_USER = 500
 MAX_FINAL_ASSISTANT = 1000
 
+# User-role events the harness generates rather than the human: slash-command
+# echoes, background-task notifications, hook output. Live data showed most
+# sessions' first_user_msg was a <local-command-caveat> block. These are
+# excluded from first/last_user_msg, user_msg_count, and the FTS blob —
+# `was_interrupted` detection still scans them.
+_HARNESS_MSG_PREFIXES = (
+    "<local-command-caveat>",
+    "<command-name>",
+    "<command-message>",
+    "<local-command-stdout>",
+    "<task-notification>",
+    "<system-reminder>",
+    "<channel ",
+)
+
+
+def _is_harness_msg(text: str) -> bool:
+    return text.lstrip().startswith(_HARNESS_MSG_PREFIXES)
+
 
 @dataclass
 class SessionRecord:
@@ -123,14 +142,15 @@ def extract_record(jsonl_path: str, events: list[Event], *,
 
         if ev.type == "user":
             if ev.user_text:
-                user_msg_count += 1
-                user_chunks.append(ev.user_text)
                 if "Request interrupted by user" in ev.user_text:
                     was_interrupted = True
-                if first_user_msg is None:
-                    first_user_msg = ev.user_text[:MAX_FIRST_LAST_USER]
-                last_user_msg = ev.user_text[:MAX_FIRST_LAST_USER]
                 last_event_is_assistant_text = False
+                if not _is_harness_msg(ev.user_text):
+                    user_msg_count += 1
+                    user_chunks.append(ev.user_text)
+                    if first_user_msg is None:
+                        first_user_msg = ev.user_text[:MAX_FIRST_LAST_USER]
+                    last_user_msg = ev.user_text[:MAX_FIRST_LAST_USER]
             # tool_result wrappers don't count as user messages
 
         elif ev.type == "assistant":

@@ -169,3 +169,45 @@ def test_quick_abort_is_trivial_regardless_of_tool_use(fixture_dir):
     rec = _extract_fixture(fixture_dir, "short_session.jsonl")
     abort = replace(rec, duration_s=30, user_msg_count=1, tool_use_count=20)
     assert is_trivial(abort) is True
+
+
+def _user_line(uuid, text, ts="2026-01-01T00:00:00Z"):
+    return json.dumps({
+        "type": "user", "sessionId": "s", "cwd": "/p", "timestamp": ts,
+        "uuid": uuid, "parentUuid": None,
+        "message": {"role": "user", "content": text},
+    }) + "\n"
+
+
+def test_harness_boilerplate_excluded_from_user_fields(tmp_path):
+    """Slash-command echoes, task notifications, and hook reminders are
+    harness-generated user events, not human input. Live data showed most
+    sessions' first_user_msg was a <local-command-caveat> block."""
+    p = tmp_path / "boiler.jsonl"
+    p.write_text(
+        _user_line("u1", "<local-command-caveat>Caveat: blah</local-command-caveat>\n<command-name>/clear</command-name>")
+        + _user_line("u2", "  <task-notification>\n<task-id>x</task-id>\n</task-notification>")
+        + _user_line("u3", "fix the actual bug", ts="2026-01-01T00:01:00Z")
+        + _user_line("u4", "<system-reminder>hook output</system-reminder>", ts="2026-01-01T00:02:00Z")
+        + _user_line("u5", "thanks, ship it", ts="2026-01-01T00:03:00Z")
+    )
+    events = list(parse_jsonl(str(p)))
+    rec = extract_record(str(p), events, source_mtime=1, source_size=1)
+
+    assert rec.user_msg_count == 2
+    assert rec.first_user_msg == "fix the actual bug"
+    assert rec.last_user_msg == "thanks, ship it"
+    assert "Caveat" not in rec.user_messages_blob
+    assert "task-notification" not in rec.user_messages_blob
+    assert rec.user_messages_blob == "fix the actual bug\nthanks, ship it"
+
+
+def test_interrupt_detection_survives_boilerplate_filter(tmp_path):
+    p = tmp_path / "interrupt.jsonl"
+    p.write_text(
+        _user_line("u1", "do the thing")
+        + _user_line("u2", "[Request interrupted by user]", ts="2026-01-01T00:01:00Z")
+    )
+    events = list(parse_jsonl(str(p)))
+    rec = extract_record(str(p), events, source_mtime=1, source_size=1)
+    assert rec.was_interrupted == 1
