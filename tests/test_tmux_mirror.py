@@ -310,7 +310,10 @@ def test_unsubscribe_last_viewer_arms_linger():
 
 # --- integration: real tmux, pyte as the client-side oracle ---
 
-TEST_SOCKET = "periscope-mirror-test"
+# Unique per run: concurrent suites (parallel worktrees/agents) on a fixed
+# socket name kill each other's test servers via the finally kill-server,
+# surfacing as phantom integration failures.
+TEST_SOCKET = f"periscope-mirror-test-{uuid.uuid4().hex[:8]}"
 needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")
 
 
