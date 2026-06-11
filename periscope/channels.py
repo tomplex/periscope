@@ -101,6 +101,14 @@ specific enough that you won't over-call them:
   with get_history_session(session_id) to read the relevant
   conversation; default is the last 30 messages, page with offset.
 
+- resume_session(session_id, tmux_session?): continue a past session
+  found via search_history — spawns `claude --resume` in a new tmux
+  window in the session's original project directory. Use when the
+  user wants to pick old work back up ("continue where we left off
+  on X"); for merely consulting past work, get_history_session is
+  the right tool. The resumed session shows up on the dashboard;
+  this session keeps running.
+
 Messages going the other direction (periscope → you) arrive as
 <channel source="periscope" ...> blocks at the start of each turn. A
 <channel> block with meta.kind="dropped" is an infrastructure notice
@@ -540,6 +548,32 @@ def _do_get_history_session_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+def _do_resume_session_tool(pane: str, arguments: dict):
+    """Resume a past session via the same guarded path as the dashboard's
+    resume button — liveness check, double-resume check, sentinel-session
+    auto-create all live in `_window_new_resume`; this just adapts its
+    HTTPException contract to the tool-result shape."""
+    session_id = str(arguments.get("session_id", "")).strip()
+    if not session_id:
+        return _tool_result({"ok": False, "error": "session_id is required"})
+    tmux_session = str(arguments.get("tmux_session") or "resumes").strip()
+
+    # Lazy import: routes/sessions.py imports from this module at load time
+    # (dismiss_dev_channels_consent_bg) — a top-level import back at it
+    # would be circular.
+    from fastapi import HTTPException
+    from periscope.config import CLAUDE_EXEC
+    from periscope.routes.sessions import _window_new_resume
+    try:
+        result = _window_new_resume(
+            tmux_session, f"{CLAUDE_EXEC} --resume {session_id}",
+            session_id, "resume",
+        )
+    except HTTPException as e:
+        return _tool_result({"ok": False, "error": str(e.detail)})
+    return _tool_result(result)
+
+
 async def emit_channel_event(pane: str, content: str, meta: dict | None = None) -> bool:
     """Push a `notifications/claude/channel` event to the Claude connected
     on `pane`. Returns True on send, False if no session attached.
@@ -852,6 +886,38 @@ _CHANNEL_TOOLS = [
             "required": ["session_id"],
         },
         "handler": _do_get_history_session_tool,
+    },
+    {
+        "name": "resume_session",
+        "description": (
+            "Resume a past Claude Code session (a session_id from "
+            "search_history) in a new tmux window — runs `claude --resume` "
+            "in the original project directory. The resumed session "
+            "appears on the dashboard alongside this one; it does NOT "
+            "replace this session. Use when past work should be continued, "
+            "not just read — for reference, get_history_session is enough. "
+            "Refuses if the session looks live (transcript written within "
+            "the last minute) or is already resumed in another window."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "History session id (from search_history results).",
+                },
+                "tmux_session": {
+                    "type": "string",
+                    "description": (
+                        "tmux session to open the window in; created if "
+                        "missing. Defaults to 'resumes' (the dashboard's "
+                        "convention)."
+                    ),
+                },
+            },
+            "required": ["session_id"],
+        },
+        "handler": _do_resume_session_tool,
     },
 ]
 

@@ -294,3 +294,40 @@ def test_get_history_session_tool_caps_notable_cmds(mocker):
     assert len(body["notable_cmds"]) == 10
     assert all(len(c) < 200 and c.endswith("…[truncated]")
                for c in body["notable_cmds"])
+
+
+def test_resume_session_tool_wraps_window_new_resume(mocker):
+    from periscope.channels import _do_resume_session_tool
+    resume = mocker.patch(
+        "periscope.routes.sessions._window_new_resume",
+        return_value={"ok": True, "target": "resumes:3", "session": "resumes",
+                      "index": 3, "mode": "resume",
+                      "resumed_session_id": "abc123"})
+
+    body = _body(_do_resume_session_tool("%5", {"session_id": "abc123"}))
+
+    assert body["ok"] is True
+    assert body["target"] == "resumes:3"
+    args = resume.call_args[0]
+    assert args[0] == "resumes"                  # default sentinel session
+    assert "--resume abc123" in args[1]
+    assert args[2] == "abc123"
+
+
+def test_resume_session_tool_maps_http_errors(mocker):
+    from fastapi import HTTPException
+    from periscope.channels import _do_resume_session_tool
+    mocker.patch(
+        "periscope.routes.sessions._window_new_resume",
+        side_effect=HTTPException(409, "session looks live; wait a minute"))
+
+    body = _body(_do_resume_session_tool("%5", {"session_id": "abc123"}))
+
+    assert body["ok"] is False
+    assert "looks live" in body["error"]
+
+
+def test_resume_session_tool_requires_session_id():
+    from periscope.channels import _do_resume_session_tool
+    body = _body(_do_resume_session_tool("%5", {"session_id": ""}))
+    assert body["ok"] is False
