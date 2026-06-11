@@ -711,13 +711,13 @@ def test_update_focus_ignores_window_activity(mocker):
     assert panes._focused_at["s:0"] == first  # activity bump did not touch focus
 
 
-def test_list_windows_filters_usage_scrape_sessions(mocker):
+def test_list_windows_filters_input_ctl_session(mocker):
     sample = (
         "main\t0\tshell\t1\t/home/tom\t\t%5\n"
-        "periscope-usage-abc12345\t0\tclaude\t1\t/tmp\t\t%6\n"
+        "periscope-input\t0\tshell\t1\t/tmp\t\t%6\n"
     )
     mocker.patch("periscope.panes.tmux", return_value=sample)
     out = list_windows()
-    # The periscope-usage-* session should be filtered out.
+    # periscope's internal control-mode session is scaffolding, not state.
     assert len(out) == 1
     assert out[0]["session"] == "main"

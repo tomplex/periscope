@@ -39,8 +39,8 @@ export async function poll() {
     windows.value = data.windows || [];
     projects.value = data.projects || [];
     syncTabsFromWindows(windows.value);
-    // UsagePill reads { scraped, fallback }.
-    usage.value = { scraped: data.usage_scrape, fallback: data.usage };
+    // UsagePill reads { plan, fallback }.
+    usage.value = { plan: data.usage_plan, fallback: data.usage };
     const lu = lastUpdateEl();
     if (lu) lu.textContent = `updated ${new Date().toLocaleTimeString()}`;
     if (consecutivePollFails > 0) {

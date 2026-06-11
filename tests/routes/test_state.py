@@ -14,7 +14,7 @@ def test_state_empty(client, mocker, clean_state):
     _patch(mocker, "update_focus_from_windows")
     _patch(mocker, "_attach_git_then_resolve_pids")
     _patch(mocker, "cached_claude_usage", return_value={})
-    _patch(mocker, "cached_scraped_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
 
     r = client.get("/api/state")
     assert r.status_code == 200
@@ -43,7 +43,7 @@ def test_state_with_window(client, mocker, clean_state):
     _patch(mocker, "cached_pr_state", return_value={"pr": None})
     _patch(mocker, "cached_lgtm_state", return_value=None)
     _patch(mocker, "cached_claude_usage", return_value={})
-    _patch(mocker, "cached_scraped_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
     _patch(mocker, "_channel_gc")
 
     r = client.get("/api/state")
@@ -66,7 +66,7 @@ def test_state_resume_gc_drops_stale(client, mocker, clean_state):
     _patch(mocker, "update_focus_from_windows")
     _patch(mocker, "_attach_git_then_resolve_pids")
     _patch(mocker, "cached_claude_usage", return_value={})
-    _patch(mocker, "cached_scraped_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
 
     client.get("/api/state")
     assert "sid-1" not in _resuming

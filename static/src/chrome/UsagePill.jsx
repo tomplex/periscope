@@ -1,12 +1,12 @@
-// Plan-usage pill in the dashboard header. Prefers scraped TUI plan
-// percentages; falls back to the JSONL-derived 5h estimate before the scrape
-// completes. Ported from static/usage-pill.js — the imperative innerHTML
-// build is replaced by JSX, but every CSS class (.usage, .usage-fallback,
-// .usage-item, .usage-item-label, .usage-item-bar, .usage-item-fill +
-// ok/warn/danger tone) and the formatting/tone logic are preserved verbatim.
+// Plan-usage pill in the dashboard header. Prefers the plan percentages
+// from Anthropic's OAuth usage endpoint (server-fetched, authoritative);
+// falls back to the JSONL-derived 5h estimate before the first fetch
+// completes. CSS classes (.usage, .usage-fallback, .usage-item,
+// .usage-item-label, .usage-item-bar, .usage-item-fill + ok/warn/danger
+// tone) are shared with the original usage-pill styling.
 //
-// Reads the `usage` signal, which the poll loop (Task 5) writes as
-// { scraped: data.usage_scrape, fallback: data.usage }.
+// Reads the `usage` signal, which the poll loop writes as
+// { plan: data.usage_plan, fallback: data.usage }.
 import { usage } from "../store.js";
 
 function fmtTokens(n) {
@@ -25,13 +25,14 @@ function fmtResetCountdown(epochSec) {
   if (diff < 3600) return `resets in ${Math.floor(diff / 60)}m`;
   const h = Math.floor(diff / 3600);
   const m = Math.floor((diff % 3600) / 60);
-  return `resets in ${h}h ${m}m`;
+  if (h < 48) return `resets in ${h}h ${m}m`;
+  return `resets in ${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
 function MeterBar({ label, pct, resets }) {
   const tone = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "ok";
   return (
-    <div class="usage-item" title={`${label} — ${pct}% used. Resets ${resets || ""}`}>
+    <div class="usage-item" title={`${label} — ${pct}% used. ${resets || ""}`}>
       <span class="usage-item-label">{label}</span>
       <span class="usage-item-bar">
         <span class={`usage-item-fill ${tone}`} style={`width:${pct}%`}></span>
@@ -43,24 +44,34 @@ function MeterBar({ label, pct, resets }) {
 
 export function UsagePill() {
   const u = usage.value || {};
-  const scraped = u.scraped;
+  const plan = u.plan;
   const fallback = u.fallback;
 
-  // Prefer the scraped TUI data (real plan percentages). Fall back to the
-  // JSONL-derived 5h pill when the scrape hasn't completed yet (first ~20s
-  // after server start) or failed.
-  if (scraped && scraped.available && scraped.meters) {
-    const m = scraped.meters;
-    const order = ["session", "week_all", "week_sonnet"];
-    const compactLabels = { session: "session", week_all: "week", week_sonnet: "sonnet" };
+  // Prefer the server-fetched plan percentages. Fall back to the
+  // JSONL-derived 5h pill when the first fetch hasn't completed yet or the
+  // OAuth endpoint is unreachable.
+  if (plan && plan.available && plan.meters) {
+    const m = plan.meters;
+    const order = ["session", "week_all", "week_opus", "week_sonnet"];
+    const compactLabels = {
+      session: "session",
+      week_all: "week",
+      week_opus: "opus",
+      week_sonnet: "sonnet",
+    };
     const present = order.filter((k) => m[k]);
     const title = present
-      .map((k) => `${m[k].label}: ${m[k].percent}% used\n  Resets ${m[k].resets}`)
+      .map((k) => `${m[k].label}: ${m[k].percent}% used\n  ${fmtResetCountdown(m[k].resets_at)}`)
       .join("\n\n");
     return (
       <div id="usage" class="usage" title={title}>
         {present.map((k) => (
-          <MeterBar key={k} label={compactLabels[k]} pct={m[k].percent} resets={m[k].resets} />
+          <MeterBar
+            key={k}
+            label={compactLabels[k]}
+            pct={m[k].percent}
+            resets={fmtResetCountdown(m[k].resets_at)}
+          />
         ))}
       </div>
     );
@@ -75,7 +86,7 @@ export function UsagePill() {
     (fallback.cache_creation_tokens || 0) +
     (fallback.output_tokens || 0);
   const title =
-    `Claude Code plan usage estimate (JSONL-derived; scrape not yet ready)\n` +
+    `Claude Code plan usage estimate (JSONL-derived; plan fetch not yet ready)\n` +
     `  ${fallback.messages} assistant messages\n` +
     `  ${fmtTokens(active)} active tokens\n` +
     `  ${fmtTokens(fallback.cache_read_tokens)} cache reads (discounted)`;

@@ -14,14 +14,10 @@ STATIC = Path(__file__).parent.parent / "static"
 # must never unlink it (see spec §"MCP_SOCKET_PATH cleanup").
 MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
 
-# Tmux session prefix for periscope-spawned `claude /usage` scrape sessions.
-# panes.list_windows filters these out; usage.py creates them.
-USAGE_SESSION_PREFIX = "periscope-usage-"
-
 # Hidden tmux session the control-mode input client (periscope/tmux_input.py)
 # attaches to. It lives apart from user sessions so the control client's
 # size never reflows a user pane, and so it survives any user session being
-# killed. panes.list_windows filters it out like the /usage sessions.
+# killed. panes.list_windows filters it out.
 INPUT_CTL_SESSION = "periscope-input"
 
 # Command line periscope sends into tmux when spawning a Claude window.

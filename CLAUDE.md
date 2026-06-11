@@ -111,7 +111,7 @@ One file per subsystem:
 | `periscope/pids.py` | `@periscope_id` mint / stamp / rebind / resolve |
 | `periscope/git_pr.py` | Git state + GitHub PR cache + activity timeline + `prewarm_pr_cache` |
 | `periscope/lgtm.py` | LGTM mirror (poll + per-session SSE) |
-| `periscope/usage.py` | Claude plan usage (JSONL parse + `claude /usage` TUI scrape) |
+| `periscope/usage.py` | Claude plan usage (JSONL parse + OAuth usage-endpoint fetch) |
 | `periscope/rename_ai.py` | Anthropic SDK plumbing for auto-rename |
 | `periscope/routes/*.py` | One APIRouter per file (11 modules: state, prefs, pane, send, sessions, paste_image, channel, history, auto_rename, lgtm, ws) |
 
@@ -286,12 +286,6 @@ Notifications go the other way as `notifications/claude/channel`
 messages, surfacing in Claude's prompt as `<channel source="periscope">`
 blocks. The pinned `mcp==1.27.*` is checked at startup and exercised by
 `tests/test_channel_shim.py`; bump both together.
-
-`.empty-mcp.json` at the repo root (`{"mcpServers":{}}`) is read only
-by `periscope/usage.py` — it's passed to `claude --strict-mcp-config`
-so the hidden `/usage`-scrape session boots with no MCP servers.
-`scrape_usage_via_tmux` recreates it if missing, so deleting it is
-harmless.
 
 ### Shim survives periscope restarts
 

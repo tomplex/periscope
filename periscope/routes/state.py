@@ -20,7 +20,7 @@ from periscope.panes import (
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.projects import all_projects
 from periscope.store import set_window_fields_bulk
-from periscope.usage import cached_claude_usage, cached_scraped_usage
+from periscope.usage import cached_claude_usage, cached_plan_usage
 from periscope.window_view import build_window_view
 
 router = APIRouter()
@@ -104,5 +104,5 @@ def state():
         "projects": projects_view,
         "ts": int(time.time()),
         "usage": cached_claude_usage(),
-        "usage_scrape": cached_scraped_usage(),
+        "usage_plan": cached_plan_usage(),
     }

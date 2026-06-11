@@ -18,7 +18,7 @@ from periscope.config import MCP_SOCKET_PATH, STATIC
 from periscope.git_pr import prewarm_pr_cache
 from periscope.lgtm import _LGTM_SSE_TASKS, _lgtm_periodic_refresh
 from periscope.log import log, _bg, _task
-from periscope.usage import cached_scraped_usage, kill_orphan_usage_sessions
+from periscope.usage import cached_plan_usage
 
 # Routes — each module owns an APIRouter that we mount into `app` below.
 from periscope.routes import (
@@ -35,9 +35,6 @@ from periscope.routes import settings as settings_routes
 async def lifespan(_app: FastAPI):
     from periscope import config
     log.info("periscope starting (pid=%d, port=%d)", os.getpid(), config.PORT)
-    # Reap any periscope-usage-* tmux sessions left behind by a prior
-    # crash before the new scrape thread spawns a fresh one.
-    kill_orphan_usage_sessions()
     # Bound periscope.db growth — drop events older than 30 days, import the
     # legacy pane_sessions/ directory if present, then drop pane_sessions rows
     # whose tmux pane is gone.
@@ -60,7 +57,7 @@ async def lifespan(_app: FastAPI):
     # Kick off cache prewarms eagerly so the first /api/state poll already
     # has PR badges and the usage bars populated.
     _bg("prewarm-pr", prewarm_pr_cache)
-    _bg("prewarm-usage", cached_scraped_usage)
+    _bg("prewarm-usage", cached_plan_usage)
     # MCP unix-socket listener bound only by the :8765 (prod) instance.
     # channel_shim.py hardcodes /tmp/periscope-mcp.sock, so Claude's
     # channels always talk to prod. Dev periscopes on other ports leave

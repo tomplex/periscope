@@ -4,10 +4,10 @@
     in the current 5-hour window. Cheap, no IO with Claude. Returns
     approximate numbers (input/output/cache_creation/cache_read tokens).
 
-(2) TUI scrape: spawns `claude` in a hidden tmux session, sends /usage,
-    captures + parses the rendered screen. Authoritative because it's
-    exactly what Anthropic shows the user; expensive (tmux session + 5–12s
-    of boot + render). Refreshed every 5 minutes in a background thread.
+(2) Plan usage from Anthropic's OAuth usage endpoint — the same data that
+    powers Claude Code's /usage screen (session %, weekly %s, exact reset
+    timestamps). Authoritative; refreshed every 5 minutes in a background
+    thread.
 
 The dashboard prefers (2) when available, falls back to (1).
 """
@@ -17,12 +17,12 @@ import re
 import subprocess
 import threading
 import time
-import uuid
+from datetime import datetime
 from pathlib import Path
 
-from periscope.config import STATIC, USAGE_SESSION_PREFIX
+import httpx
+
 from periscope.log import _bg
-from periscope.tmux import tmux
 
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
@@ -45,7 +45,6 @@ def compute_claude_usage(window_hours: float = 5.0) -> dict:
     if not _CLAUDE_PROJECTS.exists():
         return {"available": False}
 
-    from datetime import datetime
     cutoff = time.time() - window_hours * 3600
     fresh = cache_w = cache_r = out = msgs = 0
     earliest_msg_ts: float | None = None
@@ -114,165 +113,141 @@ def cached_claude_usage() -> dict:
     return data
 
 
-# --- Authoritative plan usage scraped from `claude` TUI's /usage screen ---
+# --- Authoritative plan usage from the OAuth usage endpoint ---
 #
 # The JSONL aggregation above is a free local approximation. The real numbers
-# (session %, week-all-models %, week-Sonnet %) only live server-side at
-# Anthropic and only render inside `claude`'s interactive TUI. We spawn a
-# headless tmux session, run claude, send /usage, capture the rendered screen,
-# and parse out the three progress bars. Refreshed every 5 minutes in a
-# background thread; that interval bounds the cost (a tiny haiku call per
-# scrape) without making the bars feel stale.
+# (session %, weekly %s) live server-side at Anthropic, behind the same
+# undocumented endpoint Claude Code's /usage screen renders from:
+# GET https://api.anthropic.com/api/oauth/usage, authenticated with the OAuth
+# access token Claude Code keeps in the macOS Keychain. The User-Agent must
+# identify as claude-code/<version> — anonymous clients land in an
+# aggressively rate-limited bucket and get persistent 429s.
 
-USAGE_SCRAPE_REFRESH_S = 300.0
-USAGE_SCRAPE_BOOT_TIMEOUT_S = 30.0
-USAGE_SCRAPE_RENDER_TIMEOUT_S = 12.0
-_scrape_cache: tuple[float, dict | None] = (0.0, None)
-_scrape_in_flight = False
-_scrape_lock = threading.Lock()
+PLAN_USAGE_REFRESH_S = 300.0
+_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_plan_cache: tuple[float, dict | None] = (0.0, None)
+_plan_in_flight = False
+_plan_lock = threading.Lock()
+
+# (response field, meter key, display label) — response fields that are null
+# (e.g. seven_day_opus on plans without an Opus meter) are skipped.
+_PLAN_METERS = [
+    ("five_hour", "session", "Current session"),
+    ("seven_day", "week_all", "Current week (all models)"),
+    ("seven_day_opus", "week_opus", "Current week (Opus only)"),
+    ("seven_day_sonnet", "week_sonnet", "Current week (Sonnet only)"),
+]
 
 
-_USAGE_LABELS = {
-    "Current session": "session",
-    "Current week (all models)": "week_all",
-    "Current week (Sonnet only)": "week_sonnet",
-}
+def _read_oauth_token() -> str | None:
+    """Read Claude Code's OAuth access token from the macOS Keychain.
+    Returns None when missing or expired — we never refresh it ourselves;
+    any running Claude Code session keeps it fresh."""
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password",
+             "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        creds = json.loads(out.stdout)["claudeAiOauth"]
+        if creds.get("expiresAt", 0) / 1000 <= time.time():
+            return None
+        return creds["accessToken"]
+    except Exception:
+        return None
 
 
-def parse_usage_screen(text: str) -> dict:
-    """Walk the captured /usage screen line-by-line, picking out each meter's
-    percentage and reset string. The TUI lays each meter out as three lines:
-    label, bar+percent, "Resets ...". Three known labels."""
-    lines = text.split("\n")
+_claude_version: str | None = None
+
+
+def _claude_user_agent() -> str:
+    global _claude_version
+    if _claude_version is None:
+        try:
+            out = subprocess.run(
+                ["claude", "--version"],
+                capture_output=True, text=True, timeout=10,
+            )
+            m = re.search(r"(\d+\.\d+\.\d+)", out.stdout)
+            _claude_version = m.group(1) if m else "2.0.0"
+        except Exception:
+            # launchd's minimal PATH may not resolve `claude`; a plausible
+            # version string still lands in the friendly rate-limit bucket.
+            _claude_version = "2.0.0"
+    return f"claude-code/{_claude_version}"
+
+
+def parse_plan_usage(data: dict) -> dict:
+    """Map the OAuth usage response onto the dashboard's meters shape."""
     meters: dict[str, dict] = {}
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        key = _USAGE_LABELS.get(stripped)
-        if not key or i + 2 >= len(lines):
+    for field, key, label in _PLAN_METERS:
+        entry = data.get(field)
+        if not isinstance(entry, dict) or entry.get("utilization") is None:
             continue
-        pct_match = re.search(r"(\d+)%\s+used", lines[i + 1])
-        if not pct_match:
-            continue
-        resets = ""
-        rs = re.search(r"Resets\s+(.+?)\s*$", lines[i + 2])
-        if rs:
-            resets = rs.group(1).strip()
+        resets_at = None
+        rs = entry.get("resets_at")
+        if isinstance(rs, str):
+            try:
+                resets_at = int(datetime.fromisoformat(rs).timestamp())
+            except ValueError:
+                pass
         meters[key] = {
-            "label": stripped,
-            "percent": int(pct_match.group(1)),
-            "resets": resets,
+            "label": label,
+            "percent": round(float(entry["utilization"])),
+            "resets_at": resets_at,
         }
     return {"available": bool(meters), "meters": meters}
 
 
-# Hidden tmux sessions we spawn to drive `claude /usage`. Named with the
-# USAGE_SESSION_PREFIX (defined in periscope.config) so panes.list_windows
-# can filter them out of the dashboard, and so kill_orphan_usage_sessions
-# can reap leaked sessions at startup.
-
-
-def kill_orphan_usage_sessions() -> None:
-    """Kill any leftover periscope-usage-* sessions from a prior server run.
-    Idempotent; safe to call at startup before the scrape thread launches."""
+def fetch_plan_usage() -> dict | None:
+    token = _read_oauth_token()
+    if not token:
+        return None
     try:
-        out = tmux("list-sessions", "-F", "#{session_name}")
-    except Exception:
-        return
-    for name in out.strip().split("\n"):
-        if name.startswith(USAGE_SESSION_PREFIX):
-            subprocess.run(
-                ["tmux", "kill-session", "-t", name],
-                capture_output=True, check=False, timeout=5,
-            )
-
-
-def scrape_usage_via_tmux() -> dict | None:
-    """Drive `claude` in a hidden tmux session to capture its /usage output."""
-    sess = f"{USAGE_SESSION_PREFIX}{uuid.uuid4().hex[:8]}"
-    empty_mcp = STATIC.parent / ".empty-mcp.json"
-    if not empty_mcp.exists():
-        empty_mcp.write_text('{"mcpServers":{}}')
-
-    def cap() -> str:
-        return subprocess.run(
-            ["tmux", "capture-pane", "-t", sess, "-p"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout
-
-    try:
-        subprocess.run(
-            [
-                "tmux", "new-session", "-d", "-s", sess, "-x", "200", "-y", "60",
-                f"claude --strict-mcp-config {empty_mcp}",
-            ],
-            check=True, capture_output=True, timeout=5,
+        resp = httpx.get(
+            _OAUTH_USAGE_URL,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "anthropic-beta": "oauth-2025-04-20",
+                "User-Agent": _claude_user_agent(),
+            },
+            timeout=10,
         )
-
-        # Wait for the prompt chevron to indicate claude is ready for input.
-        deadline = time.time() + USAGE_SCRAPE_BOOT_TIMEOUT_S
-        booted = False
-        while time.time() < deadline:
-            time.sleep(0.5)
-            if "❯" in cap():
-                booted = True
-                break
-        if not booted:
-            return None
-
-        # Send /usage and wait for the bars to render.
-        subprocess.run(
-            ["tmux", "send-keys", "-t", sess, "/usage", "Enter"],
-            check=False, capture_output=True, timeout=5,
-        )
-        deadline = time.time() + USAGE_SCRAPE_RENDER_TIMEOUT_S
-        usage_text = ""
-        while time.time() < deadline:
-            time.sleep(0.5)
-            content = cap()
-            if "% used" in content and "Resets" in content:
-                usage_text = content
-                break
-        if not usage_text:
-            return None
-        return parse_usage_screen(usage_text)
+        resp.raise_for_status()
+        return parse_plan_usage(resp.json())
     except Exception:
         return None
-    finally:
-        subprocess.run(
-            ["tmux", "kill-session", "-t", sess],
-            capture_output=True, check=False,
-        )
 
 
-def _refresh_scrape_into_cache() -> None:
-    global _scrape_cache, _scrape_in_flight
+def _refresh_plan_usage_into_cache() -> None:
+    global _plan_cache, _plan_in_flight
     try:
-        result = scrape_usage_via_tmux()
+        result = fetch_plan_usage()
     except Exception:
         result = None
-    with _scrape_lock:
+    with _plan_lock:
         if result:
-            _scrape_cache = (time.time(), result)
+            _plan_cache = (time.time(), result)
         else:
-            # Stamp the timestamp even on failure so cached_scraped_usage
-            # backs off for USAGE_SCRAPE_REFRESH_S instead of re-spawning a
-            # scrape on every poll. Keep the previously-cached data.
-            _scrape_cache = (time.time(), _scrape_cache[1])
-        _scrape_in_flight = False
+            # Stamp the timestamp even on failure so cached_plan_usage backs
+            # off for PLAN_USAGE_REFRESH_S instead of re-hitting the endpoint
+            # on every poll (it 429s readily). Keep the previously-cached data.
+            _plan_cache = (time.time(), _plan_cache[1])
+        _plan_in_flight = False
 
 
-def cached_scraped_usage() -> dict | None:
-    """Stale-while-revalidate: serves the last successful scrape immediately
+def cached_plan_usage() -> dict | None:
+    """Stale-while-revalidate: serves the last successful fetch immediately
     and kicks off a background refresh whenever the cache is older than
-    USAGE_SCRAPE_REFRESH_S. First-ever call returns None; the dashboard's
+    PLAN_USAGE_REFRESH_S. First-ever call returns None; the dashboard's
     next poll will see the freshly-cached result."""
-    global _scrape_in_flight
+    global _plan_in_flight
     now = time.time()
-    with _scrape_lock:
-        ts, data = _scrape_cache
-        if now - ts < USAGE_SCRAPE_REFRESH_S:
+    with _plan_lock:
+        ts, data = _plan_cache
+        if now - ts < PLAN_USAGE_REFRESH_S:
             return data
-        if not _scrape_in_flight:
-            _scrape_in_flight = True
-            _bg("usage-scrape", _refresh_scrape_into_cache)
+        if not _plan_in_flight:
+            _plan_in_flight = True
+            _bg("plan-usage", _refresh_plan_usage_into_cache)
         return data
