@@ -91,6 +91,16 @@ specific enough that you won't over-call them:
   in a dedicated session or point them at a different repo. Keep the
   returned target/pid so you can refer to the spawned pane later.
 
+- search_history(query, project?, since?, limit?): full-text search
+  over every past Claude session on this machine. Use it before
+  re-debugging an error that smells familiar, when the user references
+  past work ("like we did before", "that thing from last month", "how
+  did we fix X"), or before re-deriving a non-obvious command or
+  procedure a previous session likely worked out. Past sessions only —
+  the current session and other live panes are not indexed. Follow up
+  with get_history_session(session_id) to read the relevant
+  conversation; default is the last 30 messages, page with offset.
+
 Messages going the other direction (periscope → you) arrive as
 <channel source="periscope" ...> blocks at the start of each turn. A
 <channel> block with meta.kind="dropped" is an infrastructure notice
