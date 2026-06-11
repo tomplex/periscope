@@ -1613,3 +1613,4 @@ git -C ~/dev/periscope branch -d feature/terminal-mirror
 - `_TMUX` module constant added (not in the structure doc) — the
   integration tests need to target a `-L` socket; monkeypatching one
   tuple is the cheapest seam.
+- The structure doc's thin future-based `_command()` wrapper for data-only callers was omitted entirely — no caller needs it (the initial blob goes via the fork path).

@@ -6,8 +6,14 @@ socket and verify the design's thesis: the mirrored stream converges to
 tmux's own grid even when bytes are dropped.
 """
 
+import asyncio
+import shutil
+import subprocess
+import uuid
+
 import pytest
 
+import periscope.tmux_mirror as tmux_mirror
 from periscope.tmux_mirror import (
     ControlParser, Output, Reply, ReplyError, LayoutChange, Exit,
     decode_octal,
@@ -101,7 +107,6 @@ def _snap(**kw):
     base = dict(rows=(b"row1", b"row2"), height=2, cursor_x=3, cursor_y=1,
                 alt_on=False, cursor_visible=True)
     base.update(kw)
-    from periscope.tmux_mirror import GridSnapshot
     return GridSnapshot(**base)
 
 
@@ -197,8 +202,6 @@ def test_request_fires_immediately():
 
 
 # --- _SessionMirror dispatch (no subprocess: feed events into _dispatch) ---
-import asyncio as _asyncio
-
 
 def test_dispatch_output_routes_decoded_bytes_to_subscribers():
     async def drive():
@@ -208,7 +211,7 @@ def test_dispatch_output_routes_decoded_bytes_to_subscribers():
         m._dispatch(Output(pane_id="%99", raw=b"other-pane"))  # cheap skip
         assert sub._q.get_nowait() == b"hi\x1b[m"
         assert sub._q.empty()
-    _asyncio.run(drive())
+    asyncio.run(drive())
 
 
 def test_dispatch_reply_with_empty_callback_queue_is_dropped():
@@ -216,7 +219,7 @@ def test_dispatch_reply_with_empty_callback_queue_is_dropped():
     async def drive():
         m = _SessionMirror("sess")
         m._dispatch(Reply(body=()))        # must not raise
-    _asyncio.run(drive())
+    asyncio.run(drive())
 
 
 def test_reconcile_frame_enqueued_synchronously_on_display_reply():
@@ -236,7 +239,7 @@ def test_reconcile_frame_enqueued_synchronously_on_display_reply():
         frame = sub._q.get_nowait()
         assert frame.startswith(b"\x1b[?1049l")
         assert b"row" in frame
-    _asyncio.run(drive())
+    asyncio.run(drive())
 
 
 def test_reply_error_ends_pane_subscriptions():
@@ -249,7 +252,7 @@ def test_reply_error_ends_pane_subscriptions():
         m._dispatch(ReplyError(body=(b"can't find pane",)))
         m._dispatch(ReplyError(body=(b"can't find pane",)))
         assert sub._q.get_nowait() is None                # EOF sentinel
-    _asyncio.run(drive())
+    asyncio.run(drive())
 
 
 def test_layout_change_requests_reconcile_for_subscribed_panes():
@@ -260,7 +263,37 @@ def test_layout_change_requests_reconcile_for_subscribed_panes():
         m._timers["%7"].request = lambda: fired.append(True)
         m._dispatch(LayoutChange(window_id="@1"))
         assert fired == [True]
-    _asyncio.run(drive())
+    asyncio.run(drive())
+
+
+def test_read_loop_drops_attach_handshake_before_queued_replies():
+    # The connect-time reconcile usually beats the attach handshake to the
+    # callback queue, so the handshake block arrives with callbacks already
+    # queued — the reader must drop that first block or every callback
+    # shifts off by one (the integration oracle caught this live).
+    async def drive():
+        m = _SessionMirror("sess")
+        lines = [
+            b"%begin 1 0 0\n", b"%end 1 0 0\n",          # attach handshake
+            b"%begin 2 1 1\n", b"real\n", b"%end 2 1 1\n",
+            b"",                                          # EOF
+        ]
+
+        class FakeStdout:
+            async def readline(self):
+                return lines.pop(0)
+
+        class FakeProc:
+            stdout = FakeStdout()
+            stdin = None
+            returncode = 0
+
+        m._proc = FakeProc()
+        got = []
+        m._reply_callbacks.append(got.append)
+        await m._read_loop()
+        assert got == [Reply(body=(b"real",))]
+    asyncio.run(drive())
 
 
 def test_unsubscribe_last_viewer_arms_linger():
@@ -272,4 +305,148 @@ def test_unsubscribe_last_viewer_arms_linger():
             pass
         assert m._linger is not None
         m._linger.cancel()
-    _asyncio.run(drive())
+    asyncio.run(drive())
+
+
+# --- integration: real tmux, pyte as the client-side oracle ---
+
+TEST_SOCKET = "periscope-mirror-test"
+needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")
+
+
+def _t(*args):
+    # -f /dev/null: the first _t() call boots a fresh server on the test
+    # socket, which would otherwise source ~/.tmux.conf — on a host with
+    # tmux-continuum restore-on-start, that resurrects the user's entire
+    # real session layout (claude processes included) onto the test server.
+    return subprocess.run(
+        ["tmux", "-L", TEST_SOCKET, "-f", "/dev/null", *args],
+        capture_output=True, text=True, check=False,
+    ).stdout
+
+
+def _mk_session():
+    name = f"mtest-{uuid.uuid4().hex[:8]}"
+    # /bin/sh, not the login shell: zsh prompt segments can repaint AFTER
+    # the last reconcile frame and break the final grid comparison.
+    _t("new-session", "-d", "-s", name, "-x", "80", "-y", "24", "/bin/sh")
+    pane_id = _t("display-message", "-p", "-t", name, "#{pane_id}").strip()
+    return name, pane_id
+
+
+def _feed_pyte(screen, chunks):
+    import pyte
+    stream = pyte.ByteStream(screen)
+    for c in chunks:
+        stream.feed(c)
+
+
+def _grids_equal(screen, pane_id):
+    cap = _t("capture-pane", "-p", "-t", pane_id).split("\n")
+    cap = cap[:24] + [""] * (24 - len(cap[:24]))
+    pyte_rows = [row.rstrip() for row in screen.display]
+    return pyte_rows == [r.rstrip() for r in cap]
+
+
+async def _drain(sub, seconds):
+    """Collect every chunk the subscription yields within a window."""
+    chunks = []
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while True:
+        timeout = deadline - loop.time()
+        if timeout <= 0:
+            return chunks
+        try:
+            chunks.append(await asyncio.wait_for(sub.__anext__(), timeout))
+        except (asyncio.TimeoutError, StopAsyncIteration):
+            return chunks
+
+
+@needs_tmux
+def test_oracle_mirror_matches_tmux_grid(monkeypatch):
+    monkeypatch.setattr(tmux_mirror, "_TMUX", ("tmux", "-L", TEST_SOCKET))
+    import pyte
+    name, pane_id = _mk_session()
+
+    async def drive():
+        sub = await tmux_mirror.subscribe(name, pane_id)
+        async with sub:
+            _t("send-keys", "-t", pane_id,
+               "printf '\\033[31mRED\\033[0m line\\n'; seq 1 30", "Enter")
+            chunks = await _drain(sub, 2.0)   # includes ≥1 reconcile frame
+            screen = pyte.Screen(80, 24)
+            _feed_pyte(screen, chunks)
+            assert _grids_equal(screen, pane_id), (
+                f"pyte:\n{chr(10).join(screen.display)}")
+        await tmux_mirror.shutdown()
+
+    try:
+        asyncio.run(drive())
+    finally:
+        _t("kill-server")
+
+
+@needs_tmux
+def test_thesis_byte_drops_converge_after_reconcile(monkeypatch):
+    """The design's reason to exist, as an assertion: drop chunks from the
+    relay, and the grid still converges because a reconcile frame is
+    blindly idempotent."""
+    monkeypatch.setattr(tmux_mirror, "_TMUX", ("tmux", "-L", TEST_SOCKET))
+    import pyte
+    name, pane_id = _mk_session()
+
+    async def drive():
+        sub = await tmux_mirror.subscribe(name, pane_id)
+        async with sub:
+            _t("send-keys", "-t", pane_id, "seq 100 140", "Enter")
+            burst = await _drain(sub, 1.0)
+            # The burst contains reconcile frames too (connect-time +
+            # quiesce). Drop deterministically and grid-affectingly:
+            # exclude ALL frames (they start with the 1049 mode prefix),
+            # then drop the LAST output chunk — it carries the final
+            # lines/prompt, which are on the final grid. Index-mod
+            # dropping would flake: a surviving frame self-heals the
+            # control, and early drops only lose lines that scroll away.
+            outs = [c for c in burst if not c.startswith(b"\x1b[?1049")]
+            kept = outs[:-1]
+            sub.request_reconcile()
+            heal = await _drain(sub, 1.0)
+            screen = pyte.Screen(80, 24)
+            _feed_pyte(screen, kept + heal)
+            assert _grids_equal(screen, pane_id)
+
+            # Control: without the healing frames, the dropped tail DOES
+            # corrupt — proving the reconcile is what fixes it.
+            corrupt = pyte.Screen(80, 24)
+            _feed_pyte(corrupt, kept)
+            assert not _grids_equal(corrupt, pane_id)
+        await tmux_mirror.shutdown()
+
+    try:
+        asyncio.run(drive())
+    finally:
+        _t("kill-server")
+
+
+@needs_tmux
+def test_two_subscribers_multiplex(monkeypatch):
+    monkeypatch.setattr(tmux_mirror, "_TMUX", ("tmux", "-L", TEST_SOCKET))
+    name, pane_id = _mk_session()
+
+    async def drive():
+        a = await tmux_mirror.subscribe(name, pane_id)
+        b = await tmux_mirror.subscribe(name, pane_id)
+        assert len(tmux_mirror._MIRRORS) == 1     # one client, two subs
+        _t("send-keys", "-t", pane_id, "echo multiplexed", "Enter")
+        ca = b"".join(await _drain(a, 1.0))
+        cb = b"".join(await _drain(b, 1.0))
+        assert b"multiplexed" in ca and b"multiplexed" in cb
+        async with a, b:
+            pass
+        await tmux_mirror.shutdown()
+
+    try:
+        asyncio.run(drive())
+    finally:
+        _t("kill-server")
