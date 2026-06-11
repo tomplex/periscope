@@ -116,3 +116,9 @@ export const dismissedAlertIds = signal(new Set());
 // Keyed by pid; pruned when the pane leaves needs-input so a fresh question
 // re-surfaces. Transient. The Needs-you section filters these out.
 export const dismissedNeedsPids = signal(new Set());
+
+// Live "done" rows the user clicked away in the Ready section. Keyed by pid;
+// pruned when the pane leaves "done" so the next completion re-surfaces.
+// Needed because clicking an already-selected pane doesn't re-open the WS, so
+// nothing else would bump acked_at and clear the row. Transient.
+export const dismissedReadyPids = signal(new Set());

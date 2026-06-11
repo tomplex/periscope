@@ -21,7 +21,7 @@ import { prUrl } from "../util.js";
 export function statusDotClass(s) {
   if (s === "needs-input") return "dot dot-alert dot-pulse";
   if (s === "working") return "dot dot-green";
-  if (s === "done") return "dot dot-blue";
+  if (s === "done") return "dot dot-blue dot-pulse-done";
   if (s === "idle") return "dot dot-grey";
   return "dot dot-none";
 }

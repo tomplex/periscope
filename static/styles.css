@@ -1405,6 +1405,10 @@ body.modal-open { overflow: hidden; }
 #rail .attn-row { display: flex; align-items: center; gap: 8px; padding: 3px 10px 3px 16px; cursor: pointer; }
 #rail .attn-needs { background: #241316; }
 #rail .attn-needs:hover { background: #2c181c; }
+#rail .attn-ready { background: #122019; }
+#rail .attn-ready:hover { background: #16281f; }
+#rail .attn-ready .attn-reason { color: #6f8a78; }
+#rail .attn-ready .attn-x { color: #52665a; }
 #rail .attn-pinned { background: #161a14; }
 #rail .attn-pinned:hover { background: #1b2018; }
 #rail .attn-activity:hover { background: #1a1c20; }
@@ -1828,6 +1832,8 @@ body.modal-open { overflow: hidden; }
 }
 .section-header-alert { color: #f0857d; }
 .section-header-alert .section-header-count { background: #f85149; color: #fff; }
+.section-header-ready { color: var(--s-done); }
+.section-header-ready .section-header-count { background: var(--s-done); color: #0d1117; }
 
 /* Each nesting level adds --rail-indent of left-padding so the tree's
    hierarchy reads visually. repo at base; worktree at base + 1 step;
@@ -1923,6 +1929,8 @@ body.modal-open { overflow: hidden; }
 .dot-none { background: transparent; }
 .dot-pulse { animation: rail-pulse 1.6s ease-in-out infinite; }
 @keyframes rail-pulse { 50% { box-shadow: 0 0 0 4px var(--s-needs-bg); } }
+.dot-pulse-done { animation: rail-pulse-done 1.6s ease-in-out infinite; }
+@keyframes rail-pulse-done { 50% { box-shadow: 0 0 0 4px var(--s-done-bg); } }
 
 .detail-pane-header, .detail-review-header {
   padding: 5px 14px; border-bottom: 1px solid var(--line);

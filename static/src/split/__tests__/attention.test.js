@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildNeedsYou, isAcked, needsYouCount, resolvePinned, buildActivity,
-  isSoftQuestion, prunedNeedsDismissals,
+  buildNeedsYou, buildReady, isAcked, needsYouCount, resolvePinned, buildActivity,
+  isSoftQuestion, prunedStateDismissals,
 } from "../attention.js";
 import { shortestUniqueSuffix } from "../../util.js";
 
@@ -103,11 +103,68 @@ describe("buildNeedsYou dismissedNeedsPids", () => {
   });
 });
 
-describe("prunedNeedsDismissals", () => {
-  it("keeps pids still in needs-input, drops the rest", () => {
+describe("prunedStateDismissals", () => {
+  it("keeps pids still in the given state, drops the rest", () => {
     const live = [win({ pid: "p1", state: "needs-input" }), win({ pid: "p2", state: "idle" })];
-    const next = prunedNeedsDismissals(new Set(["p1", "p2"]), live);
+    const next = prunedStateDismissals(new Set(["p1", "p2"]), live, "needs-input");
     expect([...next]).toEqual(["p1"]);
+  });
+  it("scopes to the state argument (done)", () => {
+    const live = [win({ pid: "p1", state: "done" }), win({ pid: "p2", state: "idle" })];
+    const next = prunedStateDismissals(new Set(["p1", "p2"]), live, "done");
+    expect([...next]).toEqual(["p1"]);
+  });
+});
+
+describe("buildReady", () => {
+  it("includes live done panes, carrying the window", () => {
+    const live = win({ state: "done", completed_at: 500 });
+    const rows = buildReady([live], [], new Set());
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("live");
+    expect(rows[0].w.completed_at).toBe(500);
+  });
+
+  it("excludes panes not in done state", () => {
+    expect(buildReady([win({ state: "idle" })], [], new Set())).toHaveLength(0);
+    expect(buildReady([win({ state: "working" })], [], new Set())).toHaveLength(0);
+  });
+
+  it("hides a dismissed live pid", () => {
+    const live = win({ pid: "p1", state: "done" });
+    expect(buildReady([live], [], new Set(), new Set(["p1"]))).toHaveLength(0);
+  });
+
+  it("includes unacked done events after live rows", () => {
+    const live = win({ pid: "p1", target: "a:0", state: "done" });
+    const rows = buildReady([live], [evt({ kind: "done", target: "b:0" })], new Set());
+    expect(rows.map((r) => r.kind)).toEqual(["live", "event"]);
+  });
+
+  it("dedupes a done event whose target is already a live row", () => {
+    const live = win({ pid: "p1", target: "a:0", state: "done" });
+    const rows = buildReady([live], [evt({ kind: "done", target: "a:0" })], new Set());
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("live");
+  });
+
+  it("drops dismissed and acked events", () => {
+    expect(buildReady([], [evt({ kind: "done", id: "a1" })], new Set(["a1"]))).toHaveLength(0);
+    const w = win({ target: "tc/x:0", state: "idle", focused_at: 200 });
+    expect(buildReady([w], [evt({ kind: "done", ts: 100 })], new Set())).toHaveLength(0);
+  });
+
+  it("non-done alerts never enter the zone", () => {
+    expect(buildReady([], [evt({ kind: "need_human" })], new Set())).toHaveLength(0);
+    expect(buildReady([], [evt({ kind: "info" })], new Set())).toHaveLength(0);
+  });
+
+  it("sorts events newest-first", () => {
+    const rows = buildReady([], [
+      evt({ kind: "done", id: "old", ts: 50 }),
+      evt({ kind: "done", id: "new", ts: 90 }),
+    ], new Set());
+    expect(rows.map((r) => r.id)).toEqual(["new", "old"]);
   });
 });
 

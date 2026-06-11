@@ -10,14 +10,15 @@ export function isSoftQuestion(w) {
   return !!w?.asked_question && !w?.waiting_for;
 }
 
-// Drop dismissed-pids that are no longer in needs-input, so a pane that asks
-// again later re-appears (dismissal is scoped to one needs-input episode).
-export function prunedNeedsDismissals(dismissedNeedsPids, windows) {
-  const needy = new Set(
-    (windows || []).filter((w) => w.state === "needs-input").map((w) => w.pid)
+// Drop dismissed-pids whose pane is no longer in `state`, so a pane that
+// re-enters the state later re-appears (dismissal is scoped to one episode).
+// Used for both needs-input soft questions and Ready done-rows.
+export function prunedStateDismissals(dismissedPids, windows, state) {
+  const active = new Set(
+    (windows || []).filter((w) => w.state === state).map((w) => w.pid)
   );
   const next = new Set();
-  for (const pid of dismissedNeedsPids) if (needy.has(pid)) next.add(pid);
+  for (const pid of dismissedPids) if (active.has(pid)) next.add(pid);
   return next;
 }
 
@@ -38,6 +39,36 @@ export function buildNeedsYou(windows, alertItems, dismissedIds, dismissedNeedsP
   const events = (alertItems || [])
     .filter((r) => r.kind === "need_human")
     .filter((r) => !dismissedIds.has(r.id))
+    .filter((r) => !isAcked(r, byTarget))
+    .sort((a, b) => b.ts - a.ts)
+    .map((r) => ({
+      kind: "event",
+      id: r.id,
+      target: r.target,
+      w: byTarget[r.target] || null,
+      message: r.message,
+      ts: r.ts,
+      session: r.session,
+      name: r.name,
+    }));
+  return [...live, ...events];
+}
+
+// The green counterpart to buildNeedsYou: live "done" panes (Claude finished,
+// unacked) + unacked done events, live-first then events newest-first. A done
+// event whose target is already a live row is dropped — notify(done) fires at
+// the same moment the pane's state flips, so the duplicate is the common case.
+export function buildReady(windows, alertItems, dismissedIds, dismissedReadyPids = new Set()) {
+  const byTarget = indexByTarget(windows);
+  const live = (windows || [])
+    .filter((w) => w.state === "done")
+    .filter((w) => !dismissedReadyPids.has(w.pid))
+    .map((w) => ({ kind: "live", pid: w.pid, w }));
+  const liveTargets = new Set(live.map((r) => r.w.target));
+  const events = (alertItems || [])
+    .filter((r) => r.kind === "done")
+    .filter((r) => !dismissedIds.has(r.id))
+    .filter((r) => !liveTargets.has(r.target))
     .filter((r) => !isAcked(r, byTarget))
     .sort((a, b) => b.ts - a.ts)
     .map((r) => ({

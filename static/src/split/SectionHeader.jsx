@@ -3,7 +3,10 @@
 // only — collapse state and count are owned by the caller (prefs / computed),
 // never here. Instanced 4× in Phase 2 (NEEDS YOU / PINNED / PROJECTS / ACTIVITY).
 export function SectionHeader({ icon, label, count, collapsed, onToggle, tone }) {
-  const toneCls = tone === "alert" ? " section-header-alert" : "";
+  const toneCls =
+    tone === "alert" ? " section-header-alert"
+    : tone === "ready" ? " section-header-ready"
+    : "";
   return (
     <div
       class={`rail-row section-header${toneCls}`}

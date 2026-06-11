@@ -1,18 +1,20 @@
 // The left-rail attention zone. Two mount points (see <Rail>):
-//   <AttentionTop>    — NEEDS YOU + PINNED, rendered ABOVE the project tree.
+//   <AttentionTop>    — NEEDS YOU + READY + PINNED, rendered ABOVE the project tree.
 //   <ActivitySection> — the low-signal ACTIVITY log, rendered BELOW the tree.
 // Reads the windows + alertItems signals through the pure transforms in
 // attention.js. Out-of-tree rows use `attn-row` classes (NOT child-row) so they
 // never enter the tree's connector-adjacency CSS.
 import { useEffect } from "preact/hooks";
-import { windows, dismissedAlertIds, dismissedNeedsPids, railSelection } from "../store.js";
+import {
+  windows, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection,
+} from "../store.js";
 import { alertItems, revealPane } from "./alertFeed.js";
 import * as prefs from "../prefs.js";
 import { relTime, waitLabel, shortestUniqueSuffix } from "../util.js";
 import { SectionHeader } from "./SectionHeader.jsx";
 import {
-  buildNeedsYou, needsYouCount, resolvePinned, buildActivity,
-  isSoftQuestion, prunedNeedsDismissals,
+  buildNeedsYou, buildReady, needsYouCount, resolvePinned, buildActivity,
+  isSoftQuestion, prunedStateDismissals,
 } from "./attention.js";
 import { statusDotClass } from "./RailRows.jsx";
 
@@ -61,14 +63,20 @@ export function AttentionTop() {
   const needsRows = buildNeedsYou(live, items, dismissed, dismissedNeeds);
   const needsCollapsed = collapsed["sec:needs"] === true;
 
+  const readyRows = buildReady(live, items, dismissed, dismissedReadyPids.value);
+  const readyCollapsed = collapsed["sec:ready"] === true;
+
   const pinned = resolvePinned(prefs.getPinnedPids(), live);
   const pinnedCollapsed = collapsed["sec:pinned"] === true;
 
-  // Prune soft-question dismissals for panes that have left needs-input, so a
-  // fresh question re-surfaces. Runs after render (no signal write during it).
+  // Prune episode-scoped dismissals for panes that have left the relevant
+  // state, so the next question/completion re-surfaces. Runs after render
+  // (no signal write during it).
   useEffect(() => {
-    const next = prunedNeedsDismissals(dismissedNeedsPids.value, live);
-    if (next.size !== dismissedNeedsPids.value.size) dismissedNeedsPids.value = next;
+    const nextNeeds = prunedStateDismissals(dismissedNeedsPids.value, live, "needs-input");
+    if (nextNeeds.size !== dismissedNeedsPids.value.size) dismissedNeedsPids.value = nextNeeds;
+    const nextReady = prunedStateDismissals(dismissedReadyPids.value, live, "done");
+    if (nextReady.size !== dismissedReadyPids.value.size) dismissedReadyPids.value = nextReady;
   }, [windows.value]);
 
   function dismiss(id) {
@@ -84,6 +92,15 @@ export function AttentionTop() {
       next.add(w.pid);
       dismissedNeedsPids.value = next;
     }
+    selectPane(w);
+  }
+  // Click a live ready row: navigate + always dismiss for this done-episode.
+  // Selecting normally acks via the detail terminal's WS connect, but an
+  // already-selected pane won't reconnect — the dismissal covers that case.
+  function onReadyClick(w) {
+    const next = new Set(dismissedReadyPids.value);
+    next.add(w.pid);
+    dismissedReadyPids.value = next;
     selectPane(w);
   }
 
@@ -111,6 +128,36 @@ export function AttentionTop() {
                 <span class="attn-ico">⚠</span>
                 <span class="attn-label">{originLabel(r.w, r.session, r.name, shorten)}</span>
                 <span class="attn-reason">need_human · {relTime(r.ts)}</span>
+                <button class="attn-x" title="dismiss"
+                        onClick={(e) => { e.stopPropagation(); dismiss(r.id); }}>×</button>
+              </div>
+            )
+          )}
+        </>
+      )}
+
+      {readyRows.length > 0 && (
+        <>
+          <SectionHeader
+            icon="✓" label="READY" tone="ready"
+            count={readyRows.length}
+            collapsed={readyCollapsed}
+            onToggle={() => toggle("sec:ready", readyCollapsed)}
+          />
+          {!readyCollapsed && readyRows.map((r) =>
+            r.kind === "live" ? (
+              <div key={`rlive:${r.pid}`} class="rail-row attn-row attn-ready"
+                   onClick={() => onReadyClick(r.w)}>
+                <span class="attn-dot dot dot-blue dot-pulse-done"></span>
+                <span class="attn-label">{originLabel(r.w, null, null, shorten)}</span>
+                <span class="attn-reason">{relTime(r.w?.completed_at)}</span>
+              </div>
+            ) : (
+              <div key={`revt:${r.id}`} class="rail-row attn-row attn-ready attn-event"
+                   onClick={() => revealPane(r.target)}>
+                <span class="attn-ico">✓</span>
+                <span class="attn-label">{originLabel(r.w, r.session, r.name, shorten)}</span>
+                <span class="attn-reason">done · {relTime(r.ts)}</span>
                 <button class="attn-x" title="dismiss"
                         onClick={(e) => { e.stopPropagation(); dismiss(r.id); }}>×</button>
               </div>
