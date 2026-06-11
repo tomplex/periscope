@@ -25,14 +25,14 @@ Periscope's `main` is live (prod runs from this checkout; launchd respawns on cr
 
 **Files:** none (setup only)
 
-- [ ] **Step 1: Create worktree + branch**
+- [x] **Step 1: Create worktree + branch**
 
 ```bash
 git -C ~/dev/periscope worktree add ~/dev/periscope-mirror -b feature/terminal-mirror
 cd ~/dev/periscope-mirror
 ```
 
-- [ ] **Step 2: Confirm baseline is green**
+- [x] **Step 2: Confirm baseline is green**
 
 Run: `uv run pytest -q`
 Expected: all pass (353+ tests; if anything fails here, STOP — verify against `main` before proceeding).
@@ -45,7 +45,7 @@ Expected: all pass (353+ tests; if anything fails here, STOP — verify against 
 - Create: `periscope/tmux_mirror.py`
 - Create: `tests/test_tmux_mirror.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_tmux_mirror.py`:
 
@@ -144,12 +144,12 @@ def test_decode_split_multibyte_concatenates():
     assert half.decode() == "🐍"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'periscope.tmux_mirror'`
 
-- [ ] **Step 3: Implement events, parser, decoder**
+- [x] **Step 3: Implement events, parser, decoder**
 
 Create `periscope/tmux_mirror.py`:
 
@@ -283,12 +283,12 @@ def decode_octal(raw: bytes) -> bytes:
     return bytes(out)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: all PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/tmux_mirror.py tests/test_tmux_mirror.py
@@ -303,7 +303,7 @@ git commit -m "feat: tmux_mirror control-mode parser + octal decoder"
 - Modify: `periscope/tmux_mirror.py` (append after `decode_octal`)
 - Modify: `tests/test_tmux_mirror.py` (append)
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_tmux_mirror.py`; extend the import to add `GridSnapshot, build_reconcile_frame, snapshot_from_replies`)
+- [x] **Step 1: Write the failing tests** (append to `tests/test_tmux_mirror.py`; extend the import to add `GridSnapshot, build_reconcile_frame, snapshot_from_replies`)
 
 ```python
 # --- frame builder ---
@@ -364,12 +364,12 @@ def test_snapshot_from_replies():
     assert snap.cursor_visible is True
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: FAIL — `ImportError: cannot import name 'GridSnapshot'`
 
-- [ ] **Step 3: Implement** (append to `periscope/tmux_mirror.py`)
+- [x] **Step 3: Implement** (append to `periscope/tmux_mirror.py`)
 
 ```python
 @dataclass(frozen=True, kw_only=True)
@@ -420,12 +420,12 @@ def build_reconcile_frame(snap: GridSnapshot) -> bytes:
     return b"".join(parts)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: all PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/tmux_mirror.py tests/test_tmux_mirror.py
@@ -440,7 +440,7 @@ git commit -m "feat: tmux_mirror reconcile frame builder (row-loop coverage, 104
 - Modify: `periscope/tmux_mirror.py` (append)
 - Modify: `tests/test_tmux_mirror.py` (append)
 
-- [ ] **Step 1: Write the failing tests** (append; add `ReconcileTimer, QUIESCE_S, MAX_INTERVAL_S` to the import)
+- [x] **Step 1: Write the failing tests** (append; add `ReconcileTimer, QUIESCE_S, MAX_INTERVAL_S` to the import)
 
 ```python
 # --- ReconcileTimer ---
@@ -486,12 +486,12 @@ def test_request_fires_immediately():
     assert delays == [0.0]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: FAIL — `ImportError: cannot import name 'ReconcileTimer'`
 
-- [ ] **Step 3: Implement** (append to `periscope/tmux_mirror.py`)
+- [x] **Step 3: Implement** (append to `periscope/tmux_mirror.py`)
 
 ```python
 class ReconcileTimer:
@@ -541,12 +541,12 @@ class ReconcileTimer:
         self._fire()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: all PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/tmux_mirror.py tests/test_tmux_mirror.py
@@ -563,7 +563,7 @@ git commit -m "feat: tmux_mirror ReconcileTimer (quiesce + max-interval, injecta
 
 The reader loop delegates to a sync `_dispatch(event)` method so dispatch is unit-testable without a subprocess.
 
-- [ ] **Step 1: Write the failing tests** (append; add `_SessionMirror, Subscription` to the import)
+- [x] **Step 1: Write the failing tests** (append; add `_SessionMirror, Subscription` to the import)
 
 ```python
 # --- _SessionMirror dispatch (no subprocess: feed events into _dispatch) ---
@@ -645,12 +645,12 @@ def test_unsubscribe_last_viewer_arms_linger():
     _asyncio.run(drive())
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: FAIL — `ImportError: cannot import name '_SessionMirror'`
 
-- [ ] **Step 3: Implement** (append to `periscope/tmux_mirror.py`)
+- [x] **Step 3: Implement** (append to `periscope/tmux_mirror.py`)
 
 ```python
 class Subscription:
@@ -906,12 +906,12 @@ async def shutdown() -> None:
     _MIRRORS.clear()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: all PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/tmux_mirror.py tests/test_tmux_mirror.py
@@ -926,7 +926,7 @@ git commit -m "feat: tmux_mirror session client, subscriptions, callback-ordered
 - Modify: `pyproject.toml` (add pyte to dev group)
 - Modify: `tests/test_tmux_mirror.py` (append)
 
-- [ ] **Step 1: Add pyte as a test-only dependency**
+- [x] **Step 1: Add pyte as a test-only dependency**
 
 In `pyproject.toml`, change the dev group to:
 
@@ -945,7 +945,7 @@ dev = [
 Run: `uv sync && uv run python -c "from importlib.metadata import version; print(version('pyte'))"`
 Expected: prints a version ≥ 0.8 (note: `pyte.__version__` does not exist — don't use it)
 
-- [ ] **Step 2: Write the integration tests** (append to `tests/test_tmux_mirror.py`)
+- [x] **Step 2: Write the integration tests** (append to `tests/test_tmux_mirror.py`)
 
 These run a real tmux server on a dedicated socket (`-L periscope-mirror-test`), following `tests/test_tmux_input.py::test_roundtrip_into_real_pane`'s skipif pattern. pyte plays the role of xterm.js; assertions compare pyte's grid to `capture-pane`'s grid. The oracle tests use normal-screen shell content (pyte's alt-screen support is partial; the alt path is pinned by the frame-builder unit tests).
 
@@ -1098,12 +1098,12 @@ def test_two_subscribers_multiplex(monkeypatch):
         _t("kill-server")
 ```
 
-- [ ] **Step 3: Run the integration tests**
+- [x] **Step 3: Run the integration tests**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q -k "oracle or thesis or multiplex"`
 Expected: 3 PASS (give them a few seconds — real tmux + sleeps). If `_grids_equal` fails on SGR-heavy rows, compare with the pyte screen dump in the assertion message; text content must match even if pyte renders attributes differently.
 
-- [ ] **Step 4: Run the whole file, then commit**
+- [x] **Step 4: Run the whole file, then commit**
 
 Run: `uv run pytest tests/test_tmux_mirror.py -q`
 Expected: all PASS
@@ -1121,7 +1121,7 @@ git commit -m "test: tmux_mirror integration — pyte oracle, byte-drop converge
 - Modify: `periscope/routes/ws.py` (full rewrite below)
 - Modify: `tests/routes/test_ws.py` (full rewrite below)
 
-- [ ] **Step 1: Rewrite the tests first** (`tests/routes/test_ws.py`, full replacement)
+- [x] **Step 1: Rewrite the tests first** (`tests/routes/test_ws.py`, full replacement)
 
 ```python
 """Tests for WS /ws/pane.
@@ -1285,12 +1285,12 @@ import pytest  # noqa: E402  (used by test_ws_closes_on_subscription_eof)
 
 (Put the `import pytest` at the top of the file with the other imports rather than the bottom — shown here last only to highlight it's newly needed.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/routes/test_ws.py -q`
 Expected: FAIL — `AttributeError` (ws.py has no `tmux_mirror` attribute yet)
 
-- [ ] **Step 3: Rewrite `periscope/routes/ws.py`** (full replacement)
+- [x] **Step 3: Rewrite `periscope/routes/ws.py`** (full replacement)
 
 ```python
 """WS /ws/pane — bridges xterm.js to a tmux pane via the control-mode mirror.
@@ -1471,17 +1471,17 @@ async def ws_pane(
             drain_task.cancel()
 ```
 
-- [ ] **Step 4: Run the route tests**
+- [x] **Step 4: Run the route tests**
 
 Run: `uv run pytest tests/routes/test_ws.py -q`
 Expected: all PASS
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -q`
 Expected: all PASS (watch for stragglers that referenced the FIFO behavior)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add periscope/routes/ws.py tests/routes/test_ws.py
@@ -1495,7 +1495,7 @@ git commit -m "feat: ws.py consumes tmux_mirror — FIFO/pipe-pane machinery del
 **Files:**
 - Modify: `periscope/app.py:90-91`
 
-- [ ] **Step 1: Register mirror shutdown**
+- [x] **Step 1: Register mirror shutdown**
 
 In `periscope/app.py`, in the lifespan `finally` block, change:
 
@@ -1513,12 +1513,12 @@ to:
                                        # across dev reloads
 ```
 
-- [ ] **Step 2: Run the full suite**
+- [x] **Step 2: Run the full suite**
 
 Run: `uv run pytest -q`
 Expected: all PASS
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add periscope/app.py
@@ -1532,7 +1532,7 @@ git commit -m "feat: lifespan shuts down tmux_mirror control clients"
 **Files:**
 - Modify: `CLAUDE.md` (architecture diagram, module table, invariants #3, tests section)
 
-- [ ] **Step 1: Update CLAUDE.md**
+- [x] **Step 1: Update CLAUDE.md**
 
 1. In the architecture diagram, change
    `│ └── unix socket …` block's WS line:
@@ -1555,7 +1555,7 @@ git commit -m "feat: lifespan shuts down tmux_mirror control clients"
 5. In the Tests section, add `tests/test_tmux_mirror.py` to the list with:
    `uv run pytest tests/test_tmux_mirror.py  # mirror protocol + pyte convergence oracle`
 
-- [ ] **Step 2: Manual verification on the dev port**
+- [x] **Step 2: Manual verification on the dev port**
 
 ```bash
 PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py
@@ -1569,7 +1569,7 @@ In a browser at http://localhost:8766/ open a pane running a Claude session and 
 
 Paste the observed results into the commit message of step 3 if all four pass; STOP and debug if any fail.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CLAUDE.md
@@ -1580,7 +1580,7 @@ git commit -m "docs: CLAUDE.md — terminal mirror replaces pipe-pane invariants
 
 ### Task 9: Merge + prod restart
 
-- [ ] **Step 1: Merge to main** (merge commit, not rebase — project rule)
+- [x] **Step 1: Merge to main** (merge commit, not rebase — project rule)
 
 ```bash
 git -C ~/dev/periscope merge feature/terminal-mirror
@@ -1588,7 +1588,7 @@ git -C ~/dev/periscope merge feature/terminal-mirror
 
 If `main` moved during the work (it does — live branch), re-run `uv run pytest -q` after the merge in `~/dev/periscope`.
 
-- [ ] **Step 2: Restart prod + verify**
+- [x] **Step 2: Restart prod + verify**
 
 ```bash
 ~/dev/periscope/bin/periscope restart
@@ -1597,7 +1597,7 @@ If `main` moved during the work (it does — live branch), re-run `uv run pytest
 
 Open the dashboard, view a pane, confirm the mirror works in prod (same four checks as Task 8 Step 2). No frontend rebuild is needed — `static/src/` is untouched.
 
-- [ ] **Step 3: Clean up the worktree**
+- [x] **Step 3: Clean up the worktree**
 
 ```bash
 git -C ~/dev/periscope worktree remove ~/dev/periscope-mirror
@@ -1613,3 +1613,4 @@ git -C ~/dev/periscope branch -d feature/terminal-mirror
 - `_TMUX` module constant added (not in the structure doc) — the
   integration tests need to target a `-L` socket; monkeypatching one
   tuple is the cheapest seam.
+- The structure doc's thin future-based `_command()` wrapper for data-only callers was omitted entirely — no caller needs it (the initial blob goes via the fork path).

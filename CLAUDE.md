@@ -60,6 +60,7 @@ There IS a test suite — small, surgical, run with `uv run`:
 ```sh
 uv run pytest -q                     # full suite (incl. parse_pane / status-line regex regressions in tests/test_panes.py)
 uv run tests/test_channel_smoke.py   # MCP wire-format compat against pinned mcp==1.27.*
+uv run pytest tests/test_tmux_mirror.py  # mirror protocol + pyte convergence oracle (spawns a real tmux on -L periscope-mirror-test)
 ```
 
 These exist because each one tracks a class of regression that has bitten
@@ -80,7 +81,7 @@ browser
 
 FastAPI (server.py, single process)
  ├── /api/*       all REST endpoints (state, prefs, send, window/*, history/*, ...)
- ├── /ws/pane     bidirectional terminal bridge (capture-pane snapshot + pipe-pane FIFO)
+ ├── /ws/pane     bidirectional terminal bridge (capture-pane snapshot + control-mode mirror w/ reconcile frames)
  └── unix socket  /tmp/periscope-mcp.sock — in-process MCP server for channels
                                               ▲
                                               │ stdio
@@ -105,6 +106,7 @@ One file per subsystem:
 | `periscope/log.py` | Logging setup + `_bg` / `_task` crash wrappers |
 | `periscope/pidfile.py` | Single-instance reclaim |
 | `periscope/tmux.py` | `tmux()` / `capture()` / `deliver_input()` / `_run()` / `_tmux_mutate()` subprocess wrappers |
+| `periscope/tmux_mirror.py` | Control-mode pane mirror: `%output` relay + self-healing reconcile frames |
 | `periscope/store.py` | `state.json` layer (`_STATE`, load/write, migrations) |
 | `periscope/channels.py` | In-process MCP server + tool implementations |
 | `periscope/panes.py` | `parse_pane` + smoothing + focus tracking + `list_windows` + `_resuming` |
@@ -117,7 +119,7 @@ One file per subsystem:
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
-`tests/routes/test_<route>.py` per route). 353 pytest tests on a
+`tests/routes/test_<route>.py` per route). 495 pytest tests on a
 clean run. Run with `uv run pytest -q`.
 
 Five modules deviate from the one-test-per-module mirror.
@@ -195,12 +197,15 @@ These are the non-obvious behaviors worth preserving:
    Old status lines in scrollback should not trigger `is_claude=true` after
    the user has returned to a shell. See `parse_pane`.
 
-3. **WebSocket initial paint mirrors tmux's screen state.** Width, height,
-   cursor position, and alt-screen mode all come from `display-message`
-   before the capture-pane body is sent. The prefix enters alt-screen if
-   needed, clears the buffer, and the suffix parks the cursor where tmux
-   thinks it is — without all three, incremental updates from `pipe-pane`
-   land at the wrong cursor and leave ghost text.
+3. **WebSocket paint is self-healing, not perfect.** The initial blob
+   still mirrors tmux's size/cursor/alt-screen state (all from
+   `display-message` before the capture body), but live bytes come from a
+   per-session tmux control-mode client (`tmux_mirror.py`), and the
+   mirror periodically ships an idempotent repaint of tmux's own grid.
+   Reconcile frames are built **inside the reader task at the reply's
+   `%end`** — building them in a future-woken task would let later
+   `%output` land first and be reverted by the frame. Don't "optimize"
+   this to futures.
 
 4. **`capture-pane` separates rows with bare `\n`; xterm needs `\r\n`.**
    Forgetting the carriage return staircases every line right by the

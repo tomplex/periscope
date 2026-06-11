@@ -18,6 +18,10 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-mock>=3",
+    # Test-only terminal emulator: the verification oracle for
+    # tests/test_tmux_mirror.py. Deliberately NOT a runtime dep — the
+    # design keeps emulation out of periscope (tmux is the emulator).
+    "pyte>=0.8",
 ]
 
 [tool.pytest.ini_options]
