@@ -29,6 +29,17 @@ function fmtResetCountdown(epochSec) {
   return `resets in ${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
+// "resets in 2h 15m (6:39 PM)" — countdown plus the wall-clock reset time,
+// with a weekday prefix when the reset lands on a different day.
+function fmtReset(epochSec) {
+  if (!epochSec) return "";
+  const d = new Date(epochSec * 1000);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const clock = sameDay ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  return `${fmtResetCountdown(epochSec)} (${clock})`;
+}
+
 function MeterBar({ label, pct, resets }) {
   const tone = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "ok";
   return (
@@ -61,7 +72,7 @@ export function UsagePill() {
     };
     const present = order.filter((k) => m[k]);
     const title = present
-      .map((k) => `${m[k].label}: ${m[k].percent}% used\n  ${fmtResetCountdown(m[k].resets_at)}`)
+      .map((k) => `${m[k].label}: ${m[k].percent}% used\n  ${fmtReset(m[k].resets_at)}`)
       .join("\n\n");
     return (
       <div id="usage" class="usage" title={title}>
@@ -70,7 +81,7 @@ export function UsagePill() {
             key={k}
             label={compactLabels[k]}
             pct={m[k].percent}
-            resets={fmtResetCountdown(m[k].resets_at)}
+            resets={fmtReset(m[k].resets_at)}
           />
         ))}
       </div>
