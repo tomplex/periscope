@@ -146,3 +146,26 @@ def test_heuristic_summary_mentions_msg_count(fixture_dir):
     assert "1 messages" in text or "1 message" in text
     # Should include first user message snippet
     assert "hi, run ls" in text
+
+
+def test_single_prompt_agentic_session_is_not_trivial(fixture_dir):
+    """One user message + substantial tool use = a real working session
+    (single-prompt agentic), not a false-start."""
+    from dataclasses import replace
+    rec = _extract_fixture(fixture_dir, "short_session.jsonl")
+    agentic = replace(rec, duration_s=7042, user_msg_count=1, tool_use_count=80)
+    assert is_trivial(agentic) is False
+
+
+def test_single_prompt_without_tool_work_stays_trivial(fixture_dir):
+    from dataclasses import replace
+    rec = _extract_fixture(fixture_dir, "short_session.jsonl")
+    walked_away = replace(rec, duration_s=600, user_msg_count=1, tool_use_count=0)
+    assert is_trivial(walked_away) is True
+
+
+def test_quick_abort_is_trivial_regardless_of_tool_use(fixture_dir):
+    from dataclasses import replace
+    rec = _extract_fixture(fixture_dir, "short_session.jsonl")
+    abort = replace(rec, duration_s=30, user_msg_count=1, tool_use_count=20)
+    assert is_trivial(abort) is True

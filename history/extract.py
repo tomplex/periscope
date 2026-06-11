@@ -195,6 +195,7 @@ def extract_record(jsonl_path: str, events: list[Event], *,
 # Triviality thresholds.
 TRIVIAL_USER_MSG_THRESHOLD = 2
 TRIVIAL_DURATION_S = 60
+TRIVIAL_TOOL_USE_THRESHOLD = 5
 
 
 def compute_summary_input_hash(rec: SessionRecord) -> str:
@@ -221,15 +222,15 @@ def compute_summary_input_hash(rec: SessionRecord) -> str:
 def is_trivial(rec: SessionRecord) -> bool:
     """Trivial sessions skip the Haiku call and get a heuristic summary.
 
-    OR semantics (not AND) — either dimension being shallow signals a
-    session not worth ~$0.005 of summarization: false-starts (one user
-    message and then quit), quick aborts (<60s), or accidental Enter-key
-    sessions. AND would only catch sessions that are BOTH single-shot
-    AND fast, which would let through many 1-message-then-walked-away
-    sessions that have no useful summary to produce.
+    Quick aborts (<60s) are always trivial. A low message count alone is
+    NOT: single-prompt agentic sessions (one message, then hours of tool
+    use) are routine and very much worth summarizing — message count only
+    signals a false-start when the session also did near-zero tool work.
     """
-    return (rec.user_msg_count < TRIVIAL_USER_MSG_THRESHOLD or
-            rec.duration_s < TRIVIAL_DURATION_S)
+    if rec.duration_s < TRIVIAL_DURATION_S:
+        return True
+    return (rec.user_msg_count < TRIVIAL_USER_MSG_THRESHOLD and
+            rec.tool_use_count < TRIVIAL_TOOL_USE_THRESHOLD)
 
 
 def heuristic_summary(rec: SessionRecord) -> str:
