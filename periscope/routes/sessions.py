@@ -311,13 +311,11 @@ def window_new_worktree(
     # (the worktree-tab verb doesn't apply to __main__ — there's no
     # base_branch to fork from).
     project_key = resolve_project_for_window({"session": session})
-    if not project_key:
+    if not project_key or project_key == MAIN_KEY:
         raise HTTPException(
-            400, f"session {session!r} is not owned by a project; adopt it first"
-        )
-    if project_key == MAIN_KEY:
-        raise HTTPException(
-            400, "worktree-tab is not supported in the main project"
+            400,
+            f"worktree-tab requires a session owned by a pinned project; "
+            f"{session!r} is unmanaged or main",
         )
     project = get_project(project_key)
     if not project.get("repo"):

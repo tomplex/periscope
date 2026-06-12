@@ -205,11 +205,12 @@ def test_new_worktree_success(client, mocker):
 
 
 def test_new_worktree_rejects_main(client, mocker):
+    # Both folds of the same rule: worktree-tab needs a pinned project.
     _patch(mocker, "_run", return_value=(0, ""))
     _patch(mocker, "resolve_project_for_window", return_value="__main__")
     r = client.post("/api/window/new-worktree?session=main&branch=tc/x")
     assert r.status_code == 400
-    assert "main project" in r.json()["detail"]
+    assert "pinned project" in r.json()["detail"]
 
 
 def test_new_worktree_rejects_unowned_session(client, mocker):
@@ -217,7 +218,7 @@ def test_new_worktree_rejects_unowned_session(client, mocker):
     _patch(mocker, "resolve_project_for_window", return_value=None)
     r = client.post("/api/window/new-worktree?session=ghost&branch=tc/x")
     assert r.status_code == 400
-    assert "not owned by a project" in r.json()["detail"]
+    assert "pinned project" in r.json()["detail"]
 
 
 def test_new_worktree_rejects_missing_session(client, mocker):
