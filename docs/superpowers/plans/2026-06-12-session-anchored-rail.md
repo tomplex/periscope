@@ -20,7 +20,7 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/test_projects.py`. The `clean_state` fixture (autouse in `tests/conftest.py`) gives a fresh `_STATE`; create rows via `create_project`.
+Create `tests/test_projects.py`. **`clean_state` is NOT autouse** (`tests/conftest.py:54` — plain fixture); without it these tests would write fake project rows into the real `~/.config/periscope/state.json`. Wrap it in a local autouse fixture (the `tests/routes/test_projects.py:8` pattern).
 
 ```python
 """Direct tests for periscope/projects.py (resolve_project_for_window).
@@ -29,12 +29,21 @@ CLAUDE.md flags projects.py as indirectly-covered-only; this starts the
 direct mirror file. Route-level behavior stays in tests/routes/test_projects.py.
 """
 
+import pytest
+
 from periscope.projects import (
     MAIN_KEY,
     archive_project,
     create_project,
     resolve_project_for_window,
 )
+
+
+@pytest.fixture(autouse=True)
+def _state(clean_state):
+    # Isolation: without this, create_project persists into the REAL
+    # state.json (clean_state is not autouse in tests/conftest.py).
+    return clean_state
 
 
 def test_resolve_matched_session_returns_pinned_dir():
@@ -145,6 +154,20 @@ def test_window_new_auto_creates_missing_session(client, mocker):
     assert new_session.args[cwd_idx] == os.path.expanduser("~/dev")
     # No new-window after creating the session — new-session's window IS the tab.
     assert not any(c.args[0] == "new-window" for c in mutate.call_args_list)
+
+
+def test_window_new_no_auto_create_for_project_sessions(client, mocker):
+    # Auto-create is gated on MAIN_KEY: a typo'd session= on a project
+    # call must error, not silently mint a session.
+    _patch(mocker, "resolve_project_for_window", return_value="/Users/foo/dev/myproj")
+    _patch(mocker, "get_project", return_value={
+        "name": "myproj", "tmux_session": "myproj", "archived_at": None,
+    })
+    _patch(mocker, "_run", return_value=(1, ""))          # has-session: missing
+    mutate = _patch(mocker, "_tmux_mutate", return_value=(False, "no such session"))
+    r = client.post("/api/window/new?session=myproj-typo&mode=shell")
+    assert r.status_code == 500
+    assert not any(c.args[0] == "new-session" for c in mutate.call_args_list)
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -179,10 +202,12 @@ def _window_new_plain(session: str, exec_cmd: str, mode: str) -> dict:
 
     # Dev's "+ New tab" can target __main__'s tmux_session while it doesn't
     # exist (dev can be populated purely by folded ad-hoc sessions). Create
-    # it instead of letting `new-window -t` error. Same -P -F rationale as
-    # _window_new_resume: base-index 1 makes hardcoded :0 targets no-op.
+    # it instead of letting `new-window -t` error. Gated on MAIN_KEY so a
+    # typo'd session= on any other call still errors instead of silently
+    # minting a session. Same -P -F rationale as _window_new_resume:
+    # base-index 1 makes hardcoded :0 targets no-op.
     code, _ = _run(["tmux", "has-session", "-t", session])
-    if code != 0:
+    if code != 0 and project_key == MAIN_KEY:
         ok, msg = _tmux_mutate(
             "new-session", "-d", "-s", session, "-c", cwd,
             "-P", "-F", "#{window_index}",
@@ -211,8 +236,10 @@ Note: `MAIN_KEY` and `_run` are already imported in this module (line 26 and the
 
 - [ ] **Step 4: Run the file's tests**
 
+First, **unconditionally** add `_patch(mocker, "_run", return_value=(0, ""))` to the three existing tests that now hit the has-session call but don't patch `_run`: `test_window_new_simple_shell` (line ~37), `test_window_new_uses_project_pinned_dir` (~93), `test_window_new_archived_project_falls_through_to_cwd` (~111). Without the patch they shell out to REAL tmux — `test_window_new_simple_shell` targets session `main`, which exists on this machine, so it would pass green-but-live-tmux-dependent rather than fail.
+
 Run: `uv run pytest tests/routes/test_sessions.py -q`
-Expected: all pass. `test_window_new_uses_project_pinned_dir` and `test_window_new_archived_project_falls_through_to_cwd` mock `_run → (0, "")` already? **Check**: they don't patch `_run` — add `_patch(mocker, "_run", return_value=(0, ""))` to both if they fail on the new has-session call.
+Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -390,6 +417,14 @@ describe("mergeLiveAndPrefs", () => {
   it("no dev group when no dev windows", () => {
     const m = mergeLiveAndPrefs([win()], projects, [], {}, {});
     expect(m.repoOrder).not.toContain(MAIN_KEY);
+  });
+
+  it("null-repo project sessions get no review sentinel", () => {
+    const notesProjects = [proj({ pinned_dir: "/notes", repo: null, tmux_session: "notes", name: "Notes" })];
+    const ws = [win({ pid: "n1", session: "notes", project_pinned_dir: "/notes" })];
+    const m = mergeLiveAndPrefs(ws, notesProjects, [], {}, {});
+    expect(m.repoOrder).toEqual(["/notes"]);
+    expect(m.panesByWorktree["notes"]).toEqual(["n1"]);  // no "review"
   });
 
   it("dev pane order persists via prefs panes_by_worktree[MAIN_KEY]", () => {
@@ -595,18 +630,22 @@ export function mergeLiveAndPrefs(windows, projects, prefRepoOrder, prefWtByRepo
   }
 
   // Pane-children order per session: prefs first (filtered), then new live
-  // pids. The "review" sentinel is auto-added for project sessions only.
+  // pids. The "review" sentinel is auto-added for repo-backed project
+  // sessions only — a null-repo project's group gets none (LGTM review of
+  // a non-git dir is a dead row; LGTM just degrades silently).
   const panesByWorktree = {};
   for (const r of repoOrder) {
     if (r === MAIN_KEY) continue;
+    const own = projectsByPin[r];           // set iff r is a null-repo project's own group
+    const hasReview = !(own && !own.repo);
     for (const w of worktreesByRepo[r]) {
       const live = livePanesByWt[w] || [];
       const liveSet = new Set(live);
       const pref = prefPanesByWt[w] || [];
-      const prefKept = pref.filter(c => c === "review" || liveSet.has(c));
+      const prefKept = pref.filter(c => (c === "review" && hasReview) || liveSet.has(c));
       const prefSet = new Set(prefKept);
       const merged = [...prefKept, ...live.filter(p => !prefSet.has(p))];
-      if (!merged.includes("review")) merged.push("review");
+      if (hasReview && !merged.includes("review")) merged.push("review");
       panesByWorktree[w] = merged;
     }
   }
@@ -737,7 +776,7 @@ In `static/styles.css`, next to the existing `.rail-status` rule (grep for `.rai
 ```css
 .rail-chip {
   font-size: 10px;
-  color: var(--muted, #8b8fa3);
+  color: var(--fg-3);  /* matches the adjacent .rail-status rule */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
