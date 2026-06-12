@@ -164,6 +164,11 @@ html, body {
 }
 .usage-item-proj.blow { color: var(--s-danger); }
 .usage-item-hot { cursor: help; }
+/* Plan fetch hasn't succeeded in >2 refresh intervals: the percentages
+   describe the past (e.g. yesterday, pre-sleep). Grey out + flag. */
+.usage.usage-stale { opacity: 0.55; }
+.usage.usage-stale .usage-item-fill { background: var(--fg-3); }
+.usage-stale-mark { cursor: help; }
 /* Pane card flame: this pane carries >=40% of the current token burn while
    the session meter is hot. */
 .rail-burn { flex: 0 0 auto; font-size: 10px; cursor: help; }

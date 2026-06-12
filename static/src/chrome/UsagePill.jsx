@@ -8,6 +8,12 @@
 // Reads the `usage` signal, which the poll loop writes as
 // { plan: data.usage_plan, fallback: data.usage }.
 import { usage } from "../store.js";
+import { relTime } from "../util.js";
+
+// Stale once the fetch is two refresh intervals old (server refreshes every
+// 5 min on success) — beyond that the server is failing to fetch, not just
+// between refreshes, and the percentages describe the past.
+const STALE_AFTER_S = 600;
 
 function fmtTokens(n) {
   if (!n) return "0";
@@ -111,15 +117,22 @@ export function UsagePill() {
       week_sonnet: "sonnet",
     };
     const present = order.filter((k) => m[k]);
+    const stale =
+      plan.fetched_at &&
+      Math.floor(Date.now() / 1000) - plan.fetched_at > STALE_AFTER_S;
+    const staleLine = stale
+      ? `⚠ stale — last updated ${relTime(plan.fetched_at)} ago`
+      : null;
     const title = present
       .map((k) =>
         [`${m[k].label}: ${m[k].percent}% used`, fmtReset(m[k].resets_at), ...paceLines(m[k])]
           .filter(Boolean)
           .join("\n  "),
       )
+      .concat(staleLine ? [staleLine] : [])
       .join("\n\n");
     return (
-      <div id="usage" class="usage" title={title}>
+      <div id="usage" class={`usage${stale ? " usage-stale" : ""}`} title={title}>
         {present.map((k) => (
           <MeterBar
             key={k}
@@ -129,6 +142,7 @@ export function UsagePill() {
             pace={paceLines(m[k])}
           />
         ))}
+        {stale && <span class="usage-stale-mark">⚠</span>}
       </div>
     );
   }
