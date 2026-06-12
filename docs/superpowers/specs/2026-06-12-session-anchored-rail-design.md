@@ -38,16 +38,17 @@ Sessions with no registered project fold into `__main__`, presented as
    are handled directly:
    - UI label is "dev".
    - `_window_new_plain` (routes/sessions.py): when the resolved project
-     is `MAIN_KEY`, cwd defaults to `~/dev` instead of inheriting the
-     active pane's cwd. This also covers folded unmanaged sessions —
-     consistent with the one-rule fold, and acceptable drift from today's
-     pane-cwd inheritance.
+     is `MAIN_KEY`, cwd defaults to `os.path.expanduser("~/dev")` instead
+     of inheriting the active pane's cwd. This also covers folded
+     unmanaged sessions — consistent with the one-rule fold, and
+     acceptable drift from today's pane-cwd inheritance.
 
    Side effect of the fold worth knowing: `window_new_worktree`'s
-   "session not owned by a project" 400 becomes unreachable (every
-   session now resolves to something); unmanaged sessions land in the
-   "not supported in the main project" 400 instead. Fold the two checks
-   into one accurate message.
+   "session not owned by a project" 400 becomes near-unreachable (every
+   non-empty session resolves to something; the resolver's empty-session
+   early-out still returns None). Unmanaged sessions land in the "not
+   supported in the main project" 400 instead. Fold the two checks into
+   one accurate message.
 
 ## Rail tree (frontend)
 
@@ -66,30 +67,61 @@ PROJECTS
 ```
 
 - **Grouping key**: window → project via `project_pinned_dir`; project →
-  repo group via the project row's `repo` field. The cwd-derived
-  `repo_key` survives only as display data (chips, labels).
+  repo group via the project row's `repo` field (already shipped —
+  `projects_view` spreads full rows). The cwd-derived `repo_key` survives
+  only as display data (chips, labels).
+- **No-row fallback → dev**: a window whose `project_pinned_dir` has no
+  row in the `/api/state` projects payload folds into dev on the
+  frontend. This covers archived projects (the resolver matches archived
+  rows but `projects_view` filters them out) and the poll race right
+  after a project is deleted. The join can never strand a window.
+- **Project row label** comes from `project.name` (fallback:
+  `base_branch`, then session name) — NOT from the first pane's
+  cwd-derived `branch` as today, which would reintroduce label churn on
+  cd. `wtLabelUniverse` switches to the same source.
 - **Repo level stays**: repos with multiple worktree projects (fdy) keep
   the Repo → Project → panes shape. A project whose `repo` is null is its
   own top-level group.
-- **Affiliation chip** on pane rows when cwd ≠ project pin.
-  `worktree_affiliation` (at-pin / sibling / off-repo / no-repo + label)
-  is already computed server-side; the rail renders `⧉ <label>` for
-  anything that isn't at-pin. Sibling worktree → branch name; off-repo →
-  repo basename (+ branch when known); no-repo → `~`-relative cwd.
+- **Affiliation chip** on pane rows when cwd ≠ project pin. The chip is
+  built from `aff.kind` plus the window's own git/cwd fields — `aff.label`
+  is only usable for the sibling case (off-repo's label is
+  `basename(cwd)`, and dev panes always get `{kind: no-repo, label:
+  null}` because `__main__` is unpinned). Concrete rendering rule:
+  - `at-pin` → no chip.
+  - `sibling` → `⧉ <aff.label>` (the sibling worktree's branch).
+  - `off-repo` → `⧉ <repo_label>/<branch>` from the window's git fields.
+  - `no-repo` → `⧉ <~-relative cwd>`.
+  - dev panes (always no-repo by affiliation): use the off-repo rule when
+    the window has a `repo_key`, else `~`-relative cwd. Folded ad-hoc
+    sessions additionally prefix their session name in the chip.
 - **dev is a flat pane list** (the project-model spec's original intent
   for main). Panes from folded ad-hoc sessions appear directly in it;
   their session name rides in the chip rather than a sub-group. Every dev
   pane shows a location chip (dev has no pin): repo/branch when
   git-backed, `~`-relative cwd otherwise.
+- **dev pane ordering and drag**: a synthetic child-order key —
+  `panes_by_worktree["__main__"]` holds the unified pid order across all
+  folded sessions, and dev pane drag descriptors use `__main__` as their
+  `worktreeKey`, so cross-session reorder within dev passes the
+  same-parent drop rule unchanged. (Today "Other" sidesteps this with
+  per-session sub-rows; the flat list needs the synthetic key.)
 - **dev's "+ New tab" row** targets the `__main__` project's
   `tmux_session` (the row is per-session today; dev's flat list needs an
-  explicit target). Folded ad-hoc sessions get no new-tab row of their
-  own — spawning into them still works via the API, just not from the
-  rail.
+  explicit target). `_window_new_plain` auto-creates that session when it
+  doesn't exist (same pattern as `_window_new_resume`) — dev can be
+  populated purely by folded ad-hoc sessions while "main" is dead, and a
+  bare `new-window -t main:` would 500. Folded ad-hoc sessions get no
+  new-tab row of their own — spawning into them still works via the API,
+  just not from the rail.
 - **dev pinned to the bottom**, not draggable — same enforcement points
-  `OTHER_REPO_KEY` has today (merge, isValidDropTarget, reorderRepos,
-  RepoRow drag gate). `OTHER_REPO_KEY` itself is retired; `__main__` is
-  the sentinel everywhere.
+  `OTHER_REPO_KEY` has today: merge, isValidDropTarget, reorderRepos,
+  RepoRow drag gate, and the fifth, `syncRailPrefs`, which today strips
+  "Other" from all three persisted pref maps. For `__main__` that
+  stripping changes shape: still excluded from `repo_order` and
+  `worktrees_by_repo` (it's bottom-pinned, has no sub-rows), but
+  `panes_by_worktree["__main__"]` IS persisted — it's the dev pane
+  order. `OTHER_REPO_KEY` itself is retired; `__main__` is the sentinel
+  everywhere.
 
 ### Prefs migration
 
@@ -128,3 +160,6 @@ churn but cannot fix this; it is fixed independently:
   existing project creation flow).
 - Clickable chips (jump-to-location), grouping dev by inferred repo —
   polish, post-v1 if wanted.
+- `OpenPickerModal` still groups by cwd-derived `repo_key` and skips
+  non-git sessions — after this change the picker and rail will disagree
+  about where a cd'd pane lives. Known drift; align it in a follow-up.
