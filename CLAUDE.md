@@ -120,13 +120,12 @@ One file per subsystem:
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
-`tests/routes/test_<route>.py` per route). 495 pytest tests on a
+`tests/routes/test_<route>.py` per route). 630 pytest tests on a
 clean run. Run with `uv run pytest -q`.
 
-Five modules deviate from the one-test-per-module mirror.
-`cleanup.py` and `projects.py` have no `tests/test_<module>.py` but
-are exercised indirectly through their route tests
-(`tests/routes/test_cleanup.py`, `tests/routes/test_projects.py`).
+Four modules deviate from the one-test-per-module mirror.
+`cleanup.py` has no `tests/test_<module>.py` but is exercised
+indirectly through its route tests (`tests/routes/test_cleanup.py`).
 `repo_locks.py`, `worktrees.py`, and `worktree_spawn.py` have no
 direct test and no route test — they currently lack coverage. Add a
 direct `tests/test_<module>.py` when you next touch those.
@@ -161,7 +160,7 @@ into `#app`. Components grouped by area:
 | entry / state | `src/main.jsx` (mount + boot), `src/store.js` (transient signals — the read model), `src/prefs.js` (server-prefs cache as a signal — the persistence boundary) |
 | chrome | `src/chrome/{Header,FilterBar,UsagePill}.jsx` |
 | poll | `src/poll.js` — the single `/api/state` poll loop (writes `windows` / `projects` / `usage` signals); `openModal` bridge for poll-driven open requests |
-| split view | `src/split/{Split,Rail,RailRows,Detail}.jsx` + `src/split/railTree.js` (`mergeLiveAndPrefs`) — the only dashboard view (grid retired) |
+| split view | `src/split/{Split,Rail,RailRows,Detail}.jsx` + `src/split/railTree.js` (`mergeLiveAndPrefs`) — the only dashboard view (grid retired). Rail membership is SESSION-ANCHORED: windows group by their tmux session's project (`project_pinned_dir` + the projects payload), never by cwd — cd shows as an affiliation chip, not a move. Unmanaged sessions fold into the flat bottom-pinned "dev" group (`MAIN_KEY`); its pane order persists as `panes_by_worktree.__main__` |
 | modal | `src/modal/Modal.jsx` (tab strip + sidebar + review pane) |
 | terminal | `src/terminal/Terminal.jsx` (ref+effect wrapper) + `src/terminal/terminalCore.js` (imperative xterm + `/ws/pane`, ported ~verbatim) |
 | overlays | `src/overlays/{Dialog,Toast,Alerts,Overlays,CommandsModal,NewProjectModal,ReviewPrModal,CleanupModal,SettingsModal,OpenPickerModal,LauncherModal}.jsx` + `src/hooks/useEscape.js` (LIFO escape stack) |
