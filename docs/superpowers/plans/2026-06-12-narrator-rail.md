@@ -22,7 +22,7 @@
 
 **Files:** none (environment setup)
 
-- [ ] **Step 1: Create the worktree and branch**
+- [x] **Step 1: Create the worktree and branch**
 
 ```bash
 git worktree add ~/dev/periscope-rail -b feature/narrator-rail
@@ -31,7 +31,7 @@ cd ~/dev/periscope-rail
 
 All subsequent task commands run with `~/dev/periscope-rail` as cwd unless a step says otherwise.
 
-- [ ] **Step 2: Install frontend deps in the worktree** (Task 4 needs Vite; node_modules doesn't travel with worktrees)
+- [x] **Step 2: Install frontend deps in the worktree** (Task 4 needs Vite; node_modules doesn't travel with worktrees)
 
 ```bash
 npm install
@@ -39,7 +39,7 @@ npm install
 
 Expected: completes without errors (warnings fine).
 
-- [ ] **Step 3: Confirm green baseline and record the count**
+- [x] **Step 3: Confirm green baseline and record the count**
 
 ```bash
 uv run pytest -q
@@ -65,7 +65,7 @@ The lockstep set: every site that touches the pane_status column list must chang
 - Modify: `periscope/activity.py` (`_SCHEMA` ~line 66, `_conn()` ~line 82, pane_status block ~lines 245-336)
 - Test: `tests/test_activity.py` (pane_status section, ~lines 391-468)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_activity.py` after `test_pane_status_upsert_then_get_roundtrips` (the `_status_row` helper at line 393 needs NO change — `rail` defaults to `None` in the dataclass, and `_status_row(rail=...)` works via `**over`):
 
@@ -143,7 +143,7 @@ In `test_pane_status_lines_bulk_read_skips_placeholders`, update the exact-dict 
     assert activity.pane_status_lines() == {"%1": ("doing a thing", 42, None)}
 ```
 
-- [ ] **Step 2: Run the new/changed tests to verify they fail**
+- [x] **Step 2: Run the new/changed tests to verify they fail**
 
 ```bash
 uv run pytest tests/test_activity.py -q -k "rail or stamp_pane_rename or pane_status_lines"
@@ -151,7 +151,7 @@ uv run pytest tests/test_activity.py -q -k "rail or stamp_pane_rename or pane_st
 
 Expected: FAIL — `TypeError: ... unexpected keyword argument 'rail'` where tests construct rows with `rail=`, `AttributeError: ... no attribute 'rail'` where they read `got.rail`, and the `pane_status_lines` 3-tuple assertions fail against the current 2-tuple.
 
-- [ ] **Step 3: Implement the lockstep change in `periscope/activity.py`**
+- [x] **Step 3: Implement the lockstep change in `periscope/activity.py`**
 
 (a) `_SCHEMA` — append `rail` last in the pane_status CREATE TABLE:
 
@@ -272,7 +272,7 @@ def pane_status_lines() -> dict[str, tuple[str, int, str | None]]:
 
 `get_pane_status` and `all_pane_statuses` need NO code change — they SELECT `_PANE_STATUS_COLS` and splat into `PaneStatusRow(*row)`, which now carries 8 values.
 
-- [ ] **Step 4: Run the module's tests**
+- [x] **Step 4: Run the module's tests**
 
 ```bash
 uv run pytest tests/test_activity.py -q
@@ -290,7 +290,7 @@ Expected: `1 failed, 614 passed` — the one failure is `tests/routes/test_state
 
 Side effect worth knowing: route tests that DON'T use `fresh_activity_db` (`test_state_empty` and siblings) open the real `~/.config/periscope/periscope.db`, so this first full-suite run also runs the ALTER migration on the prod DB. Benign — the prod code currently running SELECTs the explicit 7-column list, so the extra column is invisible to it — but it means the column will already exist before Task 5's deploy. Don't be confused by that at verification time: the deploy-time signal is new rows with non-null `rail`, not the column's existence.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/activity.py tests/test_activity.py
@@ -309,7 +309,7 @@ git commit -m "feat(narrator): pane_status rail column — schema, probe-then-AL
 - Modify: `periscope/narrator.py` (constants ~line 40, `NarratorResult` ~line 62, `parse_response` ~line 96, `build_narrator_prompt` ~line 143, `_generate` upsert ~line 301)
 - Test: `tests/test_narrator.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_narrator.py` in the `---- parse_response ----` section:
 
@@ -376,7 +376,7 @@ def test_tick_persists_rail(tick_env):
     assert activity.get_pane_status("%1").rail == "comparing hit rates"
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 ```bash
 uv run pytest tests/test_narrator.py -q -k rail
@@ -384,7 +384,7 @@ uv run pytest tests/test_narrator.py -q -k rail
 
 Expected: FAIL in two shapes — the tests that reference the constant (`rail_accepted_at_limit`, `rail_over_limit...`, `build_narrator_prompt_includes_rail_rules`) fail with `AttributeError: module 'periscope.narrator' has no attribute 'RAIL_MAX_LEN'`; the three that never touch it (`rail_empty_or_nonstring_dropped`, `rail_missing_is_none`, `rail_strips_whitespace`) fail with `AttributeError: 'NarratorResult' object has no attribute 'rail'`. (`test_tick_persists_rail` fails with a plain `AssertionError` — `PaneStatusRow.rail` exists since Task 1 but is still `None`.) All mean the same thing: not implemented yet.
 
-- [ ] **Step 3: Implement in `periscope/narrator.py`**
+- [x] **Step 3: Implement in `periscope/narrator.py`**
 
 (a) Constant, next to `STATUS_MAX_LEN = 72`:
 
@@ -508,7 +508,7 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
         renamed_at=renamed_at, rail=result.rail))
 ```
 
-- [ ] **Step 4: Run the narrator tests**
+- [x] **Step 4: Run the narrator tests**
 
 ```bash
 uv run pytest tests/test_narrator.py -q
@@ -516,7 +516,7 @@ uv run pytest tests/test_narrator.py -q
 
 Expected: all pass (56 = 49 existing + 7 new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/narrator.py tests/test_narrator.py
@@ -531,7 +531,7 @@ git commit -m "feat(narrator): rail fragment in model contract — parse/validat
 - Modify: `periscope/routes/state.py` (merge block, lines 72-81)
 - Test: `tests/routes/test_state.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/routes/test_state.py`, update `test_state_merges_narrator_status_lines` (the seeded row has `rail` unset → defaults None; assert the key is ABSENT — same contract as `status_line` for panes with no status). Add after the existing assertions:
 
@@ -571,7 +571,7 @@ def test_state_merges_status_rail_when_present(client, mocker, clean_state,
     assert w["status_rail"] == "comparing hit rates"
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 ```bash
 uv run pytest tests/routes/test_state.py -q
@@ -579,7 +579,7 @@ uv run pytest tests/routes/test_state.py -q
 
 Expected: 2 FAIL — both merge tests hit `ValueError: too many values to unpack (expected 2)` in the route (the Task 1 collateral failure plus the new test).
 
-- [ ] **Step 3: Implement the merge in `periscope/routes/state.py`**
+- [x] **Step 3: Implement the merge in `periscope/routes/state.py`**
 
 Replace the merge block (lines 75-80):
 
@@ -597,7 +597,7 @@ Replace the merge block (lines 75-80):
                     view["status_rail"] = rail
 ```
 
-- [ ] **Step 4: Run the route tests, then the full suite**
+- [x] **Step 4: Run the route tests, then the full suite**
 
 ```bash
 uv run pytest tests/routes/test_state.py -q
@@ -611,7 +611,7 @@ uv run pytest -q
 
 Expected: `623 passed` (611 baseline + 12 new), 0 failed — the Task 1 collateral failure is closed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/routes/state.py tests/routes/test_state.py
@@ -633,7 +633,7 @@ NO component tests (project convention: frontend is browser-verified; bundle-gre
 - Modify: `static/styles.css` (rail-status block ~lines 1866-1875, tree guides ~lines 1914-1942, compact overrides ~line 2104)
 - Build artifact: `static/dist/app.js`
 
-- [ ] **Step 1: Restructure `PaneRow` in `static/src/split/RailRows.jsx`**
+- [x] **Step 1: Restructure `PaneRow` in `static/src/split/RailRows.jsx`**
 
 Full replacement of the component (the `.rail-label-col` wrapper goes away; a `pane-row-main` nested flex holds the name row in its existing order — icon, label, burn, pin, dot, close — and the status becomes a sibling line; text renders `status_rail || status_line` with the full status as hover title):
 
@@ -688,7 +688,7 @@ export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, drag
 }
 ```
 
-- [ ] **Step 2: Update `static/styles.css`**
+- [x] **Step 2: Update `static/styles.css`**
 
 (a) Replace the narrator-status block (currently `.rail-label-col` + `.rail-status`, lines ~1866-1875) with:
 
@@ -755,7 +755,7 @@ export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, drag
 #rail .child-row { --rail-name-center: 12px; }   /* compact: 3px pad + 9px */
 ```
 
-- [ ] **Step 3: Build the bundle**
+- [x] **Step 3: Build the bundle**
 
 ```bash
 npm run build
@@ -763,7 +763,7 @@ npm run build
 
 Expected: Vite completes, writes `static/dist/app.js`.
 
-- [ ] **Step 4: Bundle grep (headless stand-in for browser verification)**
+- [x] **Step 4: Bundle grep (headless stand-in for browser verification)**
 
 ```bash
 grep -c "pane-row-main" static/dist/app.js && grep -c "status_rail" static/dist/app.js
@@ -771,7 +771,7 @@ grep -c "pane-row-main" static/dist/app.js && grep -c "status_rail" static/dist/
 
 Expected: both print `1` or more (non-zero exit means the new markup/fallback didn't make the bundle — investigate before committing).
 
-- [ ] **Step 5: Browser-verify the geometry (if convenient)**
+- [x] **Step 5: Browser-verify the geometry (if convenient)**
 
 ```bash
 PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py
@@ -779,7 +779,7 @@ PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py
 
 Open http://localhost:8766/ — check: status renders as a second line under pane names; the tree's horizontal stubs meet the NAME line (not the row middle) on two-line rows; the last child's vertical guide terminates at the stub; hover still reveals × and ☆; drag-reorder and click-select still work. Kill the server after. (Status text may be the full `status_line` until prod generates rails — fallback chain working as designed.) If the 16px/12px offsets visibly miss the name-line center, adjust `--rail-name-center` by ±1-2px and rebuild.
 
-- [ ] **Step 6: Commit (source + CSS + bundle together — the dist is the one committed build artifact)**
+- [x] **Step 6: Commit (source + CSS + bundle together — the dist is the one committed build artifact)**
 
 ```bash
 git add static/src/split/RailRows.jsx static/styles.css static/dist/app.js
@@ -792,7 +792,7 @@ git commit -m "feat(rail): full-width status row under pane name, rail-fragment 
 
 **Files:** none new (merge + ops)
 
-- [ ] **Step 1: Full suite in the worktree**
+- [x] **Step 1: Full suite in the worktree**
 
 ```bash
 uv run pytest -q
@@ -800,7 +800,7 @@ uv run pytest -q
 
 Expected: `623 passed` (or baseline+12 if main's count moved), 0 failed.
 
-- [ ] **Step 2: Merge to main** (run from `~/dev/periscope`, the main checkout — plain merge commit, never rebase)
+- [x] **Step 2: Merge to main** (run from `~/dev/periscope`, the main checkout — plain merge commit, never rebase)
 
 ```bash
 git -C ~/dev/periscope merge feature/narrator-rail
@@ -817,13 +817,13 @@ git commit -m "merge feature/narrator-rail (bundle rebuilt on merged tree)"
 
 If *source* files conflict, resolve those first, then rebuild the bundle the same way before committing the merge.
 
-- [ ] **Step 3: Restart prod**
+- [x] **Step 3: Restart prod**
 
 ```bash
 ~/dev/periscope/bin/periscope restart
 ```
 
-- [ ] **Step 4: Prod verification** (the migration is exercised on this deploy — the prod DB has live pane_status rows)
+- [x] **Step 4: Prod verification** (the migration is exercised on this deploy — the prod DB has live pane_status rows)
 
 Wait ~2-3 minutes (worker ticks every 30s; per-pane regeneration is gated at 90s and only fires when a transcript changes), then:
 
@@ -849,7 +849,7 @@ curl -s http://127.0.0.1:8765/api/state | \
 
 Expected: a non-empty list once rails exist in the DB. Also eyeball the dashboard at http://127.0.0.1:8765/ — pane rows show the short fragment under the name; pre-deploy panes show the truncated full status (fallback).
 
-- [ ] **Step 5: Worktree cleanup**
+- [x] **Step 5: Worktree cleanup**
 
 ```bash
 git worktree remove ~/dev/periscope-rail
