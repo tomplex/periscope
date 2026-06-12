@@ -116,41 +116,41 @@ export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, drag
     w.status_at && Math.floor(Date.now() / 1000) - w.status_at > STATUS_STALE_S;
   return (
     <div
-      class={`rail-row child-row${sel}${dimCls}${drop}`}
+      class={`rail-row child-row pane-row${sel}${dimCls}${drop}`}
       data-drop-pos={dropPos || undefined}
       draggable
       onClick={() => onSelect(k)}
       {...dragProps}
     >
-      {w.is_claude
-        ? <span class="rail-icon icon-claude">✻</span>
-        : <span class="rail-icon icon-shell">$</span>}
-      <span class="rail-label-col">
+      <div class="pane-row-main">
+        {w.is_claude
+          ? <span class="rail-icon icon-claude">✻</span>
+          : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
-        {w.status_line && (
+        {w.burn_hot && (
           <span
-            class={`rail-status${statusStale ? " stale" : ""}`}
-            title={w.status_line}
-          >{w.status_line}</span>
+            class="rail-burn"
+            title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
+          >🔥</span>
         )}
-      </span>
-      {w.burn_hot && (
+        <button
+          class={`rail-pin${pinned ? " pinned" : ""}`}
+          title={pinned ? "unpin" : "pin"}
+          onClick={(e) => { e.stopPropagation(); onTogglePin && onTogglePin(); }}
+        >{pinned ? "★" : "☆"}</button>
+        <span class={statusDotClass(w.state)}></span>
+        <button
+          class="rail-close"
+          title="kill this tab"
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+        >×</button>
+      </div>
+      {w.status_line && (
         <span
-          class="rail-burn"
-          title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
-        >🔥</span>
+          class={`rail-status${statusStale ? " stale" : ""}`}
+          title={w.status_line}
+        >{w.status_rail || w.status_line}</span>
       )}
-      <button
-        class={`rail-pin${pinned ? " pinned" : ""}`}
-        title={pinned ? "unpin" : "pin"}
-        onClick={(e) => { e.stopPropagation(); onTogglePin && onTogglePin(); }}
-      >{pinned ? "★" : "☆"}</button>
-      <span class={statusDotClass(w.state)}></span>
-      <button
-        class="rail-close"
-        title="kill this tab"
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
-      >×</button>
     </div>
   );
 }

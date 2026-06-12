@@ -1863,11 +1863,15 @@ body.modal-open { overflow: hidden; }
 .rail-row.wt-row { padding-left: calc(10px + var(--rail-indent)); }
 .rail-row.child-row { padding-left: calc(10px + 2 * var(--rail-indent)); }
 
-/* Narrator status — second muted row under the pane name. The col wrapper
-   takes over .rail-label's flex slot so the status truncates on its own.
+/* Narrator status — full-width second line under the name row. The pane
+   row stacks vertically: a nested .pane-row-main keeps the old single-line
+   flex (icon/label/burn/pin/dot/close), and the status spans the whole row
+   width past the dot gutter — but stays inside the tree-guide indent (the
+   row's content box already starts right of the vertical guides).
    .stale = generated >15 min ago (poll keeps it; the work likely moved on). */
-.rail-row .rail-label-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.rail-row .rail-label-col .rail-label { flex: none; }
+.rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 0; }
+.pane-row-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.pane-row .rail-status { margin-left: 21px; }  /* icon 14px + 7px gap — align with the label */
 .rail-status {
   font-size: 11px; color: var(--fg-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1915,9 +1919,14 @@ body.modal-open { overflow: hidden; }
    actually touch. Replaces the per-row ├/└ glyphs, which broke at every
    row boundary because of vertical padding.
      ::before  — vertical line in the gutter (full row height for inner
-                 children; top-to-middle for the last-in-worktree row)
+                 children; top-to-name-center for the last-in-worktree row)
      ::after   — horizontal stub from the vertical line to the icon
-   Positioned at the center of the worktree-level indent column. */
+   Positioned at the center of the worktree-level indent column.
+   Two-line pane rows make percentage anchors (top/bottom:50%) land below
+   the name line, skewing the tree — so the stub and the terminator pin to
+   the name line's center instead: padding-top + half the ~18px name row
+   (the 18px close/pin buttons set the line height). */
+.rail-row.child-row { --rail-name-center: 16px; }   /* base: 7px pad + 9px */
 .rail-row.child-row::before,
 .rail-row.child-row::after {
   content: "";
@@ -1932,11 +1941,12 @@ body.modal-open { overflow: hidden; }
   width: 1px;
 }
 .rail-row.child-row.last-in-worktree::before {
-  bottom: 50%;                                    /* line stops at the stub */
+  bottom: auto;
+  height: var(--rail-name-center);                /* line stops at the stub */
 }
 .rail-row.child-row::after {
   left: calc(10px + var(--rail-indent) + 7px);
-  top: 50%;
+  top: var(--rail-name-center);
   width: calc(var(--rail-indent) - 5px);
   height: 1px;
 }
@@ -2102,6 +2112,7 @@ body.modal-open { overflow: hidden; }
 #rail .repo-row { margin-top: 6px; }
 #rail .wt-row { color: #aeb4bf; }
 #rail .child-row { padding-left: calc(10px + 2 * var(--rail-indent) + 6px); }
+#rail .child-row { --rail-name-center: 12px; }   /* compact: 3px pad + 9px */
 
 #rail .child-row::before,
 #rail .child-row::after { opacity: 0.6; }
