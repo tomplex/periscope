@@ -10,6 +10,7 @@ import time
 import uuid
 
 from periscope.git_pr import cached_git_state
+from periscope.log import log
 from periscope import store as _store
 from periscope.tmux import tmux
 
@@ -115,6 +116,15 @@ def _resolve_one(w: dict, wblock: dict, taken: set[str], now_ts: int) -> bool:
         # distinguish the windows.
         if pid_raw not in taken:
             pid = pid_raw
+        else:
+            # Loud on purpose: a re-mint changes the window's identity, so
+            # any pid-keyed UI state (detail-pane selection, pinned rows)
+            # silently detaches. Reported as "detail pane closes on cd";
+            # never caught in the act — this tripwire names the window if
+            # it happens again.
+            log.warning(
+                "duplicate @periscope_id %s on %s — re-minting", pid_raw, target
+            )
     if pid is None:
         pid = _rebind_pid(
             wblock,

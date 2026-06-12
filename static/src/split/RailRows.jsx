@@ -106,7 +106,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
   );
 }
 
-export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos, pinned, onTogglePin }) {
+export function PaneRow({ w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos, pinned, onTogglePin }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey ? " selected" : "";
   const dimCls = dim ? "" : " rail-dim";
@@ -127,6 +127,7 @@ export function PaneRow({ w, selectedKey, onSelect, onClose, onRename, dim, drag
           ? <span class="rail-icon icon-claude">✻</span>
           : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
+        {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
         {w.burn_hot && (
           <span
             class="rail-burn"
@@ -226,11 +227,11 @@ export function WorktreeMeta({ wtWindows }) {
   return <div class="wt-meta">{parts.map((p) => <>{p}</>)}</div>;
 }
 
-// Worktree header row. `isOther` swaps the branch glyph + drops the meta strip
-// and close button (Other = bare shells). `collapsed` hides the children
-// (rendered by the caller). Rename POSTs /api/session/rename via onRename.
+// Worktree header row (a project's session under its repo group). Dev has no
+// worktree rows, so there's no catch-all variant. `collapsed` hides the
+// children (rendered by the caller). Rename POSTs /api/session/rename.
 export function WorktreeRow({
-  worktreeKey, label, collapsed, childCount, rolledUp, dim, isOther,
+  worktreeKey, label, collapsed, childCount, rolledUp, dim,
   onToggle, onClose, onRename, dragProps, dropPos,
 }) {
   const chev = collapsed ? "▸" : "▾";
@@ -245,38 +246,34 @@ export function WorktreeRow({
       {...dragProps}
     >
       <span class="rail-chev">{chev}</span>
-      {isOther
-        ? <span class="rail-icon icon-shell">›</span>
-        : <span class="rail-icon icon-worktree">⎇</span>}
-      <RailLabel label={label} kind="worktree" renameable={!isOther} onCommit={onRename} />
+      <span class="rail-icon icon-worktree">⎇</span>
+      <RailLabel label={label} kind="worktree" renameable onCommit={onRename} />
       {collapsed && childCount > 0 ? <span class="rail-count">{childCount}</span> : null}
       <span class={statusDotClass(rolledUp)}></span>
-      {!isOther && (
-        <button
-          class="rail-close"
-          title="kill this session"
-          onClick={(e) => { e.stopPropagation(); onClose(); }}
-        >×</button>
-      )}
+      <button
+        class="rail-close"
+        title="kill this session"
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+      >×</button>
     </div>
   );
 }
 
-export function RepoRow({ repoKey, label, collapsed, rolledUp, dim, isOther, onToggle, dragProps, dropPos }) {
+export function RepoRow({ repoKey, label, collapsed, rolledUp, dim, isDev, onToggle, dragProps, dropPos }) {
   const chev = collapsed ? "▸" : "▾";
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
-  // "Other" is pinned to the bottom — never draggable; omit the drag props.
+  // "dev" is pinned to the bottom — never draggable; omit the drag props.
   return (
     <div
       class={`rail-row repo-row${dimCls}${drop}`}
       data-drop-pos={dropPos || undefined}
-      draggable={!isOther}
+      draggable={!isDev}
       onClick={onToggle}
-      {...(isOther ? {} : dragProps)}
+      {...(isDev ? {} : dragProps)}
     >
       <span class="rail-chev">{chev}</span>
-      {isOther
+      {isDev
         ? <span class="rail-icon icon-other">◇</span>
         : <span class="rail-icon icon-repo">◆</span>}
       <span class="rail-label"><b>{label}</b></span>

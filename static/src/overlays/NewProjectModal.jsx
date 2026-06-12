@@ -38,7 +38,7 @@ function deferRailAdd(result) {
     const wins = (windows.value || []).filter((w) => w.session === sessionName);
     if (wins.length === 0) return; // race; user can + open later
     await addWorktreeToRail({
-      repoKey: wins[0].repo_key || result.repo,
+      repoKey: result.repo || wins[0].repo_key,
       worktreeKey: sessionName,
       paneIds: wins.map((w) => w.pid),
       hasReview: true,

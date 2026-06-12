@@ -206,23 +206,41 @@ def _window_new_plain(session: str, exec_cmd: str, mode: str) -> dict:
     # Project pin always wins over active-pane cwd. If the target session
     # is owned by a non-archived non-main project, new tabs land in the
     # project's pinned_dir — even if the user has cd'd away in the active
-    # pane. Fall back to the pane's cwd only when no project owns the
-    # session (an unmanaged session, or __main__ which is unpinned).
+    # pane. MAIN_KEY (dev, incl. folded unmanaged sessions) lands in ~/dev;
+    # pane-cwd inheritance survives only for archived-project sessions.
     project_key = resolve_project_for_window({"session": session})
     project = get_project(project_key) if project_key else {}
-    if project_key and project_key != MAIN_KEY and not project.get("archived_at"):
+    if project_key == MAIN_KEY:
+        cwd = os.path.expanduser("~/dev")
+    elif project_key and not project.get("archived_at"):
         cwd = project_key  # the projects dict's key IS the pinned_dir path
         # (see _lookup_key in periscope/projects.py for the realpath normalization).
     else:
         cwd = tmux(
             "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
         ).strip() or os.path.expanduser("~")
-    ok, msg = _tmux_mutate(
-        "new-window", "-t", f"{session}:", "-c", cwd,
-        "-P", "-F", "#{window_index}",
-    )
-    if not ok:
-        raise HTTPException(500, msg)
+
+    # Dev's "+ New tab" can target __main__'s tmux_session while it doesn't
+    # exist (dev can be populated purely by folded ad-hoc sessions). Create
+    # it instead of letting `new-window -t` error. Gated on MAIN_KEY so a
+    # typo'd session= on any other call still errors instead of silently
+    # minting a session. Same -P -F rationale as _window_new_resume:
+    # base-index 1 makes hardcoded :0 targets no-op.
+    code, _ = _run(["tmux", "has-session", "-t", session])
+    if code != 0 and project_key == MAIN_KEY:
+        ok, msg = _tmux_mutate(
+            "new-session", "-d", "-s", session, "-c", cwd,
+            "-P", "-F", "#{window_index}",
+        )
+        if not ok:
+            raise HTTPException(500, f"failed to create session '{session}': {msg}")
+    else:
+        ok, msg = _tmux_mutate(
+            "new-window", "-t", f"{session}:", "-c", cwd,
+            "-P", "-F", "#{window_index}",
+        )
+        if not ok:
+            raise HTTPException(500, msg)
     try:
         index = int(msg)
     except ValueError:
@@ -293,13 +311,11 @@ def window_new_worktree(
     # (the worktree-tab verb doesn't apply to __main__ — there's no
     # base_branch to fork from).
     project_key = resolve_project_for_window({"session": session})
-    if not project_key:
+    if not project_key or project_key == MAIN_KEY:
         raise HTTPException(
-            400, f"session {session!r} is not owned by a project; adopt it first"
-        )
-    if project_key == MAIN_KEY:
-        raise HTTPException(
-            400, "worktree-tab is not supported in the main project"
+            400,
+            f"worktree-tab requires a session owned by a pinned project; "
+            f"{session!r} is unmanaged or main",
         )
     project = get_project(project_key)
     if not project.get("repo"):
