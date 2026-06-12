@@ -163,3 +163,33 @@ def test_state_merges_narrator_status_lines(client, mocker, clean_state,
     assert views[0]["status_at"] == 1234
     assert "status_line" not in views[1]
     assert "status_at" not in views[1]
+    assert "status_rail" not in views[0]   # row exists but rail is NULL
+
+
+def test_state_merges_status_rail_when_present(client, mocker, clean_state,
+                                               fresh_activity_db):
+    activity = fresh_activity_db
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%7", session_id="sid", status="comparing figv2 lookup hit rates",
+        generated_at=1234, jsonl_size=10, seen_name="claude", renamed_at=None,
+        rail="comparing hit rates"))
+    windows = [
+        {"session": "s", "index": 0, "active": True, "activity": 0,
+         "pane_id": "%7", "cwd": ""},
+    ]
+    _patch(mocker, "list_windows", return_value=windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "all_projects", return_value={})
+    # Hermeticity: same usage patches as test_state_merges_narrator_status_lines.
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value=None)
+    _patch(mocker, "build_window_view",
+           side_effect=lambda w, now_ts: (
+               {"index": w["index"], "pane_id": w["pane_id"]}, None))
+
+    body = client.get("/api/state").json()
+    w = body["windows"][0]
+    assert w["status_line"] == "comparing figv2 lookup hit rates"
+    assert w["status_at"] == 1234
+    assert w["status_rail"] == "comparing hit rates"

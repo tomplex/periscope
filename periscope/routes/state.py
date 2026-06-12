@@ -77,7 +77,12 @@ def state():
         for view in result:
             s = statuses.get(view.get("pane_id") or "")
             if s:
-                view["status_line"], view["status_at"] = s
+                view["status_line"], view["status_at"], rail = s
+                # Absent-key contract (same as status_line): rows generated
+                # before the rail column, or with model-rejected rails, send
+                # nothing and the UI falls back to status_line.
+                if rail:
+                    view["status_rail"] = rail
 
     stamp_updates: list[tuple[str, int, int]] = [
         stamp for _, stamp in built if stamp is not None
