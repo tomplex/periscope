@@ -6,6 +6,7 @@ export function SectionHeader({ icon, label, count, collapsed, onToggle, tone })
   const toneCls =
     tone === "alert" ? " section-header-alert"
     : tone === "ready" ? " section-header-ready"
+    : tone === "working" ? " section-header-working"
     : "";
   return (
     <div

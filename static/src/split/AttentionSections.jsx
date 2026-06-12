@@ -1,5 +1,5 @@
 // The left-rail attention zone. Two mount points (see <Rail>):
-//   <AttentionTop>    — NEEDS YOU + READY + PINNED, rendered ABOVE the project tree.
+//   <AttentionTop>    — NEEDS YOU + READY + RUNNING + PINNED, rendered ABOVE the project tree.
 //   <ActivitySection> — the low-signal ACTIVITY log, rendered BELOW the tree.
 // Reads the windows + alertItems signals through the pure transforms in
 // attention.js. Out-of-tree rows use `attn-row` classes (NOT child-row) so they
@@ -13,7 +13,7 @@ import * as prefs from "../prefs.js";
 import { relTime, waitLabel, shortestUniqueSuffix } from "../util.js";
 import { SectionHeader } from "./SectionHeader.jsx";
 import {
-  buildNeedsYou, buildReady, needsYouCount, resolvePinned, buildActivity,
+  buildNeedsYou, buildReady, buildRunning, needsYouCount, resolvePinned, buildActivity,
   isSoftQuestion, prunedStateDismissals,
 } from "./attention.js";
 import { statusDotClass } from "./RailRows.jsx";
@@ -48,7 +48,7 @@ function toggle(key, currentlyCollapsed) {
   prefs.setRailCollapsedKey(key, !currentlyCollapsed);
 }
 
-// NEEDS YOU + PINNED — top of the rail, above the project tree.
+// NEEDS YOU + READY + RUNNING + PINNED — top of the rail, above the project tree.
 export function AttentionTop() {
   // Subscribe to prefs explicitly (pins + section-collapse live there), the
   // same way Rail does — so reactivity is self-contained.
@@ -65,6 +65,9 @@ export function AttentionTop() {
 
   const readyRows = buildReady(live, items, dismissed, dismissedReadyPids.value);
   const readyCollapsed = collapsed["sec:ready"] === true;
+
+  const runningRows = buildRunning(live);
+  const runningCollapsed = collapsed["sec:running"] === true;
 
   const pinned = resolvePinned(prefs.getPinnedPids(), live);
   const pinnedCollapsed = collapsed["sec:pinned"] === true;
@@ -163,6 +166,25 @@ export function AttentionTop() {
               </div>
             )
           )}
+        </>
+      )}
+
+      {runningRows.length > 0 && (
+        <>
+          <SectionHeader
+            icon="⟳" label="RUNNING" tone="working"
+            count={runningRows.length}
+            collapsed={runningCollapsed}
+            onToggle={() => toggle("sec:running", runningCollapsed)}
+          />
+          {!runningCollapsed && runningRows.map((r) => (
+            <div key={`run:${r.pid}`} class="rail-row attn-row attn-running"
+                 onClick={() => selectPane(r.w)}>
+              <span class="attn-dot dot dot-green"></span>
+              <span class="attn-label">{originLabel(r.w, null, null, shorten)}</span>
+              <span class="attn-reason">{(r.w?.spinner || "working") + "…"}</span>
+            </div>
+          ))}
         </>
       )}
 

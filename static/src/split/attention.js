@@ -100,6 +100,14 @@ export function needsYouCount(needsYouRows) {
   return needsYouRows.length;
 }
 
+// Live "working" panes, in /api/state order. A pure mirror of pane state —
+// no events, no dismissals: rows appear and disappear with the spinner.
+export function buildRunning(windows) {
+  return (windows || [])
+    .filter((w) => w.state === "working")
+    .map((w) => ({ kind: "live", pid: w.pid, w }));
+}
+
 // Resolve the pinned-pid list against live windows, in pin order; dead ids
 // dropped silently (render-time pruning — never persist-prune, or a
 // transiently-absent pane loses its pin).

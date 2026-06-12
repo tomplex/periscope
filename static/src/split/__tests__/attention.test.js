@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildNeedsYou, buildReady, isAcked, needsYouCount, resolvePinned, buildActivity,
+  buildNeedsYou, buildReady, buildRunning, isAcked, needsYouCount, resolvePinned, buildActivity,
   isSoftQuestion, prunedStateDismissals,
 } from "../attention.js";
 import { shortestUniqueSuffix } from "../../util.js";
@@ -165,6 +165,21 @@ describe("buildReady", () => {
       evt({ kind: "done", id: "new", ts: 90 }),
     ], new Set());
     expect(rows.map((r) => r.id)).toEqual(["new", "old"]);
+  });
+});
+
+describe("buildRunning", () => {
+  it("includes only working panes, carrying the window", () => {
+    const live = win({ pid: "p1", state: "working", spinner: "Brewing" });
+    const rows = buildRunning([live, win({ pid: "p2", state: "idle" }), win({ pid: "p3", state: "done" })]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "live", pid: "p1" });
+    expect(rows[0].w.spinner).toBe("Brewing");
+  });
+
+  it("empty/missing windows → no rows", () => {
+    expect(buildRunning([])).toHaveLength(0);
+    expect(buildRunning(undefined)).toHaveLength(0);
   });
 });
 

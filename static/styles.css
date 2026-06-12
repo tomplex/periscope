@@ -1414,6 +1414,9 @@ body.modal-open { overflow: hidden; }
 #rail .attn-ready:hover { background: #16281f; }
 #rail .attn-ready .attn-reason { color: #6f8a78; }
 #rail .attn-ready .attn-x { color: #52665a; }
+#rail .attn-running { background: #1d1a10; }
+#rail .attn-running:hover { background: #242015; }
+#rail .attn-running .attn-reason { color: #8d8159; }
 #rail .attn-pinned { background: #161a14; }
 #rail .attn-pinned:hover { background: #1b2018; }
 #rail .attn-activity:hover { background: #1a1c20; }
@@ -1839,6 +1842,8 @@ body.modal-open { overflow: hidden; }
 .section-header-alert .section-header-count { background: #f85149; color: #fff; }
 .section-header-ready { color: var(--s-done); }
 .section-header-ready .section-header-count { background: var(--s-done); color: #0d1117; }
+.section-header-working { color: var(--s-working); }
+.section-header-working .section-header-count { background: var(--s-working); color: #0d1117; }
 
 /* Each nesting level adds --rail-indent of left-padding so the tree's
    hierarchy reads visually. repo at base; worktree at base + 1 step;
