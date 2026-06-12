@@ -144,8 +144,11 @@ def archive_project(pinned_dir: str) -> bool:
 def resolve_project_for_window(window: dict) -> Optional[str]:
     """Map a tmux window (with `session` field) to its owning project key.
 
-    Returns the pinned_dir key, MAIN_KEY for main, or None if no project
-    matches. Lookup is by `tmux_session` match.
+    Returns the pinned_dir key for a session owned by a project, MAIN_KEY
+    for everything else (the fold-to-dev rule: unmanaged sessions belong
+    to main). Only an empty/missing session returns None. Lookup is by
+    `tmux_session` match; archived rows still match — the frontend folds
+    them to dev via its no-row fallback.
     """
     session = window.get("session", "")
     if not session:
@@ -154,4 +157,4 @@ def resolve_project_for_window(window: dict) -> Optional[str]:
         for key, row in _store._STATE.get("projects", {}).items():
             if row.get("tmux_session") == session:
                 return key
-    return None
+    return MAIN_KEY
