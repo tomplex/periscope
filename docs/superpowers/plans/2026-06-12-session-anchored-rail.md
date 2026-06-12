@@ -18,7 +18,7 @@
 - Create: `tests/test_projects.py`
 - Modify: `periscope/projects.py:144-157` (`resolve_project_for_window`)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_projects.py`. **`clean_state` is NOT autouse** (`tests/conftest.py:54` — plain fixture); without it these tests would write fake project rows into the real `~/.config/periscope/state.json`. Wrap it in a local autouse fixture (the `tests/routes/test_projects.py:8` pattern).
 
@@ -69,12 +69,12 @@ def test_resolve_archived_project_still_matches():
     assert resolve_project_for_window({"session": "oldproj"}) == "/Users/foo/dev/oldproj"
 ```
 
-- [ ] **Step 2: Run to verify the fold test fails**
+- [x] **Step 2: Run to verify the fold test fails**
 
 Run: `uv run pytest tests/test_projects.py -q`
 Expected: `test_resolve_unknown_session_folds_to_main` FAILS (returns `None`); the other three PASS (current behavior).
 
-- [ ] **Step 3: Implement the fold**
+- [x] **Step 3: Implement the fold**
 
 In `periscope/projects.py`, replace `resolve_project_for_window`:
 
@@ -98,12 +98,12 @@ def resolve_project_for_window(window: dict) -> Optional[str]:
     return MAIN_KEY
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `uv run pytest -q`
 Expected: all pass. If `tests/test_window_view.py` or `tests/routes/` fail on a `project_pinned_dir is None` assertion for unmanaged windows, update that assertion to `== "__main__"` (grep confirmed no such assertions exist today, but the suite is the oracle).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/projects.py tests/test_projects.py
@@ -116,7 +116,7 @@ git commit -m "feat(projects): resolve_project_for_window folds unknown sessions
 - Modify: `periscope/routes/sessions.py:203-234` (`_window_new_plain`)
 - Modify: `tests/routes/test_sessions.py` (add 2 tests)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/routes/test_sessions.py` after `test_window_new_archived_project_falls_through_to_cwd` (reuse the `_patch` helper defined at the top of that file):
 
@@ -170,12 +170,12 @@ def test_window_new_no_auto_create_for_project_sessions(client, mocker):
     assert not any(c.args[0] == "new-session" for c in mutate.call_args_list)
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `uv run pytest tests/routes/test_sessions.py -q -k "main_key_defaults or auto_creates"`
 Expected: both FAIL (first: cwd is `/tmp`; second: 500 or new-window called).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Replace the body of `_window_new_plain` (`periscope/routes/sessions.py:203-234`):
 
@@ -234,14 +234,14 @@ def _window_new_plain(session: str, exec_cmd: str, mode: str) -> dict:
 
 Note: `MAIN_KEY` and `_run` are already imported in this module (line 26 and the tmux import block).
 
-- [ ] **Step 4: Run the file's tests**
+- [x] **Step 4: Run the file's tests**
 
 First, **unconditionally** add `_patch(mocker, "_run", return_value=(0, ""))` to the three existing tests that now hit the has-session call but don't patch `_run`: `test_window_new_simple_shell` (line ~37), `test_window_new_uses_project_pinned_dir` (~93), `test_window_new_archived_project_falls_through_to_cwd` (~111). Without the patch they shell out to REAL tmux — `test_window_new_simple_shell` targets session `main`, which exists on this machine, so it would pass green-but-live-tmux-dependent rather than fail.
 
 Run: `uv run pytest tests/routes/test_sessions.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/routes/sessions.py tests/routes/test_sessions.py
@@ -254,7 +254,7 @@ git commit -m "feat(sessions): /api/window/new — MAIN_KEY lands in ~/dev, auto
 - Modify: `periscope/routes/sessions.py:292-303`
 - Modify: `tests/routes/test_sessions.py:155-168`
 
-- [ ] **Step 1: Update the two tests to the folded contract**
+- [x] **Step 1: Update the two tests to the folded contract**
 
 Replace `test_new_worktree_rejects_main` and `test_new_worktree_rejects_unowned_session`:
 
@@ -273,12 +273,12 @@ def test_new_worktree_rejects_main_and_unmanaged(client, mocker):
     assert "pinned project" in r.json()["detail"]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `uv run pytest tests/routes/test_sessions.py -q -k "rejects_main_and_unmanaged"`
 Expected: FAIL (current messages are "not owned by a project" / "main project").
 
-- [ ] **Step 3: Implement the fold**
+- [x] **Step 3: Implement the fold**
 
 In `window_new_worktree` (`periscope/routes/sessions.py:292-303`), replace:
 
@@ -306,12 +306,12 @@ with:
         )
 ```
 
-- [ ] **Step 4: Run the suite**
+- [x] **Step 4: Run the suite**
 
 Run: `uv run pytest -q`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/routes/sessions.py tests/routes/test_sessions.py
@@ -324,7 +324,7 @@ git commit -m "refactor(sessions): fold window_new_worktree's two 400 guards int
 - Rewrite: `static/src/split/railTree.js`
 - Create: `static/src/split/__tests__/railTree.test.js`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `static/src/split/__tests__/railTree.test.js` (style of `attention.test.js`: tiny factories):
 
@@ -521,12 +521,12 @@ describe("paneChip", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `npm test -- --run railTree`
 Expected: FAIL — `indexProjects`, `groupKeyForWindow`, etc. not exported; `mergeLiveAndPrefs` has the old arity.
 
-- [ ] **Step 3: Rewrite `railTree.js`**
+- [x] **Step 3: Rewrite `railTree.js`**
 
 Full replacement of `static/src/split/railTree.js`:
 
@@ -719,12 +719,12 @@ export function paneChip(w, { isDev = false, sessionPrefix = null } = {}) {
 
 Note the deliberate simplification vs. the test list: `off-repo` and `no-repo` share one branch (both render from the window's own git fields, cwd fallback). `repoLabelFor` and `OTHER_REPO_KEY` are deleted — Task 6 fixes the imports.
 
-- [ ] **Step 4: Run the vitest file**
+- [x] **Step 4: Run the vitest file**
 
 Run: `npm test -- --run railTree`
 Expected: all PASS. (Other vitest files still pass: `npm test -- --run`.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add static/src/split/railTree.js static/src/split/__tests__/railTree.test.js
@@ -739,7 +739,7 @@ git commit -m "feat(rail): session-anchored railTree core — project grouping, 
 - Modify: `static/src/split/RailRows.jsx:109-156` (PaneRow), `:265-286` (RepoRow), `:232-263` (WorktreeRow)
 - Modify: `static/styles.css` (one new rule)
 
-- [ ] **Step 1: PaneRow chip prop**
+- [x] **Step 1: PaneRow chip prop**
 
 In `PaneRow`, add `chip` to the destructured props and render it after `RailLabel` (before the burn flame so the name+chip read as one phrase):
 
@@ -752,7 +752,7 @@ export function PaneRow({ w, chip, selectedKey, onSelect, onClose, onRename, dim
         {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
 ```
 
-- [ ] **Step 2: RepoRow `isOther` → `isDev`**
+- [x] **Step 2: RepoRow `isOther` → `isDev`**
 
 Rename the prop and keep both gates (draggable + glyph). The dev glyph stays `◇`:
 
@@ -762,14 +762,14 @@ export function RepoRow({ repoKey, label, collapsed, rolledUp, dim, isDev, onTog
 
 …and replace the three `isOther` uses inside with `isDev` (comment: `// "dev" is pinned to the bottom — never draggable; omit the drag props.`).
 
-- [ ] **Step 3: WorktreeRow drops `isOther`**
+- [x] **Step 3: WorktreeRow drops `isOther`**
 
 Dev has no worktree rows anymore, so `WorktreeRow`'s `isOther` handling is dead. Remove `isOther` from the props and replace its three uses with the non-other branch:
 - glyph: always `<span class="rail-icon icon-worktree">⎇</span>`
 - `renameable={!isOther}` → `renameable`
 - the close button renders unconditionally (drop the `!isOther &&` wrapper)
 
-- [ ] **Step 4: Chip CSS**
+- [x] **Step 4: Chip CSS**
 
 In `static/styles.css`, next to the existing `.rail-status` rule (grep for `.rail-status`), add:
 
@@ -787,7 +787,7 @@ In `static/styles.css`, next to the existing `.rail-status` rule (grep for `.rai
 
 (If the stylesheet doesn't define `--muted`, use the literal color the `.rail-status` rule uses.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add static/src/split/RailRows.jsx static/styles.css
@@ -800,7 +800,7 @@ git commit -m "feat(rail): PaneRow affiliation chip + RepoRow isDev, WorktreeRow
 - Modify: `static/src/split/Rail.jsx`
 - Modify: `static/src/overlays/NewProjectModal.jsx:41`, `static/src/overlays/ReviewPrModal.jsx:36`
 
-- [ ] **Step 1: Imports + signals**
+- [x] **Step 1: Imports + signals**
 
 ```js
 import { windows, projects, currentFilter, railSelection, dragState } from "../store.js";
@@ -812,7 +812,7 @@ import {
 
 (`repoLabelFor` and `OTHER_REPO_KEY` imports are gone.)
 
-- [ ] **Step 2: Thread `projects` through the three `mergeLiveAndPrefs` call sites**
+- [x] **Step 2: Thread `projects` through the three `mergeLiveAndPrefs` call sites**
 
 All three (syncRailPrefs at ~line 60, `currentMergedOrder()` at ~line 101, the render at ~line 188) become:
 
@@ -822,7 +822,7 @@ mergeLiveAndPrefs(windows.value, projects.value, prefs.getRepoOrder(), prefs.get
 
 (in `Rail()` itself, use the already-read `live` for the first arg and add `const projs = projects.value;`).
 
-- [ ] **Step 3: syncRailPrefs — persist dev pane order**
+- [x] **Step 3: syncRailPrefs — persist dev pane order**
 
 Replace the `nextRepoOrder`/`nextWtByRepo`/`nextPanesByWt` block (~lines 67-75):
 
@@ -843,11 +843,11 @@ Replace the `nextRepoOrder`/`nextWtByRepo`/`nextPanesByWt` block (~lines 67-75):
   }
 ```
 
-- [ ] **Step 4: reorderRepos / isValidDropTarget — sentinel swap**
+- [x] **Step 4: reorderRepos / isValidDropTarget — sentinel swap**
 
 In `reorderRepos` (~line 109) and `isValidDropTarget` (~lines 152-153), replace every `OTHER_REPO_KEY` with `MAIN_KEY`. No logic changes — the pane/review branch's `drag.worktreeKey === target.worktreeKey` rule already admits dev-internal drags because both descriptors carry `MAIN_KEY` (next step).
 
-- [ ] **Step 5: Render — labels, dev branch**
+- [x] **Step 5: Render — labels, dev branch**
 
 Inside `Rail()`:
 
@@ -926,7 +926,7 @@ For dev's repo-row rollup + dim (the existing `repoChildStates`/`repoDim` comput
           : worktrees.some((wt) => (byWorktree[wt] || []).some((w) => passesFilter(w, filter)));
 ```
 
-- [ ] **Step 6: Empty-state copy**
+- [x] **Step 6: Empty-state copy**
 
 The rail empty state (~line 304) is now only reachable with zero live windows. Update the copy:
 
@@ -936,7 +936,7 @@ The rail empty state (~line 304) is now only reachable with zero live windows. U
         </div>
 ```
 
-- [ ] **Step 7: Modal repoKey flips**
+- [x] **Step 7: Modal repoKey flips**
 
 `static/src/overlays/NewProjectModal.jsx:41` and `static/src/overlays/ReviewPrModal.jsx:36`: the rail pref key for a new project's group is now the project's repo, so the project-row value must win over the window's cwd-derived key:
 
@@ -944,14 +944,14 @@ The rail empty state (~line 304) is now only reachable with zero live windows. U
       repoKey: result.repo || wins[0].repo_key,
 ```
 
-- [ ] **Step 8: Run all frontend tests + build**
+- [x] **Step 8: Run all frontend tests + build**
 
 Run: `npm test -- --run && npm run build`
 Expected: vitest green; Vite build succeeds (catches any leftover `OTHER_REPO_KEY`/`repoLabelFor` import).
 
 Then grep for stragglers: `grep -rn "OTHER_REPO_KEY\|repoLabelFor" static/src/` — expected: no hits.
 
-- [ ] **Step 9: Commit (including the rebuilt bundle)**
+- [x] **Step 9: Commit (including the rebuilt bundle)**
 
 ```bash
 git add static/src static/dist
@@ -960,17 +960,17 @@ git commit -m "feat(rail): session-anchored grouping — projects join, dev flat
 
 ## Task 7: Full-suite verification
 
-- [ ] **Step 1: Server suite**
+- [x] **Step 1: Server suite**
 
 Run: `uv run pytest -q`
 Expected: all pass (paste the tail).
 
-- [ ] **Step 2: Frontend suite**
+- [x] **Step 2: Frontend suite**
 
 Run: `npm test -- --run`
 Expected: all pass.
 
-- [ ] **Step 3: Browser verification (dev server)**
+- [x] **Step 3: Browser verification (dev server)**
 
 ```sh
 npm run dev    # FastAPI :8765 + vite :5174
@@ -986,7 +986,7 @@ Checklist (against real tmux sessions):
 7. Review row appears under project sessions only; LGTM chip unaffected.
 8. Rail filter (FilterBar) still dims correctly inside dev.
 
-- [ ] **Step 4: Deploy to prod periscope**
+- [x] **Step 4: Deploy to prod periscope**
 
 ```bash
 bin/periscope restart
