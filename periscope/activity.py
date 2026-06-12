@@ -70,8 +70,9 @@ CREATE TABLE IF NOT EXISTS pane_status (
   generated_at INTEGER NOT NULL,   -- unix seconds
   jsonl_size   INTEGER NOT NULL,   -- size at generation (change check)
   seen_name    TEXT,               -- window name at last generation
-  renamed_at   INTEGER             -- rename-cooldown stamp (narrator,
+  renamed_at   INTEGER,            -- rename-cooldown stamp (narrator,
                                    -- manual routes, or detected external)
+  rail         TEXT                -- <=28-char rail fragment (nullable)
 );
 """
 
@@ -87,6 +88,12 @@ def _conn() -> sqlite3.Connection:
         c = sqlite3.connect(str(config.ACTIVITY_DB), check_same_thread=False)
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript(_SCHEMA)
+        # pane_status predates the rail column in live DBs, and CREATE TABLE
+        # IF NOT EXISTS won't add it. Guarded ALTER (history/db.py pattern)
+        # is provably idempotent, so dev/prod schema skew is harmless.
+        have = {r[1] for r in c.execute("PRAGMA table_info(pane_status)")}
+        if "rail" not in have:
+            c.execute("ALTER TABLE pane_status ADD COLUMN rail TEXT")
         c.commit()
         _CONN = c
     return _CONN
@@ -243,7 +250,7 @@ def migrate_legacy_pane_sessions() -> int:
 # and routes/state.py's bulk merge. Statuses survive restarts by design.
 
 _PANE_STATUS_COLS = ("pane_id, session_id, status, generated_at, "
-                     "jsonl_size, seen_name, renamed_at")
+                     "jsonl_size, seen_name, renamed_at, rail")
 
 
 @dataclass(frozen=True)
@@ -255,6 +262,7 @@ class PaneStatusRow:
     jsonl_size: int
     seen_name: str | None
     renamed_at: int | None
+    rail: str | None = None
 
 
 def get_pane_status(pane_id: str) -> PaneStatusRow | None:
@@ -280,13 +288,14 @@ def upsert_pane_status(row: PaneStatusRow) -> None:
     with _LOCK:
         c = _conn()
         c.execute(
-            f"INSERT INTO pane_status ({_PANE_STATUS_COLS}) VALUES (?,?,?,?,?,?,?) "
+            f"INSERT INTO pane_status ({_PANE_STATUS_COLS}) VALUES (?,?,?,?,?,?,?,?) "
             "ON CONFLICT(pane_id) DO UPDATE SET "
             "  session_id=excluded.session_id, status=excluded.status, "
             "  generated_at=excluded.generated_at, jsonl_size=excluded.jsonl_size, "
-            "  seen_name=excluded.seen_name, renamed_at=excluded.renamed_at",
+            "  seen_name=excluded.seen_name, renamed_at=excluded.renamed_at, "
+            "  rail=excluded.rail",
             (row.pane_id, row.session_id, row.status, row.generated_at,
-             row.jsonl_size, row.seen_name, row.renamed_at),
+             row.jsonl_size, row.seen_name, row.renamed_at, row.rail),
         )
         c.commit()
 
@@ -294,13 +303,14 @@ def upsert_pane_status(row: PaneStatusRow) -> None:
 def stamp_pane_rename(pane_id: str, *, name: str, at: int) -> None:
     """Start the narrator's rename cooldown for this pane. Called from the
     manual/auto rename routes. The pane may have no row yet (rename before
-    first generation) — insert a placeholder (status='', jsonl_size=0)
-    that the read paths skip and that regenerates promptly (size differs)."""
+    first generation) — insert a placeholder (status='', jsonl_size=0,
+    rail=NULL) that the read paths skip and that regenerates promptly
+    (size differs)."""
     with _LOCK:
         c = _conn()
         c.execute(
             f"INSERT INTO pane_status ({_PANE_STATUS_COLS}) "
-            "VALUES (?, NULL, '', 0, 0, ?, ?) "
+            "VALUES (?, NULL, '', 0, 0, ?, ?, NULL) "
             "ON CONFLICT(pane_id) DO UPDATE SET "
             "  seen_name=excluded.seen_name, renamed_at=excluded.renamed_at",
             (pane_id, name, at),
@@ -308,17 +318,18 @@ def stamp_pane_rename(pane_id: str, *, name: str, at: int) -> None:
         c.commit()
 
 
-def pane_status_lines() -> dict[str, tuple[str, int]]:
-    """Bulk read for routes/state.py: pane_id -> (status, generated_at).
-    One SELECT per poll — never a per-pane query inside the 32-thread
-    fan-out (it would serialize on _LOCK). Skips placeholder rows."""
+def pane_status_lines() -> dict[str, tuple[str, int, str | None]]:
+    """Bulk read for routes/state.py: pane_id -> (status, generated_at,
+    rail). One SELECT per poll — never a per-pane query inside the
+    32-thread fan-out (it would serialize on _LOCK). Skips placeholder
+    rows."""
     with _LOCK:
         c = _conn()
         rows = c.execute(
-            "SELECT pane_id, status, generated_at FROM pane_status "
+            "SELECT pane_id, status, generated_at, rail FROM pane_status "
             "WHERE status != ''"
         ).fetchall()
-    return {p: (s, int(g)) for p, s, g in rows}
+    return {p: (s, int(g), r) for p, s, g, r in rows}
 
 
 def prune_pane_status(alive_pane_ids: set[str]) -> int:

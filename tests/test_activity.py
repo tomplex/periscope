@@ -405,6 +405,51 @@ def test_pane_status_upsert_then_get_roundtrips():
     assert activity.get_pane_status("%nope") is None
 
 
+def test_pane_status_rail_roundtrips():
+    activity.upsert_pane_status(_status_row(rail="comparing lookup hit rates"))
+    assert activity.get_pane_status("%1").rail == "comparing lookup hit rates"
+
+
+def test_pane_status_rail_defaults_to_none():
+    # Existing keyword constructions never pass rail — the default must hold
+    # through a full write/read cycle.
+    activity.upsert_pane_status(_status_row())
+    assert activity.get_pane_status("%1").rail is None
+
+
+def test_pane_status_migration_adds_rail_to_old_db():
+    # The prod DB has pane_status rows that predate the rail column;
+    # CREATE TABLE IF NOT EXISTS won't add it. Fabricate the old shape at
+    # the (fixture-redirected) DB path BEFORE activity opens it, then let
+    # _conn()'s probe-then-ALTER run on first use.
+    import sqlite3
+    from periscope import config
+    db = sqlite3.connect(str(config.ACTIVITY_DB))
+    db.execute(
+        "CREATE TABLE pane_status ("
+        "  pane_id TEXT PRIMARY KEY, session_id TEXT, status TEXT NOT NULL,"
+        "  generated_at INTEGER NOT NULL, jsonl_size INTEGER NOT NULL,"
+        "  seen_name TEXT, renamed_at INTEGER)"
+    )
+    db.execute("INSERT INTO pane_status VALUES "
+               "('%1', 'sid-a', 'old status', 1000, 10, 'claude', NULL)")
+    db.commit()
+    db.close()
+    got = activity.get_pane_status("%1")   # first _conn() → migration runs
+    assert got.status == "old status"      # rows survive
+    assert got.rail is None                # column added, backfilled NULL
+    # Idempotent: a reconnect on the now-current shape must not raise.
+    activity._CONN.close()
+    activity._CONN = None
+    assert activity.get_pane_status("%1").rail is None
+
+
+def test_pane_status_lines_carries_rail():
+    activity.upsert_pane_status(_status_row(
+        "%1", status="doing a thing", generated_at=42, rail="short rail"))
+    assert activity.pane_status_lines() == {"%1": ("doing a thing", 42, "short rail")}
+
+
 def test_pane_status_upsert_overwrites_existing():
     activity.upsert_pane_status(_status_row(status="old", generated_at=1))
     activity.upsert_pane_status(_status_row(status="new", generated_at=2))
@@ -430,14 +475,17 @@ def test_stamp_pane_rename_inserts_placeholder_row():
     assert got.seen_name == "my-name"
     assert got.renamed_at == 5000
     assert got.session_id is None
+    assert got.rail is None                # 8th VALUES slot must be NULL
 
 
 def test_stamp_pane_rename_updates_existing_row_only_in_place():
-    activity.upsert_pane_status(_status_row(status="working on x", generated_at=900))
+    activity.upsert_pane_status(_status_row(status="working on x", generated_at=900,
+                                            rail="short rail"))
     activity.stamp_pane_rename("%1", name="human-name", at=6000)
     got = activity.get_pane_status("%1")
     assert got.status == "working on x"   # status untouched
     assert got.generated_at == 900        # generation clock untouched
+    assert got.rail == "short rail"       # rail untouched
     assert got.seen_name == "human-name"
     assert got.renamed_at == 6000
 
@@ -445,7 +493,7 @@ def test_stamp_pane_rename_updates_existing_row_only_in_place():
 def test_pane_status_lines_bulk_read_skips_placeholders():
     activity.upsert_pane_status(_status_row("%1", status="doing a thing", generated_at=42))
     activity.stamp_pane_rename("%2", name="n", at=1)   # placeholder, status=''
-    assert activity.pane_status_lines() == {"%1": ("doing a thing", 42)}
+    assert activity.pane_status_lines() == {"%1": ("doing a thing", 42, None)}
 
 
 def test_prune_pane_status_drops_dead_panes():
