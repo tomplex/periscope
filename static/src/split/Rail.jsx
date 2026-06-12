@@ -1,10 +1,11 @@
-// Left rail of the split view (#rail): the Repo → Worktree → Pane+review tree
+// Left rail of the split view (#rail): the Repo → Project → Pane+review tree
 // derived from prefs (curated order) joined with /api/state (live status).
-// Ported from rail.js — renderRail + all interaction handlers (collapse,
-// select, inline rename, close, drag-reorder, syncRailPrefs).
+// Membership is session-anchored (railTree.js header has the full contract);
+// dev (MAIN_KEY) renders as a flat pane list at the bottom.
 //
 // Read model:
 //   - `windows` signal  → live membership + status (rebuilt each poll)
+//   - `projects` signal → project rows (grouping keys + labels + dev target)
 //   - prefs.*           → order / collapse / last_selected (persistence boundary)
 //   - `railSelection`   → STRING highlight-key the rows compare against
 //
@@ -20,17 +21,20 @@
 // breaks under a component tree (#6). The reorder splices run against
 // currentMergedOrder() (the same merged tree the render uses), not raw prefs.
 //
-// OTHER_REPO_KEY is pinned to the bottom at all four enforcement points: merge
-// (railTree), isValidDropTarget, reorderRepos, repoRow draggable gate (RailRows).
+// MAIN_KEY (dev) is pinned to the bottom at all five enforcement points: merge
+// (railTree), isValidDropTarget, reorderRepos, RepoRow draggable gate
+// (RailRows), and syncRailPrefs (which persists panes_by_worktree[MAIN_KEY]
+// but keeps MAIN_KEY out of repo_order / worktrees_by_repo).
 import { useRef, useState } from "preact/hooks";
 import { track } from "../track.js";
-import { windows, currentFilter, railSelection, dragState } from "../store.js";
+import { windows, projects, currentFilter, railSelection, dragState } from "../store.js";
 import * as prefs from "../prefs.js";
 import { passesFilter } from "../filter.js";
 import { apiCall, targetQuery, shortestUniqueSuffix } from "../util.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
 import {
-  mergeLiveAndPrefs, indexWindowsByWorktree, repoLabelFor, maxSeverity, OTHER_REPO_KEY,
+  mergeLiveAndPrefs, indexWindowsByWorktree, indexProjects,
+  projectLabel, groupLabel, paneChip, maxSeverity, MAIN_KEY,
 } from "./railTree.js";
 import { PaneRow, ReviewRow, NewTabRow, WorktreeRow, RepoRow, WorktreeMeta } from "./RailRows.jsx";
 import { SectionHeader } from "./SectionHeader.jsx";
@@ -58,20 +62,25 @@ function syncRailPrefs() {
   lastSyncAt = Date.now();
 
   const merged = mergeLiveAndPrefs(
-    live, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
+    live, projects.value, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
   );
   const prefRepoOrder = prefs.getRepoOrder();
   const prefWtByRepo = prefs.getWorktreesByRepo();
   const prefPanesByWt = prefs.getPanesByWorktree();
 
-  const nextRepoOrder = merged.repoOrder.filter((r) => r !== OTHER_REPO_KEY);
+  const nextRepoOrder = merged.repoOrder.filter((r) => r !== MAIN_KEY);
   const nextWtByRepo = { ...merged.worktreesByRepo };
-  delete nextWtByRepo[OTHER_REPO_KEY];
+  delete nextWtByRepo[MAIN_KEY];
   const nextPanesByWt = {};
   for (const r of nextRepoOrder) {
     for (const wt of (nextWtByRepo[r] || [])) {
       nextPanesByWt[wt] = merged.panesByWorktree[wt] || [];
     }
+  }
+  // Dev's flat order IS persisted (unlike Other's was) — it's the only
+  // ordering state dev has.
+  if (merged.panesByWorktree[MAIN_KEY]) {
+    nextPanesByWt[MAIN_KEY] = merged.panesByWorktree[MAIN_KEY];
   }
 
   if (
@@ -99,16 +108,16 @@ function spliceMove(list, fromIdx, toIdx, insertAfter) {
 
 function currentMergedOrder() {
   return mergeLiveAndPrefs(
-    windows.value, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
+    windows.value, projects.value, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
   );
 }
 
 async function reorderRepos(draggedKey, targetKey, insertAfter) {
   const dragged = draggedKey.replace(/^repo:/, "");
   const target = targetKey.replace(/^repo:/, "");
-  if (dragged === OTHER_REPO_KEY || target === OTHER_REPO_KEY) return;
+  if (dragged === MAIN_KEY || target === MAIN_KEY) return;
   const { repoOrder } = currentMergedOrder();
-  const order = repoOrder.filter((r) => r !== OTHER_REPO_KEY);
+  const order = repoOrder.filter((r) => r !== MAIN_KEY);
   const from = order.indexOf(dragged);
   const to = order.indexOf(target);
   if (from < 0 || to < 0) return;
@@ -149,8 +158,8 @@ async function reorderChildren(dragChildKey, targetChildKey, worktreeKey, insert
 function isValidDropTarget(drag, target) {
   if (drag.kind === "repo") {
     if (target.kind !== "repo") return false;
-    if (target.key === `repo:${OTHER_REPO_KEY}`) return false;
-    if (drag.key === `repo:${OTHER_REPO_KEY}`) return false;
+    if (target.key === `repo:${MAIN_KEY}`) return false;
+    if (drag.key === `repo:${MAIN_KEY}`) return false;
     return true;
   }
   if (drag.kind === "worktree") {
@@ -174,6 +183,7 @@ export function Rail() {
 
   // Reading these signals subscribes the component → re-render each poll.
   const live = windows.value;
+  const projs = projects.value || [];
   const filter = currentFilter.value;
   const selectedKey = railSelection.value;
   // Subscribe to prefs so collapse/order changes re-render.
@@ -185,14 +195,18 @@ export function Rail() {
   const collapsed = prefs.getRailCollapsed();
   const projectsCollapsed = collapsed[`sec:projects`] === true;
   const byWorktree = indexWindowsByWorktree(live);
+  const projsByPin = indexProjects(projs);
+  const projectsBySession = {};
+  for (const p of projs) if (p.tmux_session) projectsBySession[p.tmux_session] = p;
+  const mainProject = projsByPin[MAIN_KEY] || {};
   const { repoOrder, worktreesByRepo, panesByWorktree } = mergeLiveAndPrefs(
-    live, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
+    live, projs, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
   );
-  // Universe for shortest-unique-suffix worktree labels: every non-Other
-  // worktree's displayed name, so a label only grows a segment on real collision.
+  // Universe for shortest-unique-suffix worktree labels: every non-dev
+  // project's displayed name, so a label only grows a segment on real collision.
   const wtLabelUniverse = repoOrder
-    .filter((r) => r !== OTHER_REPO_KEY)
-    .flatMap((r) => (worktreesByRepo[r] || []).map((wt) => byWorktree[wt]?.[0]?.branch || wt));
+    .filter((r) => r !== MAIN_KEY)
+    .flatMap((r) => (worktreesByRepo[r] || []).map((wt) => projectLabel(projectsBySession[wt], wt)));
 
   // --- Selection -----------------------------------------------------------
   function selectKey(key) {
@@ -306,7 +320,7 @@ export function Rail() {
       <aside id="rail" aria-label="projects rail">
         <div class="rail-head"><span>Projects</span></div>
         <div class="rail-empty">
-          No worktree-backed tmux sessions are open. Use <code>+ project</code> or <code>review PR</code> to start one.
+          No tmux windows found. Use <code>+ project</code> or <code>review PR</code> to start one.
         </div>
       </aside>
     );
@@ -323,13 +337,20 @@ export function Rail() {
         onToggle={() => toggleCollapse("sec:projects")}
       />
       {!projectsCollapsed && repoOrder.map((repoKey) => {
-        const isOther = repoKey === OTHER_REPO_KEY;
-        const repoLabel = repoLabelFor(repoKey, live);
+        const isDev = repoKey === MAIN_KEY;
+        const repoLabel = groupLabel(repoKey, projsByPin);
         const worktrees = worktreesByRepo[repoKey] || [];
         const repoCollapsed = collapsed[`repo:${repoKey}`] === true;
-        const repoChildStates = worktrees.flatMap((wt) => (byWorktree[wt] || []).map((w) => w.state || "shell"));
+        const devWindows = isDev
+          ? (panesByWorktree[MAIN_KEY] || []).map((pid) => live.find((w) => w.pid === pid)).filter(Boolean)
+          : [];
+        const repoChildStates = isDev
+          ? devWindows.map((w) => w.state || "shell")
+          : worktrees.flatMap((wt) => (byWorktree[wt] || []).map((w) => w.state || "shell"));
         const repoRolledUp = maxSeverity(repoChildStates);
-        const repoDim = worktrees.some((wt) => (byWorktree[wt] || []).some((w) => passesFilter(w, filter)));
+        const repoDim = isDev
+          ? devWindows.some((w) => passesFilter(w, filter))
+          : worktrees.some((wt) => (byWorktree[wt] || []).some((w) => passesFilter(w, filter)));
         const repoKeyStr = `repo:${repoKey}`;
 
         return (
@@ -340,12 +361,46 @@ export function Rail() {
               collapsed={repoCollapsed}
               rolledUp={repoRolledUp}
               dim={repoDim}
-              isOther={isOther}
+              isDev={isDev}
               onToggle={() => toggleCollapse(repoKeyStr)}
               dragProps={makeDragProps({ kind: "repo", key: repoKeyStr })}
               dropPos={dropPosFor(repoKeyStr)}
             />
-            {!repoCollapsed && worktrees.map((wtKey) => {
+            {isDev && !repoCollapsed && (() => {
+              // Dev: flat pane list across __main__'s session + folded
+              // ad-hoc sessions. Drag descriptors use MAIN_KEY as the
+              // worktreeKey so cross-session reorder passes the existing
+              // same-parent drop rule; order persists via
+              // panes_by_worktree[MAIN_KEY] (syncRailPrefs).
+              const rows = devWindows.map((w) => {
+                const sessionPrefix = w.session !== mainProject.tmux_session ? w.session : null;
+                return (
+                  <PaneRow
+                    key={`pane:${w.pid}`}
+                    w={w}
+                    chip={paneChip(w, { isDev: true, sessionPrefix })}
+                    selectedKey={selectedKey}
+                    dim={passesFilter(w, filter)}
+                    onSelect={selectKey}
+                    onClose={() => closePane(w)}
+                    onRename={(next) => renamePane(w, next)}
+                    dragProps={makeDragProps({ kind: "pane", key: `pane:${w.pid}`, childKey: w.pid, worktreeKey: MAIN_KEY })}
+                    dropPos={dropPosFor(`pane:${w.pid}`)}
+                    pinned={prefs.getPinnedPids().includes(w.pid)}
+                    onTogglePin={() => prefs.togglePin(w.pid)}
+                  />
+                );
+              });
+              rows.push(
+                <NewTabRow
+                  key={`newtab:${MAIN_KEY}`}
+                  worktreeKey={mainProject.tmux_session || "main"}
+                  onOpen={openLauncher}
+                />
+              );
+              return rows;
+            })()}
+            {!isDev && !repoCollapsed && worktrees.map((wtKey) => {
               const wtWindows = byWorktree[wtKey] || [];
               const windowsByPid = Object.fromEntries(wtWindows.map((w) => [w.pid, w]));
               const childOrder = panesByWorktree[wtKey] || [];
@@ -374,6 +429,7 @@ export function Rail() {
                     <PaneRow
                       key={`pane:${w.pid}`}
                       w={w}
+                      chip={paneChip(w)}
                       selectedKey={selectedKey}
                       dim={passesFilter(w, filter)}
                       onSelect={selectKey}
@@ -390,9 +446,9 @@ export function Rail() {
               childRows.push(<NewTabRow key={`newtab:${wtKey}`} worktreeKey={wtKey} onOpen={openLauncher} />);
 
               const rolledUp = maxSeverity(childStates);
-              const label = isOther
-                ? wtKey
-                : shortestUniqueSuffix(wtWindows[0]?.branch || wtKey, wtLabelUniverse);
+              // Stable label from the project row — never the first pane's
+              // cwd-derived branch (which churned on cd).
+              const label = shortestUniqueSuffix(projectLabel(projectsBySession[wtKey], wtKey), wtLabelUniverse);
               const wtDim = wtWindows.some((w) => passesFilter(w, filter));
               const childCount = childOrder.filter((c) => c === "review" || windowsByPid[c]).length;
 
@@ -405,14 +461,13 @@ export function Rail() {
                     childCount={childCount}
                     rolledUp={rolledUp}
                     dim={wtDim}
-                    isOther={isOther}
                     onToggle={() => toggleCollapse(`wt:${wtKey}`)}
                     onClose={() => closeWorktree(wtKey)}
                     onRename={(next) => renameWorktree(wtKey, next)}
                     dragProps={makeDragProps({ kind: "worktree", key: `wt:${wtKey}`, repoKey })}
                     dropPos={dropPosFor(`wt:${wtKey}`)}
                   />
-                  {!isOther && <WorktreeMeta wtWindows={wtWindows} />}
+                  <WorktreeMeta wtWindows={wtWindows} />
                   {!wtCollapsed && childRows}
                 </RailFragment>
               );

@@ -8,13 +8,12 @@
 // the project's `repo` field keys the top-level group. cd never moves a row;
 // the cwd-derived repo_key/branch fields are display-only (chips).
 //
-// MAIN_KEY ("dev") replaces the old OTHER_REPO_KEY: the catch-all for
-// __main__'s own session, folded unmanaged sessions, and no-row pins
-// (archived projects / delete races). Dev renders as a FLAT pane list —
-// worktreesByRepo[MAIN_KEY] is always [] and panesByWorktree[MAIN_KEY] holds
-// the unified pid order (that pref key IS persisted, unlike Other's was).
-// Pinned to the bottom at the same enforcement points Other had: merge
-// (here), isValidDropTarget, reorderRepos, the RepoRow drag-attr gate, and
+// MAIN_KEY ("dev") is the catch-all group: __main__'s own session, folded
+// unmanaged sessions, and no-row pins (archived projects / delete races).
+// Dev renders as a FLAT pane list — worktreesByRepo[MAIN_KEY] is always []
+// and panesByWorktree[MAIN_KEY] holds the unified pid order (a persisted
+// pref key). Pinned to the bottom at five enforcement points: merge (here),
+// isValidDropTarget, reorderRepos, the RepoRow drag-attr gate, and
 // syncRailPrefs (Rail.jsx).
 
 export const MAIN_KEY = "__main__";
