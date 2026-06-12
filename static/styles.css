@@ -1878,6 +1878,19 @@ body.modal-open { overflow: hidden; }
 }
 .rail-status.stale { opacity: .5; }
 
+/* Affiliation chip — where the pane's cwd actually is when it differs from
+   its project's pin (session-anchored rail: the row never moves on cd, the
+   chip carries the location instead). */
+.rail-chip {
+  font-size: 10px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 11em;
+  flex: 0 1 auto;
+}
+
 /* Worktree metadata strip — appears below the worktree label, aligned
    with the icon column so it visually nests with the parent. PR/CI/Linear
    chips stay quiet (muted color, small font) so they don't compete with
