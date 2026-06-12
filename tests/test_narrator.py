@@ -119,6 +119,42 @@ def test_parse_response_non_string_rename_dropped_status_kept():
     assert out is not None and out.rename is None
 
 
+def test_parse_response_rail_accepted_at_limit():
+    rail = "x" * narrator.RAIL_MAX_LEN
+    out = narrator.parse_response(
+        f'{{"status": "s", "rail": "{rail}", "rename": null}}')
+    assert out.rail == rail
+
+
+def test_parse_response_rail_over_limit_dropped_status_and_rename_kept():
+    # A bad rail must never discard a good status or rename — the rail is
+    # the optional garnish, not the meal.
+    rail = "x" * (narrator.RAIL_MAX_LEN + 1)
+    out = narrator.parse_response(
+        f'{{"status": "s", "rail": "{rail}", "rename": "fs-liveness"}}')
+    assert out is not None
+    assert out.rail is None
+    assert out.status == "s"
+    assert out.rename == "fs-liveness"
+
+
+def test_parse_response_rail_empty_or_nonstring_dropped():
+    assert narrator.parse_response(
+        '{"status": "s", "rail": "  ", "rename": null}').rail is None
+    assert narrator.parse_response(
+        '{"status": "s", "rail": 42, "rename": null}').rail is None
+
+
+def test_parse_response_rail_missing_is_none():
+    assert narrator.parse_response('{"status": "s", "rename": null}').rail is None
+
+
+def test_parse_response_rail_strips_whitespace():
+    out = narrator.parse_response(
+        '{"status": "s", "rail": "  comparing rates  ", "rename": null}')
+    assert out.rail == "comparing rates"
+
+
 # ---- rename_decision ----
 
 def test_rename_decision_passes_valid_suggestion():
@@ -219,6 +255,19 @@ def test_build_narrator_prompt_omits_empty_sections():
     assert "files touched" not in p
 
 
+def test_build_narrator_prompt_includes_rail_rules():
+    p = narrator.build_narrator_prompt(
+        window_name="f2-post-deploy", branch=None, pr=None, cwd="/repo",
+        signals={})
+    assert '"rail"' in p                          # in the return-shape line
+    assert str(narrator.RAIL_MAX_LEN) in p        # length rule in-prompt
+    # The no-overlap rule must reference the CURRENT name inline (in the
+    # rules block, i.e. before the `current_name:` data line), not speak
+    # abstractly about "the window name".
+    rules_block = p.split("current_name:")[0]
+    assert "f2-post-deploy" in rules_block
+
+
 # ---- disabled latch ----
 
 def test_enabled_true_with_key(monkeypatch):
@@ -309,6 +358,13 @@ def test_tick_generates_first_status(tick_env):
     assert row.seen_name == "claude"
     assert row.renamed_at is None
     assert tick_env["tmux_calls"] == []   # rename: null → no tmux
+
+
+def test_tick_persists_rail(tick_env):
+    tick_env["response"] = ('{"status": "fixing flaky reconcile test", '
+                            '"rail": "comparing hit rates", "rename": null}')
+    narrator.tick([_pane()])
+    assert activity.get_pane_status("%1").rail == "comparing hit rates"
 
 
 def test_tick_skips_pane_without_session_mapping(tick_env):

@@ -38,6 +38,7 @@ MIN_INTERVAL_S = 90
 MAX_PER_TICK = 5
 RENAME_COOLDOWN_S = 1800
 STATUS_MAX_LEN = 72
+RAIL_MAX_LEN = 28
 
 Regen = Literal["session_switch", "size_changed", "first_sight"]
 
@@ -63,6 +64,7 @@ def _enabled() -> bool:
 class NarratorResult:
     status: str
     rename: str | None
+    rail: str | None = None
 
 
 def should_regenerate(row: PaneStatusRow | None, *, session_id: str,
@@ -96,7 +98,8 @@ def pick_regenerations(candidates: list[tuple[int, str]], *,
 def parse_response(raw: str) -> NarratorResult | None:
     """Model output is an external boundary — the ONLY defensive parsing
     in this module. None means: keep the previous status, retry next tick
-    naturally. A non-string rename drops just the rename, not the status."""
+    naturally. A non-string rename drops just the rename, and a bad rail
+    drops just the rail — never the status."""
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned,
@@ -115,7 +118,14 @@ def parse_response(raw: str) -> NarratorResult | None:
         return None
     rename = d.get("rename")
     rename = rename.strip() or None if isinstance(rename, str) else None
-    return NarratorResult(status=status, rename=rename)
+    rail = d.get("rail")
+    if isinstance(rail, str):
+        rail = rail.strip()
+        if not rail or len(rail) > RAIL_MAX_LEN:
+            rail = None
+    else:
+        rail = None
+    return NarratorResult(status=status, rename=rename, rail=rail)
 
 
 def rename_decision(suggestion: str | None, *, current_name: str,
@@ -157,13 +167,21 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
         "  - Describe the most recent WORK even if the pane has since gone quiet —",
         "    the dashboard already shows busy/idle; never mention busy/idle state.",
         "",
+        "Also write `rail`: an ultra-short cut of the status for a narrow",
+        "sidebar row, rendered directly under the window name. Rules:",
+        f"  - Max {RAIL_MAX_LEN} characters.",
+        "  - Lead with the current action, e.g. 'comparing lookup hit rates'.",
+        f"  - The name '{window_name}' sits right above it — never repeat that",
+        "    name's concept; give the differentiating detail instead.",
+        "  - No trailing punctuation or ellipsis. All lowercase.",
+        "",
         "Also decide whether the window deserves a NEW NAME. Suggest one ONLY",
         "when the work has meaningfully diverged from the current name. Rules:",
         *[f"  {r}" for r in RENAME_RULES],
         "  - Most calls should return null for rename — name churn is worse than",
         "    a slightly stale name. Example: current_name='fs-liveness', recent",
         "    work is still feature-store liveness checks → return",
-        '    {"status": "...", "rename": null}.',
+        '    {"status": "...", "rail": "...", "rename": null}.',
         "",
         f"current_name: {window_name}",
         f"cwd: {cwd}",
@@ -184,7 +202,7 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
     lines += [
         "",
         'Return ONLY a JSON object: {"status": "<status line>",'
-        ' "rename": null | "<new-name>"}.',
+        ' "rail": "<short fragment>", "rename": null | "<new-name>"}.',
         "No markdown fences, no commentary, just the JSON object.",
     ]
     return "\n".join(lines)
@@ -301,5 +319,5 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     activity.upsert_pane_status(PaneStatusRow(
         pane_id=pane_id, session_id=sid, status=result.status,
         generated_at=now, jsonl_size=size, seen_name=seen_name,
-        renamed_at=renamed_at))
+        renamed_at=renamed_at, rail=result.rail))
     log.info("narrator: %s status %r", pane_id, result.status)
