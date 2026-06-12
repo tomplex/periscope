@@ -303,3 +303,96 @@ def test_parse_plan_usage_warns_once_on_live_unknown_meter(caplog):
     hits = [r for r in caplog.records if "unmapped meter" in r.message]
     assert len(hits) == 1
     assert "seven_day_omelette" in hits[0].getMessage()
+
+
+# --- fetch failure visibility + cache backoff ---
+
+
+def test_fetch_plan_usage_warns_when_token_missing(caplog, monkeypatch):
+    """A missing/expired keychain token logs a warning instead of silently
+    serving stale meters forever."""
+    import logging
+    import periscope.usage as usage
+    monkeypatch.setattr(usage, "_read_oauth_token", lambda: None)
+    with caplog.at_level(logging.WARNING):
+        assert usage.fetch_plan_usage() is None
+    assert any("no valid OAuth token" in r.getMessage() for r in caplog.records)
+
+
+def test_fetch_plan_usage_warns_on_http_failure(caplog, monkeypatch):
+    """Network/HTTP failures warn — httpx only logs requests that get a
+    response, so this is the only evidence a fetch was even attempted."""
+    import logging
+    import periscope.usage as usage
+
+    def boom(*a, **kw):
+        raise RuntimeError("connect timeout")
+
+    monkeypatch.setattr(usage, "_read_oauth_token", lambda: "tok")
+    monkeypatch.setattr(usage.httpx, "get", boom)
+    with caplog.at_level(logging.WARNING):
+        assert usage.fetch_plan_usage() is None
+    assert any("plan usage fetch failed" in r.getMessage() for r in caplog.records)
+
+
+def test_refresh_success_stamps_fetched_at_and_full_backoff(monkeypatch):
+    """A successful refresh attaches fetched_at and schedules the next
+    attempt PLAN_USAGE_REFRESH_S out."""
+    import time
+    import periscope.usage as usage
+    monkeypatch.setattr(usage, "fetch_plan_usage",
+                        lambda: {"available": True, "meters": {}})
+    monkeypatch.setattr(usage.activity, "record_usage_samples", lambda rows: None)
+    monkeypatch.setattr(usage, "attach_projections", lambda *a, **kw: None)
+    monkeypatch.setattr(usage, "_plan_cache", (0.0, None))
+    monkeypatch.setattr(usage, "_plan_in_flight", True)
+    before = time.time()
+    usage._refresh_plan_usage_into_cache()
+    next_at, data = usage._plan_cache
+    assert data["fetched_at"] >= int(before)
+    assert next_at - before >= usage.PLAN_USAGE_REFRESH_S - 1
+    assert usage._plan_in_flight is False
+
+
+def test_refresh_failure_keeps_data_and_retries_sooner(monkeypatch):
+    """A failed refresh keeps the previously-cached data (with its old
+    fetched_at) and retries at PLAN_USAGE_RETRY_S, not the full interval —
+    the post-wake first attempt often fails before the network is up."""
+    import time
+    import periscope.usage as usage
+    old = {"available": True, "meters": {}, "fetched_at": 123}
+    monkeypatch.setattr(usage, "fetch_plan_usage", lambda: None)
+    monkeypatch.setattr(usage, "_plan_cache", (0.0, old))
+    monkeypatch.setattr(usage, "_plan_in_flight", True)
+    before = time.time()
+    usage._refresh_plan_usage_into_cache()
+    next_at, data = usage._plan_cache
+    assert data is old
+    assert usage.PLAN_USAGE_RETRY_S - 1 <= next_at - before < usage.PLAN_USAGE_REFRESH_S
+    assert usage._plan_in_flight is False
+
+
+def test_cached_plan_usage_no_spawn_before_next_attempt(monkeypatch):
+    """Inside the backoff window the cache is served with no refresh spawn."""
+    import time
+    import periscope.usage as usage
+    data = {"available": True, "meters": {}}
+    monkeypatch.setattr(usage, "_plan_cache", (time.time() + 100, data))
+    monkeypatch.setattr(usage, "_bg", lambda *a: (_ for _ in ()).throw(
+        AssertionError("refresh spawned inside backoff window")))
+    assert usage.cached_plan_usage() is data
+
+
+def test_cached_plan_usage_spawns_once_when_due(monkeypatch):
+    """Past the next-attempt time: serves stale data immediately and spawns
+    exactly one refresh (in-flight flag dedupes concurrent polls)."""
+    import time
+    import periscope.usage as usage
+    data = {"available": True, "meters": {}}
+    spawned = []
+    monkeypatch.setattr(usage, "_plan_cache", (time.time() - 1, data))
+    monkeypatch.setattr(usage, "_plan_in_flight", False)
+    monkeypatch.setattr(usage, "_bg", lambda name, fn: spawned.append(name))
+    assert usage.cached_plan_usage() is data
+    assert usage.cached_plan_usage() is data
+    assert spawned == ["plan-usage"]

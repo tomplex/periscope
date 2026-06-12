@@ -125,7 +125,12 @@ def cached_claude_usage() -> dict:
 # aggressively rate-limited bucket and get persistent 429s.
 
 PLAN_USAGE_REFRESH_S = 300.0
+# Failed fetches retry sooner: post-wake the network is often not up yet for
+# the first attempt, and a full 5-minute backoff pins the dashboard to
+# yesterday's numbers exactly when the user sits down.
+PLAN_USAGE_RETRY_S = 60.0
 _OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+# (next attempt eligible at, last successful data)
 _plan_cache: tuple[float, dict | None] = (0.0, None)
 _plan_in_flight = False
 _plan_lock = threading.Lock()
@@ -302,8 +307,13 @@ def attach_projections(meters: dict, now: float,
 
 
 def fetch_plan_usage() -> dict | None:
+    # Failures warn rather than pass silently: a broken token or endpoint
+    # would otherwise serve stale meters forever with zero log evidence
+    # (httpx only logs requests that get a response). Attempt rate is capped
+    # by the cache backoff, so this can't spam.
     token = _read_oauth_token()
     if not token:
+        log.warning("plan usage: no valid OAuth token in keychain")
         return None
     try:
         resp = httpx.get(
@@ -317,7 +327,8 @@ def fetch_plan_usage() -> dict | None:
         )
         resp.raise_for_status()
         return parse_plan_usage(resp.json())
-    except Exception:
+    except Exception as e:
+        log.warning("plan usage fetch failed: %r", e)
         return None
 
 
@@ -327,34 +338,38 @@ def _refresh_plan_usage_into_cache() -> None:
         result = fetch_plan_usage()
         if result:
             now = int(time.time())
+            result["fetched_at"] = now
             activity.record_usage_samples([
                 (now, k, m["utilization"], m.get("resets_at"))
                 for k, m in result["meters"].items()
             ])
             attach_projections(result["meters"], now)
     except Exception:
+        log.exception("plan usage: sample recording/projection failed")
         result = None
     with _plan_lock:
         if result:
-            _plan_cache = (time.time(), result)
+            _plan_cache = (time.time() + PLAN_USAGE_REFRESH_S, result)
         else:
-            # Stamp the timestamp even on failure so cached_plan_usage backs
-            # off for PLAN_USAGE_REFRESH_S instead of re-hitting the endpoint
-            # on every poll (it 429s readily). Keep the previously-cached data.
-            _plan_cache = (time.time(), _plan_cache[1])
+            # Back off even on failure instead of re-hitting the endpoint on
+            # every poll (it 429s readily), but at the shorter retry interval.
+            # Keep the previously-cached data; the frontend renders its
+            # fetched_at as a staleness marker.
+            _plan_cache = (time.time() + PLAN_USAGE_RETRY_S, _plan_cache[1])
         _plan_in_flight = False
 
 
 def cached_plan_usage() -> dict | None:
     """Stale-while-revalidate: serves the last successful fetch immediately
-    and kicks off a background refresh whenever the cache is older than
-    PLAN_USAGE_REFRESH_S. First-ever call returns None; the dashboard's
-    next poll will see the freshly-cached result."""
+    and kicks off a background refresh whenever the next-attempt time has
+    passed (PLAN_USAGE_REFRESH_S after a success, PLAN_USAGE_RETRY_S after a
+    failure). First-ever call returns None; the dashboard's next poll will
+    see the freshly-cached result."""
     global _plan_in_flight
     now = time.time()
     with _plan_lock:
-        ts, data = _plan_cache
-        if now - ts < PLAN_USAGE_REFRESH_S:
+        next_at, data = _plan_cache
+        if now < next_at:
             return data
         if not _plan_in_flight:
             _plan_in_flight = True
