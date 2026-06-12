@@ -288,6 +288,8 @@ uv run pytest -q
 
 Expected: `1 failed, 614 passed` — the one failure is `tests/routes/test_state.py::test_state_merges_narrator_status_lines` with `ValueError: too many values to unpack`.
 
+Side effect worth knowing: route tests that DON'T use `fresh_activity_db` (`test_state_empty` and siblings) open the real `~/.config/periscope/periscope.db`, so this first full-suite run also runs the ALTER migration on the prod DB. Benign — the prod code currently running SELECTs the explicit 7-column list, so the extra column is invisible to it — but it means the column will already exist before Task 5's deploy. Don't be confused by that at verification time: the deploy-time signal is new rows with non-null `rail`, not the column's existence.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -380,7 +382,7 @@ def test_tick_persists_rail(tick_env):
 uv run pytest tests/test_narrator.py -q -k rail
 ```
 
-Expected: FAIL — `AttributeError: module 'periscope.narrator' has no attribute 'RAIL_MAX_LEN'`.
+Expected: FAIL in two shapes — the tests that reference the constant (`rail_accepted_at_limit`, `rail_over_limit...`, `build_narrator_prompt_includes_rail_rules`) fail with `AttributeError: module 'periscope.narrator' has no attribute 'RAIL_MAX_LEN'`; the three that never touch it (`rail_empty_or_nonstring_dropped`, `rail_missing_is_none`, `rail_strips_whitespace`) fail with `AttributeError: 'NarratorResult' object has no attribute 'rail'`. (`test_tick_persists_rail` fails with a plain `AssertionError` — `PaneStatusRow.rail` exists since Task 1 but is still `None`.) All mean the same thing: not implemented yet.
 
 - [ ] **Step 3: Implement in `periscope/narrator.py`**
 
@@ -837,6 +839,8 @@ sqlite3 ~/.config/periscope/periscope.db \
 ```
 
 Expected: at least one row with a short lowercase rail fragment once a generation has fired post-deploy (old rows keep NULL — that's the designed fallback). If empty after several minutes, check that some Claude pane actually produced transcript activity since the restart.
+
+Note: the `rail` COLUMN already exists on the prod DB at this point — Task 1's first full-suite run migrated it (route tests without `fresh_activity_db` open the real `~/.config/periscope/periscope.db`). That's benign and expected; don't treat a pre-existing column as evidence the deploy worked. The deploy-time signal is rows with non-null `rail` appearing after the restart.
 
 ```bash
 curl -s http://127.0.0.1:8765/api/state | \
