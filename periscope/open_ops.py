@@ -8,7 +8,9 @@ from dataclasses import dataclass
 
 from periscope import projects
 from periscope.gitutil import resolve_repo_and_branch
-from periscope.tmux import _run
+from periscope.panes import list_windows
+from periscope.tmux import _run, _tmux_mutate
+from periscope.worktree_spawn import _layout_two_window
 
 
 @dataclass(frozen=True)
@@ -58,3 +60,47 @@ def ensure_project(toplevel: str, repo: str) -> projects.Project:
         toplevel, name=name, tmux_session=name, repo=repo,
         base_branch=branch or None,
     )
+
+
+def _session_live(name: str) -> bool:
+    return _tmux_mutate("has-session", "-t", name)[0]   # socket-aware; False when missing
+
+
+def _session_owns_dir(name: str, pinned_dir: str) -> bool:
+    """True if any window of session `name` sits at `pinned_dir` (realpath)."""
+    return any(w["session"] == name
+               and os.path.realpath(w.get("cwd") or "") == pinned_dir
+               for w in list_windows())
+
+
+def _claude_pid_for_session(name: str) -> str:
+    """The @periscope_id (pid_raw) of the session's claude window — matched by
+    window NAME ('claude'), since list_windows() carries no is_claude flag.
+    Falls back to the first window. '' if none."""
+    wins = [w for w in list_windows() if w["session"] == name]
+    if not wins:
+        return ""
+    claude = next((w for w in wins if w["name"] == "claude"), wins[0])
+    return claude.get("pid_raw") or ""
+
+
+def _dedupe_name(base: str) -> str:
+    n, candidate = 2, f"{base}-2"
+    while _session_live(candidate):
+        n += 1
+        candidate = f"{base}-{n}"
+    return candidate
+
+
+def ensure_session(project: projects.Project, pinned_dir: str) -> tuple[str, str]:
+    """Idempotent create-or-focus. `pinned_dir` is the project's key (taken
+    explicitly — Project is a TypedDict with no self-key). Returns
+    (tmux_session, claude_pid)."""
+    name = project["tmux_session"]
+    if _session_live(name):
+        if _session_owns_dir(name, pinned_dir):
+            return name, _claude_pid_for_session(name)
+        name = _dedupe_name(name)                      # live but foreign
+        projects.update_project(pinned_dir, tmux_session=name)
+    claude_pid, _ = _layout_two_window(name, pinned_dir)
+    return name, claude_pid
