@@ -6,7 +6,7 @@ dispatch function is `open_target`, never `open`.
 import os
 from dataclasses import dataclass
 
-from periscope import projects
+from periscope import projects, worktrees
 from periscope.gitutil import resolve_repo_and_branch
 from periscope.panes import list_windows
 from periscope.tmux import _run, _tmux_mutate
@@ -36,6 +36,16 @@ class OpenResult:
     repo: str
     claude_pid: str
     ui: dict
+
+
+def worktree_for_branch(repo: str, branch: str) -> str | None:
+    """Path of an existing worktree checked out on `branch`, or None.
+    Authoritative source is `git worktree list` (via the 60s cache), not a
+    recomputed path."""
+    for path, wt_branch in worktrees._cached_worktrees(repo):
+        if wt_branch == branch:
+            return os.path.realpath(path)
+    return None
 
 
 def _git_toplevel(path: str) -> str:

@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 
@@ -68,3 +69,11 @@ def test_ensure_session_dedupes_foreign_name(tmp_git_repo, clean_state, tmux_tes
     session, claude_pid = open_ops.ensure_session(proj, repo)
     assert session != proj["tmux_session"]      # deduped
     assert projects.get_project(repo)["tmux_session"] == session  # row updated
+
+
+def test_worktree_for_branch_matches_enumerated(tmp_git_repo, clean_state):
+    repo = str(tmp_git_repo)
+    from periscope.gitutil import detect_default_branch
+    default = detect_default_branch(repo)
+    assert open_ops.worktree_for_branch(repo, default) == os.path.realpath(repo)
+    assert open_ops.worktree_for_branch(repo, "no-such-branch") is None
