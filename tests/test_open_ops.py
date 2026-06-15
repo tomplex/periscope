@@ -193,3 +193,19 @@ def test_build_catalog_lists_repo_and_main_worktree(tmp_git_repo, clean_state, m
     assert any(r["repo"] == repo for r in cat["repos"])
     assert any(w["path"] == os.path.realpath(repo) and w["is_main"]
                for w in cat["worktrees"])
+
+
+def test_open_target_pr_rolls_back_worktree_on_open_failure(tmp_git_repo, clean_state, monkeypatch):
+    repo = str(tmp_git_repo)
+    discarded = {}
+    monkeypatch.setattr(projects, "fetch_pr_into_worktree",
+        lambda r, pr: projects.PRWorktree(path=repo, base_branch="main", is_fork=False,
+                                          local_branch="pr-13", pr_state="OPEN", name="pr-13"))
+    def boom(path):   # make the path-case fail
+        raise RuntimeError("spawn failed")
+    monkeypatch.setattr(open_ops, "_open_path", boom)
+    monkeypatch.setattr(projects, "_discard_pr_worktree",
+        lambda repo_, path, branch: discarded.update(repo=repo_, path=path, branch=branch))
+    with pytest.raises(RuntimeError):
+        open_ops.open_target(open_ops.PRTarget(repo=repo, pr=13))
+    assert discarded == {"repo": repo, "path": repo, "branch": "pr-13"}

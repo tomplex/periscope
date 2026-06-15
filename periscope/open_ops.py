@@ -155,37 +155,52 @@ def _discover_repos() -> set[str]:
     return repos
 
 
+def _open_path(path: str) -> OpenResult:
+    """Resolve a directory to a live, rail-placed tmux session.
+
+    The shared implementation for PathTarget and PR/Branch targets so the
+    path case is monkeypatchable independently of the descriptor dispatch.
+    """
+    toplevel = _git_toplevel(path)                       # ValueError if non-git
+    repo = resolve_repo(toplevel)                        # --git-common-dir → parent
+    project = ensure_project(toplevel, repo)
+    session, claude_pid = ensure_session(project, toplevel)
+    # Rebuild the full pane list from the now-live session. list_windows()
+    # is a live shell-out, so freshly-stamped windows are visible
+    # synchronously; pid_raw is the @periscope_id, "" for unmanaged.
+    pane_pids = [w["pid_raw"] for w in list_windows()
+                 if w["session"] == session and w["pid_raw"]]
+    ui = place_in_rail(session, project, pane_pids or [claude_pid])
+    return OpenResult(tmux_session=session, repo=repo, claude_pid=claude_pid, ui=ui)
+
+
 def open_target(descriptor: Descriptor) -> OpenResult:
     """Resolve a descriptor to a live, rail-placed tmux session.
 
     PathTarget  — git toplevel → ensure_project → ensure_session → place_in_rail.
-    BranchTarget — locate or spawn the worktree, then recurse into the path case.
-    PRTarget    — fetch PR into worktree, recurse into path case, then stamp
+    BranchTarget — locate or spawn the worktree, then open the path.
+    PRTarget    — fetch PR into worktree, open the path, then stamp
                   linked_pr / is_fork (the path case has no PR knowledge).
+                  Rolls back the worktree if the open fails after the fetch.
     """
     if isinstance(descriptor, PathTarget):
-        toplevel = _git_toplevel(descriptor.path)        # ValueError if non-git
-        repo = resolve_repo(toplevel)                    # --git-common-dir → parent
-        project = ensure_project(toplevel, repo)
-        session, claude_pid = ensure_session(project, toplevel)
-        # Rebuild the full pane list from the now-live session. list_windows()
-        # is a live shell-out, so freshly-stamped windows are visible
-        # synchronously; pid_raw is the @periscope_id, "" for unmanaged.
-        pane_pids = [w["pid_raw"] for w in list_windows()
-                     if w["session"] == session and w["pid_raw"]]
-        ui = place_in_rail(session, project, pane_pids or [claude_pid])
-        return OpenResult(tmux_session=session, repo=repo,
-                          claude_pid=claude_pid, ui=ui)
+        return _open_path(descriptor.path)
 
     if isinstance(descriptor, BranchTarget):
         wt = worktree_for_branch(descriptor.repo, descriptor.branch)
         if wt is None:
             wt = spawn_worktree(descriptor.repo, descriptor.branch)["path"]
-        return open_target(PathTarget(path=wt))
+        return _open_path(wt)
 
     if isinstance(descriptor, PRTarget):
         prwt = projects.fetch_pr_into_worktree(descriptor.repo, descriptor.pr)
-        result = open_target(PathTarget(path=prwt.path))
+        try:
+            result = _open_path(prwt.path)
+        except Exception:
+            # Any failure after the worktree exists must roll it back so the
+            # caller can retry without hitting a stale orphan. Re-raise unchanged.
+            projects._discard_pr_worktree(descriptor.repo, prwt.path, prwt.local_branch)
+            raise
         store.set_window_fields(result.claude_pid, linked_pr=descriptor.pr,
                                 is_fork=prwt.is_fork)
         return result
