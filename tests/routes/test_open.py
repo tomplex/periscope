@@ -11,7 +11,7 @@ def test_post_open_path_returns_contract(client, tmp_git_repo, clean_state, tmux
     assert r.status_code == 200
     body = r.json()
     assert body["repo"] == repo and body["claude_pid"]
-    assert repo in body["ui"]["worktrees_by_repo"]
+    assert body["tmux_session"] in body["ui"]["worktrees_by_repo"][repo]
 
 def test_post_open_non_git_400(client, tmp_path, clean_state):
     r = client.post("/api/open", json={"path": str(tmp_path)})
