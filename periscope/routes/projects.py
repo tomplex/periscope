@@ -278,7 +278,7 @@ def projects_create(body: CreateBody):
             )
 
     try:
-        _layout_two_window(tmux_session, pinned_dir)  # returns pid; ignored here
+        _layout_two_window(tmux_session, pinned_dir)  # (claude_pid, shell_pid) ignored here
     except HTTPException:
         # tmux failed mid-layout — leave the worktree on disk so the user
         # can retry adoption or clean up manually. Don't rollback git.

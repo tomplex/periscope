@@ -1,8 +1,13 @@
 """Tests for periscope.worktree_spawn."""
 
+import shutil
+
 import pytest
 
+needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")
 
+
+@needs_tmux
 def test_layout_two_window_stamps_both_windows(tmp_git_repo, tmux_test_server):
     from periscope.worktree_spawn import _layout_two_window
     from periscope.tmux import tmux
