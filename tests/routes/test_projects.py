@@ -11,13 +11,12 @@ from periscope.projects import PRWorktree
 
 @pytest.fixture(autouse=True)
 def _stub_worktree_path(mocker, tmp_path):
-    """projects_pr_review resolves the worktree path via worktree_path(),
-    which calls _resolve_layout (settings I/O + a git-worktree-list). Stub
-    it in both the route and projects module so tests stay hermetic — none
-    of them assert on the worktree path itself.
+    """fetch_pr_into_worktree resolves the worktree path via worktree_path(),
+    which calls _resolve_layout (settings I/O + a git-worktree-list). Stub it
+    in the projects module (where it's now called) so tests stay hermetic —
+    none of them assert on the worktree path itself.
     """
     side_eff = lambda repo, slug: str(tmp_path / "wt" / slug.replace("/", "-"))
-    mocker.patch("periscope.routes.projects.worktree_path", side_effect=side_eff)
     mocker.patch("periscope.projects.worktree_path", side_effect=side_eff)
 
 

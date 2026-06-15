@@ -29,7 +29,7 @@ from periscope.projects import (
 from periscope.store import set_window_fields
 from periscope.gitutil import detect_default_branch, resolve_repo_and_branch
 from periscope.tmux import _run, _tmux_mutate
-from periscope.worktree_spawn import spawn_worktree, worktree_path, _layout_two_window
+from periscope.worktree_spawn import spawn_worktree, _layout_two_window
 
 
 router = APIRouter()
