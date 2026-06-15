@@ -145,38 +145,12 @@ export function Header() {
 
         <span class="filters-sep"></span>
 
-        {/* + new dropdown. Item handlers (new session/project/review PR) land
-            with the secondary-modal port in Task 8; inert here. */}
-        <Dropdown
-          id="new-dd-toggle"
-          toggleClass="filter-btn is-action tb-dd-toggle"
-          toggleLabel={
-            <>
-              + new <span class="tb-dd-chev" aria-hidden="true">▾</span>
-            </>
-          }
-          title="create new"
-        >
-          <button id="new-session" class="tb-dd-item" role="menuitem" title="create a new tmux session">
-            + session
-          </button>
-          <button
-            id="new-project-btn"
-            class="tb-dd-item"
-            role="menuitem"
-            title="create a new project (new worktree + tmux session)"
-          >
-            + project
-          </button>
-          <button
-            id="review-pr-btn"
-            class="tb-dd-item"
-            role="menuitem"
-            title="review a PR by number — creates a worktree at pr-<N> + claude session"
-          >
-            📋 review PR
-          </button>
-        </Dropdown>
+        {/* + new — opens the unified open omnibox. */}
+        <button type="button" class="filter-btn is-action" id="new-open-btn"
+                title="open a repo, worktree, or PR"
+                onClick={() => window.__periscopeOpenOmnibox?.()}>
+          + new
+        </button>
 
         {/* ⋯ overflow: low-frequency actions. */}
         <Dropdown

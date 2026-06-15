@@ -315,29 +315,3 @@ export function setDetailMode(pid, mode) {
   next[pid] = mode;
   return patchUI({ detail_mode_by_pid: next });
 }
-
-// Add a worktree to the rail. If its repo isn't railed yet, append to
-// repo_order. Idempotent — re-adding the same worktree is a no-op.
-//
-// Used by + project / + review PR / + open flows.
-export async function addWorktreeToRail({ repoKey, worktreeKey, paneIds, hasReview }) {
-  const order = getRepoOrder();
-  const wts = getWorktreesByRepo();
-  const panes = getPanesByWorktree();
-
-  if (!order.includes(repoKey)) order.push(repoKey);
-  const wtList = wts[repoKey] || [];
-  if (!wtList.includes(worktreeKey)) wtList.push(worktreeKey);
-  wts[repoKey] = wtList;
-
-  if (!panes[worktreeKey]) {
-    panes[worktreeKey] = [...paneIds];
-    if (hasReview) panes[worktreeKey].push("review");
-  }
-
-  await patchUI({
-    repo_order: order,
-    worktrees_by_repo: wts,
-    panes_by_worktree: panes,
-  });
-}
