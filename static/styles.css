@@ -2119,6 +2119,22 @@ body.modal-open { overflow: hidden; }
 .newtab-row { opacity: .6; }
 .newtab-row:hover { opacity: .9; }
 
+/* --- Open omnibox -------------------------------------------------------- */
+.open-omnibox-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.open-omnibox-card { background: var(--bg-modal); border-radius: var(--r-md); box-shadow: var(--shadow-modal); padding: 16px; width: 520px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 8px; }
+.open-omnibox-input { width: 100%; box-sizing: border-box; background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: var(--r-sm); color: var(--fg-0); font-size: 14px; padding: 8px 10px; outline: none; font-family: var(--sans); }
+.open-omnibox-input:focus { border-color: var(--accent); }
+.open-omnibox-list { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; }
+.open-omnibox-row { display: block; width: 100%; padding: 8px 10px; text-align: left; background: transparent; border: 0; color: var(--fg-1); cursor: pointer; font-size: 13px; border-radius: var(--r-sm); }
+.open-omnibox-row:hover { background: rgba(255,255,255,.05); color: var(--fg-0); }
+.open-omnibox-row.kind-worktree { color: var(--fg-2); }
+.open-omnibox-row.kind-pr { color: var(--accent); }
+.open-omnibox-row.kind-new { color: var(--s-shell); font-style: italic; }
+.open-omnibox-back { background: transparent; border: 0; color: var(--fg-3); font-size: 12px; cursor: pointer; padding: 4px 0; text-align: left; }
+.open-omnibox-back:hover { color: var(--fg-1); }
+.open-omnibox-error { font-size: 12px; color: var(--s-danger); padding: 2px 0; }
+.open-omnibox-busy { font-size: 12px; color: var(--fg-3); padding: 2px 0; }
+
 /* --- Rail restyle: spacing/typography toward attention-rail mockup --------- */
 
 #rail .rail-row { padding-top: 3px; padding-bottom: 3px; }
