@@ -1,7 +1,7 @@
 import subprocess
 
 import pytest
-from periscope import projects
+from periscope import open_ops, projects
 
 
 def test_fetch_pr_into_worktree_returns_metadata(tmp_git_repo, monkeypatch):
@@ -21,3 +21,17 @@ def test_fetch_pr_into_worktree_returns_metadata(tmp_git_repo, monkeypatch):
     monkeypatch.setattr(projects, "_fetch_pr_branch", lambda *a, **k: None)
     res = projects.fetch_pr_into_worktree(str(tmp_git_repo), 7)
     assert res.path and res.base_branch == "main" and res.is_fork is False
+
+
+def test_ensure_project_registers_when_absent(tmp_git_repo, clean_state):
+    repo = str(tmp_git_repo)
+    proj = open_ops.ensure_project(repo, repo)
+    assert proj["tmux_session"] and proj["repo"] == repo
+    assert repo in projects.all_projects()
+
+
+def test_ensure_project_idempotent_no_409(tmp_git_repo, clean_state):
+    repo = str(tmp_git_repo)
+    first = open_ops.ensure_project(repo, repo)
+    again = open_ops.ensure_project(repo, repo)   # must NOT raise
+    assert again["tmux_session"] == first["tmux_session"]
