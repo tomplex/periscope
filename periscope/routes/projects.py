@@ -13,7 +13,6 @@ identifiers sidestep the issue entirely.
 Phase 1 does NOT include POST /api/projects (create-new); that's phase 2.
 """
 
-import json
 import os
 from pathlib import Path
 
@@ -25,13 +24,12 @@ from periscope.panes import list_windows
 from periscope.projects import (
     all_projects, archive_project, create_project, get_project,
     update_project, MAIN_KEY,
+    fetch_pr_into_worktree,
 )
-from periscope.repo_locks import repo_lock
 from periscope.store import set_window_fields
 from periscope.gitutil import detect_default_branch, resolve_repo_and_branch
 from periscope.tmux import _run, _tmux_mutate
 from periscope.worktree_spawn import spawn_worktree, worktree_path, _layout_two_window
-from periscope.worktrees import invalidate as worktrees_invalidate
 
 
 router = APIRouter()
@@ -437,70 +435,6 @@ def projects_discoverable():
     }
 
 
-def _resolve_pr_metadata(repo: str, pr: int) -> dict:
-    """`gh pr view` for PR #pr in `repo`, returning the parsed metadata.
-
-    Raises HTTPException: 404 if the PR doesn't exist, 400 if the gh call
-    fails for any other reason, 500 if gh returns unparseable JSON.
-    """
-    code, out = _run(
-        [
-            "gh", "pr", "view", str(pr),
-            "--json", "headRefName,isCrossRepository,headRepository,baseRefName,state",
-        ],
-        cwd=repo,
-        timeout=15.0,
-    )
-    if code != 0:
-        # gh's stderr is in `out` since _run merges them; map "not found"
-        # variants to 404, anything else to 400.
-        if "no pull requests found" in out.lower() or "could not resolve" in out.lower():
-            raise HTTPException(404, f"PR #{pr} not found in {repo}: {out}")
-        raise HTTPException(400, f"gh pr view failed: {out}")
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError as e:
-        raise HTTPException(500, f"gh pr view returned invalid JSON: {e}")
-
-
-def _fetch_pr_branch(repo: str, pr: int, local_branch: str) -> None:
-    """Fetch PR #pr's head commits into local branch `local_branch` via the
-    `pull/<N>/head` refspec (uniform for same-repo and fork PRs). Runs
-    outside the per-repo lock — a network op, idempotent vs. concurrent
-    fetches.
-
-    Raises HTTPException: 409 if the local branch is already in use (a
-    prior review of this PR is still around), 400 on any other failure.
-    """
-    fetch_code, fetch_out = _run(
-        ["git", "-C", repo, "fetch", "origin", f"pull/{pr}/head:{local_branch}"],
-        timeout=60.0,
-    )
-    if fetch_code != 0:
-        # Git's fetch-into-existing-branch error vocabulary:
-        #   "non-fast-forward"  — local branch has divergent commits
-        #   "refusing to fetch" — branch is a current worktree HEAD elsewhere
-        # Both mean a previous review of this PR is still around → 409 with
-        # a cleanup hint. Everything else (network, auth) is a 400.
-        if "non-fast-forward" in fetch_out or "refusing to fetch" in fetch_out:
-            raise HTTPException(
-                409,
-                f"local branch {local_branch!r} already in use — "
-                f"remove the existing worktree/branch first: {fetch_out}",
-            )
-        raise HTTPException(400, f"git fetch failed: {fetch_out}")
-
-
-def _discard_pr_worktree(repo: str, wt_path: str, local_branch: str) -> None:
-    """Roll back a just-created PR-review worktree: force-remove it and
-    delete its orphan local branch. Used when a later step fails after the
-    worktree exists — leaving it would be undetectable cleanup-view bait.
-    `--force` is safe: the worktree was just created with no user content.
-    """
-    _run(["git", "-C", repo, "worktree", "remove", "--force", wt_path])
-    _run(["git", "-C", repo, "branch", "-D", local_branch])
-
-
 @router.post("/api/projects/pr-review")
 def projects_pr_review(body: PRReviewBody):
     """Spawn a project for reviewing PR #<N> on `repo`. Fetches via
@@ -523,16 +457,9 @@ def projects_pr_review(body: PRReviewBody):
     if pr <= 0:
         raise HTTPException(400, f"pr_number must be positive: {pr}")
 
-    # The fetched local branch stays `pr-<N>` — a throwaway review name
-    # that's collision-safe for both same-repo and fork PRs (a fork's
-    # headRefName can be anything, including `main`, so it's unsafe as a
-    # local branch name). The project / tmux-session / worktree-dir name
-    # is separate: it defaults to the PR's head branch (resolved from the
-    # gh call below) so the user doesn't have to type one.
-    local_branch = f"pr-{pr}"
     # Cheap tmux-collision pre-check, but only possible when the user gave
     # an explicit name — otherwise the name isn't known until after the
-    # ~15s gh call, so the check moves below.
+    # ~15s gh call inside fetch_pr_into_worktree, so the check moves below.
     if body.name:
         explicit_name = body.name.strip()
         has_session_code, _ = _run(["tmux", "has-session", "-t", explicit_name])
@@ -541,21 +468,21 @@ def projects_pr_review(body: PRReviewBody):
                 409, f"tmux session {explicit_name!r} already exists; pick a different name",
             )
 
-    meta = _resolve_pr_metadata(repo, pr)
+    try:
+        wt = fetch_pr_into_worktree(repo, pr)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
-    is_fork = bool(meta.get("isCrossRepository"))
-    pr_state = (meta.get("state") or "").upper()  # OPEN / CLOSED / MERGED
-    # NOTE: base_branch here is the PR's target branch (e.g. `main`), per
-    # spec §Verb 3 step 5. This means future worktree-tabs spawned from
-    # THIS project (Verb 2) will fork off `main`, not off `pr-<N>`. That
-    # IS the spec's intent — sub-feature work off a PR-review should
-    # rebase against the PR's target, not the PR itself. Don't "fix" this.
-    base_branch = meta.get("baseRefName") or None
+    wt_path = wt.path
+    local_branch = wt.local_branch
+    is_fork = wt.is_fork
+    base_branch = wt.base_branch
+    pr_state = wt.pr_state
 
-    # Project name: explicit override, else the PR's head branch (so the
-    # user doesn't have to name it), else `pr-<N>` as a last resort.
-    head_ref = (meta.get("headRefName") or "").strip()
-    name = (body.name or head_ref or local_branch).strip()
+    # fetch_pr_into_worktree resolves head_ref from gh metadata; use its
+    # name field so the project name round-trips correctly (the worktree
+    # path is slugified, but the name is the raw head branch).
+    name = (body.name or wt.name or local_branch).strip()
     tmux_session = name
 
     # Post-gh collision check for the auto-resolved name (the explicit-name
@@ -563,36 +490,13 @@ def projects_pr_review(body: PRReviewBody):
     if not body.name:
         has_session_code, _ = _run(["tmux", "has-session", "-t", tmux_session])
         if has_session_code == 0:
+            from periscope.projects import _discard_pr_worktree
+            _discard_pr_worktree(repo, wt_path, local_branch)
             raise HTTPException(
                 409,
                 f"tmux session {tmux_session!r} already exists "
                 f"(PR head branch) — pass an explicit name to override",
             )
-
-    # Fetch the PR head into local branch `pr-<N>` (see _fetch_pr_branch).
-    _fetch_pr_branch(repo, pr, local_branch)
-
-    # Worktree path honors the repo's inline/sibling layout. Slugged from
-    # the project name (PR head branch by default) so the dir on disk is
-    # recognizable, not `pr-<N>`.
-    wt_path = worktree_path(repo, name)
-    if os.path.exists(wt_path):
-        raise HTTPException(409, f"worktree path already exists: {wt_path}")
-
-    # Create the worktree at `pr-<N>` under the per-repo lock. On failure,
-    # delete the orphan `pr-<N>` branch the fetch created — otherwise a
-    # retry hits the "non-fast-forward" path and 409s with a confusing
-    # error.
-    with repo_lock(repo):
-        Path(wt_path).parent.mkdir(parents=True, exist_ok=True)
-        code, out = _run(
-            ["git", "-C", repo, "worktree", "add", wt_path, local_branch],
-            timeout=30.0,
-        )
-        if code != 0:
-            _run(["git", "-C", repo, "branch", "-D", local_branch])
-            raise HTTPException(500, f"git worktree add failed: {out}")
-    worktrees_invalidate(repo)
 
     pinned_dir = wt_path
 
@@ -600,6 +504,7 @@ def projects_pr_review(body: PRReviewBody):
         # Race: someone adopted this path between our checks. Discard the
         # just-created worktree + orphan branch to avoid leaving phase-6
         # cleanup-view bait.
+        from periscope.projects import _discard_pr_worktree
         _discard_pr_worktree(repo, wt_path, local_branch)
         raise HTTPException(
             409, f"project already exists at {pinned_dir!r}"
@@ -612,6 +517,7 @@ def projects_pr_review(body: PRReviewBody):
     try:
         claude_pid, _ = _layout_two_window(tmux_session, pinned_dir)
     except HTTPException:
+        from periscope.projects import _discard_pr_worktree
         _discard_pr_worktree(repo, wt_path, local_branch)
         raise
 

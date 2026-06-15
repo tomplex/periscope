@@ -4,18 +4,21 @@ import json
 
 import pytest
 
+from fastapi import HTTPException
+
+from periscope.projects import PRWorktree
+
 
 @pytest.fixture(autouse=True)
 def _stub_worktree_path(mocker, tmp_path):
     """projects_pr_review resolves the worktree path via worktree_path(),
     which calls _resolve_layout (settings I/O + a git-worktree-list). Stub
-    it to a tmp path so these tests stay hermetic — none of them assert on
-    the worktree path itself.
+    it in both the route and projects module so tests stay hermetic — none
+    of them assert on the worktree path itself.
     """
-    mocker.patch(
-        "periscope.routes.projects.worktree_path",
-        side_effect=lambda repo, slug: str(tmp_path / "wt" / slug.replace("/", "-")),
-    )
+    side_eff = lambda repo, slug: str(tmp_path / "wt" / slug.replace("/", "-"))
+    mocker.patch("periscope.routes.projects.worktree_path", side_effect=side_eff)
+    mocker.patch("periscope.projects.worktree_path", side_effect=side_eff)
 
 
 # === phase 4: PR review =====================================================
@@ -31,42 +34,40 @@ def _gh_view_json(pr_number, head_ref="feature-foo", is_cross=False, state="OPEN
     })
 
 
-def _pr_review_run_sequence(repo_path, gh_output):
-    """Ordered return values for `_run` covering the PR review flow when
-    no explicit name is given (the common case — name auto-resolves from
-    the PR's head branch, so the tmux collision check runs AFTER gh):
-      1. git rev-parse --show-toplevel        → (0, repo)
-      2. gh pr view --json ...                → (0, gh_output)
-      3. tmux has-session                     → (1, "") meaning "not found"
-      4. git fetch origin pull/N/head:pr-N    → (0, "")
-      5. git worktree add <path> pr-N         → (0, "")
-    The order MUST match the endpoint's actual call sequence.
-    """
-    return [
-        (0, str(repo_path)),
-        (0, gh_output),
-        (1, ""),
-        (0, ""),
-        (0, ""),
-    ]
+def _make_wt(tmp_path, head_ref="feature-foo", pr=42, is_cross=False,
+             state="OPEN", base="main"):
+    """Return a PRWorktree as fetch_pr_into_worktree would for a given PR."""
+    local_branch = f"pr-{pr}"
+    name = head_ref or local_branch
+    wt_path = str(tmp_path / "wt" / name.replace("/", "-"))
+    return PRWorktree(
+        path=wt_path,
+        base_branch=base,
+        is_fork=is_cross,
+        local_branch=local_branch,
+        pr_state=state.upper(),
+        name=name,
+    )
 
 
 def test_pr_review_success_same_repo(client, mocker, tmp_path):
     """Happy path: same-repo PR (isCrossRepository=False)."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    wt = _make_wt(tmp_path, head_ref="feature-foo", pr=42, is_cross=False, state="OPEN")
     mocker.patch(
         "periscope.routes.projects._run",
-        side_effect=_pr_review_run_sequence(repo, _gh_view_json(42, is_cross=False)),
+        side_effect=[
+            (0, str(repo)),  # rev-parse
+            (1, ""),          # tmux has-session (no collision)
+        ],
     )
+    mocker.patch("periscope.routes.projects.fetch_pr_into_worktree", return_value=wt)
     mocker.patch("periscope.routes.projects._layout_two_window", return_value=("abcd1234", "efgh5678"))
     mocker.patch("periscope.routes.projects.create_project", return_value={
         "name": "pr-42", "tmux_session": "pr-42", "repo": str(repo),
         "base_branch": "main", "archived_at": None,
     })
-    # Don't trip on the os.path.exists check for the worktree path —
-    # tmp_path/repo doesn't already have ~/dev/worktrees/repo/pr-42.
-    mocker.patch("periscope.routes.projects.os.path.exists", return_value=False)
     mocker.patch("periscope.routes.projects.all_projects", return_value={})
     set_fields = mocker.patch("periscope.routes.projects.set_window_fields")
 
@@ -85,16 +86,20 @@ def test_pr_review_fork_pr(client, mocker, tmp_path):
     """Fork PR: is_fork=True flag is written."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    wt = _make_wt(tmp_path, pr=99, is_cross=True)
     mocker.patch(
         "periscope.routes.projects._run",
-        side_effect=_pr_review_run_sequence(repo, _gh_view_json(99, is_cross=True)),
+        side_effect=[
+            (0, str(repo)),  # rev-parse
+            (1, ""),          # tmux has-session
+        ],
     )
+    mocker.patch("periscope.routes.projects.fetch_pr_into_worktree", return_value=wt)
     mocker.patch("periscope.routes.projects._layout_two_window", return_value=("abcd1234", "efgh5678"))
     mocker.patch("periscope.routes.projects.create_project", return_value={
         "name": "pr-99", "tmux_session": "pr-99", "repo": str(repo),
         "base_branch": "main", "archived_at": None,
     })
-    mocker.patch("periscope.routes.projects.os.path.exists", return_value=False)
     mocker.patch("periscope.routes.projects.all_projects", return_value={})
     set_fields = mocker.patch("periscope.routes.projects.set_window_fields")
 
@@ -110,16 +115,20 @@ def test_pr_review_merged_pr_still_creates(client, mocker, tmp_path):
     """A merged PR should still create the project."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    wt = _make_wt(tmp_path, pr=7, state="MERGED")
     mocker.patch(
         "periscope.routes.projects._run",
-        side_effect=_pr_review_run_sequence(repo, _gh_view_json(7, state="MERGED")),
+        side_effect=[
+            (0, str(repo)),  # rev-parse
+            (1, ""),          # tmux has-session
+        ],
     )
+    mocker.patch("periscope.routes.projects.fetch_pr_into_worktree", return_value=wt)
     mocker.patch("periscope.routes.projects._layout_two_window", return_value=("abcd1234", "efgh5678"))
     mocker.patch("periscope.routes.projects.create_project", return_value={
         "name": "pr-7", "tmux_session": "pr-7", "repo": str(repo),
         "base_branch": "main", "archived_at": None,
     })
-    mocker.patch("periscope.routes.projects.os.path.exists", return_value=False)
     mocker.patch("periscope.routes.projects.all_projects", return_value={})
     mocker.patch("periscope.routes.projects.set_window_fields")
 
@@ -136,9 +145,12 @@ def test_pr_review_not_found(client, mocker, tmp_path):
     mocker.patch(
         "periscope.routes.projects._run",
         side_effect=[
-            (0, str(repo)),           # rev-parse
-            (1, "no pull requests found for branch"),  # gh pr view
+            (0, str(repo)),  # rev-parse
         ],
+    )
+    mocker.patch(
+        "periscope.routes.projects.fetch_pr_into_worktree",
+        side_effect=HTTPException(404, "PR #9999 not found"),
     )
     r = client.post("/api/projects/pr-review", json={
         "repo": str(repo), "pr_number": 9999,
@@ -194,17 +206,18 @@ def test_pr_review_rejects_session_collision_explicit_name(client, mocker, tmp_p
 
 def test_pr_review_rejects_session_collision_auto_name(client, mocker, tmp_path):
     """Without an explicit name, the name comes from the PR's head branch,
-    so the collision check runs AFTER gh resolves it."""
+    so the collision check runs AFTER fetch_pr_into_worktree resolves it."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    wt = _make_wt(tmp_path, head_ref="dup", pr=42)
     mocker.patch(
         "periscope.routes.projects._run",
         side_effect=[
-            (0, str(repo)),                          # rev-parse
-            (0, _gh_view_json(42, head_ref="dup")),  # gh pr view
-            (0, ""),                                  # has-session: session exists
+            (0, str(repo)),  # rev-parse
+            (0, ""),          # has-session: session exists
         ],
     )
+    mocker.patch("periscope.routes.projects.fetch_pr_into_worktree", return_value=wt)
     r = client.post("/api/projects/pr-review", json={
         "repo": str(repo), "pr_number": 42,
     })
@@ -217,18 +230,20 @@ def test_pr_review_auto_names_from_head_branch(client, mocker, tmp_path):
     doesn't have to type one)."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    wt = _make_wt(tmp_path, head_ref="tc/lookup-redesign", pr=42)
     mocker.patch(
         "periscope.routes.projects._run",
-        side_effect=_pr_review_run_sequence(
-            repo, _gh_view_json(42, head_ref="tc/lookup-redesign"),
-        ),
+        side_effect=[
+            (0, str(repo)),  # rev-parse
+            (1, ""),          # tmux has-session (no collision)
+        ],
     )
+    mocker.patch("periscope.routes.projects.fetch_pr_into_worktree", return_value=wt)
     mocker.patch("periscope.routes.projects._layout_two_window", return_value=("abcd1234", "efgh5678"))
     create = mocker.patch("periscope.routes.projects.create_project", return_value={
         "name": "tc/lookup-redesign", "tmux_session": "tc/lookup-redesign",
         "repo": str(repo), "base_branch": "main", "archived_at": None,
     })
-    mocker.patch("periscope.routes.projects.os.path.exists", return_value=False)
     mocker.patch("periscope.routes.projects.all_projects", return_value={})
     mocker.patch("periscope.routes.projects.set_window_fields")
 
