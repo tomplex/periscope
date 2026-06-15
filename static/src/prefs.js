@@ -125,6 +125,12 @@ export async function patchUI(patch) {
   return true;
 }
 
+// Write a server-authoritative ui blob into the cache WITHOUT re-POSTing —
+// used by the open flow, where the server already persisted the pref.
+export function setUI(uiBlob) {
+  prefsSignal.value = { ...P(), ui: uiBlob };
+}
+
 // ── Window annotations ──────────────────────────────────────────────────
 
 export function getAnnotation(pid) {
