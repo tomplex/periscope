@@ -205,7 +205,7 @@ def spawn_worktree(
     return result
 
 
-def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
+def _layout_two_window(tmux_session: str, pinned_dir: str) -> tuple[str, str]:
     """Apply the trellis-style 2-window layout: window 1 'claude',
     window 2 'shell'. tmux session is created from scratch and ends with
     window 1 active. The user is NOT attached — periscope is a dashboard,
@@ -216,9 +216,9 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
     note 5). Without it, `claude` can land mid-rc and either get echoed
     as text or fail silently.
 
-    Returns the claude window's stamped @periscope_id. Phase 4's PR-review
-    endpoint uses this to write state.windows[pid].linked_pr synchronously;
-    other callers can ignore the return.
+    Returns `(claude_pid, shell_pid)` — both windows stamped. Phase 4's
+    PR-review endpoint uses claude_pid to write state.windows[pid].linked_pr
+    synchronously; other callers can ignore the return.
 
     Raises HTTPException(500) on any tmux failure — this layout primitive
     is deliberately coupled to FastAPI so its callers (the project-CRUD
@@ -256,6 +256,13 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
         # Worktree + session + window 1 already exist; don't roll back.
         log.warning("new-project: failed to create shell window: %s", msg)
 
+    # Stamp the shell window too — server-side rail placement needs the
+    # complete pane list synchronously (it would otherwise only learn the
+    # shell pid on the next /api/state poll's resolve_pids).
+    shell_idx = tmux("display-message", "-t", f"{tmux_session}:shell",
+                     "-p", "#{window_index}").strip()
+    shell_pid = stamp_new_window(f"{tmux_session}:{shell_idx}") if shell_idx.isdigit() else ""
+
     # Park focus on window 1 (claude).
     _tmux_mutate("select-window", "-t", f"{tmux_session}:claude")
 
@@ -278,5 +285,5 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
     target = f"{tmux_session}:{idx_out}"
     note_focus(target)
     note_action(target)
-    pid = stamp_new_window(target)
-    return pid
+    claude_pid = stamp_new_window(target)
+    return claude_pid, shell_pid

@@ -610,7 +610,7 @@ def projects_pr_review(body: PRReviewBody):
     # branch — otherwise we leak orphan state with no way to detect it
     # from the UI (no project row, no tmux session).
     try:
-        claude_pid = _layout_two_window(tmux_session, pinned_dir)
+        claude_pid, _ = _layout_two_window(tmux_session, pinned_dir)
     except HTTPException:
         _discard_pr_worktree(repo, wt_path, local_branch)
         raise

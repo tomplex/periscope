@@ -59,7 +59,7 @@ def test_pr_review_success_same_repo(client, mocker, tmp_path):
         "periscope.routes.projects._run",
         side_effect=_pr_review_run_sequence(repo, _gh_view_json(42, is_cross=False)),
     )
-    mocker.patch("periscope.routes.projects._layout_two_window", return_value="abcd1234")
+    mocker.patch("periscope.routes.projects._layout_two_window", return_value=("abcd1234", "efgh5678"))
     mocker.patch("periscope.routes.projects.create_project", return_value={
         "name": "pr-42", "tmux_session": "pr-42", "repo": str(repo),
         "base_branch": "main", "archived_at": None,
@@ -89,7 +89,7 @@ def test_pr_review_fork_pr(client, mocker, tmp_path):
         "periscope.routes.projects._run",
         side_effect=_pr_review_run_sequence(repo, _gh_view_json(99, is_cross=True)),
     )
-    mocker.patch("periscope.routes.projects._layout_two_window", return_value="abcd1234")
+    mocker.patch("periscope.routes.projects._layout_two_window", return_value=("abcd1234", "efgh5678"))
     mocker.patch("periscope.routes.projects.create_project", return_value={
         "name": "pr-99", "tmux_session": "pr-99", "repo": str(repo),
         "base_branch": "main", "archived_at": None,
@@ -114,7 +114,7 @@ def test_pr_review_merged_pr_still_creates(client, mocker, tmp_path):
         "periscope.routes.projects._run",
         side_effect=_pr_review_run_sequence(repo, _gh_view_json(7, state="MERGED")),
     )
-    mocker.patch("periscope.routes.projects._layout_two_window", return_value="abcd1234")
+    mocker.patch("periscope.routes.projects._layout_two_window", return_value=("abcd1234", "efgh5678"))
     mocker.patch("periscope.routes.projects.create_project", return_value={
         "name": "pr-7", "tmux_session": "pr-7", "repo": str(repo),
         "base_branch": "main", "archived_at": None,
@@ -223,7 +223,7 @@ def test_pr_review_auto_names_from_head_branch(client, mocker, tmp_path):
             repo, _gh_view_json(42, head_ref="tc/lookup-redesign"),
         ),
     )
-    mocker.patch("periscope.routes.projects._layout_two_window", return_value="abcd1234")
+    mocker.patch("periscope.routes.projects._layout_two_window", return_value=("abcd1234", "efgh5678"))
     create = mocker.patch("periscope.routes.projects.create_project", return_value={
         "name": "tc/lookup-redesign", "tmux_session": "tc/lookup-redesign",
         "repo": str(repo), "base_branch": "main", "archived_at": None,
