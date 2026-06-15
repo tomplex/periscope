@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 
 from periscope import projects
-from periscope.gitutil import resolve_repo, resolve_repo_and_branch
+from periscope.gitutil import resolve_repo_and_branch
 from periscope.tmux import _run
 
 
