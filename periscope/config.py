@@ -28,6 +28,10 @@ INPUT_CTL_SESSION = "periscope-input"
 # reintroduce the channel-less-spawn bug.
 CLAUDE_EXEC = "claude --dangerously-load-development-channels server:periscope"
 
+
+def claude_exec() -> str:
+    return os.environ.get("PERISCOPE_CLAUDE_EXEC", CLAUDE_EXEC)
+
 # Port the FastAPI server binds. Default 8765 = "prod" (launchd-managed).
 # Override via PERISCOPE_PORT=8766 for a dev instance running alongside
 # prod. Read once at module load — server.py invokes load_dotenv before

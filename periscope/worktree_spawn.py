@@ -239,11 +239,12 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> str:
     # Send `claude` into window 1, with the periscope channels flag so the
     # spawned Claude connects to periscope's MCP socket.
     from periscope.channels import dismiss_dev_channels_consent_bg
-    from periscope.config import CLAUDE_EXEC
+    from periscope.config import claude_exec
+    exec_cmd = claude_exec()
     time.sleep(0.1)
     claude_target = f"{tmux_session}:claude"
-    _tmux_mutate("send-keys", "-t", claude_target, CLAUDE_EXEC, "Enter")
-    if "--dangerously-load-development-channels" in CLAUDE_EXEC:
+    _tmux_mutate("send-keys", "-t", claude_target, exec_cmd, "Enter")
+    if "--dangerously-load-development-channels" in exec_cmd:
         dismiss_dev_channels_consent_bg(claude_target)
 
     # Window 2: shell.

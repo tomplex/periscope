@@ -9,6 +9,7 @@ and normal-size pastes) use a single `send-keys -H` subprocess; large
 inputs fall back to load-buffer + paste-buffer over stdin to dodge ARG_MAX.
 """
 
+import os
 import re
 import subprocess
 import uuid
@@ -18,10 +19,13 @@ _ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
 _FG_COLOR_RE = re.compile(r"\x1b\[38(?:;\d+)+m")
 
 
+def _tmux_argv(*args: str) -> list[str]:
+    sock = os.environ.get("PERISCOPE_TMUX_SOCKET")
+    return ["tmux", *(("-L", sock) if sock else ()), *args]
+
+
 def tmux(*args: str) -> str:
-    r = subprocess.run(
-        ["tmux", *args], capture_output=True, text=True, timeout=5
-    )
+    r = subprocess.run(_tmux_argv(*args), capture_output=True, text=True, timeout=5)
     return r.stdout
 
 
@@ -38,9 +42,7 @@ def _run(cmd: list[str], cwd: str | None = None, timeout: float = 3.0) -> tuple[
 def _tmux_mutate(*args: str) -> tuple[bool, str]:
     """Run a tmux command for its side effects. Surfaces stderr on failure
     instead of swallowing it like `tmux()` does."""
-    r = subprocess.run(
-        ["tmux", *args], capture_output=True, text=True, timeout=5
-    )
+    r = subprocess.run(_tmux_argv(*args), capture_output=True, text=True, timeout=5)
     if r.returncode != 0:
         return False, (r.stderr.strip() or r.stdout.strip() or "tmux failed")
     return True, r.stdout.strip()

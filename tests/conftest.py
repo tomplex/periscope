@@ -4,6 +4,9 @@ These fixtures sandbox side-effecting helpers so tests don't write to
 ~/.config/periscope or bind real unix sockets.
 """
 
+import os
+import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -74,3 +77,28 @@ def clean_state(tmp_xdg_home, monkeypatch):
     }
     monkeypatch.setattr(store, "_STATE", fresh)
     return fresh
+
+
+@pytest.fixture
+def tmux_test_server(monkeypatch):
+    """Isolated tmux server (-L) + a harmless CLAUDE_EXEC stub, so spawns
+    don't touch the default server or launch real Claude."""
+    sock = f"periscope-open-test-{uuid.uuid4().hex[:8]}"
+    monkeypatch.setenv("PERISCOPE_TMUX_SOCKET", sock)
+    monkeypatch.setenv("PERISCOPE_CLAUDE_EXEC", "cat")   # sits on stdin; window stays alive
+    yield sock
+    subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+
+
+@pytest.fixture
+def tmp_git_repo(tmp_path):
+    """Real git repo with one commit. Returns a realpath'd Path (macOS
+    /var -> /private/var, so callers compare against realpath)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "--allow-empty", "-qm", "init"],
+                   cwd=repo, env=env, check=True)
+    return Path(os.path.realpath(repo))
