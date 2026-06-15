@@ -89,3 +89,12 @@ def test_place_in_rail_writes_keys(tmp_git_repo, clean_state):
     assert proj["tmux_session"] in ui["worktrees_by_repo"][proj["repo"]]
     assert ui["panes_by_worktree"][proj["tmux_session"]] == ["%1", "%2"]
     assert store.get_ui() == ui          # returns exactly what was persisted
+
+
+def test_build_catalog_lists_repo_and_main_worktree(tmp_git_repo, clean_state, monkeypatch):
+    repo = str(tmp_git_repo)
+    monkeypatch.setattr(open_ops, "_discover_repos", lambda: {repo})
+    cat = open_ops.build_catalog()
+    assert any(r["repo"] == repo for r in cat["repos"])
+    assert any(w["path"] == os.path.realpath(repo) and w["is_main"]
+               for w in cat["worktrees"])

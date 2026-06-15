@@ -5,9 +5,10 @@ dispatch function is `open_target`, never `open`.
 """
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from periscope import projects, store, worktrees
-from periscope.gitutil import resolve_repo_and_branch
+from periscope.gitutil import detect_default_branch, resolve_repo_and_branch
 from periscope.panes import list_windows
 from periscope.tmux import _run, _tmux_mutate
 from periscope.worktree_spawn import _layout_two_window
@@ -136,3 +137,37 @@ def ensure_session(project: projects.Project, pinned_dir: str) -> tuple[str, str
         projects.update_project(pinned_dir, tmux_session=name)
     claude_pid, _ = _layout_two_window(name, pinned_dir)
     return name, claude_pid
+
+
+def _discover_repos() -> set[str]:
+    """Known-project repos + git repos one level under ~/dev (skipping
+    hidden dirs + the worktrees container). Mirrors projects_discoverable."""
+    repos: set[str] = set()
+    for p in projects.all_projects().values():
+        if p.get("repo"):
+            repos.add(os.path.realpath(p["repo"]))
+    dev = Path.home() / "dev"
+    if dev.is_dir():
+        for child in dev.iterdir():
+            if child.is_dir() and not child.name.startswith(".") \
+               and child.name != "worktrees" and (child / ".git").exists():
+                repos.add(str(child.resolve()))
+    return repos
+
+
+def build_catalog() -> dict:
+    """GET /api/open/catalog payload: {repos:[...], worktrees:[...]}."""
+    repos_out, worktrees_out = [], []
+    for repo in sorted(_discover_repos()):
+        code, out = _run(["git", "-C", repo, "branch", "--format=%(refname:short)"])
+        branches = (out.split("\n")[:100] if (code == 0 and out) else [])
+        repos_out.append({"repo": repo, "label": os.path.basename(repo),
+                          "default_branch": detect_default_branch(repo),
+                          "branches": branches})
+        for path, branch in worktrees._cached_worktrees(repo):
+            worktrees_out.append({
+                "path": os.path.realpath(path), "repo": repo,
+                "branch": branch,
+                "is_main": os.path.realpath(path) == os.path.realpath(repo),
+            })
+    return {"repos": repos_out, "worktrees": worktrees_out}
