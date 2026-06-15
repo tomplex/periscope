@@ -38,6 +38,95 @@ Tests: `tests/test_open_ops.py`, `tests/routes/test_open.py`, `tests/test_worktr
 
 ---
 
+## Task 0: Test harness — tmux socket seam, CLAUDE_EXEC override, fixtures
+
+**Why (load-bearing safety):** `open_ops` tests exercise the REAL `_layout_two_window` / `ensure_session` against real tmux (deliberate — mocking tmux reproduces the Q1-2026 mock-passes/prod-fails class). But today `periscope.tmux` shells to the *default* tmux server and `_layout_two_window` `send-keys` the literal `CLAUDE_EXEC` (`claude …`) — so running the suite as-is spawns real Claude sessions on the dev machine. This task adds two seams so tests run on an isolated `-L` socket with a harmless stub exec, mirroring `tests/test_tmux_mirror.py`'s `-L periscope-mirror-test` pattern.
+
+**Files:**
+- Modify: `periscope/tmux.py`, `periscope/config.py`
+- Modify: `tests/conftest.py` (add fixtures)
+
+- [ ] **Step 1: Add the tmux socket seam**
+
+In `periscope/tmux.py`, add a dynamic argv builder (read env per-call so a test fixture's `monkeypatch.setenv` takes effect) and route `tmux()` + `_tmux_mutate()` through it:
+
+```python
+import os
+
+def _tmux_argv(*args: str) -> list[str]:
+    sock = os.environ.get("PERISCOPE_TMUX_SOCKET")
+    return ["tmux", *(("-L", sock) if sock else ()), *args]
+
+def tmux(*args: str) -> str:
+    r = subprocess.run(_tmux_argv(*args), capture_output=True, text=True, timeout=5)
+    return r.stdout
+
+def _tmux_mutate(*args: str) -> tuple[bool, str]:
+    r = subprocess.run(_tmux_argv(*args), capture_output=True, text=True, timeout=5)
+    if r.returncode != 0:
+        return False, (r.stderr.strip() or r.stdout.strip() or "tmux failed")
+    return True, r.stdout.strip()
+```
+
+`open_ops` will use `_tmux_mutate("has-session", "-t", name)[0]` for liveness (Task 4), so it inherits the socket — never raw `_run(["tmux", ...])`.
+
+- [ ] **Step 2: Make `CLAUDE_EXEC` overridable**
+
+In `periscope/config.py`, keep the constant as the default and add a reader:
+
+```python
+CLAUDE_EXEC = "claude --dangerously-load-development-channels server:periscope"
+
+def claude_exec() -> str:
+    return os.environ.get("PERISCOPE_CLAUDE_EXEC", CLAUDE_EXEC)
+```
+
+In `periscope/worktree_spawn.py:_layout_two_window`, change `from periscope.config import CLAUDE_EXEC` to `from periscope.config import claude_exec`, bind `exec_cmd = claude_exec()` once, and use `exec_cmd` in both the `send-keys` and the `"--dangerously-load-development-channels" in exec_cmd` check.
+
+- [ ] **Step 3: Add fixtures to `tests/conftest.py`**
+
+```python
+import os, subprocess, uuid
+from pathlib import Path
+
+@pytest.fixture
+def tmux_test_server(monkeypatch):
+    """Isolated tmux server (-L) + a harmless CLAUDE_EXEC stub, so spawns
+    don't touch the default server or launch real Claude."""
+    sock = f"periscope-open-test-{uuid.uuid4().hex[:8]}"
+    monkeypatch.setenv("PERISCOPE_TMUX_SOCKET", sock)
+    monkeypatch.setenv("PERISCOPE_CLAUDE_EXEC", "cat")   # sits on stdin; window stays alive
+    yield sock
+    subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+
+@pytest.fixture
+def tmp_git_repo(tmp_path):
+    """Real git repo with one commit. Returns a realpath'd Path (macOS
+    /var → /private/var, so callers compare against realpath)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "--allow-empty", "-qm", "init"],
+                   cwd=repo, env=env, check=True)
+    return Path(os.path.realpath(repo))
+```
+
+- [ ] **Step 4: Verify the seams are inert in prod and active under the fixture**
+
+Run: `uv run pytest -q` (existing suite must stay green — the env vars are unset, so `_tmux_argv` returns `["tmux", ...]` and `claude_exec()` returns the constant).
+Expected: PASS (baseline unchanged).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add periscope/tmux.py periscope/config.py periscope/worktree_spawn.py tests/conftest.py
+git commit -m "test(open): tmux -L socket seam + CLAUDE_EXEC override + git/tmux fixtures"
+```
+
+---
+
 ## Task 1: `_layout_two_window` stamps both windows
 
 **Files:**
@@ -97,7 +186,7 @@ Change the return type annotation to `tuple[str, str]`. After the shell window i
 
 Update the docstring's "Returns the claude window's stamped @periscope_id" line to "Returns `(claude_pid, shell_pid)` — both windows stamped."
 
-> The two retiring callers (`projects_create`, `projects_pr_review`) are deleted in Task 10; until then they assign `pid = _layout_two_window(...)`. Fix them now to `claude_pid, _ = _layout_two_window(...)` so the suite stays green between tasks.
+> Interim caller fix (both are deleted in Task 10, but must stay correct until then): `projects_create` (routes/projects.py:281) **ignores** the return (`_layout_two_window(tmux_session, pinned_dir)  # ignored`) — no change needed, a bare tuple-returning call is fine. `projects_pr_review` (routes/projects.py:613) does `claude_pid = _layout_two_window(...)` — change it to `claude_pid, _ = _layout_two_window(...)`, or its `set_window_fields(claude_pid, ...)` at :637 silently stamps a tuple-keyed window. Edit only :613.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -308,27 +397,29 @@ git commit -m "feat(open): open_ops scaffolding — descriptors, OpenResult, ens
 - [ ] **Step 1: Write the failing tests**
 
 ```python
+from periscope.tmux import _tmux_mutate
+
 def test_ensure_session_spawns_when_dead(tmp_git_repo, clean_state, tmux_test_server):
-    repo = str(tmp_git_repo)
+    repo = str(tmp_git_repo)                       # already realpath'd by the fixture
     proj = open_ops.ensure_project(repo, repo)
-    session, claude_pid = open_ops.ensure_session(proj)
+    session, claude_pid = open_ops.ensure_session(proj, repo)
     assert session == proj["tmux_session"] and claude_pid
-    code, _ = open_ops._run(["tmux", "has-session", "-t", session])
-    assert code == 0
+    assert _tmux_mutate("has-session", "-t", session)[0] is True
 
 def test_ensure_session_focuses_when_live_and_ours(tmp_git_repo, clean_state, tmux_test_server):
     repo = str(tmp_git_repo)
     proj = open_ops.ensure_project(repo, repo)
-    s1, pid1 = open_ops.ensure_session(proj)
-    s2, pid2 = open_ops.ensure_session(proj)   # second call must not spawn a 2nd session
+    s1, pid1 = open_ops.ensure_session(proj, repo)
+    s2, pid2 = open_ops.ensure_session(proj, repo)   # must NOT spawn a 2nd session
     assert s1 == s2 and pid1 == pid2
 
 def test_ensure_session_dedupes_foreign_name(tmp_git_repo, clean_state, tmux_test_server):
     repo = str(tmp_git_repo)
     proj = open_ops.ensure_project(repo, repo)
-    # Occupy the recorded name with an unrelated session in a different cwd.
-    open_ops._run(["tmux", "new-session", "-d", "-s", proj["tmux_session"], "-c", "/tmp"])
-    session, claude_pid = open_ops.ensure_session(proj)
+    # Occupy the recorded name with an unrelated session in a different cwd
+    # (socket-aware so it lands on the test server, not the default one).
+    _tmux_mutate("new-session", "-d", "-s", proj["tmux_session"], "-c", "/tmp")
+    session, claude_pid = open_ops.ensure_session(proj, repo)
     assert session != proj["tmux_session"]      # deduped
     assert projects.get_project(repo)["tmux_session"] == session  # row updated
 ```
@@ -342,30 +433,30 @@ Expected: FAIL — `AttributeError: ... 'ensure_session'`.
 
 ```python
 from periscope.panes import list_windows
+from periscope.tmux import _tmux_mutate
 from periscope.worktree_spawn import _layout_two_window
 
 
 def _session_live(name: str) -> bool:
-    code, _ = _run(["tmux", "has-session", "-t", name])
-    return code == 0
+    return _tmux_mutate("has-session", "-t", name)[0]   # socket-aware; False when missing
 
 
 def _session_owns_dir(name: str, pinned_dir: str) -> bool:
     """True if any window of session `name` sits at `pinned_dir` (realpath)."""
-    for w in list_windows():
-        if w.get("session") == name and os.path.realpath(w.get("cwd") or "") == pinned_dir:
-            return True
-    return False
+    return any(w["session"] == name
+               and os.path.realpath(w.get("cwd") or "") == pinned_dir
+               for w in list_windows())
 
 
 def _claude_pid_for_session(name: str) -> str:
-    """The @periscope_id of the session's claude window (first is_claude
-    window, else first window). Empty string if none resolvable."""
-    wins = [w for w in list_windows() if w.get("session") == name]
+    """The @periscope_id (pid_raw) of the session's claude window — matched by
+    window NAME ('claude'; set in _layout_two_window), since list_windows()
+    carries no is_claude flag. Falls back to the first window. '' if none."""
+    wins = [w for w in list_windows() if w["session"] == name]
     if not wins:
         return ""
-    claude = next((w for w in wins if w.get("is_claude")), wins[0])
-    return claude.get("pid") or ""
+    claude = next((w for w in wins if w["name"] == "claude"), wins[0])
+    return claude.get("pid_raw") or ""
 
 
 def _dedupe_name(base: str) -> str:
@@ -376,11 +467,10 @@ def _dedupe_name(base: str) -> str:
     return candidate
 
 
-def ensure_session(project: projects.Project) -> tuple[str, str]:
-    """Idempotent create-or-focus. Returns (tmux_session, claude_pid)."""
-    pinned_dir = next(k for k, v in projects.all_projects().items()
-                      if v["tmux_session"] == project["tmux_session"]
-                      and v.get("repo") == project.get("repo"))
+def ensure_session(project: projects.Project, pinned_dir: str) -> tuple[str, str]:
+    """Idempotent create-or-focus. `pinned_dir` is the project's key (the
+    caller already has it — Project is a TypedDict with no self-key, so we
+    take it explicitly rather than reverse-lookup). Returns (session, claude_pid)."""
     name = project["tmux_session"]
     if _session_live(name):
         if _session_owns_dir(name, pinned_dir):
@@ -391,7 +481,7 @@ def ensure_session(project: projects.Project) -> tuple[str, str]:
     return name, claude_pid
 ```
 
-> `list_windows()` items expose `session`, `cwd`, `is_claude`, `pid` (the `@periscope_id`) — confirm field names against `periscope/panes.py:build_window_view` during implementation and adjust the `.get(...)` keys if they differ.
+> `list_windows()` keys verified against `panes.py:283-294`: `session, index, name, active, cwd, pid_raw, pane_id, activity`. The `@periscope_id` is **`pid_raw`** (not `pid`); there is **no `is_claude`** — claude is identified by `name == "claude"`.
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -637,10 +727,10 @@ def test_open_target_pr_stamps_linked_pr(tmp_git_repo, clean_state, tmux_test_se
         lambda r, pr: projects.PRWorktree(path=repo, base_branch="main",
                                           is_fork=False, local_branch="pr-9"))
     res = open_ops.open_target(open_ops.PRTarget(repo=repo, pr=9))
-    assert store.get_window_fields(res.claude_pid).get("linked_pr") == 9
+    assert store.get_window(res.claude_pid).get("linked_pr") == 9
 ```
 
-> If `store.get_window_fields` doesn't exist, assert via `store._STATE["windows"][res.claude_pid]["linked_pr"] == 9` using the `clean_state` fixture's rebind.
+> `store.get_window(pid)` (store.py:329) is the reader; `store.get_window_fields` does NOT exist. The write side `store.set_window_fields(..., linked_pr=, is_fork=)` (store.py:335) is correct.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -655,11 +745,14 @@ def open_target(descriptor: Descriptor) -> OpenResult:
         toplevel = _git_toplevel(descriptor.path)        # ValueError if non-git
         repo = resolve_repo(toplevel)                     # --git-common-dir → parent
         project = ensure_project(toplevel, repo)
-        session, claude_pid = ensure_session(project)
-        _, shell_pid = (claude_pid, "")  # pids already stamped; rebuild full list
-        pane_pids = [p.get("pid") for p in list_windows()
-                     if p.get("session") == session and p.get("pid")]
-        ui = place_in_rail(session, projects.get_project(toplevel), pane_pids or [claude_pid])
+        session, claude_pid = ensure_session(project, toplevel)
+        # Rebuild the full pane list from the now-live session. list_windows()
+        # is a live shell-out (panes.py:254), so freshly-stamped windows are
+        # visible synchronously; pid_raw is the @periscope_id, "" for unmanaged.
+        pane_pids = [w["pid_raw"] for w in list_windows()
+                     if w["session"] == session and w["pid_raw"]]
+        ui = place_in_rail(session, projects.get_project(toplevel),
+                           pane_pids or [claude_pid])
         return OpenResult(tmux_session=session, repo=repo, claude_pid=claude_pid, ui=ui)
 
     if isinstance(descriptor, BranchTarget):
@@ -781,7 +874,7 @@ def open_catalog():
     return open_ops.build_catalog()
 ```
 
-In `periscope/app.py`, add `open` to the router-module include list (match the existing pattern — find the list that names `state, prefs, pane, send, sessions, ...` and add `open`).
+In `periscope/app.py`, import the route module **aliased** so it doesn't shadow the builtin `open()` — match the existing `lgtm as lgtm_route` / `projects as projects_routes` pattern (app.py:28-31): `from periscope.routes import open as open_route`, then add `open_route` to the `include_router` loop tuple (app.py:120-122).
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -1211,4 +1304,6 @@ git worktree remove ../periscope-open
 ## Self-Review Notes
 
 - **Spec coverage:** `/api/open` + descriptor variants (T3,T4,T5,T8,T9); idempotent focus + no-409 (T3,T4,T8); revive name-collision (T4); catalog (T7); server-side rail placement + ui-blob return (T6,T8,T9); client `setUI` refresh kills `deferRailAdd` (T12,T13); both-windows stamping (T1); PR linkage post-convergence (T2,T8); omnibox + classifier + drill-ins (T11,T13); retire legacy routes + 3 modals + `+session` (T10,T14); non-git→400 (T8,T9). OpenPickerModal retired with accepted capability loss (T14).
-- **Open items deferred to implementation:** exact `list_windows()` field names (`pid`/`is_claude`/`cwd`) verified against `panes.py` in T4/T8; `_cached_worktrees` main-checkout ordering fallback noted in T7; `spawn_worktree` branch-arg name confirmed in T8.
+- **Test-harness safety (Task 0):** real-tmux tests run on an isolated `-L` socket (`PERISCOPE_TMUX_SOCKET`) with a stub exec (`PERISCOPE_CLAUDE_EXEC=cat`) so `pytest` never touches the default tmux server or spawns real Claude — both seams inert in prod (env unset).
+- **Plan-reviewer fixes applied:** `list_windows()` keys corrected to `pid_raw` + name-match for claude (no `is_claude`); `ensure_session(project, pinned_dir)` takes the key explicitly (no fragile reverse-lookup); `store.get_window` not `get_window_fields`; `app.py` import aliased `open as open_route`; Task 1 edits `projects_pr_review:613` only; realpath-safe assertions via the `tmp_git_repo` fixture.
+- **Verified-sound (no action):** `spawn_worktree(repo, branch) -> {"path",...}`, `_cached_worktrees` main-checkout-first, `list_windows()` live-not-cached, rail keys + `"review"` auto-add.
