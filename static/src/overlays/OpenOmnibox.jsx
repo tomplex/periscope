@@ -53,7 +53,8 @@ export function OpenOmnibox() {
 
   function pick(card) {
     if (card.kind === "open") return post(card.descriptor);
-    setDrill({ card });   // worktree → branch entry; pr → repo picker
+    if (card.kind === "pr" && !card.needsRepo) return post({ repo: card.pr.repo, pr: card.pr.pr });
+    setDrill({ card });   // worktree → branch entry; pr w/o repo → repo picker
   }
 
   const cards = drill ? [] : classify(query, catalog);
@@ -68,8 +69,8 @@ export function OpenOmnibox() {
                    value={query} onInput={(e) => setQuery(e.target.value)}
                    onKeyDown={(e) => { if (e.key === "Enter" && cards[0]) pick(cards[0]); }} />
             <div class="open-omnibox-list">
-              {cards.map((c, i) => (
-                <button key={i} class={`open-omnibox-row kind-${c.kind}`} onClick={() => pick(c)}>
+              {cards.map((c) => (
+                <button key={c.label} class={`open-omnibox-row kind-${c.kind}`} onClick={() => pick(c)}>
                   {c.label}
                 </button>
               ))}
@@ -82,7 +83,7 @@ export function OpenOmnibox() {
         )}
         {drill && drill.card.kind === "pr" && (
           <RepoDrill repos={catalog.repos} onPick={(repo) =>
-            post({ repo, pr: drill.card.pr })} onBack={() => setDrill(null)} />
+            post({ repo, pr: drill.card.pr.pr })} onBack={() => setDrill(null)} />
         )}
         {error && <div class="open-omnibox-error">{error}</div>}
         {busy && <div class="open-omnibox-busy">opening…</div>}
