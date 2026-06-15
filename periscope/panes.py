@@ -32,7 +32,7 @@ _focused_at: dict[str, int] = {}
 # both order by this. Bumped from the periscope-side handlers only:
 #   - /ws/pane WS-connect (modal-open is the canonical "opened in periscope")
 #   - /api/send, /api/paste-image, /api/rename
-#   - /api/session/new, /api/window/new (creation through periscope)
+#   - /api/open, /api/window/new (creation through periscope)
 # In-memory cache only; the persistent counterpart lives in
 # _STATE["windows"][pid]["acked_at"] and is the source of truth for the
 # done-vs-idle split (see /api/state). Reset on process restart; the

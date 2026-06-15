@@ -9,6 +9,74 @@ from periscope.tmux import _tmux_mutate
 needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")
 
 
+def test_fetch_pr_into_worktree_rejects_non_positive_pr(tmp_git_repo):
+    with pytest.raises(ValueError, match="pr must be positive"):
+        projects.fetch_pr_into_worktree(str(tmp_git_repo), 0)
+
+
+def test_fetch_pr_into_worktree_worktree_add_failure_cleans_up_branch(
+    tmp_git_repo, monkeypatch
+):
+    """If git worktree add fails after the branch was fetched, the orphan
+    local branch is deleted so a retry doesn't hit a non-fast-forward 409.
+    This is the critical rollback path that lived in the old pr-review route.
+    """
+    # Create the local branch (simulating a successful _fetch_pr_branch).
+    subprocess.run(
+        ["git", "branch", "pr-42"],
+        cwd=tmp_git_repo, check=True, capture_output=True,
+    )
+    wt_dest = str(tmp_git_repo.parent / "wt-pr-42")
+    monkeypatch.setattr(projects, "worktree_path", lambda repo, slug: wt_dest)
+    monkeypatch.setattr(projects, "_resolve_pr_metadata",
+        lambda repo, pr: {"headRefName": "feature-x", "isCrossRepository": False,
+                          "baseRefName": "main", "state": "OPEN"})
+    monkeypatch.setattr(projects, "_fetch_pr_branch", lambda *a, **k: None)
+
+    # Stub _run: let mkdir calls (routed via Path.mkdir, not _run) pass, but
+    # make the git worktree add call fail by intercepting it in _run.
+    real_run = projects._run
+
+    def patched_run(cmd, **kwargs):
+        if "worktree" in cmd and "add" in cmd:
+            return (1, "fatal: simulated worktree add failure")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(projects, "_run", patched_run)
+
+    from fastapi import HTTPException as FastHTTPException
+    with pytest.raises(FastHTTPException) as exc_info:
+        projects.fetch_pr_into_worktree(str(tmp_git_repo), 42)
+    assert exc_info.value.status_code == 500
+
+    # The orphan branch must be gone — confirmed by running git branch.
+    result = subprocess.run(
+        ["git", "-C", str(tmp_git_repo), "branch", "--list", "pr-42"],
+        capture_output=True, text=True,
+    )
+    assert "pr-42" not in result.stdout, "orphan branch was not cleaned up after worktree add failure"
+
+
+def test_fetch_pr_into_worktree_409_if_wt_path_exists(tmp_git_repo, monkeypatch):
+    """If the target worktree path already exists on disk (e.g. a duplicate
+    PR review attempt), fetch_pr_into_worktree raises HTTPException(409) before
+    calling git worktree add — so the existing worktree is never clobbered.
+    """
+    existing_wt = str(tmp_git_repo.parent / "wt-pr-99")
+    os.makedirs(existing_wt, exist_ok=True)
+    monkeypatch.setattr(projects, "worktree_path", lambda repo, slug: existing_wt)
+    monkeypatch.setattr(projects, "_resolve_pr_metadata",
+        lambda repo, pr: {"headRefName": "dup-branch", "isCrossRepository": False,
+                          "baseRefName": "main", "state": "OPEN"})
+    monkeypatch.setattr(projects, "_fetch_pr_branch", lambda *a, **k: None)
+
+    from fastapi import HTTPException as FastHTTPException
+    with pytest.raises(FastHTTPException) as exc_info:
+        projects.fetch_pr_into_worktree(str(tmp_git_repo), 99)
+    assert exc_info.value.status_code == 409
+    assert "already exists" in exc_info.value.detail
+
+
 def test_fetch_pr_into_worktree_returns_metadata(tmp_git_repo, monkeypatch):
     # Redirect worktree_path to a location inside tmp_git_repo so git worktree
     # add runs for real without touching ~/dev/worktrees.

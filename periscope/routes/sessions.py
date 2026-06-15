@@ -1,7 +1,7 @@
 """Session and window CRUD endpoints.
 
-POST /api/session/new
 DELETE /api/session
+POST /api/session/rename
 POST /api/window/new            (incl. mode=resume)
 POST /api/window/move
 DELETE /api/window
@@ -28,28 +28,6 @@ from periscope.tmux import _run, _tmux_mutate, tmux
 from periscope.worktree_spawn import spawn_worktree
 
 router = APIRouter()
-
-
-class NewSessionBody(BaseModel):
-    name: str
-    cwd: str | None = None
-
-
-@router.post("/api/session/new")
-def session_new(body: NewSessionBody):
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(400, "empty name")
-    cwd = body.cwd or os.path.expanduser("~")
-    ok, msg = _tmux_mutate("new-session", "-d", "-s", name, "-c", cwd)
-    if not ok:
-        raise HTTPException(500, msg)
-    # Stamp focus so the new session sorts to the top on next poll. Stamping
-    # `acted_at` too: creating a session through periscope is a user action,
-    # so the new window earns a slot in the stream view.
-    note_focus(f"{name}:0")
-    note_action(f"{name}:0")
-    return {"ok": True, "session": name}
 
 
 class RenameSessionBody(BaseModel):

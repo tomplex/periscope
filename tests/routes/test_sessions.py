@@ -1,4 +1,9 @@
-"""Tests for /api/session/* and /api/window/*."""
+"""Tests for /api/session/* and /api/window/*.
+
+POST /api/session/new was retired; session creation is now handled by
+POST /api/open (open_ops.ensure_session). Tests for session/new have been
+removed; the equivalent coverage lives in tests/test_open_ops.py.
+"""
 
 
 def _patch(mocker, name, **kwargs):
@@ -8,22 +13,6 @@ def _patch(mocker, name, **kwargs):
             return mocker.patch(prefix, **kwargs)
         except (AttributeError, ModuleNotFoundError):
             continue
-
-
-def test_session_new_creates_session(client, mocker):
-    _patch(mocker, "_tmux_mutate", return_value=(True, ""))
-    r = client.post("/api/session/new", json={"name": "foo", "cwd": "/tmp"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is True
-    assert body["session"] == "foo"
-
-
-def test_session_new_rejects_empty_name(client, mocker):
-    _patch(mocker, "_tmux_mutate", return_value=(True, ""))
-    r = client.post("/api/session/new", json={"name": "   "})
-    assert r.status_code == 400
-    assert "empty" in r.json()["detail"]
 
 
 def test_session_delete(client, mocker):

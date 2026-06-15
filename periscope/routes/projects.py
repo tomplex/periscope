@@ -4,13 +4,13 @@ GET    /api/projects               — list all (incl. archived)
 POST   /api/projects/adopt         — adopt unmanaged session OR existing worktree
 POST   /api/projects/patch         — rename, edit base_branch, set/clear pinned_repo
 POST   /api/projects/archive       — set archived_at
+POST   /api/projects/promote       — promote a main-project tab to its own project
+GET    /api/projects/discoverable  — repos + branches for the new-project modal
 
 We deliberately do NOT use path params for `pinned_dir`. Starlette
 rejects URL-encoded `/` in path-converter segments by default, and
 pinned_dirs are absolute paths with many slashes. Body-carried
 identifiers sidestep the issue entirely.
-
-Phase 1 does NOT include POST /api/projects (create-new); that's phase 2.
 """
 
 import os
@@ -24,28 +24,12 @@ from periscope.panes import list_windows
 from periscope.projects import (
     all_projects, archive_project, create_project, get_project,
     update_project, MAIN_KEY,
-    fetch_pr_into_worktree,
 )
-from periscope.store import set_window_fields
-from periscope.gitutil import detect_default_branch, resolve_repo_and_branch
+from periscope.gitutil import resolve_repo_and_branch
 from periscope.tmux import _run, _tmux_mutate
-from periscope.worktree_spawn import spawn_worktree, _layout_two_window
 
 
 router = APIRouter()
-
-
-def resolve_repo_toplevel_or_400(raw: str) -> str:
-    """Resolve a user-supplied repo path to its realpath git toplevel, or
-    raise HTTPException(400). Shared by the project-creation routes so the
-    'must be an existing git repo' validation lives in one place."""
-    repo = os.path.realpath(raw)
-    if not os.path.isdir(repo):
-        raise HTTPException(400, f"repo does not exist: {raw}")
-    code, toplevel = _run(["git", "-C", repo, "rev-parse", "--show-toplevel"])
-    if code != 0 or not toplevel:
-        raise HTTPException(400, f"not a git repo: {raw}")
-    return os.path.realpath(toplevel)
 
 
 @router.get("/api/projects")
@@ -213,96 +197,6 @@ def projects_archive(body: ArchiveBody):
     return {"ok": True, "pinned_dir": key, **get_project(key)}
 
 
-class CreateBody(BaseModel):
-    repo: str
-    branch: str
-    name: str | None = None  # auto-fills to branch if absent
-
-
-class PRReviewBody(BaseModel):
-    repo: str
-    pr_number: int
-    name: str | None = None  # defaults to pr-<N> if absent
-
-
-@router.post("/api/projects")
-def projects_create(body: CreateBody):
-    """Create a new project: spawn worktree if branch != default,
-    create tmux session, apply 2-window layout, register project."""
-    repo = resolve_repo_toplevel_or_400(body.repo)
-
-    branch = body.branch.strip()
-    if not branch:
-        raise HTTPException(400, "branch is required")
-    if branch.startswith("-"):
-        raise HTTPException(400, f"branch name cannot start with '-': {branch!r}")
-
-    default = detect_default_branch(repo)
-
-    # Pre-flight collision checks before ANY filesystem/tmux mutation.
-    # Pre-checking up here means a 409 leaves the user's state untouched —
-    # no orphan worktree on disk, no half-created tmux session.
-    name = (body.name or branch).strip()
-    tmux_session = name
-
-    if branch == default and repo in all_projects():
-        raise HTTPException(409, f"project already exists at {repo!r}")
-    has_session_code, _ = _run(["tmux", "has-session", "-t", tmux_session])
-    if has_session_code == 0:
-        raise HTTPException(
-            409, f"tmux session {tmux_session!r} already exists; pick a different name",
-        )
-
-    pinned_dir: str
-    warning: str | None = None
-    if branch == default:
-        # No worktree — project pins to repo root.
-        pinned_dir = repo
-    else:
-        try:
-            res = spawn_worktree(repo, branch)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        pinned_dir = res["path"]
-        warning = res.get("warning")
-
-        # Belt-and-suspenders: after spawn, re-check the pinned_dir isn't
-        # already adopted. spawn_worktree already rejected if the path
-        # exists on disk, so this is mostly defensive against a racy
-        # adoption during the fetch+add window.
-        if pinned_dir in all_projects():
-            raise HTTPException(
-                409, f"project already exists at {pinned_dir!r}"
-            )
-
-    try:
-        _layout_two_window(tmux_session, pinned_dir)  # (claude_pid, shell_pid) ignored here
-    except HTTPException:
-        # tmux failed mid-layout — leave the worktree on disk so the user
-        # can retry adoption or clean up manually. Don't rollback git.
-        raise
-
-    try:
-        row = create_project(
-            pinned_dir,
-            name=name,
-            tmux_session=tmux_session,
-            repo=repo,
-            base_branch=branch,
-        )
-    except ValueError as e:
-        # Race: someone adopted the same pinned_dir between our 409-check
-        # and here. Roll back tmux so the orphan session doesn't shadow
-        # the existing project on next poll.
-        _run(["tmux", "kill-session", "-t", tmux_session])
-        raise HTTPException(409, str(e))
-
-    result = {"ok": True, "pinned_dir": pinned_dir, **row}
-    if warning:
-        result["warning"] = warning
-    return result
-
-
 class PromoteBody(BaseModel):
     # The window to promote (tmux addressing).
     session: str
@@ -435,119 +329,3 @@ def projects_discoverable():
     }
 
 
-@router.post("/api/projects/pr-review")
-def projects_pr_review(body: PRReviewBody):
-    """Spawn a project for reviewing PR #<N> on `repo`. Fetches via
-    `pull/<N>/head:pr-<N>` (uniform for same-repo + fork PRs), creates a
-    worktree at branch `pr-<N>`, applies the standard claude+shell layout,
-    and writes `linked_pr` on the claude window so the card-meta `#PR`
-    badge appears on the next poll.
-
-    Errors:
-      400 — repo not git, pr_number invalid, gh call failed, fetch failed,
-            project name collides
-      404 — PR not found
-      409 — worktree path already exists OR tmux session name collides OR
-            project already exists at pinned_dir
-      500 — git/tmux mutation failed for any other reason
-    """
-    repo = resolve_repo_toplevel_or_400(body.repo)
-
-    pr = body.pr_number
-    if pr <= 0:
-        raise HTTPException(400, f"pr_number must be positive: {pr}")
-
-    # Cheap tmux-collision pre-check, but only possible when the user gave
-    # an explicit name — otherwise the name isn't known until after the
-    # ~15s gh call inside fetch_pr_into_worktree, so the check moves below.
-    if body.name:
-        explicit_name = body.name.strip()
-        has_session_code, _ = _run(["tmux", "has-session", "-t", explicit_name])
-        if has_session_code == 0:
-            raise HTTPException(
-                409, f"tmux session {explicit_name!r} already exists; pick a different name",
-            )
-
-    try:
-        wt = fetch_pr_into_worktree(repo, pr, name_override=body.name)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-    wt_path = wt.path
-    local_branch = wt.local_branch
-    is_fork = wt.is_fork
-    base_branch = wt.base_branch
-    pr_state = wt.pr_state
-
-    # wt.name already applied the body.name → head_ref → pr-N precedence
-    # inside fetch_pr_into_worktree (and the worktree dir was slugged from
-    # the same name), so it round-trips for both explicit and auto names.
-    name = wt.name
-    tmux_session = name
-
-    # Post-gh collision check for the auto-resolved name (the explicit-name
-    # path already checked above, before the gh call).
-    if not body.name:
-        has_session_code, _ = _run(["tmux", "has-session", "-t", tmux_session])
-        if has_session_code == 0:
-            from periscope.projects import _discard_pr_worktree
-            _discard_pr_worktree(repo, wt_path, local_branch)
-            raise HTTPException(
-                409,
-                f"tmux session {tmux_session!r} already exists "
-                f"(PR head branch) — pass an explicit name to override",
-            )
-
-    pinned_dir = wt_path
-
-    if pinned_dir in all_projects():
-        # Race: someone adopted this path between our checks. Discard the
-        # just-created worktree + orphan branch to avoid leaving phase-6
-        # cleanup-view bait.
-        from periscope.projects import _discard_pr_worktree
-        _discard_pr_worktree(repo, wt_path, local_branch)
-        raise HTTPException(
-            409, f"project already exists at {pinned_dir!r}"
-        )
-
-    # Apply the 2-window layout and capture the claude window's pid for the
-    # synchronous linked_pr write. On failure, roll back the worktree +
-    # branch — otherwise we leak orphan state with no way to detect it
-    # from the UI (no project row, no tmux session).
-    try:
-        claude_pid, _ = _layout_two_window(tmux_session, pinned_dir)
-    except HTTPException:
-        from periscope.projects import _discard_pr_worktree
-        _discard_pr_worktree(repo, wt_path, local_branch)
-        raise
-
-    try:
-        row = create_project(
-            pinned_dir,
-            name=name,
-            tmux_session=tmux_session,
-            repo=repo,
-            base_branch=base_branch,
-        )
-    except ValueError as e:
-        _run(["tmux", "kill-session", "-t", tmux_session])
-        raise HTTPException(409, str(e))
-
-    # Write the PR link on the claude window. Future polls' resolve_pids
-    # will see @periscope_id=<claude_pid> on the tmux window, recognize it
-    # as a valid stamp, and refresh last_seen — the linked_pr field stays
-    # because phase-1 added it to the GC immunity list.
-    # No guard: _layout_two_window raises HTTPException(500) if the claude
-    # window's index can't be resolved, so claude_pid is always a real
-    # 8-char hex id by the time we get here.
-    set_window_fields(claude_pid, linked_pr=pr, is_fork=is_fork)
-
-    result = {
-        "ok": True,
-        "pinned_dir": pinned_dir,
-        "pr_number": pr,
-        "is_fork": is_fork,
-        "pr_state": pr_state,
-        **row,
-    }
-    return result
