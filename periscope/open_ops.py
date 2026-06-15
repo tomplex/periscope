@@ -11,7 +11,7 @@ from periscope import projects, store, worktrees
 from periscope.gitutil import detect_default_branch, resolve_repo, resolve_repo_and_branch
 from periscope.panes import list_windows
 from periscope.tmux import _run, _tmux_mutate
-from periscope.worktree_spawn import _layout_two_window
+from periscope.worktree_spawn import _layout_two_window, spawn_worktree
 
 
 @dataclass(frozen=True)
@@ -173,15 +173,13 @@ def open_target(descriptor: Descriptor) -> OpenResult:
         # synchronously; pid_raw is the @periscope_id, "" for unmanaged.
         pane_pids = [w["pid_raw"] for w in list_windows()
                      if w["session"] == session and w["pid_raw"]]
-        ui = place_in_rail(session, projects.get_project(toplevel),
-                           pane_pids or [claude_pid])
+        ui = place_in_rail(session, project, pane_pids or [claude_pid])
         return OpenResult(tmux_session=session, repo=repo,
                           claude_pid=claude_pid, ui=ui)
 
     if isinstance(descriptor, BranchTarget):
         wt = worktree_for_branch(descriptor.repo, descriptor.branch)
         if wt is None:
-            from periscope.worktree_spawn import spawn_worktree
             wt = spawn_worktree(descriptor.repo, descriptor.branch)["path"]
         return open_target(PathTarget(path=wt))
 
