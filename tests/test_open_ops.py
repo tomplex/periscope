@@ -81,6 +81,33 @@ def test_worktree_for_branch_matches_enumerated(tmp_git_repo, clean_state):
 
 from periscope import store
 
+
+@needs_tmux
+def test_open_target_path_spawns_dormant_then_focuses(tmp_git_repo, clean_state, tmux_test_server):
+    repo = str(tmp_git_repo)
+    r1 = open_ops.open_target(open_ops.PathTarget(path=repo))
+    assert r1.repo == repo and r1.claude_pid and r1.tmux_session
+    assert r1.tmux_session in r1.ui["worktrees_by_repo"][repo]
+    r2 = open_ops.open_target(open_ops.PathTarget(path=repo))   # idempotent focus
+    assert r2.tmux_session == r1.tmux_session
+
+
+def test_open_target_non_git_path_raises(tmp_path, clean_state):
+    with pytest.raises(ValueError):
+        open_ops.open_target(open_ops.PathTarget(path=str(tmp_path)))
+
+
+@needs_tmux
+def test_open_target_pr_stamps_linked_pr(tmp_git_repo, clean_state, tmux_test_server, monkeypatch):
+    repo = str(tmp_git_repo)
+    monkeypatch.setattr(projects, "fetch_pr_into_worktree",
+        lambda r, pr: projects.PRWorktree(path=repo, base_branch="main",
+                                          is_fork=False, local_branch="pr-9",
+                                          pr_state="OPEN", name="pr-9"))
+    res = open_ops.open_target(open_ops.PRTarget(repo=repo, pr=9))
+    assert store.get_window(res.claude_pid).get("linked_pr") == 9
+
+
 def test_place_in_rail_writes_keys(tmp_git_repo, clean_state):
     repo = str(tmp_git_repo)
     proj = open_ops.ensure_project(repo, repo)

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from periscope import projects, store, worktrees
-from periscope.gitutil import detect_default_branch, resolve_repo_and_branch
+from periscope.gitutil import detect_default_branch, resolve_repo, resolve_repo_and_branch
 from periscope.panes import list_windows
 from periscope.tmux import _run, _tmux_mutate
 from periscope.worktree_spawn import _layout_two_window
@@ -153,6 +153,46 @@ def _discover_repos() -> set[str]:
                and child.name != "worktrees" and (child / ".git").exists():
                 repos.add(str(child.resolve()))
     return repos
+
+
+def open_target(descriptor: Descriptor) -> OpenResult:
+    """Resolve a descriptor to a live, rail-placed tmux session.
+
+    PathTarget  — git toplevel → ensure_project → ensure_session → place_in_rail.
+    BranchTarget — locate or spawn the worktree, then recurse into the path case.
+    PRTarget    — fetch PR into worktree, recurse into path case, then stamp
+                  linked_pr / is_fork (the path case has no PR knowledge).
+    """
+    if isinstance(descriptor, PathTarget):
+        toplevel = _git_toplevel(descriptor.path)        # ValueError if non-git
+        repo = resolve_repo(toplevel)                    # --git-common-dir → parent
+        project = ensure_project(toplevel, repo)
+        session, claude_pid = ensure_session(project, toplevel)
+        # Rebuild the full pane list from the now-live session. list_windows()
+        # is a live shell-out, so freshly-stamped windows are visible
+        # synchronously; pid_raw is the @periscope_id, "" for unmanaged.
+        pane_pids = [w["pid_raw"] for w in list_windows()
+                     if w["session"] == session and w["pid_raw"]]
+        ui = place_in_rail(session, projects.get_project(toplevel),
+                           pane_pids or [claude_pid])
+        return OpenResult(tmux_session=session, repo=repo,
+                          claude_pid=claude_pid, ui=ui)
+
+    if isinstance(descriptor, BranchTarget):
+        wt = worktree_for_branch(descriptor.repo, descriptor.branch)
+        if wt is None:
+            from periscope.worktree_spawn import spawn_worktree
+            wt = spawn_worktree(descriptor.repo, descriptor.branch)["path"]
+        return open_target(PathTarget(path=wt))
+
+    if isinstance(descriptor, PRTarget):
+        prwt = projects.fetch_pr_into_worktree(descriptor.repo, descriptor.pr)
+        result = open_target(PathTarget(path=prwt.path))
+        store.set_window_fields(result.claude_pid, linked_pr=descriptor.pr,
+                                is_fork=prwt.is_fork)
+        return result
+
+    raise ValueError(f"unknown descriptor: {descriptor!r}")
 
 
 def build_catalog() -> dict:
