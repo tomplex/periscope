@@ -469,7 +469,7 @@ def projects_pr_review(body: PRReviewBody):
             )
 
     try:
-        wt = fetch_pr_into_worktree(repo, pr)
+        wt = fetch_pr_into_worktree(repo, pr, name_override=body.name)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -479,10 +479,10 @@ def projects_pr_review(body: PRReviewBody):
     base_branch = wt.base_branch
     pr_state = wt.pr_state
 
-    # fetch_pr_into_worktree resolves head_ref from gh metadata; use its
-    # name field so the project name round-trips correctly (the worktree
-    # path is slugified, but the name is the raw head branch).
-    name = (body.name or wt.name or local_branch).strip()
+    # wt.name already applied the body.name → head_ref → pr-N precedence
+    # inside fetch_pr_into_worktree (and the worktree dir was slugged from
+    # the same name), so it round-trips for both explicit and auto names.
+    name = wt.name
     tmux_session = name
 
     # Post-gh collision check for the auto-resolved name (the explicit-name

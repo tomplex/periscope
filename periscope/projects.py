@@ -247,12 +247,18 @@ class PRWorktree:
     name: str       # resolved project name (head_ref or local_branch fallback)
 
 
-def fetch_pr_into_worktree(repo: str, pr: int) -> PRWorktree:
+def fetch_pr_into_worktree(repo: str, pr: int, name_override: str | None = None) -> PRWorktree:
     """Fetch PR #pr into a fresh worktree under `repo`, preserving the
     route's rollback semantics: on any failure after the worktree exists,
     `_discard_pr_worktree` force-removes it and deletes the orphan branch.
     Raises ValueError on bad input; HTTPException on gh/git failures
     (the caller maps). Returns the worktree metadata.
+
+    `name_override` (the route's explicit user-supplied name) takes
+    precedence over the PR's head branch when slugging the on-disk worktree
+    dir — matching the original route's `body.name or head_ref or pr-N`
+    precedence. Callers that want the head-branch default (e.g. open_target)
+    pass it as None.
     """
     if pr <= 0:
         raise ValueError(f"pr must be positive: {pr}")
@@ -266,7 +272,7 @@ def fetch_pr_into_worktree(repo: str, pr: int) -> PRWorktree:
     base_branch = meta.get("baseRefName") or None
 
     head_ref = (meta.get("headRefName") or "").strip()
-    name = (head_ref or local_branch).strip()
+    name = ((name_override or "").strip() or head_ref or local_branch).strip()
 
     # Fetch the PR head into local branch `pr-<N>`.
     _fetch_pr_branch(repo, pr, local_branch)
