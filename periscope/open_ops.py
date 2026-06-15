@@ -6,7 +6,7 @@ dispatch function is `open_target`, never `open`.
 import os
 from dataclasses import dataclass
 
-from periscope import projects, worktrees
+from periscope import projects, store, worktrees
 from periscope.gitutil import resolve_repo_and_branch
 from periscope.panes import list_windows
 from periscope.tmux import _run, _tmux_mutate
@@ -100,6 +100,28 @@ def _dedupe_name(base: str) -> str:
         n += 1
         candidate = f"{base}-{n}"
     return candidate
+
+
+def place_in_rail(tmux_session: str, project: projects.Project,
+                  pane_pids: list[str]) -> dict:
+    """Append the session to the rail prefs (idempotent) and return the
+    full ui blob for the client to write into prefsSignal."""
+    ui = store.get_ui()
+    repo = project["repo"]
+    order = list(ui.get("repo_order", []))
+    if repo not in order:
+        order.append(repo)
+    wts = {k: list(v) for k, v in ui.get("worktrees_by_repo", {}).items()}
+    wt_list = wts.setdefault(repo, [])
+    if tmux_session not in wt_list:
+        wt_list.append(tmux_session)
+    panes = {k: list(v) for k, v in ui.get("panes_by_worktree", {}).items()}
+    if tmux_session not in panes:
+        panes[tmux_session] = list(pane_pids)
+    patch = {"repo_order": order, "worktrees_by_repo": wts,
+             "panes_by_worktree": panes}
+    store.update_ui(patch)
+    return store.get_ui()
 
 
 def ensure_session(project: projects.Project, pinned_dir: str) -> tuple[str, str]:

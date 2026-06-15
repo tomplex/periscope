@@ -77,3 +77,15 @@ def test_worktree_for_branch_matches_enumerated(tmp_git_repo, clean_state):
     default = detect_default_branch(repo)
     assert open_ops.worktree_for_branch(repo, default) == os.path.realpath(repo)
     assert open_ops.worktree_for_branch(repo, "no-such-branch") is None
+
+
+from periscope import store
+
+def test_place_in_rail_writes_keys(tmp_git_repo, clean_state):
+    repo = str(tmp_git_repo)
+    proj = open_ops.ensure_project(repo, repo)
+    ui = open_ops.place_in_rail(proj["tmux_session"], proj, ["%1", "%2"])
+    assert proj["repo"] in ui["repo_order"]
+    assert proj["tmux_session"] in ui["worktrees_by_repo"][proj["repo"]]
+    assert ui["panes_by_worktree"][proj["tmux_session"]] == ["%1", "%2"]
+    assert store.get_ui() == ui          # returns exactly what was persisted
