@@ -419,12 +419,10 @@ dispatch is in `open_ops` not the route handler (pushback #1).
    slightly worse (boolean-flag-on-a-function, which the taste rules disfavor),
    so I kept them as two named functions.
 
-6. **`OpenPickerModal` retired.** Spec open question (lines 333-335). Decided:
-   retire it — "open dir" cards over the catalog cover the live-session case
-   (server focuses), and keeping a second rail-add surface re-fragments the very
-   thing this feature unifies. Sanity-check: the picker today adds an
-   *already-live unmanaged* session whose dir may not be a discoverable repo; if
-   such sessions must remain rail-addable and they don't appear in the catalog,
-   the picker (or an omnibox "live sessions" card source fed by the `windows`
-   signal) has to stay. Verify the catalog (or a windows-signal card source)
-   covers every session the picker can currently add before deleting it.
+6. **`OpenPickerModal` retired — RESOLVED (Tom, 2026-06-15): retire it and
+   accept the capability loss.** Delete the modal outright; do NOT add a
+   live-sessions card-source. The omnibox opens only what the catalog knows
+   (discoverable repos + worktrees + PRs). Ad-hoc tmux sessions started by hand
+   outside the discoverable roots are no longer rail-addable via the UI — an
+   accepted v1 loss. (Original rationale retained: keeping a second rail-add
+   surface re-fragments the thing this feature unifies.)
