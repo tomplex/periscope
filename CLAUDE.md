@@ -342,8 +342,17 @@ Tools exposed to Claude:
 - `link_linear(id, title?, status?)` — same for Linear tickets (no
   auto-detection path). Optional `title`/`status` metadata renders on
   the card and in the modal; each call fully describes the link.
-- `spawn_claude(prompt, session?, cwd?, name?)` — fork a fresh Claude
-  pane in a new tmux window with the given first message.
+- `spawn_claude(prompt, workspace?, session?, cwd?, name?)` — fork a
+  fresh Claude pane in a new tmux window with the given first message.
+  `workspace="same"` (default) adds a window to the caller's session, so
+  the spawn nests under the caller's rail item (fan-out / related work —
+  the rail is session-anchored, so a different `cwd` shows only as a
+  chip). `workspace="new"` anchors the spawn to its `cwd`'s worktree as
+  its own rail item: `open_ops.resolve_worktree_session` registers the
+  project + dedupes a foreign-name clash, the spawn creates the session
+  (or new-tabs into an existing worktree session), then `place_in_rail`
+  records the ordering. Non-git `cwd` with `workspace="new"` falls back
+  to `"same"` (no worktree to anchor a rail item to).
 
 Notifications go the other way as `notifications/claude/channel`
 messages, surfacing in Claude's prompt as `<channel source="periscope">`

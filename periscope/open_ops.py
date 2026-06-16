@@ -125,6 +125,28 @@ def place_in_rail(tmux_session: str, project: projects.Project,
     return store.get_ui()
 
 
+def resolve_worktree_session(path: str) -> tuple[str, projects.Project] | None:
+    """Resolve a cwd to the `(session_name, project)` a pane should spawn into
+    to appear as its OWN rail item — registering the project if absent and
+    deduping a live-but-foreign session name (same name-collision handling as
+    `ensure_session`). Creates no windows: the caller adds the pane itself
+    (new tmux session when the name is free, new tab when it already owns the
+    worktree). Returns None when `path` isn't inside a git repo — there's no
+    worktree to anchor a rail item to, so the caller falls back to its session.
+    """
+    try:
+        toplevel = _git_toplevel(path)
+    except ValueError:
+        return None
+    repo = resolve_repo(toplevel)
+    project = ensure_project(toplevel, repo)
+    name = project["tmux_session"]
+    if _session_live(name) and not _session_owns_dir(name, toplevel):
+        name = _dedupe_name(name)                          # live but foreign
+        projects.update_project(toplevel, tmux_session=name)
+    return name, project
+
+
 def ensure_session(project: projects.Project, pinned_dir: str) -> tuple[str, str]:
     """Idempotent create-or-focus. `pinned_dir` is the project's key (taken
     explicitly — Project is a TypedDict with no self-key). Returns

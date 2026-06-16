@@ -81,15 +81,18 @@ specific enough that you won't over-call them:
   the user will want to read (spec, design doc, report, HTML output).
   Quiet: the tab appears on this pane without stealing focus.
 
-- spawn_claude(prompt, session?, cwd?, name?): launch a fresh Claude
-  session in a new tmux window with the given prompt as its first
+- spawn_claude(prompt, workspace?, session?, cwd?, name?): launch a fresh
+  Claude session in a new tmux window with the given prompt as its first
   message. The new window appears on the dashboard. Use when the user
   asks you to delegate, parallelize, or "spin up another session" — or
   when the task at hand decomposes into independent sub-tasks that
-  each deserve their own focused context. Default `session` is yours,
-  `cwd` is your pane's working directory; override to group sub-agents
-  in a dedicated session or point them at a different repo. Keep the
-  returned target/pid so you can refer to the spawned pane later.
+  each deserve their own focused context. `workspace` controls where it
+  lands: "same" (default) nests it under YOUR card as fan-out/related
+  sub-work (even if `cwd` is a different worktree); "new" makes it its
+  own top-level dashboard item anchored to `cwd`'s worktree (new tab if
+  that worktree already has a session) — for DISTINCT work tracked on its
+  own. Default `cwd` is your pane's working directory. Keep the returned
+  target/pid so you can refer to the spawned pane later.
 
 - search_history(query, project?, since?, limit?): full-text search
   over every past Claude session on this machine. Use it before
@@ -387,11 +390,27 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     ).strip()
     caller_session, _, caller_cwd = info.partition("|")
 
-    session = str(arguments.get("session") or caller_session or "spawned").strip()
     cwd = str(arguments.get("cwd") or caller_cwd or os.path.expanduser("~")).strip()
     if not os.path.isdir(cwd):
         cwd = os.path.expanduser("~")
     name = str(arguments.get("name") or "").strip()
+
+    # Where the spawned pane lands in the dashboard. "same" (default) keeps it
+    # a window in the caller's session, so fan-out / related sub-work nests
+    # under the caller's rail item (the rail is session-anchored). "new"
+    # anchors it to its cwd's worktree as its OWN rail item — a separate
+    # project-backed session — for distinct work tracked on its own. The
+    # session name is created fresh, or new-tabbed into when it already owns
+    # the worktree; resolve_worktree_session registers the project + dedupes a
+    # foreign-name clash, and returns None when cwd isn't in a git repo (no
+    # worktree to anchor → fall back to the caller's session).
+    from periscope import open_ops
+    workspace = str(arguments.get("workspace") or "same").strip().lower()
+    anchored = open_ops.resolve_worktree_session(cwd) if workspace == "new" else None
+    if anchored:
+        session, project = anchored
+    else:
+        session = str(arguments.get("session") or caller_session or "spawned").strip()
 
     # Create the session if missing, otherwise add a window to it. Both
     # paths use `-P -F #{window_index}` so we know the spawned slot — with
@@ -466,6 +485,16 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     pid, pane_id = _resolve_window(
         lambda w: w.get("session") == session and w.get("index") == index
     )
+
+    # workspace="new": persist the rail placement now that the window is
+    # stamped. The item already surfaces from live state (the project is
+    # registered, so the session groups under its repo), but place_in_rail
+    # records the ordering — same server-side placement the unified-open
+    # route does. pid_raw is the just-stamped @periscope_id.
+    if anchored:
+        pane_pids = [w["pid_raw"] for w in list_windows()
+                     if w["session"] == session and w.get("pid_raw")]
+        open_ops.place_in_rail(session, project, pane_pids or [pid])
 
     body = {
         "ok": True,
@@ -797,9 +826,16 @@ _CHANNEL_TOOLS = [
             "parallelize, or spin up another Claude session; "
             "(2) the current task decomposes into independent "
             "sub-tasks that benefit from focused, isolated "
-            "contexts running concurrently. Returns target / "
-            "session / index / pid / pane_id for the spawned pane "
-            "— keep them so you can address it again later."
+            "contexts running concurrently. Set `workspace` to "
+            "control where the spawn lands on the dashboard: "
+            "\"same\" (default) for fan-out / sub-work that's part "
+            "of YOUR current task — it nests under your card, even "
+            "in a different worktree; \"new\" when the spawn is "
+            "DISTINCT work the user would track separately — it "
+            "becomes its own top-level item anchored to its "
+            "worktree. Returns target / session / index / pid / "
+            "pane_id for the spawned pane — keep them so you can "
+            "address it again later."
         ),
         "inputSchema": {
             "type": "object",
@@ -808,13 +844,28 @@ _CHANNEL_TOOLS = [
                     "type": "string",
                     "description": "Initial message to send to the spawned Claude session.",
                 },
+                "workspace": {
+                    "type": "string",
+                    "enum": ["same", "new"],
+                    "description": (
+                        "Where the spawn lands on the dashboard. \"same\" "
+                        "(default): a window in YOUR session — fan-out / "
+                        "related sub-work nests under your card (even if "
+                        "`cwd` is a different worktree). \"new\": its own "
+                        "top-level dashboard item, a session anchored to "
+                        "`cwd`'s worktree (new tab if that worktree already "
+                        "has one) — for DISTINCT work tracked separately. "
+                        "\"new\" requires `cwd` to be inside a git repo; "
+                        "otherwise it behaves like \"same\"."
+                    ),
+                },
                 "session": {
                     "type": "string",
-                    "description": "tmux session to spawn into. Defaults to the caller's session. Created if it doesn't exist.",
+                    "description": "tmux session to spawn into (\"same\" workspace only). Defaults to the caller's session. Created if it doesn't exist.",
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Working directory for the spawned window. Defaults to the caller's pane cwd.",
+                    "description": "Working directory for the spawned window. Defaults to the caller's pane cwd. With workspace=\"new\", its worktree anchors the new dashboard item.",
                 },
                 "name": {
                     "type": "string",

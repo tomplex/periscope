@@ -139,6 +139,49 @@ def test_ensure_session_dedupes_foreign_name(tmp_git_repo, clean_state, tmux_tes
     assert projects.get_project(repo)["tmux_session"] == session  # row updated
 
 
+def test_resolve_worktree_session_non_git_returns_none(tmp_path, clean_state):
+    # No worktree to anchor a rail item to → caller falls back to its session.
+    assert open_ops.resolve_worktree_session(str(tmp_path)) is None
+
+
+@needs_tmux
+def test_resolve_worktree_session_registers_and_keeps_name(
+    tmp_git_repo, clean_state, tmux_test_server
+):
+    repo = str(tmp_git_repo)
+    name, proj = open_ops.resolve_worktree_session(repo)
+    assert name == proj["tmux_session"]          # name free → kept as-is
+    assert proj["repo"] == repo
+    assert repo in projects.all_projects()       # project registered
+    # Creates no window — the caller spawns the pane itself.
+    assert _tmux_mutate("has-session", "-t", name)[0] is False
+
+
+@needs_tmux
+def test_resolve_worktree_session_keeps_name_when_live_and_ours(
+    tmp_git_repo, clean_state, tmux_test_server
+):
+    repo = str(tmp_git_repo)
+    proj = open_ops.ensure_project(repo, repo)
+    # A live session that already owns the worktree → caller new-tabs into it.
+    _tmux_mutate("new-session", "-d", "-s", proj["tmux_session"], "-c", repo)
+    name, _ = open_ops.resolve_worktree_session(repo)
+    assert name == proj["tmux_session"]          # NOT deduped
+
+
+@needs_tmux
+def test_resolve_worktree_session_dedupes_foreign_name(
+    tmp_git_repo, clean_state, tmux_test_server
+):
+    repo = str(tmp_git_repo)
+    proj = open_ops.ensure_project(repo, repo)
+    # The recorded name is occupied by an unrelated session in a different cwd.
+    _tmux_mutate("new-session", "-d", "-s", proj["tmux_session"], "-c", "/tmp")
+    name, _ = open_ops.resolve_worktree_session(repo)
+    assert name != proj["tmux_session"]          # deduped
+    assert projects.get_project(repo)["tmux_session"] == name  # row updated
+
+
 def test_worktree_for_branch_matches_enumerated(tmp_git_repo, clean_state):
     repo = str(tmp_git_repo)
     from periscope.gitutil import detect_default_branch
