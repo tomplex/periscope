@@ -62,7 +62,7 @@ There IS a test suite — small, surgical, run with `uv run`:
 
 ```sh
 uv run pytest -q                     # full suite (incl. parse_pane / status-line regex regressions in tests/test_panes.py)
-uv run tests/test_channel_smoke.py   # MCP wire-format compat against pinned mcp==1.27.*
+uv run pytest tests/test_channel_shim.py # channel-shim reconnect protocol (if these fail spuriously, `uv sync` — see .venv drift below)
 uv run pytest tests/test_tmux_mirror.py  # mirror protocol + pyte convergence oracle (spawns a real tmux on -L periscope-mirror-test)
 ```
 
@@ -119,24 +119,36 @@ One file per subsystem:
 | `periscope/usage.py` | Claude plan usage (JSONL parse + OAuth usage-endpoint fetch) |
 | `periscope/rename_ai.py` | Anthropic SDK plumbing for auto-rename (`RENAME_RULES` taste block shared with the narrator) |
 | `periscope/narrator.py` | Per-pane AI status lines + divergence renames (pure decision core + worker-driven tick; see "Narrator" below) |
-| `periscope/routes/*.py` | One APIRouter per file (11 modules: state, prefs, pane, send, sessions, paste_image, channel, history, auto_rename, lgtm, ws) |
+| `periscope/open_ops.py` | Unified-open core: `open_target` dispatch (path/branch/pr descriptors → resolve → register → idempotent create-or-focus → server-side rail placement) + `ensure_session` / `worktree_for_branch` / `place_in_rail` / `build_catalog`. No HTTP (see "Unified open" below) |
+| `periscope/routes/*.py` | One APIRouter per file (alerts, auto_rename, channel, cleanup, events, fs, healthz, history, lgtm, open, pane, paste_image, prefs, projects, send, sessions, settings, state, ws) |
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
-`tests/routes/test_<route>.py` per route). 630 pytest tests on a
+`tests/routes/test_<route>.py` per route). 634 pytest tests on a
 clean run. Run with `uv run pytest -q`.
 
-Four modules deviate from the one-test-per-module mirror.
 `cleanup.py` has no `tests/test_<module>.py` but is exercised
 indirectly through its route tests (`tests/routes/test_cleanup.py`).
-`repo_locks.py`, `worktrees.py`, and `worktree_spawn.py` have no
-direct test and no route test — they currently lack coverage. Add a
-direct `tests/test_<module>.py` when you next touch those.
+`repo_locks.py` and `worktrees.py` have no direct test and no route
+test — they currently lack coverage. Add a direct
+`tests/test_<module>.py` when you next touch those. (`worktree_spawn.py`
+gained `tests/test_worktree_spawn.py` and `open_ops.py` has
+`tests/test_open_ops.py`, both real-tmux integration tests gated on
+`@needs_tmux`.)
 
-`tests/test_channel_smoke.py` is a separate PEP-723 `# /// script`
-that exercises an older `channel_server.py` shape; it's excluded from
-pytest collection via `tests/conftest.py:collect_ignore`. Run it
-directly with `uv run tests/test_channel_smoke.py` if needed.
+`tests/test_channel_shim.py` exercises the channel-shim reconnect
+protocol (spawns the shim as a real subprocess against a fake unix-socket
+server) and runs as part of the normal `uv run pytest -q` suite — there
+is no separate smoke script and no `collect_ignore`.
+
+**`.venv` drift landmine:** those shim-subprocess tests spawn
+`sys.executable channel_shim.py`. If the local `.venv` has drifted from
+`uv.lock` (mismatched plugin/dep versions), the suite over-collects and
+the shim subprocess misbehaves — surfacing as two spurious
+`test_channel_shim.py` reconnect failures (`TimeoutError`/fast EOF) with
+NO code change. Fix: `uv sync` to rebuild `.venv` from the lock. The
+canonical locked env collects 634 tests, all green. If you ever see only
+those two channel tests fail, suspect the env before the code.
 
 ### Key invariants the split preserved
 
@@ -166,7 +178,7 @@ into `#app`. Components grouped by area:
 | split view | `src/split/{Split,Rail,RailRows,Detail}.jsx` + `src/split/railTree.js` (`mergeLiveAndPrefs`) — the only dashboard view (grid retired). Rail membership is SESSION-ANCHORED: windows group by their tmux session's project (`project_pinned_dir` + the projects payload), never by cwd — cd shows as an affiliation chip, not a move. Unmanaged sessions fold into the flat bottom-pinned "dev" group (`MAIN_KEY`); its pane order persists as `panes_by_worktree.__main__` |
 | modal | `src/modal/Modal.jsx` (tab strip + sidebar + review pane) |
 | terminal | `src/terminal/Terminal.jsx` (ref+effect wrapper) + `src/terminal/terminalCore.js` (imperative xterm + `/ws/pane`, ported ~verbatim) |
-| overlays | `src/overlays/{Dialog,Toast,Alerts,Overlays,CommandsModal,NewProjectModal,ReviewPrModal,CleanupModal,SettingsModal,OpenPickerModal,LauncherModal}.jsx` + `src/hooks/useEscape.js` (LIFO escape stack) |
+| overlays | `src/overlays/{Dialog,Toast,Overlays,CommandsModal,CleanupModal,SettingsModal,LauncherModal,OpenOmnibox}.jsx` + `src/hooks/useEscape.js` (LIFO escape stack). `OpenOmnibox` is the command-palette (↑↓↵ nav, ⌘K, grouped cards) behind the header's single `+ new` button — it replaced the old `+ session` / `+ project` / `review PR` menu and the retired `NewProjectModal` / `ReviewPrModal` / `OpenPickerModal`. `src/open/classify.js` is its pure (unit-tested) query→cards classifier |
 | util | `src/util.js` (`targetQuery` last-colon split, `apiCall`, `relTime`, `prUrl`, `rewriteLgtmHost`) |
 
 Still vanilla under `static/`: `history.js` + `util.js` (the `/history` SPA —
@@ -257,6 +269,49 @@ number and CI glyph (⟳ ✓ ✗) out of the URL field. If Claude changes its
 status format, these regexes break and `is_claude` returns false for every
 window — fix the regexes first when triaging "everything looks like a
 shell." Add a case to `tests/test_panes.py` for any new variation.
+
+## Unified open (`periscope/open_ops.py` + `routes/open.py`)
+
+One endpoint and one UI surface materialize a session into the rail. The
+header's `+ new` button (and ⌘K) open the `OpenOmnibox` command-palette,
+which loads `GET /api/open/catalog` (discoverable repos + their worktrees)
+and POSTs a *target descriptor* to `POST /api/open`. The server owns all
+dispatch.
+
+`open_ops.open_target(descriptor)` takes one of three frozen-dataclass
+variants and converges branch/PR onto the path case:
+- `PathTarget(path)` — resolve git toplevel (400 if non-git) → `resolve_repo`
+  (parent repo) → `ensure_project` (register if absent, **never** 409) →
+  `ensure_session` → rebuild pane pids → `place_in_rail` → `OpenResult`.
+- `BranchTarget(repo, branch)` — open the branch's worktree, or
+  `spawn_worktree` then recurse into the path case.
+- `PRTarget(repo, pr)` — `fetch_pr_into_worktree`, recurse, then stamp
+  `linked_pr`; rolls back the worktree if the open fails after the fetch.
+
+Invariants worth knowing before touching it:
+
+- **Idempotent create-or-focus is NAME-based, not cwd-based.** `ensure_session`
+  checks `tmux has-session` on the project's recorded `tmux_session`; cwd
+  collides (the documented footgun — multiple panes per dir). Live-and-ours →
+  focus; dead → spawn; live-but-foreign (name reused) → dedupe the name and
+  `update_project`. This is what fixes the "project already exists" dead-end:
+  a dormant registered project (session killed) reopens instead of 409ing.
+- **Rail placement is server-side.** `place_in_rail` writes the rail pref
+  (`repo_order` / `worktrees_by_repo` keyed by tmux **session name** /
+  `panes_by_worktree`) and the route returns the `ui` blob; the omnibox writes
+  it straight into `prefsSignal` via `prefs.setUI`. This killed the old
+  client-side ~3500ms `deferRailAdd` poll-wait race.
+- **`_layout_two_window` stamps BOTH windows** (claude + shell) so the full
+  pane list is known synchronously — `place_in_rail` needs it without waiting
+  for the next poll's `resolve_pids`.
+- **The catalog is repo/worktree-scoped (v1).** Arbitrary non-git dirs 400;
+  ad-hoc live sessions outside the discoverable roots are not rail-addable
+  (the old `OpenPickerModal` was retired). Widen the catalog if that need
+  returns.
+- **Real-tmux tests need a clean `.venv`.** `tests/test_open_ops.py` +
+  `tests/test_worktree_spawn.py` spawn real tmux on an isolated `-L` socket
+  (`PERISCOPE_TMUX_SOCKET`) with a stub exec (`PERISCOPE_CLAUDE_EXEC`); both
+  seams live in `periscope/tmux.py` + `config.py` and are inert in prod.
 
 ## History (`history/`)
 
