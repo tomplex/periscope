@@ -44,14 +44,17 @@ npm run dev                     # http://127.0.0.1:5174/
 under a single shell with `trap 'kill 0' EXIT INT TERM` — ctrl+c kills the
 whole process group at once, so uvicorn's reload-worker child never gets
 orphaned regardless of how each intermediate layer forwards signals.
-`vite.config.js` proxies `/api/*` and `/ws/*` to FastAPI on :8765. Vite
+`vite.config.js` proxies `/api/*` and `/ws/*` to FastAPI on :8766. Vite
 builds the committed `static/dist/app.js`; production serves that bundle
 from FastAPI with no build step at boot (`bin/periscope restart` just
 respawns the daemon against the already-built, already-committed bundle).
 
-`dev.sh` exports `PERISCOPE_DEV=1` so uvicorn runs with `--reload`. The
-pidfile reclaim path (see below) treats a reloader child as the same
-instance.
+`dev.sh` exports `PERISCOPE_DEV=1` (so uvicorn runs with `--reload`) and
+`PERISCOPE_PORT=8766` (so the dev backend stays off the :8765 prod port —
+it never reclaims the launchd prod instance, never binds the MCP socket,
+and never runs the Claude-spending activity worker; see `config.is_prod()`
+below). The pidfile reclaim path (see below) treats a reloader child as
+the same instance.
 
 ## Tests
 
