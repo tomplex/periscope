@@ -25,19 +25,21 @@ export function classify(query, catalog) {
     if (match(w.path, q) || match(w.branch || "", q)) {
       const repoLabel = (catalog.repos.find(r => r.repo === w.repo) || {}).label || w.repo;
       cards.push({ kind: "open", label: `${repoLabel} · ${w.branch || "detached"}`,
-                   descriptor: { path: w.path } });
+                   sub: w.path, descriptor: { path: w.path } });
     }
   }
   for (const r of catalog.repos || []) {
     if (match(r.label, q) || match(r.repo, q)) {
       cards.push({ kind: "worktree", label: `${r.label} · new worktree…`,
+                   sub: `off origin/${r.default_branch || "HEAD"}`,
                    repo: r.repo, branches: r.branches, descriptor: null });
     }
   }
   const pr = parsePrRef(q);
   if (pr) {
     cards.push({ kind: "pr",
-                 label: pr.repo ? `review PR #${pr.pr} in ${pr.repo}` : `review PR #${pr.pr}…`,
+                 label: pr.repo ? `review PR #${pr.pr} in ${pr.repo}` : `review PR #${pr.pr}`,
+                 sub: pr.repo || "choose a repo",
                  needsRepo: !pr.repo, pr });
   }
   return cards;
