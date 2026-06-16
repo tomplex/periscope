@@ -11,7 +11,12 @@ trap 'kill 0' EXIT INT TERM
 # PERISCOPE_DEV=1 enables uvicorn's reload supervisor so backend edits
 # bounce the worker. Production (`uv run server.py`) runs as a single
 # process so it's easy to kill and leaves no orphans.
-PERISCOPE_DEV=1 uv run server.py &
+#
+# PERISCOPE_PORT=8766 keeps dev OFF the prod port: it never reclaims the
+# launchd-managed prod instance (which would respawn and fight back over
+# 8765), never binds the MCP socket, and — with the IS_PROD gate — never
+# runs the Claude-spending activity worker. vite.config.js proxies to 8766.
+PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py &
 vite &
 # Rebuild the committed static/dist/ bundle on every static/src/ change.
 # --emptyOutDir false mirrors vite.config.js: never wipe the committed dist.

@@ -9,9 +9,9 @@ surface an error to the user. A bad body is logged and returns 200 n=0.
 
 The raw request body is parsed by hand rather than via a Pydantic body
 model: a model would raise 422 BEFORE the handler runs, so the handler
-could not swallow it. dev is derived from config.PORT != 8765 (the
-prod/dev discriminator the package already trusts), not PERISCOPE_DEV
-(read only in server.py's __main__). Real-usage queries filter dev=0.
+could not swallow it. dev is the inverse of config.is_prod() (prod port
+AND not PERISCOPE_DEV), so a dev instance is flagged even if it lands
+on 8765. Real-usage queries filter dev=0.
 """
 
 import json
@@ -39,5 +39,5 @@ async def post_events(request: Request):
         return {"ok": True, "n": 0}
     if len(events) > _MAX_BATCH:
         events = events[:_MAX_BATCH]
-    n = activity.record_ui_events(events, dev=config.PORT != 8765)
+    n = activity.record_ui_events(events, dev=not config.is_prod())
     return {"ok": True, "n": n}

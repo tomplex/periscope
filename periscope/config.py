@@ -40,6 +40,24 @@ def claude_exec() -> str:
 # `from periscope.config import PORT` (which would snapshot the value).
 PORT = int(os.environ.get("PERISCOPE_PORT", "8765"))
 
+# Every dev flow (dev.sh, the worktree workflow) exports PERISCOPE_DEV=1;
+# the prod launchd plist sets only PATH/HOME. So DEV is the authoritative
+# "is this a developer's instance" signal — more reliable than PORT, which
+# dev.sh historically left at the 8765 default and thus spent Haiku.
+DEV = bool(os.environ.get("PERISCOPE_DEV"))
+
+def is_prod() -> bool:
+    """True only for the real prod instance: on the prod port AND not a dev
+    process. Gates everything that costs money or owns a singleton resource
+    (Claude-spending activity worker, MCP socket). A dev instance never
+    trips this even if it somehow lands on 8765.
+
+    A function, not a constant: reads module globals PORT/DEV at call time so
+    tests that monkeypatch `config.PORT` observe the new value — the same
+    live-access contract PORT itself documents above."""
+    return PORT == 8765 and not DEV
+
+
 def config_dir() -> Path:
     """The periscope config directory ($XDG_CONFIG_HOME/periscope, default
     ~/.config/periscope). Computed per call — not a module constant — so tests

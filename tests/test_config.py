@@ -32,3 +32,21 @@ def test_PORT_reads_PERISCOPE_PORT_env(monkeypatch):
     import periscope.config
     importlib.reload(periscope.config)
     assert periscope.config.PORT == 8766
+
+
+def test_is_prod_only_true_on_prod_port_and_not_dev(monkeypatch):
+    """is_prod() gates all Claude-spending / singleton-owning work. It must be
+    true ONLY for the real launchd prod instance: port 8765 AND not a dev
+    process. The dev-on-8765 case (dev.sh's old default) must read False so a
+    developer's instance never spends Haiku."""
+    import periscope.config as cfg
+    cases = {
+        (8765, False): True,   # prod
+        (8765, True): False,   # dev that landed on the prod port — the bug
+        (8766, False): False,  # stray non-dev on a dev port
+        (8766, True): False,   # normal dev worktree / dev.sh
+    }
+    for (port, dev), expected in cases.items():
+        monkeypatch.setattr(cfg, "PORT", port)
+        monkeypatch.setattr(cfg, "DEV", dev)
+        assert cfg.is_prod() is expected, f"PORT={port} DEV={dev}"

@@ -67,20 +67,23 @@ async def lifespan(_app: FastAPI):
     # channel_shim.py hardcodes /tmp/periscope-mcp.sock, so Claude's
     # channels always talk to prod. Dev periscopes on other ports leave
     # the socket alone — see spec §"Dev never serves channels."
-    if config.PORT == 8765:
+    if config.is_prod():
         mcp_task = _task("mcp-listener", _mcp_listener())
     else:
         mcp_task = None
-        log.info("dev port %d: skipping MCP listener", config.PORT)
+        log.info("non-prod (port %d, dev=%s): skipping MCP listener",
+                 config.PORT, config.DEV)
     # LGTM mirror: polls localhost:9900 + subscribes per-session SSE.
     # No-op while LGTM isn't running; surfaces on the dashboard the
     # moment it comes up.
     lgtm_task = _task("lgtm-refresh", _lgtm_periodic_refresh())
     # Activity worker: context-reset + milestone detection. Prod only —
     # periscope.db is a single shared file; two workers would race the
-    # milestone cursor and double-spend Haiku. Same guard as the MCP
-    # listener above. NB: _task's signature is _task(name, coro).
-    if config.PORT == 8765:
+    # milestone cursor and double-spend Haiku. Gated on IS_PROD (not bare
+    # PORT==8765) because dev.sh historically ran on the default 8765 and
+    # spent Haiku on every narrator tick. Same guard as the MCP listener.
+    # NB: _task's signature is _task(name, coro).
+    if config.is_prod():
         from periscope import activity
         activity_task = _task("activity-worker", activity.run_worker())
     else:

@@ -2,7 +2,9 @@ import { defineConfig } from "vite";
 import preact from "@preact/preset-vite";
 import { fileURLToPath } from "node:url";
 
-// Dev: serves static/ with HMR and proxies API/WS to FastAPI on :8765.
+// Dev: serves static/ with HMR and proxies API/WS to FastAPI on :8766 —
+// the dev backend port (dev.sh sets PERISCOPE_PORT=8766), kept off the
+// :8765 prod instance so HMR development never reclaims prod or spends Haiku.
 // Build: bundles the Preact app under static/src/ into a committed
 // static/dist/app.js (fixed name, no content hash) so index.html references a
 // stable path and `bin/periscope restart` needs no build step. Production
@@ -53,12 +55,12 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
     proxy: {
-      "/api": "http://127.0.0.1:8765",
-      "/ws": { target: "ws://127.0.0.1:8765", ws: true },
+      "/api": "http://127.0.0.1:8766",
+      "/ws": { target: "ws://127.0.0.1:8766", ws: true },
       // Vite's extensionless URL resolution picks up history.js for /history
       // (returns the JS source with Content-Type: text/html). Hand /history
       // off to FastAPI's explicit route instead, which serves history.html.
-      "/history": "http://127.0.0.1:8765",
+      "/history": "http://127.0.0.1:8766",
     },
   },
 });
