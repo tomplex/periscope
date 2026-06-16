@@ -120,7 +120,7 @@ export function resolvePinned(pinnedPids, windows) {
 // The low-signal Activity feed: everything that isn't need_human.
 export function buildActivity(alertItems) {
   return (alertItems || []).filter(
-    (r) => r.kind === "done" || r.kind === "info" || r.kind === "milestone"
+    (r) => r.kind === "done" || r.kind === "info"
   );
 }
 

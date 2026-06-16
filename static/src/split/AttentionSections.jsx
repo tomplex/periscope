@@ -229,7 +229,7 @@ export function ActivitySection() {
       {!activityCollapsed && activity.map((r) => (
         <div key={`act:${r.id}`} class={`rail-row attn-row attn-activity attn-${r.kind}`}
              onClick={() => revealPane(r.target)}>
-          <span class="attn-ico">{r.kind === "done" ? "✓" : r.kind === "milestone" ? "★" : "•"}</span>
+          <span class="attn-ico">{r.kind === "done" ? "✓" : "•"}</span>
           <span class="attn-label">{originLabel(null, r.session, r.name, shorten)}</span>
           <span class="attn-reason">{relTime(r.ts)}</span>
         </div>

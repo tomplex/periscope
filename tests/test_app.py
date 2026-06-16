@@ -55,9 +55,8 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     # The activity worker's FIRST tick runs immediately on startup — with
     # the real one, every pytest run on this machine executed a live tick
     # against the developer's actual tmux server: real capture-pane, real
-    # milestone/narrator Haiku calls, and (post-narrator) real renames of
-    # real windows. PORT defaults to 8765 here, so the prod-only guard
-    # does not protect tests.
+    # narrator Haiku calls, and real renames of real windows. PORT defaults
+    # to 8765 here, so the prod-only guard does not protect tests.
     mocker.patch("periscope.activity.run_worker", side_effect=_noop)
     # Lifespan teardown still calls os.unlink(MCP_SOCKET_PATH) regardless
     # of whether the listener was real; without this patch, running pytest

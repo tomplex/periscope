@@ -212,8 +212,7 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
 def tick(panes: list[tuple[dict, dict]]) -> None:
     """One narrator pass over the worker's (window, parsed) Claude panes.
     Called synchronously from activity._worker_tick (already off-loop).
-    Per-pane try/except — one bad pane never starves the rest (the
-    maybe_emit_milestone resilience pattern)."""
+    Per-pane try/except — one bad pane never starves the rest."""
     if not _enabled():
         return
     now = int(time.time())

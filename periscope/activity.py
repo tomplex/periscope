@@ -1,8 +1,8 @@
 """Activity store + read-path merge + the background activity worker.
 
 Owns periscope.db (SQLite): the durable events git cannot reconstruct —
-channel alerts, context resets, Haiku milestones. Git commits and CI runs
-stay computed-on-demand in git_pr.py; this module merges them with the
+channel alerts, context resets. Git commits and CI runs stay
+computed-on-demand in git_pr.py; this module merges them with the
 persisted rows at read time for the modal sidebar's Activity section.
 
 Import discipline: this module imports git_pr, panes, rename_ai, config.
@@ -21,19 +21,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from periscope import config
-from periscope.git_pr import cached_git_state, shared_activity_for
-from periscope.gitutil import github_slug
+from periscope.git_pr import shared_activity_for
 from periscope.log import _bg, log
 from periscope.panes import _acted_at, list_windows, parse_pane
-from periscope.rename_ai import claude_complete
-from periscope.tmux import _run, tmux
+from periscope.tmux import tmux
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   scope_kind  TEXT NOT NULL,         -- 'pane' | 'branch'
   scope_key   TEXT NOT NULL,         -- pane_id (%N)  |  repo_path\\x1fbranch
-  event_kind  TEXT NOT NULL,         -- 'alert' | 'milestone' | 'reset'
+  event_kind  TEXT NOT NULL,         -- 'alert' | 'reset'
   at          INTEGER NOT NULL,
   text        TEXT NOT NULL,
   detail      TEXT,
@@ -42,7 +40,6 @@ CREATE TABLE IF NOT EXISTS events (
   dedup_key   TEXT UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_events_scope ON events (scope_kind, scope_key, at);
-CREATE TABLE IF NOT EXISTS cursors (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS pane_sessions (
   pane_id     TEXT PRIMARY KEY,      -- tmux pane id, e.g. '%56'
   session_id  TEXT NOT NULL,         -- Claude CLAUDE_CODE_SESSION_ID (JSONL stem)
@@ -446,7 +443,7 @@ def _row_to_event(event_kind, at, text, detail, url):
     if event_kind == "alert":
         # detail holds the alert kind: done / need_human / info.
         return {"src": "alert", "kind": detail or "info", "at": at, "text": text}
-    # reset / milestone — session-sourced rows.
+    # reset — session-sourced rows.
     return {"src": "session", "kind": event_kind, "at": at,
             "text": text, "state": detail, "url": url}
 
@@ -477,8 +474,8 @@ def _fetch_git_into_cache(path, branch):
 
 def cached_pane_activity(target, pane_id, path, branch, limit=40):
     """Merged Activity stream for a pane, newest-first: git/CI events
-    (stale-while-revalidate cache) + persisted alert/reset/milestone
-    events + the per-target 'opened in periscope' anchor."""
+    (stale-while-revalidate cache) + persisted alert/reset events + the
+    per-target 'opened in periscope' anchor."""
     events: list[dict] = []
     if path and branch:
         key = (path, branch)
@@ -492,7 +489,7 @@ def cached_pane_activity(target, pane_id, path, branch, limit=40):
             git_events = cached[1] if cached else []
         for e in git_events:
             events.append({**e, "src": "git"})
-    # Persisted events (alerts, resets, milestones).
+    # Persisted events (alerts, resets).
     events.extend(events_for(pane_id, path, branch, limit=limit))
     # Per-target "opened in periscope" anchor.
     opened_at = _acted_at.get(target, 0)
@@ -511,7 +508,7 @@ def cached_pane_activity(target, pane_id, path, branch, limit=40):
 # tick is the wrong cost. The cwd-field check below still guards file
 # selection within that dir. If Claude Code ever encodes a character
 # differently, that cwd gets no transcript (graceful: resets still fire
-# from the context-% drop; milestones still summarize commit messages).
+# from the context-% drop).
 
 _PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -632,8 +629,8 @@ def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
 # --- Background worker -------------------------------------------------
 #
 # One lifespan-driven loop (prod instance only — see app.py). Every ~30s
-# it captures each active Claude pane and runs the context-reset check.
-# Phase 3 extends _worker_tick with the milestone check.
+# it captures each active Claude pane, runs the context-reset check, and
+# drives the narrator (semantic status + auto-rename).
 
 def _worker_tick(last_ctx: dict) -> None:
     """One worker pass. Blocking (tmux + git subprocesses) — run off-loop."""
@@ -650,22 +647,6 @@ def _worker_tick(last_ctx: dict) -> None:
         panes.append((w, parsed))
         _check_reset(w.get("pane_id") or "", w.get("cwd") or "",
                      parsed.get("context_pct"), last_ctx)
-    # Milestones: one check per unique (cwd, branch) across Claude panes.
-    seen: set = set()
-    for w, _parsed in panes:
-        cwd = w.get("cwd")
-        if not cwd:
-            continue
-        branch = (cached_git_state(cwd) or {}).get("branch")
-        if not branch or (cwd, branch) in seen:
-            continue
-        seen.add((cwd, branch))
-        on_branch = [p for p in panes if p[0].get("cwd") == cwd]
-        settled = all(p[1].get("state") in ("idle", "shell") for p in on_branch)
-        try:
-            maybe_emit_milestone(cwd, branch, settled)
-        except Exception:
-            log.exception("maybe_emit_milestone failed for %s", cwd)
     # Narrator: one semantic-status pass over the same Claude panes.
     try:
         # Function-level import — narrator imports activity; a top-level
@@ -689,127 +670,3 @@ async def run_worker() -> None:
         except Exception:
             log.exception("activity worker tick failed")
         await asyncio.sleep(30)
-
-
-# --- Haiku milestones --------------------------------------------------
-
-def build_milestone_prompt(commits: list[str], prompts: list[str]) -> str:
-    """Prompt asking Haiku to compress a run of work into one line.
-    commits: subject lines, oldest first. prompts: user-turn text."""
-    lines = [
-        "A developer just finished a run of work on one git branch.",
-        "Summarize what was accomplished as ONE line, in exactly this form:",
-        "  completed: <feature>",
-        "Constraints: <= 80 characters total, concrete, no trailing period.",
-        "",
-        "Commits (oldest first):",
-    ]
-    lines += [f"  - {c}" for c in commits]
-    if prompts:
-        lines += ["", "What the developer asked for:"]
-        lines += [f"  - {p}" for p in prompts]
-    lines += ["", "Return ONLY the single 'completed: ...' line, nothing else."]
-    return "\n".join(lines)
-
-
-def _cursor_get(key: str) -> str | None:
-    with _LOCK:
-        c = _conn()
-        row = c.execute("SELECT value FROM cursors WHERE key=?", (key,)).fetchone()
-    return row[0] if row else None
-
-
-def _cursor_set(key: str, value: str) -> None:
-    with _LOCK:
-        c = _conn()
-        c.execute("INSERT INTO cursors (key,value) VALUES (?,?) "
-                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                  (key, value))
-        c.commit()
-
-
-def _git_head(path: str) -> str | None:
-    code, out = _run(["git", "-C", path, "rev-parse", "HEAD"])
-    return out.strip() if code == 0 and out else None
-
-
-def _commits_since(path: str, last: str | None, head: str) -> list[tuple[int, str]]:
-    """(committer_unix_time, subject) for commits in last..head, oldest
-    first. When last is None, the most recent 15 commits up to head."""
-    rev = f"{last}..{head}" if last else f"-15 {head}"
-    code, out = _run(["git", "-C", path, "log", *rev.split(),
-                      "--pretty=format:%ct%x09%s"], timeout=3.0)
-    rows: list[tuple[int, str]] = []
-    if code == 0 and out:
-        for line in out.split("\n"):
-            ct, _, subj = line.partition("\t")
-            if ct.isdigit() and subj.strip():
-                rows.append((int(ct), subj.strip()))
-    rows.reverse()  # oldest first
-    return rows[-15:]
-
-
-def _recent_user_prompts(cwd: str, limit: int = 4) -> list[str]:
-    """Best-effort: the last few real user-turn texts from the live
-    transcript. Claude Code stores user text at message.content — a string
-    for a typed prompt, a list of blocks for tool-result/image turns.
-    Skip meta turns and non-string content; there is no top-level `text`.
-    Bounded tail read — transcripts can be tens of MB."""
-    tf = live_transcript_for(cwd)
-    if not tf:
-        return []
-    prompts: list[str] = []
-    try:
-        with tf.open() as fh:
-            tail = deque(fh, maxlen=2000)
-    except Exception:
-        return []
-    for line in tail:
-        try:
-            d = json.loads(line)
-        except Exception:
-            continue
-        if d.get("type") != "user" or d.get("isMeta"):
-            continue
-        content = (d.get("message") or {}).get("content")
-        if isinstance(content, str) and content.strip():
-            prompts.append(content.strip()[:300])
-    return prompts[-limit:]
-
-
-def maybe_emit_milestone(path: str, branch: str, settled: bool) -> None:
-    """If HEAD advanced past the last summarized SHA and every Claude pane
-    on the branch is settled, summarize the commit run via Haiku and
-    record one milestone event."""
-    head = _git_head(path)
-    if not head:
-        return
-    branch_key = f"{path}\x1f{branch}"
-    cursor = f"milestone:{branch_key}"
-    last = _cursor_get(cursor)
-    if last == head:
-        return
-    if not settled:
-        return  # debounce — wait for the commit run to finish
-    commits = _commits_since(path, last, head)
-    if not commits:
-        _cursor_set(cursor, head)
-        return
-    prompts = _recent_user_prompts(path)
-    try:
-        line = claude_complete(
-            build_milestone_prompt([c[1] for c in commits], prompts)
-        ).strip()
-    except Exception:
-        log.warning("milestone summary failed", exc_info=True)
-        return  # do NOT advance the cursor — retry next tick
-    if not line:
-        log.warning("milestone summary returned empty; will retry next tick")
-        return  # degenerate success — do NOT advance the cursor
-    text = line.splitlines()[0][:90]
-    slug = github_slug(path)
-    url = (f"https://github.com/{slug}/compare/{last}...{head}"
-           if slug and last else None)
-    record("branch", branch_key, "milestone", text,
-           at=commits[-1][0], url=url, dedup_key=f"milestone:{head}")
-    _cursor_set(cursor, head)

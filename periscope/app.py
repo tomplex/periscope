@@ -77,9 +77,9 @@ async def lifespan(_app: FastAPI):
     # No-op while LGTM isn't running; surfaces on the dashboard the
     # moment it comes up.
     lgtm_task = _task("lgtm-refresh", _lgtm_periodic_refresh())
-    # Activity worker: context-reset + milestone detection. Prod only —
-    # periscope.db is a single shared file; two workers would race the
-    # milestone cursor and double-spend Haiku. Gated on IS_PROD (not bare
+    # Activity worker: context-reset detection + narrator (semantic status
+    # + auto-rename). Prod only — the narrator spends Haiku per pane, and
+    # periscope.db is a single shared file. Gated on IS_PROD (not bare
     # PORT==8765) because dev.sh historically ran on the default 8765 and
     # spent Haiku on every narrator tick. Same guard as the MCP listener.
     # NB: _task's signature is _task(name, coro).

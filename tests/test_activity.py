@@ -21,7 +21,7 @@ def test_record_then_events_for_roundtrips():
 
 def test_events_for_returns_pane_and_branch_scopes():
     activity.record("pane", "%1", "alert", "a", detail="info", at=10)
-    activity.record("branch", "/repo\x1fmain", "milestone", "m", at=20)
+    activity.record("branch", "/repo\x1fmain", "note", "m", at=20)
     activity.record("pane", "%2", "alert", "other pane", detail="info", at=30)
     out = activity.events_for("%1", "/repo", "main")
     texts = {e["text"] for e in out}
@@ -36,8 +36,8 @@ def test_events_for_newest_first():
 
 
 def test_dedup_key_makes_record_idempotent():
-    activity.record("branch", "/r\x1fmain", "milestone", "x", at=1, dedup_key="m:abc")
-    activity.record("branch", "/r\x1fmain", "milestone", "x again", at=2, dedup_key="m:abc")
+    activity.record("branch", "/r\x1fmain", "note", "x", at=1, dedup_key="m:abc")
+    activity.record("branch", "/r\x1fmain", "note", "x again", at=2, dedup_key="m:abc")
     out = activity.events_for(None, "/r", "main")
     assert len(out) == 1
     assert out[0]["text"] == "x"  # first write wins
@@ -171,117 +171,6 @@ def test_compact_or_clear_labels_compacted_with_marker(tmp_path, monkeypatch):
     detail, text = activity._compact_or_clear("/repo")
     assert detail == "compacted"
     assert "303k" in text and "14k" in text
-
-
-def test_build_milestone_prompt_shape():
-    p = activity.build_milestone_prompt(
-        ["add the parser", "wire the parser into routes"],
-        ["please add a config parser"],
-    )
-    assert "completed:" in p
-    assert "add the parser" in p
-    assert "wire the parser into routes" in p
-    assert "please add a config parser" in p
-    # Asks for exactly one line.
-    assert "ONE line" in p or "one line" in p
-
-
-def test_build_milestone_prompt_without_prompts():
-    p = activity.build_milestone_prompt(["fix the bug"], [])
-    assert "fix the bug" in p
-    assert "completed:" in p
-
-
-def _git(repo, *args):
-    import subprocess
-    subprocess.run(["git", "-C", str(repo), *args], check=True,
-                   capture_output=True,
-                   env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-                        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-                        "PATH": __import__("os").environ["PATH"]})
-
-
-def _commit(repo, msg):
-    (repo / "f.txt").write_text(msg)
-    _git(repo, "add", "f.txt")
-    _git(repo, "commit", "-m", msg)
-
-
-def test_recent_user_prompts_reads_message_content(tmp_path, monkeypatch):
-    # Regression guard: user text is at message.content, never a top-level
-    # `text` key. A buggy d.get("text") reader returns [] and this fails.
-    tf = tmp_path / "t.jsonl"
-    entries = [
-        {"type": "user", "isMeta": True,
-         "message": {"role": "user", "content": "<system junk>"}},
-        {"type": "user",
-         "message": {"role": "user", "content": "add a config parser"}},
-        {"type": "assistant",
-         "message": {"role": "assistant", "content": "ok"}},
-        {"type": "user",
-         "message": {"role": "user", "content": [{"type": "tool_result"}]}},
-        {"type": "user",
-         "message": {"role": "user", "content": "now wire it up"}},
-    ]
-    tf.write_text("\n".join(_json.dumps(e) for e in entries) + "\n")
-    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: tf)
-    assert activity._recent_user_prompts("/repo") == [
-        "add a config parser", "now wire it up"]
-
-
-def test_maybe_emit_milestone_summarizes_a_commit_run(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init")
-    _commit(repo, "first commit")
-    _commit(repo, "second commit")
-    monkeypatch.setattr(activity, "claude_complete",
-                        lambda prompt: "completed: the thing")
-    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
-
-    activity.maybe_emit_milestone(str(repo), "main", settled=True)
-    out = activity.events_for(None, str(repo), "main")
-    assert len(out) == 1
-    assert out[0]["kind"] == "milestone"
-    assert out[0]["text"] == "completed: the thing"
-
-
-def test_maybe_emit_milestone_noop_when_head_unchanged(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init")
-    _commit(repo, "only commit")
-    calls = []
-    monkeypatch.setattr(activity, "claude_complete",
-                        lambda p: calls.append(p) or "completed: x")
-    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
-
-    activity.maybe_emit_milestone(str(repo), "main", settled=True)
-    activity.maybe_emit_milestone(str(repo), "main", settled=True)  # HEAD unchanged
-    assert len(calls) == 1
-    assert len(activity.events_for(None, str(repo), "main")) == 1
-
-
-def test_maybe_emit_milestone_noop_when_not_settled(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init")
-    _commit(repo, "a commit")
-    monkeypatch.setattr(activity, "claude_complete", lambda p: "completed: x")
-    activity.maybe_emit_milestone(str(repo), "main", settled=False)
-    assert activity.events_for(None, str(repo), "main") == []
-
-
-def test_maybe_emit_milestone_empty_completion_does_not_advance(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init")
-    _commit(repo, "a commit")
-    monkeypatch.setattr(activity, "claude_complete", lambda p: "   ")
-    monkeypatch.setattr(activity, "live_transcript_for", lambda cwd: None)
-    activity.maybe_emit_milestone(str(repo), "main", settled=True)
-    # Empty completion: no junk milestone, cursor not advanced.
-    assert activity.events_for(None, str(repo), "main") == []
 
 
 # --- UI instrumentation ------------------------------------------------

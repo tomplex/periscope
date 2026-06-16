@@ -53,35 +53,5 @@ def alerts_recent(limit: int = Query(100, ge=1, le=500)):
                 "name": w["name"],
             })
 
-    # Milestones are branch-scoped — surface recent ones dashboard-wide.
-    # (Reset events stay modal-only, per the spec.)
-    from periscope import activity
-    seen_branches: set = set()
-    for w in windows:
-        cwd = w.get("cwd") or ""
-        if not cwd:
-            continue
-        gs = activity.cached_git_state(cwd)
-        branch = (gs or {}).get("branch")
-        if not branch or (cwd, branch) in seen_branches:
-            continue
-        seen_branches.add((cwd, branch))
-        target = f"{w['session']}:{w['index']}"
-        for e in activity.events_for(None, cwd, branch, limit=10):
-            if e.get("kind") != "milestone":
-                continue
-            items.append({
-                "id": f"milestone|{e['at']}|{target}",
-                "ts": e["at"],
-                "kind": "milestone",
-                "severity": "info",
-                "message": e["text"],
-                "pane_id": w.get("pane_id") or "",
-                "target": target,
-                "session": w["session"],
-                "index": w["index"],
-                "name": w["name"],
-            })
-
     items.sort(key=lambda x: x["ts"], reverse=True)
     return {"items": items[:limit]}

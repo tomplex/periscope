@@ -71,7 +71,7 @@ describe("resolvePinned", () => {
 });
 
 describe("buildActivity", () => {
-  it("keeps done/info/milestone, drops need_human", () => {
+  it("keeps done/info, drops need_human", () => {
     const items = [evt({ kind: "done" }), evt({ kind: "need_human" }), evt({ kind: "info" })];
     expect(buildActivity(items).map((r) => r.kind)).toEqual(["done", "info"]);
   });

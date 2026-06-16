@@ -36,7 +36,6 @@ function timelineColor(kind, evState) {
   }
   if (kind === "open") return "var(--fg-3)";
   if (kind === "reset") return "var(--s-working)";
-  if (kind === "milestone") return "var(--s-success)";
   if (kind === "rename") return "var(--accent)";
   return "var(--fg-3)";
 }
@@ -46,7 +45,6 @@ function timelineLabel(kind, evState) {
   if (kind === "ci") return evState ? `ci ${evState}` : "ci";
   if (kind === "open") return "opened";
   if (kind === "reset") return evState === "compacted" ? "compacted" : "cleared";
-  if (kind === "milestone") return "milestone";
   if (kind === "rename") return "renamed";
   return kind;
 }
