@@ -198,6 +198,48 @@ def _do_notify_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+_CAPTAINS_LOG_KINDS = {"standing_order", "watch", "narrative"}
+
+
+def _require_first_mate(pane: str) -> bool:
+    """True iff `pane` is the registered first-mate singleton. The tool
+    registry is flat (every attached pane sees every tool), so first-mate-only
+    tools self-guard. Lazy-import activity (channels.py never top-imports it)."""
+    from periscope import activity
+
+    marker = activity.get_first_mate()
+    return marker is not None and marker.pane_id == pane
+
+
+def _do_captains_log_read_tool(pane: str, arguments: dict):
+    """Return recent captain's-log entries (first-mate-only)."""
+    if not _require_first_mate(pane):
+        return _tool_result({"ok": False, "error": "first-mate-only tool"})
+    from periscope import activity
+
+    limit = int(arguments.get("limit", 50))
+    rows = activity.recent_captain_log(limit=limit)
+    entries = [{"at": r.at, "kind": r.kind, "text": r.text} for r in rows]
+    return _tool_result({"ok": True, "entries": entries})
+
+
+def _do_captains_log_append_tool(pane: str, arguments: dict):
+    """Append a captain's-log entry (first-mate-only)."""
+    if not _require_first_mate(pane):
+        return _tool_result({"ok": False, "error": "first-mate-only tool"})
+    kind = str(arguments.get("kind", "")).strip()
+    text = str(arguments.get("text", "")).strip()
+    if kind not in _CAPTAINS_LOG_KINDS:
+        return _tool_result({"ok": False,
+                             "error": f"kind must be one of {sorted(_CAPTAINS_LOG_KINDS)}"})
+    if not text:
+        return _tool_result({"ok": False, "error": "text is required and must be non-empty"})
+    from periscope import activity
+
+    activity.append_captain_log(kind=kind, text=text)
+    return _tool_result({"ok": True})
+
+
 def _resolve_window(match) -> tuple[str, str]:
     """Find the first `list_windows()` entry satisfying `match`, resolve its
     persistent @periscope_id (minting one if the window is new), and return
@@ -1224,6 +1266,36 @@ _CHANNEL_TOOLS = [
             "required": ["handle"],
         },
         "handler": _do_terminate_tool,
+    },
+    {
+        "name": "captains_log_read",
+        "description": (
+            "Read recent captain's-log entries (standing orders, watch-list, "
+            "narrative). First-mate-only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max entries (newest-first)."},
+            },
+        },
+        "handler": _do_captains_log_read_tool,
+    },
+    {
+        "name": "captains_log_append",
+        "description": (
+            "Append a captain's-log entry. `kind` is one of standing_order, "
+            "watch, narrative. First-mate-only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["standing_order", "watch", "narrative"]},
+                "text": {"type": "string"},
+            },
+            "required": ["kind", "text"],
+        },
+        "handler": _do_captains_log_append_tool,
     },
 ]
 

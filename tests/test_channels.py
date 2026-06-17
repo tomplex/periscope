@@ -603,3 +603,52 @@ def test_terminate_mutate_failure(mocker):
     mocker.patch("periscope.channels._tmux_mutate", return_value=(False, "no such window"))
     body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
     assert body["ok"] is False and body["error"] == "no such window"
+
+
+# --- first-mate captain's-log tools ---
+
+def test_first_mate_tools_are_registered():
+    from periscope.channels import _CHANNEL_TOOLS
+    names = {t["name"] for t in _CHANNEL_TOOLS}
+    assert {"captains_log_read", "captains_log_append"} <= names
+    for t in _CHANNEL_TOOLS:
+        if t["name"].startswith("captains_log"):
+            assert "inputSchema" in t and callable(t["handler"])
+
+
+def test_captains_log_tools_refuse_non_first_mate(fresh_activity_db):
+    from periscope.channels import _do_captains_log_read_tool, _do_captains_log_append_tool
+    # no marker set -> every caller is refused
+    r = _body(_do_captains_log_read_tool("%5", {}))
+    assert r["ok"] is False and "first-mate" in r["error"].lower()
+    a = _body(_do_captains_log_append_tool("%5", {"kind": "watch", "text": "x"}))
+    assert a["ok"] is False
+
+
+def test_captains_log_append_and_read_for_first_mate(fresh_activity_db):
+    from periscope import activity
+    from periscope.channels import _do_captains_log_read_tool, _do_captains_log_append_tool
+    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+
+    ok = _body(_do_captains_log_append_tool("%9", {"kind": "standing_order", "text": "watch propensity"}))
+    assert ok["ok"] is True
+    read = _body(_do_captains_log_read_tool("%9", {}))
+    assert read["ok"] is True
+    assert read["entries"][0]["text"] == "watch propensity"
+    assert read["entries"][0]["kind"] == "standing_order"
+
+
+def test_captains_log_append_rejects_bad_kind(fresh_activity_db):
+    from periscope import activity
+    from periscope.channels import _do_captains_log_append_tool
+    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    bad = _body(_do_captains_log_append_tool("%9", {"kind": "nonsense", "text": "x"}))
+    assert bad["ok"] is False and "kind" in bad["error"].lower()
+
+
+def test_captains_log_append_rejects_empty_text(fresh_activity_db):
+    from periscope import activity
+    from periscope.channels import _do_captains_log_append_tool
+    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    bad = _body(_do_captains_log_append_tool("%9", {"kind": "watch", "text": "  "}))
+    assert bad["ok"] is False
