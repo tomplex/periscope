@@ -366,13 +366,12 @@ surface.
    (narrator is its own file, imports activity for storage) decisively.
 
 2. **`_do_fleet_digest_tool` in v1a: stub vs. compute-on-demand vs. defer to
-   v1b.** I proposed shipping it as a guarded stub. *Alternative:* defer the
-   handler entirely to v1b and ship only the two captain's-log tools in v1a.
-   *Close because:* v1a's stated deliverable lists "fleet-digest pull" as a v1a
-   tool, but there's no digest to pull until v1b — so the v1a version is
-   necessarily inert. Recommend: ship the registry entry + guard (testable now),
-   keep the body a clean stub, fill it in v1b. Tom to confirm he wants the
-   entry in the v1a PR vs. all three tools landing in v1b.
+   v1b.** **RESOLVED (plan): defer the handler entirely to v1b.** v1a ships
+   only the two captain's-log tools (read/append); the fleet-digest-pull tool
+   lands in v1b alongside the heartbeat that gives it a digest to return. A
+   stub would be dormant, registry-visible dead code — worse than absent. So
+   v1a's tool count is **2**, not 3 (the spec/structure's "three first-mate
+   tools" framing minus the deferred pull tool).
 
 3. **Per-handler guard line vs. a `first_mate_only` registry flag.** I chose the
    per-handler line. *Alternative:* a declarative `"first_mate_only": True` on
