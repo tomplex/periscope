@@ -208,3 +208,41 @@ def heartbeat_decide(*, prev, cur, marker) -> "Push | None":
     if not diverged:
         return None
     return Push(pane_id=marker.pane_id, content=_render_delta(prev, cur, reason))
+
+
+def assemble_pane_views(panes: list, now: int) -> list[dict]:
+    """IO glue: turn the worker's (window, parsed) pairs into curated contract
+    dicts via read-only primitives + the pure _curate_pane. No build_window_view
+    (its poll-coupled side effects must not fire on the worker's cadence)."""
+    from periscope import activity
+    from periscope.channels import channel_state_for
+    from periscope.git_pr import cached_git_state, cached_pr_state
+    from periscope.panes import recency_stamps_for
+
+    status_lines = activity.pane_status_lines()
+    out = []
+    for w, parsed in panes:
+        if not parsed.get("is_claude"):
+            continue
+        # Worker rows carry pane_id (%N) + pid_raw, NOT a resolved @periscope_id
+        # (pid is attached only after _attach_git_then_resolve_pids, which writes
+        # state.json and is NOT thread-safe — must not run in the to_thread tick).
+        # %N is stable across ticks and keys pane_status + channel state, so use it
+        # as the digest handle directly.
+        pane_id = w.get("pane_id") or ""
+        cwd = w.get("cwd") or ""
+        target = f"{w.get('session')}:{w.get('index')}"
+        st = status_lines.get(pane_id)     # pane_status is keyed by %N
+        git = cached_git_state(cwd) or {}
+        pr = cached_pr_state(cwd, git.get("branch")) or {}
+        stamps = recency_stamps_for(target)
+        out.append(_curate_pane(
+            handle=pane_id, name=w.get("name") or w.get("index") or "",
+            session=w.get("session") or "",
+            is_claude=True, status_line=st[0] if st else None,
+            alerts=channel_state_for(pane_id).get("alerts", []),
+            pr=pr.get("pr"), ci=pr.get("ci"),
+            focused_at=stamps.get("focused_at", 0), acted_at=stamps.get("acted_at", 0),
+            now=now,
+        ))
+    return out

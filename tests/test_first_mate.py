@@ -197,3 +197,70 @@ def test_heartbeat_decide_pushes_on_ci_red_even_if_otherwise_nominal():
                       budget_pct=50, budget_resets_at=None, at=2)
     push = heartbeat_decide(prev=prev, cur=cur, marker=marker)
     assert push is not None      # CI ✓->✗ forces a push (also caught by pr/ci divergence)
+
+
+def test_assemble_pane_views_uses_curate_and_skips_non_claude(monkeypatch, fresh_activity_db):
+    from periscope import first_mate, activity
+    import periscope.channels as channels
+    import periscope.panes as panes
+    import periscope.git_pr as git_pr
+
+    # Two windows; one is not Claude and must be dropped.
+    panes_in = [
+        ({"session": "s", "index": "1", "cwd": "/r", "pane_id": "%5", "pid": "@1"},
+         {"is_claude": True}),
+        ({"session": "s", "index": "2", "cwd": "/r", "pane_id": "%6", "pid": "@2"},
+         {"is_claude": False}),
+    ]
+    # pane_status is keyed by tmux %N (pane_id), not @periscope_id — match real shape.
+    monkeypatch.setattr(activity, "pane_status_lines", lambda: {"%5": ("running tests", 0, None)})
+    monkeypatch.setattr(channels, "channel_state_for",
+                        lambda pid: {"alerts": [{"kind": "need_human", "ts": 9}]})
+    monkeypatch.setattr(git_pr, "cached_git_state", lambda p: {"branch": "b"})
+    monkeypatch.setattr(git_pr, "cached_pr_state", lambda p, b: {"pr": 7, "ci": "✗"})
+    monkeypatch.setattr(panes, "recency_stamps_for",
+                        lambda t: {"focused_at": 100, "acted_at": 100})
+
+    views = first_mate.assemble_pane_views(panes_in, now=130)
+    assert len(views) == 1
+    v = views[0]
+    assert v["handle"] == "%5" and v["status_line"] == "running tests"   # handle = pane_id (%N)
+    assert v["blocked"] is True and v["pr"] == 7 and v["ci"] == "✗"
+    assert v["idle_s"] == 30
+
+
+def test_run_worker_emits_pending_push_and_advances_last_sent(monkeypatch):
+    import asyncio
+    from periscope import activity, first_mate
+    sent = []
+
+    async def fake_emit(pane_id, content, meta=None):
+        sent.append((pane_id, content))
+        return True
+
+    monkeypatch.setattr("periscope.channels.emit_channel_event", fake_emit)
+    first_mate._LAST_SENT = None
+    cur = first_mate.FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
+    last_ctx = {"_fm_push": ("%9", "delta text", cur)}
+
+    asyncio.run(activity._emit_pending_first_mate(last_ctx))   # sync test: drive the coro
+    assert sent == [("%9", "delta text")]
+    assert first_mate._LAST_SENT is cur          # advanced on ok
+    assert "_fm_push" not in last_ctx            # consumed
+    first_mate._LAST_SENT = None                 # reset module global for other tests
+
+
+def test_run_worker_keeps_last_sent_on_failed_emit(monkeypatch):
+    import asyncio
+    from periscope import activity, first_mate
+
+    async def fake_emit(pane_id, content, meta=None):
+        return False                              # pane not attached
+
+    monkeypatch.setattr("periscope.channels.emit_channel_event", fake_emit)
+    first_mate._LAST_SENT = None
+    cur = first_mate.FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
+    last_ctx = {"_fm_push": ("%9", "delta", cur)}
+
+    asyncio.run(activity._emit_pending_first_mate(last_ctx))
+    assert first_mate._LAST_SENT is None          # NOT advanced -> next tick re-pushes
