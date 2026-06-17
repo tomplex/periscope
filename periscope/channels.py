@@ -773,6 +773,52 @@ async def _do_report_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+async def _do_list_claudes_tool(pane: str, arguments: dict):
+    """List all live Claude panes with their handles, so the caller can
+    discover, message (send_to), peek, or terminate them. Flat — supports peer
+    discovery and handoff, not just a spawn subtree.
+
+    is_claude is probed per pane with a stateless capture+parse_pane — NOT
+    build_window_view, which mutates poll state-transition tracking. The
+    capture fan-out is offloaded to a thread so it doesn't block the event
+    loop; pid resolution (which writes state.json and is not thread-safe) runs
+    in the loop first, mirroring the /api/state route's ordering."""
+    from periscope.tmux import capture
+    from periscope.panes import parse_pane
+    from periscope.activity import pane_status_lines
+
+    windows = list_windows()
+    _attach_git_then_resolve_pids(windows)  # attaches pid, strips pid_raw (not thread-safe)
+    statuses = pane_status_lines()
+
+    def _collect():
+        out = []
+        for w in windows:
+            target = f"{w['session']}:{w['index']}"
+            try:
+                parsed = parse_pane(capture(target))
+            except Exception:
+                continue
+            if not parsed.get("is_claude"):
+                continue
+            pane_id = w.get("pane_id") or ""
+            status = statuses.get(pane_id)
+            pid = w.get("pid") or ""
+            out.append({
+                "handle": pid,
+                "name": w.get("name"),
+                "session": w.get("session"),
+                "cwd": w.get("cwd"),
+                "status_line": status[0] if status else None,
+                "attached": channel_state_for(pane_id)["attached"],
+                "spawned_by": get_window(pid).get("spawned_by"),
+            })
+        return out
+
+    claudes = await asyncio.to_thread(_collect)
+    return _tool_result({"ok": True, "claudes": claudes})
+
+
 # --- MCP tool registry ---
 # Each record co-locates a tool's name, JSON schema, and handler. `_list_tools`
 # maps it to `types.Tool` objects (mcp `types` is lazy-imported, so the registry
@@ -1084,6 +1130,18 @@ _CHANNEL_TOOLS = [
             "required": ["message"],
         },
         "handler": _do_report_tool,
+    },
+    {
+        "name": "list_claudes",
+        "description": (
+            "List every live Claude pane periscope can see, with each one's "
+            "handle (pid), name, session, cwd, latest status line, whether "
+            "it's attached to periscope's channel (messageable via send_to), "
+            "and its spawner handle. Use to discover other Claudes before "
+            "messaging, peeking, or terminating them."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _do_list_claudes_tool,
     },
 ]
 

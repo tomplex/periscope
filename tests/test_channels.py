@@ -490,3 +490,39 @@ def test_report_spawner_gone(mocker):
     mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
     body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
     assert body["ok"] is False and "no longer live" in body["error"]
+
+
+def test_list_claudes_filters_and_trims(mocker):
+    from periscope import channels
+    rows = [
+        {"session": "s", "index": 1, "name": "lead", "cwd": "/a", "pane_id": "%2", "pid_raw": "p1"},
+        {"session": "s", "index": 2, "name": "shell", "cwd": "/b", "pane_id": "%3", "pid_raw": "p2"},
+    ]
+    mocker.patch("periscope.channels.list_windows", return_value=rows)
+
+    def _attach(ws):
+        for w in ws:
+            if "pid_raw" in w:
+                w["pid"] = w.pop("pid_raw")
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
+
+    # capture returns the target so parse_pane can tell windows apart; is_claude
+    # true only for the "s:1" pane. This exercises the real per-pane probe path.
+    mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
+    mocker.patch("periscope.panes.parse_pane",
+                 side_effect=lambda content: {"is_claude": content == "s:1"})
+    mocker.patch("periscope.activity.pane_status_lines",
+                 return_value={"%2": ("reviewing PR", 123, None)})
+    mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
+    mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "boss0"})
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%1", {})))
+
+    assert body["ok"] is True
+    assert len(body["claudes"]) == 1
+    c = body["claudes"][0]
+    assert c == {
+        "handle": "p1", "name": "lead", "session": "s", "cwd": "/a",
+        "status_line": "reviewing PR", "attached": True, "spawned_by": "boss0",
+    }
+    assert "pane_id" not in c
