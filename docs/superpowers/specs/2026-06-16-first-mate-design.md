@@ -1,10 +1,19 @@
 # First Mate — design
 
-**Status:** design / pre-plan
+**Status:** design / pre-plan (spec-review applied 2026-06-16)
 **Date:** 2026-06-16
-**Depends on:** the Claude-control MCP tooling specced separately (`send_to`,
-`report`, `list_claudes`, `peek`, `terminate`, `spawn_claude`). This spec
-*consumes* that tool layer; it does not define it.
+**Depends on:** the Claude-control MCP tooling (`send_to`, `report`,
+`list_claudes`, `peek`, `terminate`, `spawn_claude`), specced and built
+separately and **now merged to `main`** (`periscope/channels.py`). This spec
+*consumes* that tool layer; it does not define it. The first mate (a real
+`CLAUDE_EXEC` pane) acquires these tools at runtime over the same MCP socket as
+any worker.
+
+> **Reconciliation note (post-merge):** `report` routes to the pane's
+> **spawner** via `spawned_by` provenance — not to a broadcast "bridge." This
+> is load-bearing for the interrupt model (see The awareness loop): a worker's
+> `report` can only wake the first mate once the first mate is that worker's
+> spawner, which is a **v2** capability. v1 does not rely on `report`.
 
 ## What this is
 
@@ -42,14 +51,14 @@ the first mate through its raw tmux pane).
 ## Architecture
 
 The first mate is a **real, singleton Claude pane** whose lifecycle Periscope
-owns — supervised the way the activity worker is (one per machine, spawned on
-demand, kept alive, prod-gated via `config.is_prod()`). Under the hood it is an
-ordinary Claude session distinguished by three things:
+owns — prod-gated via `config.is_prod()`. Under the hood it is an ordinary
+`CLAUDE_EXEC` Claude session distinguished by three things:
 
 1. a **first-mate system prompt** (role, the conn ritual, the prohibitions);
 2. the **control MCP tools** (`send_to`/`report`/`list_claudes`/`peek`/
-   `terminate`/`spawn_claude`) — same tools the workers get, so the first mate
-   dogfoods the fleet's nervous system;
+   `terminate`/`spawn_claude`) — same tools the workers get (acquired over the
+   MCP socket via `channel_shim.py`), so the first mate dogfoods the fleet's
+   nervous system;
 3. a few **first-mate-only tools** (captain's log read/append; fleet-digest
    pull; conn-state query — see below).
 
@@ -62,15 +71,50 @@ to hold a conversation with Tom and reason over fetched transcripts — that is 
 Claude session, not a Python loop. Keeping it a real pane also means zero new
 agent runtime: it *is* a Claude, supervised.
 
+### First-mate supervisor (net-new lifecycle — no existing precedent)
+
+There is **no precedent** for Periscope boot-spawning a long-lived Claude pane:
+the activity worker is an in-process asyncio task (not a pane), and the only
+boot-spawned tmux entity is the hidden control session (`tmux_input.py`, runs no
+Claude). So the supervisor is net-new code, specified here:
+
+- **Launch point.** A lifespan-managed task, prod-gated like `run_worker`
+  (`app.py` launches it under `is_prod()`).
+- **Invocation.** Same mechanics as `_do_spawn_claude_tool`: `tmux new-window`
+  in the `bridge` session, `send-keys CLAUDE_EXEC` + Enter. **System-prompt
+  delivery** has no mechanism today (`CLAUDE_EXEC` carries channel flags only);
+  v1b adds it via **`--append-system-prompt`** appended to the invocation (the
+  role/conn/prohibitions block), *not* pasted as a first message (a pasted
+  prompt is mutable conversation; the role must be a true system prompt). This
+  is the one new flag on the launch string.
+- **Singleton identity + respawn.** A durable **`first_mate` marker row** in
+  `periscope.db` (pane id + session id) records the live instance. On each
+  supervisor pass: if the marked pane is alive, do nothing; if it's gone (user
+  `exit`, crash), respawn and re-mark. The marker prevents double-spawn and
+  tells the heartbeat which `%N` to push to. (Stored alongside the captain's
+  log — same table tenancy, same boot-read.)
+- **Home.** The `bridge` tmux session (already created as the interim home).
+
+### Per-pane tool visibility (known gap, deferred)
+
+`channels._CHANNEL_TOOLS` is a **flat list returned to every attached pane**
+(channels.py) — there is no per-pane tool gating today. So the **first-mate-only
+tools, once added to the registry, are visible to every worker pane**. For v1
+this is harmless (workers simply never call captain's-log tools, and the tools
+themselves can guard: refuse unless the calling pane is the registered
+`first_mate` marker). True per-pane tool *filtering* is a deferred enhancement,
+not a v1 requirement; v1 ships the tools registry-wide with a caller guard.
+
 ### Relationship to existing modules
 
 | Existing | Role for the first mate |
 |---|---|
 | `periscope/activity.py` `run_worker()` (30s tick, prod-gated) | Hosts the **heartbeat**: computes the fleet digest each tick and pushes it to the first mate only on divergence. |
 | `periscope/narrator.py` (pure decision core + worker tick) | Pattern to mirror: the digest's "did the fleet picture diverge?" logic is a **pure function**, like `should_regenerate`. |
-| `periscope/channels.py` (in-process MCP, `notify`) | Transport: heartbeat ticks and interrupt events both reach the first mate as **channel notifications** (the mechanism that already wakes a Claude). |
-| `periscope/usage.py` | Budget input to every consequential decision. |
-| `~/.config/periscope/periscope.db` | Captain's-log storage (new table) + the fact store the digest is built from (`pane_status`, alerts, activity, PR cache). |
+| `periscope/channels.py` `emit_channel_event` (channels.py:635, currently unused) | Transport: heartbeat ticks + interrupt events reach the first mate as **channel notifications**. v1b is its first consumer. |
+| `periscope/channels.py` `_do_notify_tool` (channels.py:167) | Interrupt seam: the `need_human` → first-mate immediate push hooks in at this write point. |
+| `periscope/usage.py` `cached_plan_usage()` (usage.py:362) | Budget % + `resets_at` for the digest (v1 display); gating input (v3). |
+| `~/.config/periscope/periscope.db` via `activity.py` | Captain's-log + `first_mate` marker tables, following the `pane_status` table template (`CREATE TABLE IF NOT EXISTS` + frozen-dataclass row + get/upsert/prune + guarded-`ALTER`). `activity.py` is the documented DB owner. |
 
 ---
 
@@ -102,21 +146,53 @@ scale. Most ticks send nothing, so an idle fleet costs ~no first-mate thinking.
   blocked; worker-3 finished; budget 62%→71%"), not the whole world — keeps the
   first mate's context small.
 
+**Assembly seam.** The digest's raw inputs already exist server-side, but
+`activity._worker_tick` does not build window views today — it captures panes
+for the narrator. The digest is computed by a **pure `build_fleet_digest(...)`**
+that takes already-assembled inputs (the `/api/state` read model:
+`store.snapshot()` windows, `activity.pane_status_lines()`, cached git/PR/CI
+state, `usage.cached_plan_usage()`); the worker calls the existing state
+assembly and feeds it in. Keeping `build_fleet_digest` pure (inputs → digest)
+makes it unit-testable and sidesteps the worker's import graph (no new
+`activity → window_view` cycle: pass the assembled view in, don't import it).
+Budget % (`cached_plan_usage()["meters"]["session"]["percent"]` + `resets_at`)
+**appears in the digest from v1** (it's a free read); budget-*gated decisions*
+are v3.
+
+**Push seam.** The transport is `channels.emit_channel_event(pane, content,
+meta) -> bool` (channels.py:635) — the `notifications/claude/channel` path. It
+exists but has **no current consumer**; v1b makes the heartbeat its first
+caller. It returns `False` when the target pane isn't attached to the socket
+(`_MCP_SESSIONS` miss). **Not-attached fallback:** the first-mate pane may not
+be connected yet (boot race) or may have exited — on `False`, the heartbeat
+**drops the push and retries on the next tick** (the digest is divergence-based,
+so the next tick re-pushes the still-diverged picture; nothing is lost). The
+supervisor (below) is what brings the pane back if it's gone.
+
 ### 2. Interrupt events (immediate, deduped)
 
-A narrow allowlist wakes the first mate *now*, out of band from the heartbeat:
+A narrow allowlist wakes the first mate *now*, out of band from the heartbeat.
+**In v1 the interrupt tier is entirely server-detected** — the first mate spawns
+nothing, so no worker's `report` can route to it (`report` → spawner; see the
+reconciliation note). The two v1 interrupt sources:
 
-- a worker `report(...)` (worker explicitly addresses the bridge),
-- a pane going `need_human`,
-- watched-PR CI flips red.
+- **`need_human`** — `notify(kind="need_human")` (`_do_notify_tool`,
+  channels.py:167) is not an event bus today; it appends an alert row. v1 adds a
+  small hook **at that write point**: when the kind is `need_human`, push
+  immediately to the first-mate pane via `emit_channel_event`. This preserves
+  true immediacy rather than waiting a tick.
+- **watched-PR CI flips red** — already polled by `git_pr`; the heartbeat scan
+  detects the red transition and pushes ahead of digest divergence (≤ one tick
+  of latency, acceptable for CI).
 
-**Worker-declares-intent:** the tool a worker picks *is* the urgency signal —
-`report` interrupts; a plain `notify(done)` only lands in the log for the next
-heartbeat digest. **Periscope dedupes wolf-criers**: before waking the first
-mate, Periscope collapses repeat/again interrupts against the alerts table
-(e.g. the same worker firing `report` five times in a minute becomes one wake).
-The worker keeps its intent; Periscope enforces the "don't pound the door"
-backstop.
+**`report` → first mate is v2.** Once the first mate is a spawner (v2 conn
+tier), `report` from a first-mate-spawned worker routes to it via `spawned_by`,
+and **worker-declares-intent** activates: the tool a worker picks *is* the
+urgency signal (`report` interrupts; a plain `notify(done)` only lands in the
+digest). At that point **Periscope dedupes wolf-criers** — collapsing repeat
+interrupts at read time (note: `_do_notify_tool` writes alerts with **no**
+`dedup_key` today, so this is a new read-time collapse keyed on
+(pane, kind, window), not reuse of the table's `INSERT OR IGNORE` dedup).
 
 ### 3. On-demand pulls (first mate reaches out)
 
@@ -130,7 +206,8 @@ than being handed everything.
 
 | Tier | Trigger | Reaches first mate as | Cost |
 |---|---|---|---|
-| Interrupt | worker `report`, `need_human`, watched CI red | immediate channel notification (deduped) | rare by design |
+| Interrupt (v1) | `need_human` (notify-write hook), watched CI red (heartbeat scan) | immediate channel notification | rare by design |
+| Interrupt (v2+) | + worker `report` from a first-mate-spawned worker | immediate, deduped at read time | rare by design |
 | Digest | everything else material (status changes, `done`, progress) | batched delta on next heartbeat tick | one notify per divergent tick |
 | On-demand | first mate decides it needs depth | tool call result (pull) | only when reasoning |
 
@@ -263,29 +340,66 @@ Phasing governs **build order only**; every phase below is specified to the
 same depth — v2+ is not "deferred and hand-waved," it is designed here and
 sequenced for delivery.
 
-### v1 — Awareness core (demoable first bullet)
+### v1 — Awareness core
 
 Proves the awareness loop and digest quality before any autonomy or surface.
+v1 is split into two PRs by **risk class** (spec-review finding): v1a is pure,
+unit-testable substrate that mirrors existing patterns; v1b is the live
+integration (a supervised pane that spends budget on prod). v1a ships first and
+on its own — it is inert (nothing calls the new code until v1b wires it), so it
+carries no prod-behavior risk.
 
-- First-mate singleton pane, Periscope-supervised, prod-gated.
-- First-mate system prompt: role + the prohibitions list (stated, even though
-  no conn-gated actions exist yet) so the role is correct from day one.
-- Heartbeat in `activity.run_worker`: fleet-digest computation + pure
-  divergence decision + divergence-gated channel push (delta digest).
-- Interrupt events: `report` / `need_human` / watched-CI-red → deduped wake.
-- Standing-tier tools only: summarize, answer, `peek`, on-demand pulls, and the
-  clearly-idle nudge. **No conn, no spawn/terminate.**
-- Captain's log table + read-on-boot + standing-orders/watch-list/narrative
-  read+append tools.
-- **Interaction via the raw tmux pane** (no surface yet).
+#### v1a — Substrate (first PR; the demoable-green increment)
 
-**Demo:** Tom asks the first-mate pane "what's everyone doing?" and gets an
-accurate fleet read; a worker goes `need_human` and the first mate proactively
-flags it; the first mate nudges a clearly-idle worker.
+All pure logic + storage + tool definitions. No live pane, no prod behavior
+change. Every piece mirrors an existing pattern.
 
-**Tests:** pure divergence function (unit, mirrors narrator tests);
-dedupe-wolf-criers (unit against the alerts table); digest shape;
-captain-log persistence round-trip.
+- **`build_fleet_digest(...)`** — pure function: assembled read-model inputs →
+  structured fleet digest. Unit-tested with fixtures.
+- **`fleet_diverged(prev_digest, cur_digest) -> (bool, reason)`** — pure
+  divergence decision, mirrors `narrator.should_regenerate` (narrator.py:70).
+  Unit-tested, zero fixtures.
+- **Captain's-log + `first_mate` marker tables** in `periscope.db` via
+  `activity.py`, following the `pane_status` template (table + frozen-dataclass
+  row + get/upsert/prune). Read-on-boot. Round-trip tested.
+- **First-mate-only MCP tools** added to `channels._CHANNEL_TOOLS`: captain's-log
+  read/append, fleet-digest pull. Registry-wide with a caller guard (refuse
+  unless the calling pane is the `first_mate` marker). Tool-shape tested.
+
+**Tests (all unit, no live pane):** `fleet_diverged` truth table; digest shape +
+materiality; captain-log + marker round-trip; tool registration + caller guard.
+This is the green gate for the v1a PR.
+
+#### v1b — Live integration (second PR; held for explicit review)
+
+Wires v1a's substrate to a running first mate. **Introduces a self-spawning,
+budget-spending Claude on prod boot** — so it is held for Tom's explicit
+go-ahead and watched on first run, not auto-shipped.
+
+- **First-mate supervisor** (see Architecture): lifespan task, prod-gated;
+  spawn into `bridge` with `CLAUDE_EXEC --append-system-prompt <role>`; liveness
+  + respawn against the `first_mate` marker.
+- **First-mate system prompt:** role + prohibitions list (stated from day one,
+  even though no conn-gated actions exist yet).
+- **Heartbeat wiring** in `activity._worker_tick`: call `build_fleet_digest` →
+  `fleet_diverged` → on divergence `emit_channel_event(first_mate_pane, delta)`,
+  with the not-attached retry-next-tick fallback.
+- **Interrupt wiring:** `need_human` push hook at `_do_notify_tool`; watched-CI
+  red transition in the heartbeat scan.
+- **Standing-tier behavior:** summarize/answer/`peek`/on-demand pulls + the
+  clearly-idle nudge (`send_to`). **No conn, no spawn/terminate by the first
+  mate.**
+- **Interaction via the raw `bridge:first-mate` pane** (no surface yet).
+
+**Demo:** Tom asks the first-mate pane "what's everyone doing?" → accurate fleet
+read; a worker goes `need_human` → the first mate proactively flags it; the
+first mate nudges a clearly-idle worker.
+
+**Tests:** supervisor respawn logic (marker present/alive/dead); push
+not-attached fallback; `need_human` hook fires the push. Live-pane behavior is
+verified by the demo, not by mocking a real Claude (per the narrator's
+"lifespan tests mock `run_worker`" invariant — the heartbeat tick stays mocked
+in the suite).
 
 ### v2 — The conn (bounded autonomy)
 
@@ -330,6 +444,13 @@ assumption about which wins.
 
 - Exact materiality thresholds for digest divergence and "clearly idle" — tune
   against real fleet traffic, like the narrator's cadence was tuned.
-- Whether the first-mate-only tools (digest pull, captain's log, conn query)
-  ride the existing channel MCP server or a small dedicated one.
 - Surface: the whole presentation design (separate pass).
+
+**Resolved in spec-review:**
+- First-mate-only tools ride the **existing** channel MCP server (one socket,
+  one registry) — a second server would force the first-mate pane to attach two
+  sockets, and the control tools already live in the existing one.
+- Per-pane tool *filtering* doesn't exist; v1a ships the tools registry-wide
+  with a caller guard (see Per-pane tool visibility). True filtering deferred.
+- The conn-state store and the `first_mate` marker share the captain's-log
+  table tenancy in `activity.py`.
