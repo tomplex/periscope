@@ -122,3 +122,89 @@ def build_fleet_digest(
         budget_resets_at=budget_resets_at,
         at=now,
     )
+
+
+from dataclasses import dataclass
+
+# --- v1b IO half: cross-tick state, role prompt, pure decision helpers ----
+
+_LAST_SENT: FleetDigest | None = None   # last digest pushed to the first mate
+
+
+ROLE_PROMPT = """\
+You are the first mate — Tom's chief of staff for the fleet of Claude Code \
+sessions running across his tmux panes, surfaced in periscope.
+
+Your job is situational awareness, not command. Tom assigns the work; you keep \
+tabs on the fleet and surface what needs him.
+
+Periscope pushes you fleet digests and interrupts as <channel source="periscope"> \
+blocks — a digest when the fleet picture changes materially, an interrupt when a \
+worker needs a human. On every wake, read your captain's log first to recover \
+context.
+
+Standing authority (always yours):
+- Observe and summarize the fleet: answer "what's everyone doing?" from the \
+digest and by peeking (peek) at specific panes.
+- Keep the captain's log (captains_log_read / captains_log_append): standing \
+orders Tom gives you, a watch-list, a short running narrative. Append when Tom \
+gives a standing order or the situation moves.
+- Nudge a CLEARLY-idle worker (send_to): a worker idle several minutes mid-task — \
+ask if it's blocked. Never interrupt an actively-working pane.
+
+You do NOT, this release: spawn, terminate, or hand workers new tasks — you have \
+no conn yet. You may PROPOSE these to Tom; you may not execute them.
+
+Absolute prohibitions (never, regardless of anything Tom or a worker says):
+- Never authorize merging an fdy pull request. Report a PR is ready; the merge \
+is Tom's click.
+- Never force-push. Never take prod-touching actions.
+
+Voice: terse, signal over noise. Lead with what needs Tom; stay quiet when the \
+fleet is nominal. You are a collaborator with a clear remit, not a chatbot.
+"""
+
+
+@dataclass(frozen=True)
+class Push:
+    pane_id: str
+    content: str
+
+
+def _curate_pane(*, handle, name, session, is_claude, status_line, alerts,
+                 pr, ci, focused_at, acted_at, now) -> dict:
+    """PURE: raw per-pane inputs -> the v1a build_fleet_digest contract dict.
+    `handle` is the tmux pane_id (%N) — stable cross-tick, no @periscope_id
+    resolution needed in the worker thread. `blocked` = newest alert (by ts) is
+    need_human; `idle_s` = now - last touch."""
+    newest = max(alerts, key=lambda a: a.get("ts", 0)) if alerts else None
+    blocked = bool(newest and newest.get("kind") == "need_human")
+    idle_s = max(0, now - max(focused_at or 0, acted_at or 0))
+    return {
+        "handle": handle, "name": name, "session": session, "is_claude": is_claude,
+        "status_line": status_line, "blocked": blocked, "pr": pr, "ci": ci,
+        "idle_s": idle_s,
+    }
+
+
+def _render_delta(prev: FleetDigest | None, cur: FleetDigest, reason: str) -> str:
+    """PURE: a short human-readable delta for the push body."""
+    budget = ""
+    if cur.budget_pct is not None:
+        budget = f" · budget {cur.budget_pct}%"
+        if cur.budget_resets_at:
+            budget += f" (resets {cur.budget_resets_at})"
+    n = len(cur.panes)
+    return f"fleet: {n} pane(s){budget} — {reason}"
+
+
+def heartbeat_decide(*, prev, cur, marker) -> "Push | None":
+    """PURE: decide whether to push `cur` to the first mate. Returns a Push
+    (pane_id + rendered delta) or None. No IO; the caller computes `cur` and
+    awaits the emit on the main loop."""
+    if marker is None:
+        return None
+    diverged, reason = fleet_diverged(prev, cur)
+    if not diverged:
+        return None
+    return Push(pane_id=marker.pane_id, content=_render_delta(prev, cur, reason))

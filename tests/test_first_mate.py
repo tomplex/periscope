@@ -131,3 +131,69 @@ def test_build_stamps_now():
     d = build_fleet_digest(panes=[], usage=None, now=4242)
     assert d.at == 4242
     assert d.panes == ()
+
+
+from periscope.first_mate import (
+    _curate_pane, _render_delta, heartbeat_decide,
+)
+from periscope.activity import FirstMateMarker
+
+
+def test_curate_pane_derives_blocked_from_newest_need_human_alert():
+    d = _curate_pane(
+        handle="@1", name="w", session="s", is_claude=True, status_line="working",
+        alerts=[{"kind": "info", "ts": 10}, {"kind": "need_human", "ts": 20}],
+        pr=1234, ci="✓", focused_at=100, acted_at=90, now=130,
+    )
+    assert d["blocked"] is True
+    assert d["idle_s"] == 30          # now - max(focused, acted)
+    assert d["handle"] == "@1" and d["pr"] == 1234 and d["ci"] == "✓"
+
+
+def test_curate_pane_not_blocked_when_newest_alert_is_not_need_human():
+    d = _curate_pane(
+        handle="@1", name="w", session="s", is_claude=True, status_line=None,
+        alerts=[{"kind": "need_human", "ts": 10}, {"kind": "done", "ts": 20}],
+        pr=None, ci=None, focused_at=0, acted_at=0, now=5,
+    )
+    assert d["blocked"] is False
+    assert d["idle_s"] == 5           # max(0,0)=0 -> now-0
+
+
+def test_render_delta_mentions_changed_panes_and_budget():
+    prev = FleetDigest(panes=(PaneDigest("@1","w","s","run",False,None,None,0),),
+                       budget_pct=60, budget_resets_at=None, at=1)
+    cur = FleetDigest(panes=(PaneDigest("@1","w","s","run",True,None,None,0),),
+                      budget_pct=71, budget_resets_at=None, at=2)
+    text = _render_delta(prev, cur, "@1 blocked")
+    assert "@1" in text and "71" in text
+
+
+def test_heartbeat_decide_pushes_on_divergence_when_marker_present():
+    marker = FirstMateMarker(pane_id="%9", session_id=None, updated_at=1)
+    prev = None
+    cur = FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
+    push = heartbeat_decide(prev=prev, cur=cur, marker=marker)
+    assert push is not None and push.pane_id == "%9" and push.content
+
+
+def test_heartbeat_decide_none_when_no_marker():
+    cur = FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
+    assert heartbeat_decide(prev=None, cur=cur, marker=None) is None
+
+
+def test_heartbeat_decide_none_when_not_diverged():
+    marker = FirstMateMarker(pane_id="%9", session_id=None, updated_at=1)
+    a = FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=1)
+    b = FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
+    assert heartbeat_decide(prev=a, cur=b, marker=marker) is None
+
+
+def test_heartbeat_decide_pushes_on_ci_red_even_if_otherwise_nominal():
+    marker = FirstMateMarker(pane_id="%9", session_id=None, updated_at=1)
+    prev = FleetDigest(panes=(PaneDigest("@1","w","s","x",False,7,"✓",0),),
+                       budget_pct=50, budget_resets_at=None, at=1)
+    cur = FleetDigest(panes=(PaneDigest("@1","w","s","x",False,7,"✗",0),),
+                      budget_pct=50, budget_resets_at=None, at=2)
+    push = heartbeat_decide(prev=prev, cur=cur, marker=marker)
+    assert push is not None      # CI ✓->✗ forces a push (also caught by pr/ci divergence)
