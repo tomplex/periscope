@@ -246,3 +246,60 @@ def assemble_pane_views(panes: list, now: int) -> list[dict]:
             now=now,
         ))
     return out
+
+
+FIRST_MATE_SESSION = "bridge"
+FIRST_MATE_WINDOW = "first-mate"
+
+
+def supervisor_pass(*, now: int) -> None:
+    """Ensure exactly one live first-mate pane. No-op if the marked pane is
+    alive; (re)spawn + re-mark if the marker is missing or its pane is gone.
+    Idempotent — a live marker short-circuits, preventing double-spawn."""
+    from periscope import activity
+    from periscope.panes import list_windows
+
+    marker = activity.get_first_mate()
+    live = {w.get("pane_id") for w in list_windows()}
+    if marker is not None and marker.pane_id in live:
+        return
+    _spawn_first_mate(now=now)
+
+
+def _spawn_first_mate(*, now: int) -> None:
+    """Ensure the `bridge` session, open a single `first-mate` window running
+    claude_exec() + --append-system-prompt ROLE_PROMPT, stamp it, set the
+    marker. Borrows worktree_spawn._layout_two_window's sequence (single window,
+    no HTTPException — this is a lifespan task, not a request)."""
+    import os
+    import shlex
+    import time as _time
+    from periscope.tmux import tmux, _tmux_mutate
+    # Function-level imports (keep them here): a test monkeypatches
+    # `periscope.config.is_prod`, which only takes effect if is_prod is
+    # re-resolved per call rather than bound at module import.
+    from periscope.config import claude_exec, is_prod
+    from periscope.channels import dismiss_dev_channels_consent_bg
+    from periscope.pids import stamp_new_window
+    from periscope.open_ops import _session_live   # socket-aware has-session
+    from periscope import activity
+
+    if not is_prod():
+        return  # defense in depth: never spawn a budget-spender off prod
+
+    home = os.path.expanduser("~")
+    if not _session_live(FIRST_MATE_SESSION):
+        _tmux_mutate("new-session", "-d", "-s", FIRST_MATE_SESSION,
+                     "-c", home, "-n", FIRST_MATE_WINDOW)
+    else:
+        _tmux_mutate("new-window", "-t", f"{FIRST_MATE_SESSION}:",
+                     "-c", home, "-n", FIRST_MATE_WINDOW)
+    target = f"{FIRST_MATE_SESSION}:{FIRST_MATE_WINDOW}"
+    exec_cmd = f"{claude_exec()} --append-system-prompt {shlex.quote(ROLE_PROMPT)}"
+    _time.sleep(0.1)  # let rc finish before the command lands (CLAUDE.md note 5)
+    _tmux_mutate("send-keys", "-t", target, exec_cmd, "Enter")
+    if "--dangerously-load-development-channels" in exec_cmd:
+        dismiss_dev_channels_consent_bg(target)
+    stamp_new_window(target)
+    pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
+    activity.set_first_mate(pane_id=pane_id, session_id=None, at=now)

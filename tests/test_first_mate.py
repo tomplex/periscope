@@ -264,3 +264,35 @@ def test_run_worker_keeps_last_sent_on_failed_emit(monkeypatch):
 
     asyncio.run(activity._emit_pending_first_mate(last_ctx))
     assert first_mate._LAST_SENT is None          # NOT advanced -> next tick re-pushes
+
+
+def test_supervisor_noop_when_marker_alive(monkeypatch, fresh_activity_db):
+    from periscope import first_mate, activity
+    import periscope.panes as panes
+    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    monkeypatch.setattr(panes, "list_windows", lambda: [{"pane_id": "%9"}])
+    called = []
+    monkeypatch.setattr(first_mate, "_spawn_first_mate", lambda *, now: called.append(now))
+    first_mate.supervisor_pass(now=5)
+    assert called == []                       # alive -> no respawn
+
+
+def test_supervisor_respawns_when_marker_missing(monkeypatch, fresh_activity_db):
+    from periscope import first_mate
+    import periscope.panes as panes
+    monkeypatch.setattr(panes, "list_windows", lambda: [])
+    called = []
+    monkeypatch.setattr(first_mate, "_spawn_first_mate", lambda *, now: called.append(now))
+    first_mate.supervisor_pass(now=5)
+    assert called == [5]                      # no marker -> spawn
+
+
+def test_supervisor_respawns_when_marked_pane_dead(monkeypatch, fresh_activity_db):
+    from periscope import first_mate, activity
+    import periscope.panes as panes
+    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    monkeypatch.setattr(panes, "list_windows", lambda: [{"pane_id": "%7"}])  # %9 gone
+    called = []
+    monkeypatch.setattr(first_mate, "_spawn_first_mate", lambda *, now: called.append(now))
+    first_mate.supervisor_pass(now=5)
+    assert called == [5]
