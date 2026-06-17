@@ -71,6 +71,19 @@ CREATE TABLE IF NOT EXISTS pane_status (
                                    -- manual routes, or detected external)
   rail         TEXT                -- <=28-char rail fragment (nullable)
 );
+CREATE TABLE IF NOT EXISTS captain_log (
+  id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  at    INTEGER NOT NULL,
+  kind  TEXT NOT NULL,         -- 'standing_order' | 'watch' | 'narrative'
+  text  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_captain_log_at ON captain_log (at);
+CREATE TABLE IF NOT EXISTS first_mate (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+  pane_id     TEXT NOT NULL,
+  session_id  TEXT,
+  updated_at  INTEGER NOT NULL
+);
 """
 
 _CONN: sqlite3.Connection | None = None
@@ -342,6 +355,80 @@ def prune_pane_status(alive_pane_ids: set[str]) -> int:
                       [(p,) for p in dead])
         c.commit()
         return len(dead)
+
+
+# --- captain_log + first_mate marker: first-mate substrate --------------
+#
+# captain_log is the first mate's durable scratch — standing orders, a
+# watch-list, narrative notes — appended via the captains_log MCP tools.
+# first_mate is a singleton (id=1) marker naming which pane currently holds
+# the first-mate role; the tools self-guard against it (channels.py).
+
+@dataclass(frozen=True)
+class CaptainLogRow:
+    id: int
+    at: int
+    kind: str          # standing_order | watch | narrative
+    text: str
+
+
+@dataclass(frozen=True)
+class FirstMateMarker:
+    pane_id: str
+    session_id: str | None
+    updated_at: int
+
+
+def append_captain_log(*, kind: str, text: str, at: int | None = None) -> None:
+    with _LOCK:
+        c = _conn()
+        c.execute(
+            "INSERT INTO captain_log (at, kind, text) VALUES (?,?,?)",
+            (int(at if at is not None else time.time()), kind, text),
+        )
+        c.commit()
+
+
+def recent_captain_log(*, limit: int = 50) -> list[CaptainLogRow]:
+    """Newest-first captain's-log rows."""
+    with _LOCK:
+        c = _conn()
+        rows = c.execute(
+            "SELECT id, at, kind, text FROM captain_log ORDER BY at DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [CaptainLogRow(*r) for r in rows]
+
+
+def get_first_mate() -> FirstMateMarker | None:
+    with _LOCK:
+        c = _conn()
+        row = c.execute(
+            "SELECT pane_id, session_id, updated_at FROM first_mate WHERE id=1"
+        ).fetchone()
+    return FirstMateMarker(*row) if row else None
+
+
+def set_first_mate(*, pane_id: str, session_id: str | None, at: int) -> None:
+    """Upsert the singleton (id=1) first-mate marker."""
+    with _LOCK:
+        c = _conn()
+        c.execute(
+            "INSERT INTO first_mate (id, pane_id, session_id, updated_at) "
+            "VALUES (1, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "  pane_id=excluded.pane_id, session_id=excluded.session_id, "
+            "  updated_at=excluded.updated_at",
+            (pane_id, session_id, at),
+        )
+        c.commit()
+
+
+def clear_first_mate() -> None:
+    with _LOCK:
+        c = _conn()
+        c.execute("DELETE FROM first_mate WHERE id=1")
+        c.commit()
 
 
 # --- usage_samples: plan-usage time series ------------------------------
