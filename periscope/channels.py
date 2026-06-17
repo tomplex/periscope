@@ -819,6 +819,32 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
     return _tool_result({"ok": True, "claudes": claudes})
 
 
+def _do_peek_tool(pane: str, arguments: dict):
+    """Read another Claude's recent transcript by handle, without messaging it.
+    Reads directly off the pane's recorded session id — refuses when there is
+    none rather than guessing by cwd (which on a shared cwd would return a
+    sibling pane's transcript). Bypasses get_turns_for_pane precisely because
+    that helper re-derives pane_id and has the cwd fallback."""
+    from periscope.turns import (
+        session_id_for_pane, jsonl_for_session, messages_from_jsonl,
+    )
+
+    handle = str(arguments.get("handle", "")).strip()
+    if not handle:
+        return _tool_result({"ok": False, "error": "handle is required"})
+    _pid, pane_id, _w = _resolve_window_by_pid(handle)
+    if not pane_id:
+        return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
+    sid = session_id_for_pane(pane_id)
+    if sid is None:
+        return _tool_result({"ok": False, "error": f"no recorded session for handle {handle}"})
+    jsonl = jsonl_for_session(sid)
+    if jsonl is None:
+        return _tool_result({"ok": False, "error": "session transcript not found"})
+    messages = messages_from_jsonl(str(jsonl))
+    return _tool_result({"ok": True, "handle": handle, "turns": messages[-20:]})
+
+
 # --- MCP tool registry ---
 # Each record co-locates a tool's name, JSON schema, and handler. `_list_tools`
 # maps it to `types.Tool` objects (mcp `types` is lazy-imported, so the registry
@@ -1142,6 +1168,23 @@ _CHANNEL_TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
         "handler": _do_list_claudes_tool,
+    },
+    {
+        "name": "peek",
+        "description": (
+            "Read the recent transcript (last ~20 messages) of another Claude "
+            "pane by its handle, without sending it anything — use to check on "
+            "a delegated worker's progress instead of waiting for a report. "
+            "Refuses if the pane has no recorded session yet."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+            },
+            "required": ["handle"],
+        },
+        "handler": _do_peek_tool,
     },
 ]
 

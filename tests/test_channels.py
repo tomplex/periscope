@@ -526,3 +526,41 @@ def test_list_claudes_filters_and_trims(mocker):
         "status_line": "reviewing PR", "attached": True, "spawned_by": "boss0",
     }
     assert "pane_id" not in c
+
+
+def test_peek_happy(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {}))
+    mocker.patch("periscope.turns.session_id_for_pane", return_value="sess-abc")
+    mocker.patch("periscope.turns.jsonl_for_session", return_value="/x/sess-abc.jsonl")
+    msgs = [{"role": "user", "text": str(i)} for i in range(30)]
+    mocker.patch("periscope.turns.messages_from_jsonl", return_value=msgs)
+
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
+
+    assert body["ok"] is True and body["handle"] == "ab12"
+    assert len(body["turns"]) == 20
+    assert body["turns"][-1]["text"] == "29"
+
+
+def test_peek_no_session_refuses_without_transcript_read(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {}))
+    mocker.patch("periscope.turns.session_id_for_pane", return_value=None)
+    jsonl = mocker.patch("periscope.turns.jsonl_for_session")
+    msgs = mocker.patch("periscope.turns.messages_from_jsonl")
+
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
+
+    assert body["ok"] is False and "no recorded session" in body["error"]
+    jsonl.assert_not_called()   # the cwd-collision footgun is unreachable
+    msgs.assert_not_called()
+
+
+def test_peek_no_window(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
+    assert body["ok"] is False and "no live window" in body["error"]
