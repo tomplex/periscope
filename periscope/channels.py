@@ -34,7 +34,7 @@ from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
 from periscope.panes import list_windows, note_focus, note_action
 from periscope.pids import _attach_git_then_resolve_pids
-from periscope.store import set_window_fields
+from periscope.store import set_window_fields, get_window
 from periscope.tabs import open_tab
 from periscope.tmux import tmux, _run, _tmux_mutate
 
@@ -502,6 +502,14 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     pid, pane_id = _resolve_window(
         lambda w: w.get("session") == session and w.get("index") == index
     )
+
+    # Provenance breadcrumb: record who spawned this child so report() knows
+    # where "back" is. Pure metadata, no ownership — a severed child simply
+    # never calls report(). Guard on both ids so a vanished caller or
+    # unresolved child doesn't write a junk link.
+    parent_pid = _resolve_pid_for_pane(pane)
+    if parent_pid and pid:
+        set_window_fields(pid, spawned_by=parent_pid)
 
     # workspace="new": persist the rail placement now that the window is
     # stamped. The item already surfaces from live state (the project is

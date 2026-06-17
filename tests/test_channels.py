@@ -372,3 +372,45 @@ def test_resolve_window_by_pid_empty_handle_returns_empty(mocker):
     from periscope import channels
     mocker.patch("periscope.channels.list_windows")
     assert channels._resolve_window_by_pid("") == ("", "", {})
+
+
+def test_spawn_claude_writes_spawned_by(mocker):
+    from periscope import channels
+    # tmux session lookup for the caller pane → session|cwd
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))  # has-session ok
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels._resolve_window", return_value=("child99", "%9"))
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    set_fields = mocker.patch("periscope.channels.set_window_fields")
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    set_fields.assert_any_call("child99", spawned_by="parent11")
+
+
+def test_spawn_claude_no_parent_tolerated(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels._resolve_window", return_value=("child99", "%9"))
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="")  # vanished caller
+    set_fields = mocker.patch("periscope.channels.set_window_fields")
+
+    result = asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    # no spawned_by write when parent pid can't be resolved, and no crash
+    for call in set_fields.call_args_list:
+        assert "spawned_by" not in call.kwargs
+    assert json.loads(result[0].text)["ok"] is True
