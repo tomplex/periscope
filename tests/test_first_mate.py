@@ -227,6 +227,32 @@ def test_assemble_pane_views_uses_curate_and_skips_non_claude(monkeypatch, fresh
     assert v["idle_s"] == 30
 
 
+def test_assemble_pane_views_excludes_the_first_mate_itself(monkeypatch, fresh_activity_db):
+    # The first mate is a Claude pane; if it appears in its own digest, its
+    # reactions change its status, which the next tick reads as divergence and
+    # pushes again — a feedback loop. The marked pane must be excluded.
+    from periscope import first_mate, activity
+    import periscope.channels as channels
+    import periscope.panes as panes
+    import periscope.git_pr as git_pr
+
+    activity.set_first_mate(pane_id="%9", session_id=None, at=1)   # %9 == the first mate
+    panes_in = [
+        ({"session": "bridge", "index": "1", "cwd": "/r", "pane_id": "%9", "pid": "@fm"},
+         {"is_claude": True}),
+        ({"session": "s", "index": "2", "cwd": "/r", "pane_id": "%5", "pid": "@w"},
+         {"is_claude": True}),
+    ]
+    monkeypatch.setattr(activity, "pane_status_lines", lambda: {})
+    monkeypatch.setattr(channels, "channel_state_for", lambda pid: {"alerts": []})
+    monkeypatch.setattr(git_pr, "cached_git_state", lambda p: {})
+    monkeypatch.setattr(git_pr, "cached_pr_state", lambda p, b: {})
+    monkeypatch.setattr(panes, "recency_stamps_for", lambda t: {})
+
+    views = first_mate.assemble_pane_views(panes_in, now=10)
+    assert [v["handle"] for v in views] == ["%5"]   # self (%9) excluded; only the worker
+
+
 def test_run_worker_emits_pending_push_and_advances_last_sent(monkeypatch):
     import asyncio
     from periscope import activity, first_mate

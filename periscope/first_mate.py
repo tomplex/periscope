@@ -220,6 +220,13 @@ def assemble_pane_views(panes: list, now: int) -> list[dict]:
     from periscope.panes import recency_stamps_for
 
     status_lines = activity.pane_status_lines()
+    # The first mate must NOT see itself in the digest. It IS a Claude pane, so
+    # including it creates a feedback loop: it reacts to a push, its own status
+    # changes, the next tick diverges on *its own* change, pushes again, ad
+    # infinitum. Skip the marked pane so only real fleet (worker) changes drive
+    # pushes.
+    marker = activity.get_first_mate()
+    self_pane = marker.pane_id if marker else None
     out = []
     for w, parsed in panes:
         if not parsed.get("is_claude"):
@@ -230,6 +237,8 @@ def assemble_pane_views(panes: list, now: int) -> list[dict]:
         # %N is stable across ticks and keys pane_status + channel state, so use it
         # as the digest handle directly.
         pane_id = w.get("pane_id") or ""
+        if pane_id and pane_id == self_pane:
+            continue   # don't let the first mate watch itself (feedback loop)
         cwd = w.get("cwd") or ""
         target = f"{w.get('session')}:{w.get('index')}"
         st = status_lines.get(pane_id)     # pane_status is keyed by %N
