@@ -385,12 +385,15 @@ def test_spawn_claude_writes_spawned_by(mocker):
     mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
     mocker.patch("periscope.channels.note_focus")
     mocker.patch("periscope.channels.note_action")
-    mocker.patch("periscope.channels._resolve_window", return_value=("child99", "%9"))
+    # Brand-new window: mint a fresh unique pid (stamp_new_window), NOT
+    # _resolve_window — the latter rebinds and can steal a live pane's pid.
+    stamp = mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     set_fields = mocker.patch("periscope.channels.set_window_fields")
 
     asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
+    stamp.assert_called_once_with("sess:3")  # mint-fresh, no rebind collision
     set_fields.assert_any_call("child99", spawned_by="parent11")
 
 
@@ -404,7 +407,7 @@ def test_spawn_claude_no_parent_tolerated(mocker):
     mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
     mocker.patch("periscope.channels.note_focus")
     mocker.patch("periscope.channels.note_action")
-    mocker.patch("periscope.channels._resolve_window", return_value=("child99", "%9"))
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="")  # vanished caller
     set_fields = mocker.patch("periscope.channels.set_window_fields")
 

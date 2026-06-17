@@ -33,7 +33,7 @@ from typing import Any
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
 from periscope.panes import list_windows, note_focus, note_action
-from periscope.pids import _attach_git_then_resolve_pids
+from periscope.pids import _attach_git_then_resolve_pids, stamp_new_window
 from periscope.store import set_window_fields, get_window
 from periscope.tabs import open_tab
 from periscope.tmux import tmux, _run, _tmux_mutate
@@ -496,17 +496,21 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     note_focus(target)
     note_action(target)
 
-    # Resolve the spawned window's stable @periscope_id so the caller can
-    # reference it across restarts. Matched on (session, index) rather than
-    # pane_id %N because we don't have the pane_id yet.
-    pid, pane_id = _resolve_window(
-        lambda w: w.get("session") == session and w.get("index") == index
-    )
+    # Mint + stamp a fresh unique @periscope_id for the brand-new window.
+    # Do NOT resolve via rebind here: a just-created window has no stamp yet,
+    # and resolving a single window (empty taken-set) lets _rebind_pid match it
+    # to a LIVE window's entry on (branch, cwd) — stealing that pid. Since the
+    # child inherits the caller's cwd by default, that collision is the common
+    # case, and the provenance write below would then corrupt the caller's own
+    # row (spawned_by pointing at itself). stamp_new_window mints a
+    # guaranteed-unique id, sidestepping rebind entirely.
+    pid = stamp_new_window(target)
+    pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
 
     # Provenance breadcrumb: record who spawned this child so report() knows
     # where "back" is. Pure metadata, no ownership — a severed child simply
-    # never calls report(). Guard on both ids so a vanished caller or
-    # unresolved child doesn't write a junk link.
+    # never calls report(). Guard on both ids so a vanished caller doesn't
+    # write a junk link.
     parent_pid = _resolve_pid_for_pane(pane)
     if parent_pid and pid:
         set_window_fields(pid, spawned_by=parent_pid)
