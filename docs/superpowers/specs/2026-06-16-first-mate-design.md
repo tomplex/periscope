@@ -93,7 +93,11 @@ Claude). So the supervisor is net-new code, specified here:
   `exit`, crash), respawn and re-mark. The marker prevents double-spawn and
   tells the heartbeat which `%N` to push to. (Stored alongside the captain's
   log — same table tenancy, same boot-read.)
-- **Home.** The `bridge` tmux session (already created as the interim home).
+- **Home.** A `bridge` tmux session. The supervisor **ensures the session
+  exists** (`has-session` → `new-session` else `new-window`, the
+  `_do_spawn_claude_tool` branch shape) and opens a single `first-mate` window
+  in it — it must NOT assume a pre-existing session (a fresh prod boot has
+  none; any hand-made `bridge` session is incidental).
 
 ### Per-pane tool visibility (known gap, deferred)
 

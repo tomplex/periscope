@@ -719,8 +719,32 @@ def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
 # it captures each active Claude pane, runs the context-reset check, and
 # drives the narrator (semantic status + auto-rename).
 
+def _safe_usage() -> dict | None:
+    try:
+        from periscope.usage import cached_plan_usage
+        return cached_plan_usage()
+    except Exception:
+        return None
+
+
+async def _emit_pending_first_mate(last_ctx: dict) -> None:
+    """Main-loop side of the heartbeat: send a Push stashed by _worker_tick.
+    Awaited in run_worker (the MCP sessions are main-loop-affine — must NOT be
+    emitted from the worker thread)."""
+    pending = last_ctx.pop("_fm_push", None)
+    if not pending:
+        return
+    pane_id, content, cur = pending
+    from periscope.channels import emit_channel_event
+    from periscope import first_mate
+    ok = await emit_channel_event(pane_id, content, {"kind": "fleet_digest"})
+    if ok:
+        first_mate._LAST_SENT = cur     # advance only on a successful send
+
+
 def _worker_tick(last_ctx: dict) -> None:
     """One worker pass. Blocking (tmux + git subprocesses) — run off-loop."""
+    now = int(time.time())
     panes: list[tuple[dict, dict]] = []
     for w in list_windows():
         target = f"{w['session']}:{w['index']}"
@@ -742,6 +766,21 @@ def _worker_tick(last_ctx: dict) -> None:
         narrator.tick(panes)
     except Exception:
         log.exception("narrator tick failed")
+    # First mate: supervisor liveness + heartbeat decision (sync; the async
+    # emit is hoisted to run_worker's main loop — see _emit_pending_first_mate).
+    try:
+        from periscope import first_mate
+        first_mate.supervisor_pass(now=now)
+        cur = first_mate.build_fleet_digest(
+            panes=first_mate.assemble_pane_views(panes, now), usage=_safe_usage(), now=now,
+        )
+        push = first_mate.heartbeat_decide(
+            prev=first_mate._LAST_SENT, cur=cur, marker=get_first_mate(),
+        )
+        if push is not None:
+            last_ctx["_fm_push"] = (push.pane_id, push.content, cur)
+    except Exception:
+        log.exception("first-mate worker pass failed")
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()
@@ -754,6 +793,7 @@ async def run_worker() -> None:
     while True:
         try:
             await asyncio.to_thread(_worker_tick, last_ctx)
+            await _emit_pending_first_mate(last_ctx)
         except Exception:
             log.exception("activity worker tick failed")
         await asyncio.sleep(30)

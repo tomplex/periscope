@@ -96,6 +96,16 @@ describe("mergeLiveAndPrefs", () => {
     expect(m.panesByWorktree["notes"]).toEqual(["n1"]);  // no "review"
   });
 
+  it("the bridge session renders as its own 'bridge' group, not folded into dev", () => {
+    const bridgeProjects = [proj({ pinned_dir: "/Users/tom", repo: null, tmux_session: "bridge", name: "bridge" })];
+    const ws = [win({ pid: "fm", session: "bridge", project_pinned_dir: "/Users/tom" })];
+    const m = mergeLiveAndPrefs(ws, bridgeProjects, [], {}, {});
+    expect(m.repoOrder).toEqual(["/Users/tom"]);                 // own group, not MAIN_KEY
+    expect(m.worktreesByRepo["/Users/tom"]).toEqual(["bridge"]);
+    expect(m.panesByWorktree["bridge"]).toEqual(["fm"]);         // the first-mate pane, no review row
+    expect(groupLabel("/Users/tom", indexProjects(bridgeProjects))).toBe("bridge");
+  });
+
   it("dev pane order persists via prefs panes_by_worktree[MAIN_KEY]", () => {
     const ws = [
       win({ pid: "x", session: "main", project_pinned_dir: MAIN_KEY }),
