@@ -34,7 +34,7 @@ from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
 from periscope.panes import list_windows, note_focus, note_action
 from periscope.pids import _attach_git_then_resolve_pids
-from periscope.store import set_window_fields
+from periscope.store import set_window_fields, get_window
 from periscope.tabs import open_tab
 from periscope.tmux import tmux, _run, _tmux_mutate
 
@@ -81,15 +81,18 @@ specific enough that you won't over-call them:
   the user will want to read (spec, design doc, report, HTML output).
   Quiet: the tab appears on this pane without stealing focus.
 
-- spawn_claude(prompt, session?, cwd?, name?): launch a fresh Claude
-  session in a new tmux window with the given prompt as its first
+- spawn_claude(prompt, workspace?, session?, cwd?, name?): launch a fresh
+  Claude session in a new tmux window with the given prompt as its first
   message. The new window appears on the dashboard. Use when the user
   asks you to delegate, parallelize, or "spin up another session" — or
   when the task at hand decomposes into independent sub-tasks that
-  each deserve their own focused context. Default `session` is yours,
-  `cwd` is your pane's working directory; override to group sub-agents
-  in a dedicated session or point them at a different repo. Keep the
-  returned target/pid so you can refer to the spawned pane later.
+  each deserve their own focused context. `workspace` controls where it
+  lands: "same" (default) nests it under YOUR card as fan-out/related
+  sub-work (even if `cwd` is a different worktree); "new" makes it its
+  own top-level dashboard item anchored to `cwd`'s worktree (new tab if
+  that worktree already has a session) — for DISTINCT work tracked on its
+  own. Default `cwd` is your pane's working directory. Keep the returned
+  target/pid so you can refer to the spawned pane later.
 
 - search_history(query, project?, since?, limit?): full-text search
   over every past Claude session on this machine. Use it before
@@ -216,6 +219,23 @@ def _resolve_pid_for_pane(pane_id: str) -> str:
     if the pane has vanished from tmux's list-windows."""
     pid, _ = _resolve_window(lambda w: w.get("pane_id") == pane_id)
     return pid
+
+
+def _resolve_window_by_pid(handle: str) -> tuple[str, str, dict]:
+    """Resolve an @periscope_id handle to (pid, pane_id, window).
+
+    Matches on `pid_raw` — the stamped @periscope_id on the raw list_windows
+    row — BEFORE resolution, because resolution attaches `pid` only after a
+    match (raw rows carry pid_raw, not pid). peek/terminate read
+    session/index off the returned window dict. Returns ("", "", {}) when no
+    live window matches."""
+    if not handle:
+        return "", "", {}
+    for w in list_windows():
+        if w.get("pid_raw") == handle:
+            _attach_git_then_resolve_pids([w])
+            return w.get("pid") or "", w.get("pane_id") or "", w
+    return "", "", {}
 
 
 def _do_link_pr_tool(pane: str, arguments: dict):
@@ -387,11 +407,27 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     ).strip()
     caller_session, _, caller_cwd = info.partition("|")
 
-    session = str(arguments.get("session") or caller_session or "spawned").strip()
     cwd = str(arguments.get("cwd") or caller_cwd or os.path.expanduser("~")).strip()
     if not os.path.isdir(cwd):
         cwd = os.path.expanduser("~")
     name = str(arguments.get("name") or "").strip()
+
+    # Where the spawned pane lands in the dashboard. "same" (default) keeps it
+    # a window in the caller's session, so fan-out / related sub-work nests
+    # under the caller's rail item (the rail is session-anchored). "new"
+    # anchors it to its cwd's worktree as its OWN rail item — a separate
+    # project-backed session — for distinct work tracked on its own. The
+    # session name is created fresh, or new-tabbed into when it already owns
+    # the worktree; resolve_worktree_session registers the project + dedupes a
+    # foreign-name clash, and returns None when cwd isn't in a git repo (no
+    # worktree to anchor → fall back to the caller's session).
+    from periscope import open_ops
+    workspace = str(arguments.get("workspace") or "same").strip().lower()
+    anchored = open_ops.resolve_worktree_session(cwd) if workspace == "new" else None
+    if anchored:
+        session, project = anchored
+    else:
+        session = str(arguments.get("session") or caller_session or "spawned").strip()
 
     # Create the session if missing, otherwise add a window to it. Both
     # paths use `-P -F #{window_index}` so we know the spawned slot — with
@@ -466,6 +502,24 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     pid, pane_id = _resolve_window(
         lambda w: w.get("session") == session and w.get("index") == index
     )
+
+    # Provenance breadcrumb: record who spawned this child so report() knows
+    # where "back" is. Pure metadata, no ownership — a severed child simply
+    # never calls report(). Guard on both ids so a vanished caller or
+    # unresolved child doesn't write a junk link.
+    parent_pid = _resolve_pid_for_pane(pane)
+    if parent_pid and pid:
+        set_window_fields(pid, spawned_by=parent_pid)
+
+    # workspace="new": persist the rail placement now that the window is
+    # stamped. The item already surfaces from live state (the project is
+    # registered, so the session groups under its repo), but place_in_rail
+    # records the ordering — same server-side placement the unified-open
+    # route does. pid_raw is the just-stamped @periscope_id.
+    if anchored:
+        pane_pids = [w["pid_raw"] for w in list_windows()
+                     if w["session"] == session and w.get("pid_raw")]
+        open_ops.place_in_rail(session, project, pane_pids or [pid])
 
     body = {
         "ok": True,
@@ -667,6 +721,148 @@ async def _handle_mcp_connection(
             pass
 
 
+async def _deliver(pane_id: str, message: str, caller_pane: str) -> dict:
+    """Shared send_to/report delivery: self-send guard, channel push, and the
+    not-attached error mapping. Returns the tool body dict (callers augment
+    success with their own fields)."""
+    if pane_id == caller_pane:
+        return {"ok": False, "error": "refusing to send to your own pane"}
+    sent = await emit_channel_event(pane_id, message)
+    if not sent:
+        return {"ok": False, "error": "target not attached to periscope channel"}
+    return {"ok": True}
+
+
+async def _do_send_to_tool(pane: str, arguments: dict):
+    """Deliver a message to another live Claude by handle (pid). Wakes the
+    recipient via the channel rail."""
+    handle = str(arguments.get("handle", "")).strip()
+    message = str(arguments.get("message", "")).strip()
+    if not handle:
+        return _tool_result({"ok": False, "error": "handle is required"})
+    if not message:
+        return _tool_result({"ok": False, "error": "message is required"})
+    _pid, pane_id, _w = _resolve_window_by_pid(handle)
+    if not pane_id:
+        return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
+    body = await _deliver(pane_id, message, pane)
+    if body.get("ok"):
+        body = {"ok": True, "handle": handle, "pane_id": pane_id}
+    return _tool_result(body)
+
+
+async def _do_report_tool(pane: str, arguments: dict):
+    """Report back to the pane that spawned this one. Sugar over send_to,
+    routed via the spawned_by provenance breadcrumb — the worker doesn't carry
+    the parent's handle, the server knows it."""
+    message = str(arguments.get("message", "")).strip()
+    if not message:
+        return _tool_result({"ok": False, "error": "message is required"})
+    caller_pid = _resolve_pid_for_pane(pane)
+    if not caller_pid:
+        return _tool_result({"ok": False, "error": f"could not resolve pid for pane {pane}"})
+    spawned_by = get_window(caller_pid).get("spawned_by")
+    if not spawned_by:
+        return _tool_result({"ok": False, "error": "this pane has no spawner to report to"})
+    _pid, pane_id, _w = _resolve_window_by_pid(spawned_by)
+    if not pane_id:
+        return _tool_result({"ok": False, "error": "spawner is no longer live"})
+    body = await _deliver(pane_id, message, pane)
+    if body.get("ok"):
+        body = {"ok": True, "to": spawned_by}
+    return _tool_result(body)
+
+
+async def _do_list_claudes_tool(pane: str, arguments: dict):
+    """List all live Claude panes with their handles, so the caller can
+    discover, message (send_to), peek, or terminate them. Flat — supports peer
+    discovery and handoff, not just a spawn subtree.
+
+    is_claude is probed per pane with a stateless capture+parse_pane — NOT
+    build_window_view, which mutates poll state-transition tracking. The
+    capture fan-out is offloaded to a thread so it doesn't block the event
+    loop; pid resolution (which writes state.json and is not thread-safe) runs
+    in the loop first, mirroring the /api/state route's ordering."""
+    from periscope.tmux import capture
+    from periscope.panes import parse_pane
+    from periscope.activity import pane_status_lines
+
+    windows = list_windows()
+    _attach_git_then_resolve_pids(windows)  # attaches pid, strips pid_raw (not thread-safe)
+    statuses = pane_status_lines()
+
+    def _collect():
+        out = []
+        for w in windows:
+            target = f"{w['session']}:{w['index']}"
+            try:
+                parsed = parse_pane(capture(target))
+            except Exception:
+                continue
+            if not parsed.get("is_claude"):
+                continue
+            pane_id = w.get("pane_id") or ""
+            status = statuses.get(pane_id)
+            pid = w.get("pid") or ""
+            out.append({
+                "handle": pid,
+                "name": w.get("name"),
+                "session": w.get("session"),
+                "cwd": w.get("cwd"),
+                "status_line": status[0] if status else None,
+                "attached": channel_state_for(pane_id)["attached"],
+                "spawned_by": get_window(pid).get("spawned_by"),
+            })
+        return out
+
+    claudes = await asyncio.to_thread(_collect)
+    return _tool_result({"ok": True, "claudes": claudes})
+
+
+def _do_peek_tool(pane: str, arguments: dict):
+    """Read another Claude's recent transcript by handle, without messaging it.
+    Reads directly off the pane's recorded session id — refuses when there is
+    none rather than guessing by cwd (which on a shared cwd would return a
+    sibling pane's transcript). Bypasses get_turns_for_pane precisely because
+    that helper re-derives pane_id and has the cwd fallback."""
+    from periscope.turns import (
+        session_id_for_pane, jsonl_for_session, messages_from_jsonl,
+    )
+
+    handle = str(arguments.get("handle", "")).strip()
+    if not handle:
+        return _tool_result({"ok": False, "error": "handle is required"})
+    _pid, pane_id, _w = _resolve_window_by_pid(handle)
+    if not pane_id:
+        return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
+    sid = session_id_for_pane(pane_id)
+    if sid is None:
+        return _tool_result({"ok": False, "error": f"no recorded session for handle {handle}"})
+    jsonl = jsonl_for_session(sid)
+    if jsonl is None:
+        return _tool_result({"ok": False, "error": "session transcript not found"})
+    messages = messages_from_jsonl(str(jsonl))
+    return _tool_result({"ok": True, "handle": handle, "turns": messages[-20:]})
+
+
+def _do_terminate_tool(pane: str, arguments: dict):
+    """Kill another Claude's tmux window by handle — cleanup after delegation,
+    or tear down a stuck worker. Refuses to kill the caller's own pane."""
+    handle = str(arguments.get("handle", "")).strip()
+    if not handle:
+        return _tool_result({"ok": False, "error": "handle is required"})
+    _pid, pane_id, window = _resolve_window_by_pid(handle)
+    if not pane_id:
+        return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
+    if pane_id == pane:
+        return _tool_result({"ok": False, "error": "refusing to terminate your own pane"})
+    target = f"{window['session']}:{window['index']}"
+    ok, msg = _tmux_mutate("kill-window", "-t", target)
+    if not ok:
+        return _tool_result({"ok": False, "error": msg})
+    return _tool_result({"ok": True, "terminated": handle})
+
+
 # --- MCP tool registry ---
 # Each record co-locates a tool's name, JSON schema, and handler. `_list_tools`
 # maps it to `types.Tool` objects (mcp `types` is lazy-imported, so the registry
@@ -797,9 +993,16 @@ _CHANNEL_TOOLS = [
             "parallelize, or spin up another Claude session; "
             "(2) the current task decomposes into independent "
             "sub-tasks that benefit from focused, isolated "
-            "contexts running concurrently. Returns target / "
-            "session / index / pid / pane_id for the spawned pane "
-            "— keep them so you can address it again later."
+            "contexts running concurrently. Set `workspace` to "
+            "control where the spawn lands on the dashboard: "
+            "\"same\" (default) for fan-out / sub-work that's part "
+            "of YOUR current task — it nests under your card, even "
+            "in a different worktree; \"new\" when the spawn is "
+            "DISTINCT work the user would track separately — it "
+            "becomes its own top-level item anchored to its "
+            "worktree. Returns target / session / index / pid / "
+            "pane_id for the spawned pane — keep them so you can "
+            "address it again later."
         ),
         "inputSchema": {
             "type": "object",
@@ -808,13 +1011,28 @@ _CHANNEL_TOOLS = [
                     "type": "string",
                     "description": "Initial message to send to the spawned Claude session.",
                 },
+                "workspace": {
+                    "type": "string",
+                    "enum": ["same", "new"],
+                    "description": (
+                        "Where the spawn lands on the dashboard. \"same\" "
+                        "(default): a window in YOUR session — fan-out / "
+                        "related sub-work nests under your card (even if "
+                        "`cwd` is a different worktree). \"new\": its own "
+                        "top-level dashboard item, a session anchored to "
+                        "`cwd`'s worktree (new tab if that worktree already "
+                        "has one) — for DISTINCT work tracked separately. "
+                        "\"new\" requires `cwd` to be inside a git repo; "
+                        "otherwise it behaves like \"same\"."
+                    ),
+                },
                 "session": {
                     "type": "string",
-                    "description": "tmux session to spawn into. Defaults to the caller's session. Created if it doesn't exist.",
+                    "description": "tmux session to spawn into (\"same\" workspace only). Defaults to the caller's session. Created if it doesn't exist.",
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Working directory for the spawned window. Defaults to the caller's pane cwd.",
+                    "description": "Working directory for the spawned window. Defaults to the caller's pane cwd. With workspace=\"new\", its worktree anchors the new dashboard item.",
                 },
                 "name": {
                     "type": "string",
@@ -918,6 +1136,90 @@ _CHANNEL_TOOLS = [
             "required": ["session_id"],
         },
         "handler": _do_resume_session_tool,
+    },
+    {
+        "name": "send_to",
+        "description": (
+            "Send a message to another live Claude pane by its handle "
+            "(the pid returned by spawn_claude / list_claudes). The message "
+            "wakes the recipient and arrives as a channel block it acts on. "
+            "Use to delegate a task to, or nudge, another Claude. Errors if "
+            "the handle resolves to no live window or the target isn't "
+            "attached to periscope's channel."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+                "message": {"type": "string", "description": "Message to deliver."},
+            },
+            "required": ["handle", "message"],
+        },
+        "handler": _do_send_to_tool,
+    },
+    {
+        "name": "report",
+        "description": (
+            "Report a message back to the Claude that spawned this pane. Use "
+            "when you were delegated a task and want to return your result to "
+            "your lead — it wakes them with your message. Errors if this pane "
+            "has no recorded spawner (it was hand-created or its spawner has "
+            "exited)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Message to send to your spawner."},
+            },
+            "required": ["message"],
+        },
+        "handler": _do_report_tool,
+    },
+    {
+        "name": "list_claudes",
+        "description": (
+            "List every live Claude pane periscope can see, with each one's "
+            "handle (pid), name, session, cwd, latest status line, whether "
+            "it's attached to periscope's channel (messageable via send_to), "
+            "and its spawner handle. Use to discover other Claudes before "
+            "messaging, peeking, or terminating them."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _do_list_claudes_tool,
+    },
+    {
+        "name": "peek",
+        "description": (
+            "Read the recent transcript (last ~20 messages) of another Claude "
+            "pane by its handle, without sending it anything — use to check on "
+            "a delegated worker's progress instead of waiting for a report. "
+            "Refuses if the pane has no recorded session yet."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+            },
+            "required": ["handle"],
+        },
+        "handler": _do_peek_tool,
+    },
+    {
+        "name": "terminate",
+        "description": (
+            "Kill another Claude's tmux window by its handle. Use to clean up "
+            "a worker after it's delegated its result, or to tear down a stuck "
+            "one. Refuses to terminate your own pane. This is destructive — the "
+            "window and its Claude session are gone."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+            },
+            "required": ["handle"],
+        },
+        "handler": _do_terminate_tool,
     },
 ]
 

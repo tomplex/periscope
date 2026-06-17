@@ -331,3 +331,272 @@ def test_resume_session_tool_requires_session_id():
     from periscope.channels import _do_resume_session_tool
     body = _body(_do_resume_session_tool("%5", {"session_id": ""}))
     assert body["ok"] is False
+
+
+# --- inter-claude management tools ---
+
+import asyncio
+import json
+from unittest.mock import AsyncMock
+
+
+def test_resolve_window_by_pid_matches_stamped_handle(mocker):
+    from periscope import channels
+    rows = [
+        {"session": "s", "index": 2, "name": "w", "cwd": "/x",
+         "pane_id": "%7", "pid_raw": "abcd1234"},
+    ]
+    mocker.patch("periscope.channels.list_windows", return_value=rows)
+
+    def _attach(ws):
+        for w in ws:
+            w["pid"] = w.pop("pid_raw")
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
+
+    pid, pane_id, window = channels._resolve_window_by_pid("abcd1234")
+    assert pid == "abcd1234"
+    assert pane_id == "%7"
+    assert window["session"] == "s" and window["index"] == 2
+
+
+def test_resolve_window_by_pid_miss_returns_empty(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels.list_windows", return_value=[
+        {"session": "s", "index": 2, "pane_id": "%7", "pid_raw": "other"},
+    ])
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids")
+    assert channels._resolve_window_by_pid("abcd1234") == ("", "", {})
+
+
+def test_resolve_window_by_pid_empty_handle_returns_empty(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels.list_windows")
+    assert channels._resolve_window_by_pid("") == ("", "", {})
+
+
+def test_spawn_claude_writes_spawned_by(mocker):
+    from periscope import channels
+    # tmux session lookup for the caller pane → session|cwd
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))  # has-session ok
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels._resolve_window", return_value=("child99", "%9"))
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    set_fields = mocker.patch("periscope.channels.set_window_fields")
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    set_fields.assert_any_call("child99", spawned_by="parent11")
+
+
+def test_spawn_claude_no_parent_tolerated(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels._resolve_window", return_value=("child99", "%9"))
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="")  # vanished caller
+    set_fields = mocker.patch("periscope.channels.set_window_fields")
+
+    result = asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    # no spawned_by write when parent pid can't be resolved, and no crash
+    for call in set_fields.call_args_list:
+        assert "spawned_by" not in call.kwargs
+    assert json.loads(result[0].text)["ok"] is True
+
+
+def test_send_to_happy(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {"session": "s", "index": 2}))
+    emit = mocker.patch("periscope.channels.emit_channel_event",
+                        new=AsyncMock(return_value=True))
+
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
+
+    emit.assert_awaited_once_with("%9", "hi")
+    assert body == {"ok": True, "handle": "ab12", "pane_id": "%9"}
+
+
+def test_send_to_no_window(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
+    assert body["ok"] is False and "no live window" in body["error"]
+
+
+def test_send_to_not_attached(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {}))
+    mocker.patch("periscope.channels.emit_channel_event", new=AsyncMock(return_value=False))
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
+    assert body["ok"] is False and "not attached" in body["error"]
+
+
+def test_send_to_self_refused(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%1", {}))
+    emit = mocker.patch("periscope.channels.emit_channel_event", new=AsyncMock(return_value=True))
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
+    assert body["ok"] is False and "own pane" in body["error"]
+    emit.assert_not_awaited()
+
+
+def test_send_to_missing_args(mocker):
+    from periscope import channels
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "", "message": "hi"})))
+    assert body["ok"] is False and "handle" in body["error"]
+
+
+def test_report_routes_to_spawner(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
+    mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "parent11"})
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("parent11", "%2", {}))
+    emit = mocker.patch("periscope.channels.emit_channel_event", new=AsyncMock(return_value=True))
+
+    body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
+
+    emit.assert_awaited_once_with("%2", "done")
+    assert body == {"ok": True, "to": "parent11"}
+
+
+def test_report_no_spawner_errors(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
+    mocker.patch("periscope.channels.get_window", return_value={})  # no spawned_by
+    body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
+    assert body["ok"] is False and "no spawner" in body["error"]
+
+
+def test_report_spawner_gone(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
+    mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "parent11"})
+    mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
+    assert body["ok"] is False and "no longer live" in body["error"]
+
+
+def test_list_claudes_filters_and_trims(mocker):
+    from periscope import channels
+    rows = [
+        {"session": "s", "index": 1, "name": "lead", "cwd": "/a", "pane_id": "%2", "pid_raw": "p1"},
+        {"session": "s", "index": 2, "name": "shell", "cwd": "/b", "pane_id": "%3", "pid_raw": "p2"},
+    ]
+    mocker.patch("periscope.channels.list_windows", return_value=rows)
+
+    def _attach(ws):
+        for w in ws:
+            if "pid_raw" in w:
+                w["pid"] = w.pop("pid_raw")
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
+
+    # capture returns the target so parse_pane can tell windows apart; is_claude
+    # true only for the "s:1" pane. This exercises the real per-pane probe path.
+    mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
+    mocker.patch("periscope.panes.parse_pane",
+                 side_effect=lambda content: {"is_claude": content == "s:1"})
+    mocker.patch("periscope.activity.pane_status_lines",
+                 return_value={"%2": ("reviewing PR", 123, None)})
+    mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
+    mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "boss0"})
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%1", {})))
+
+    assert body["ok"] is True
+    assert len(body["claudes"]) == 1
+    c = body["claudes"][0]
+    assert c == {
+        "handle": "p1", "name": "lead", "session": "s", "cwd": "/a",
+        "status_line": "reviewing PR", "attached": True, "spawned_by": "boss0",
+    }
+    assert "pane_id" not in c
+
+
+def test_peek_happy(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {}))
+    mocker.patch("periscope.turns.session_id_for_pane", return_value="sess-abc")
+    mocker.patch("periscope.turns.jsonl_for_session", return_value="/x/sess-abc.jsonl")
+    msgs = [{"role": "user", "text": str(i)} for i in range(30)]
+    mocker.patch("periscope.turns.messages_from_jsonl", return_value=msgs)
+
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
+
+    assert body["ok"] is True and body["handle"] == "ab12"
+    assert len(body["turns"]) == 20
+    assert body["turns"][-1]["text"] == "29"
+
+
+def test_peek_no_session_refuses_without_transcript_read(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {}))
+    mocker.patch("periscope.turns.session_id_for_pane", return_value=None)
+    jsonl = mocker.patch("periscope.turns.jsonl_for_session")
+    msgs = mocker.patch("periscope.turns.messages_from_jsonl")
+
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
+
+    assert body["ok"] is False and "no recorded session" in body["error"]
+    jsonl.assert_not_called()   # the cwd-collision footgun is unreachable
+    msgs.assert_not_called()
+
+
+def test_peek_no_window(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
+    assert body["ok"] is False and "no live window" in body["error"]
+
+
+def test_terminate_happy(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {"session": "s", "index": 4}))
+    mut = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, ""))
+    body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
+    mut.assert_called_once_with("kill-window", "-t", "s:4")
+    assert body == {"ok": True, "terminated": "ab12"}
+
+
+def test_terminate_self_refused(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%1", {"session": "s", "index": 4}))
+    mut = mocker.patch("periscope.channels._tmux_mutate")
+    body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
+    assert body["ok"] is False and "own pane" in body["error"]
+    mut.assert_not_called()
+
+
+def test_terminate_no_window(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
+    assert body["ok"] is False and "no live window" in body["error"]
+
+
+def test_terminate_mutate_failure(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {"session": "s", "index": 4}))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(False, "no such window"))
+    body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
+    assert body["ok"] is False and body["error"] == "no such window"
