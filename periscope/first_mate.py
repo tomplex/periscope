@@ -78,3 +78,45 @@ def fleet_diverged(prev: FleetDigest | None, cur: FleetDigest) -> tuple[bool, st
             return True, f"budget {prev.budget_pct}%->{cur.budget_pct}%"
 
     return False, "nominal"
+
+
+def build_fleet_digest(
+    *, panes: list[dict], usage: dict | None, now: int,
+) -> FleetDigest:
+    """Curate assembled per-pane read-model dicts into a typed FleetDigest.
+
+    Pure: reads documented dict keys, constructs frozen dataclasses, never
+    imports store/window_view/usage. `panes` is the curated contract
+    (the v1b worker adapter maps build_window_view output -> these keys,
+    including need_human-alert -> blocked). `usage` is cached_plan_usage()
+    output (or None when unavailable).
+    """
+    pane_digests = tuple(
+        PaneDigest(
+            handle=v["handle"],
+            name=v["name"],
+            session=v["session"],
+            status_line=v.get("status_line"),
+            blocked=bool(v.get("blocked", False)),
+            pr=v.get("pr"),
+            ci=v.get("ci"),
+            idle_s=int(v.get("idle_s", 0)),
+        )
+        for v in panes
+        if v.get("is_claude")
+    )
+
+    budget_pct = None
+    budget_resets_at = None
+    if usage:
+        session = usage.get("meters", {}).get("session")
+        if session and session.get("percent") is not None:
+            budget_pct = round(session["percent"])
+            budget_resets_at = session.get("resets_at")
+
+    return FleetDigest(
+        panes=pane_digests,
+        budget_pct=budget_pct,
+        budget_resets_at=budget_resets_at,
+        at=now,
+    )

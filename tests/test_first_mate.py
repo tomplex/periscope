@@ -1,4 +1,5 @@
 from periscope.first_mate import PaneDigest, FleetDigest, fleet_diverged
+from periscope.first_mate import build_fleet_digest
 
 
 def _pane(handle="@1", *, status_line="working", blocked=False, idle_s=0):
@@ -68,3 +69,48 @@ def test_idle_crossing_threshold_is_divergent():
     cur = _fleet([_pane(idle_s=10_000)])
     diverged, _ = fleet_diverged(prev, cur)
     assert diverged is True
+
+
+def _view(handle, *, is_claude=True, status_line="working", blocked=False,
+          pr=None, ci=None, idle_s=0):
+    return {
+        "handle": handle, "name": "win", "session": "sess",
+        "is_claude": is_claude, "status_line": status_line, "blocked": blocked,
+        "pr": pr, "ci": ci, "idle_s": idle_s,
+    }
+
+
+def test_build_filters_non_claude_panes():
+    d = build_fleet_digest(
+        panes=[_view("@1"), _view("@2", is_claude=False)], usage=None, now=1000,
+    )
+    assert [p.handle for p in d.panes] == ["@1"]
+
+
+def test_build_maps_pane_fields():
+    d = build_fleet_digest(
+        panes=[_view("@1", status_line="opening PR", blocked=True, pr=1234, ci="✓", idle_s=42)],
+        usage=None, now=1000,
+    )
+    p = d.panes[0]
+    assert (p.handle, p.status_line, p.blocked, p.pr, p.ci, p.idle_s) == \
+           ("@1", "opening PR", True, 1234, "✓", 42)
+
+
+def test_build_extracts_budget_from_usage():
+    usage = {"meters": {"session": {"percent": 61.7, "resets_at": 99999}}}
+    d = build_fleet_digest(panes=[_view("@1")], usage=usage, now=1000)
+    assert d.budget_pct == 62          # rounded
+    assert d.budget_resets_at == 99999
+
+
+def test_build_handles_missing_usage():
+    d = build_fleet_digest(panes=[_view("@1")], usage=None, now=1000)
+    assert d.budget_pct is None
+    assert d.budget_resets_at is None
+
+
+def test_build_stamps_now():
+    d = build_fleet_digest(panes=[], usage=None, now=4242)
+    assert d.at == 4242
+    assert d.panes == ()
