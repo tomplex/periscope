@@ -139,11 +139,10 @@ a valid root — `report()` simply errors for it.
 `spawn_claude`'s response shape is unchanged: the caller *is* the parent and
 already knows its own pid, so it needs nothing new echoed back.
 
-**Reading it back.** `store.py` exposes `set_window_fields(pid, **fields)`
-(write) but no getter, and `channels.py` deliberately never touches `_STATE`
-directly (module docstring). `report()` therefore needs a new
-`get_window_fields(pid) -> dict` (or `get_window_field(pid, key)`) accessor in
-`store.py` to read `spawned_by`. Add it alongside `set_window_fields`.
+**Reading it back.** `store.py` already exposes `get_window(pid) ->
+WindowAnnotation` (`store.py:329`) — returns a copy of `windows[pid]` or `{}`.
+`report()` reads `spawned_by` via `get_window(caller_pid).get("spawned_by")`.
+No new accessor needed; do **not** reach into `_STATE` from `channels.py`.
 
 **GC interaction (not a problem for live windows).** `spawned_by` is not in
 `_IMMUNITY_FIELDS`, but `_gc_windows` only drops entries that weren't refreshed
@@ -182,7 +181,7 @@ Lead → any live Claude.
 Worker → its spawner. Sugar over `send_to(my_spawner, message)`.
 
 - Resolve caller: `caller_pid = _resolve_pid_for_pane(pane)`.
-- Read `spawned_by` via the new `get_window_fields(caller_pid)` accessor
+- Read `spawned_by` via `get_window(caller_pid).get("spawned_by")`
   (see Provenance). If absent: error
   (`{"ok": False, "error": "this pane has no spawner to report to"}`).
 - Resolve `spawned_by (pid) → pane_id` and `await emit_channel_event(...)`,
@@ -318,7 +317,7 @@ Claude A: exits. Worker runs on; report() to A would just error (not attached).
 ## Testing strategy
 
 - **Tool handlers are unit-testable** with `emit_channel_event`, the
-  pid-resolution helper, `get_window_fields`/`set_window_fields`,
+  pid-resolution helper, `get_window`/`set_window_fields`,
   `session_id_for_pane`/`get_turns_for_pane`, and `_tmux_mutate` mocked — no
   tmux, no live Claude in the test path. One `tests/test_channels_*` case per
   tool covering: happy path, handle resolves to nothing, target not attached,
@@ -332,7 +331,8 @@ Claude A: exits. Worker runs on; report() to A would just error (not attached).
 - **`report()` routing**: assert it reads `spawned_by` and routes to the
   resolved parent pane; assert the no-spawner error.
 - **Provenance**: assert `spawn_claude` writes `spawned_by` on the child's
-  window entry (extend the existing spawn test).
+  window entry. `_do_spawn_claude_tool` is currently **untested** — this is a
+  *new* test (`tests/test_channels.py`), not an extension of an existing one.
 - **Verify during implementation (not yet tested):** concurrent reports —
   spawn 3 workers, have all three `report()` to one idle lead near
   simultaneously, and confirm Claude Code coalesces/queues the wakes into
