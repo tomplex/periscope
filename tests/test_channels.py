@@ -564,3 +564,39 @@ def test_peek_no_window(mocker):
     mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
     body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
     assert body["ok"] is False and "no live window" in body["error"]
+
+
+def test_terminate_happy(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {"session": "s", "index": 4}))
+    mut = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, ""))
+    body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
+    mut.assert_called_once_with("kill-window", "-t", "s:4")
+    assert body == {"ok": True, "terminated": "ab12"}
+
+
+def test_terminate_self_refused(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%1", {"session": "s", "index": 4}))
+    mut = mocker.patch("periscope.channels._tmux_mutate")
+    body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
+    assert body["ok"] is False and "own pane" in body["error"]
+    mut.assert_not_called()
+
+
+def test_terminate_no_window(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
+    assert body["ok"] is False and "no live window" in body["error"]
+
+
+def test_terminate_mutate_failure(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {"session": "s", "index": 4}))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(False, "no such window"))
+    body = _body(channels._do_terminate_tool("%1", {"handle": "ab12"}))
+    assert body["ok"] is False and body["error"] == "no such window"

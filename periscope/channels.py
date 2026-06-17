@@ -845,6 +845,24 @@ def _do_peek_tool(pane: str, arguments: dict):
     return _tool_result({"ok": True, "handle": handle, "turns": messages[-20:]})
 
 
+def _do_terminate_tool(pane: str, arguments: dict):
+    """Kill another Claude's tmux window by handle — cleanup after delegation,
+    or tear down a stuck worker. Refuses to kill the caller's own pane."""
+    handle = str(arguments.get("handle", "")).strip()
+    if not handle:
+        return _tool_result({"ok": False, "error": "handle is required"})
+    _pid, pane_id, window = _resolve_window_by_pid(handle)
+    if not pane_id:
+        return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
+    if pane_id == pane:
+        return _tool_result({"ok": False, "error": "refusing to terminate your own pane"})
+    target = f"{window['session']}:{window['index']}"
+    ok, msg = _tmux_mutate("kill-window", "-t", target)
+    if not ok:
+        return _tool_result({"ok": False, "error": msg})
+    return _tool_result({"ok": True, "terminated": handle})
+
+
 # --- MCP tool registry ---
 # Each record co-locates a tool's name, JSON schema, and handler. `_list_tools`
 # maps it to `types.Tool` objects (mcp `types` is lazy-imported, so the registry
@@ -1185,6 +1203,23 @@ _CHANNEL_TOOLS = [
             "required": ["handle"],
         },
         "handler": _do_peek_tool,
+    },
+    {
+        "name": "terminate",
+        "description": (
+            "Kill another Claude's tmux window by its handle. Use to clean up "
+            "a worker after it's delegated its result, or to tear down a stuck "
+            "one. Refuses to terminate your own pane. This is destructive — the "
+            "window and its Claude session are gone."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+            },
+            "required": ["handle"],
+        },
+        "handler": _do_terminate_tool,
     },
 ]
 
