@@ -88,6 +88,12 @@ _IMMUNITY_FIELDS = (
     "linked_pr", "linked_linear",
     "acked_at", "completed_at",
     "alias", "is_fork",
+    # spawned_by is written by spawn_claude's provenance step the instant the
+    # child window is created — BEFORE any poll stamps the entry's last_seen.
+    # Without immunity, a GC pass straddling the spawn reaps the fresh
+    # (last_seen-less) entry and the breadcrumb is lost. Durable channel
+    # metadata, same category as linked_pr/linked_linear.
+    "spawned_by",
 )
 
 
