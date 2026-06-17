@@ -315,3 +315,20 @@ def _spawn_first_mate(*, now: int) -> None:
         log.warning("first-mate spawn: could not read pane_id; leaving marker unset")
         return
     activity.set_first_mate(pane_id=pane_id, session_id=None, at=now)
+
+
+def register_bridge_project(*, home: str | None = None) -> None:
+    """Register the `bridge` session as a first-class rail project so the
+    first-mate pane is reachable in the dashboard instead of folding into the
+    'dev' group. Idempotent; `repo=None` (the rail renders a null-repo project as
+    its own group labelled by `name`). Writes state.json, so call from the
+    main loop (the prod-gated lifespan), NOT the worker thread."""
+    import os
+    from periscope import projects
+
+    pinned = os.path.realpath(home or os.path.expanduser("~"))
+    if projects.get_project(pinned):
+        projects.update_project(pinned, tmux_session=FIRST_MATE_SESSION, name="bridge")
+    else:
+        projects.create_project(pinned, name="bridge",
+                                tmux_session=FIRST_MATE_SESSION, repo=None, base_branch=None)

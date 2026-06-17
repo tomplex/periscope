@@ -317,3 +317,18 @@ def test_spawn_leaves_marker_unset_on_empty_pane_id(monkeypatch, fresh_activity_
 
     first_mate._spawn_first_mate(now=1)
     assert activity.get_first_mate() is None   # no phantom marker -> no respawn loop
+
+
+def test_register_bridge_project_creates_null_repo_project(clean_state, tmp_path):
+    import os
+    from periscope import first_mate, projects
+    first_mate.register_bridge_project(home=str(tmp_path))
+    pinned = os.path.realpath(str(tmp_path))
+    proj = projects.get_project(pinned)
+    assert proj["name"] == "bridge"
+    assert proj["tmux_session"] == "bridge"
+    assert proj.get("repo") is None        # null-repo -> renders as its own named rail group
+    # Idempotent: a second call must not raise (create_project would ValueError
+    # on a duplicate pinned_dir — register must take the update path instead).
+    first_mate.register_bridge_project(home=str(tmp_path))
+    assert projects.get_project(pinned)["tmux_session"] == "bridge"
