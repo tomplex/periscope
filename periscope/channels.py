@@ -194,6 +194,17 @@ def _do_notify_tool(pane: str, arguments: dict):
     except Exception:
         log.warning("activity.record failed for notify()", exc_info=True)
 
+    # Interrupt tier: a need_human wakes the first mate immediately, out of band
+    # from the 30s heartbeat. (Other kinds ride the next heartbeat digest.)
+    if kind == "need_human":
+        try:
+            from periscope import activity as _activity
+            marker = _activity.get_first_mate()
+            if marker is not None:
+                _schedule_first_mate_emit(marker.pane_id, f"need_human from {pane}: {message}")
+        except Exception:
+            log.warning("first-mate need_human hook failed", exc_info=True)
+
     body = {"ok": True, "kind": kind, "severity": severity}
     return _tool_result(body)
 
@@ -238,6 +249,27 @@ def _do_captains_log_append_tool(pane: str, arguments: dict):
 
     activity.append_captain_log(kind=kind, text=text)
     return _tool_result({"ok": True})
+
+
+def _serialize_digest(d) -> dict:
+    return {
+        "at": d.at, "budget_pct": d.budget_pct, "budget_resets_at": d.budget_resets_at,
+        "panes": [
+            {"handle": p.handle, "name": p.name, "session": p.session,
+             "status_line": p.status_line, "blocked": p.blocked, "pr": p.pr,
+             "ci": p.ci, "idle_s": p.idle_s}
+            for p in d.panes
+        ],
+    }
+
+
+def _do_fleet_digest_tool(pane: str, arguments: dict):
+    """Return the last-pushed fleet digest (first-mate-only on-demand pull)."""
+    if not _require_first_mate(pane):
+        return _tool_result({"ok": False, "error": "first-mate-only tool"})
+    from periscope import first_mate
+    d = first_mate._LAST_SENT
+    return _tool_result({"ok": True, "digest": _serialize_digest(d) if d else None})
 
 
 def _resolve_window(match) -> tuple[str, str]:
@@ -701,6 +733,14 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
         return True
     except Exception:
         return False
+
+
+def _schedule_first_mate_emit(pane_id: str, content: str) -> None:
+    """Fire-and-forget a channel push to the first-mate pane from a main-loop
+    context (the MCP tool handler runs there). Wrapped in _task so a crash is
+    logged, not swallowed (CLAUDE.md invariant 8)."""
+    from periscope.log import _task
+    _task("first-mate-interrupt", emit_channel_event(pane_id, content, {"kind": "interrupt"}))
 
 
 async def _mcp_listener() -> None:
@@ -1296,6 +1336,15 @@ _CHANNEL_TOOLS = [
             "required": ["kind", "text"],
         },
         "handler": _do_captains_log_append_tool,
+    },
+    {
+        "name": "fleet_digest",
+        "description": (
+            "Return the current fleet digest (per-pane who/status/blocked/PR-CI/"
+            "idle + budget). First-mate-only on-demand pull."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _do_fleet_digest_tool,
     },
 ]
 
