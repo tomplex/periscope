@@ -283,7 +283,7 @@ def _spawn_first_mate(*, now: int) -> None:
     from periscope.pids import stamp_new_window
     from periscope.open_ops import _session_live   # socket-aware has-session
     from periscope.log import log
-    from periscope import activity
+    from periscope import activity, config
 
     if not is_prod():
         return  # defense in depth: never spawn a budget-spender off prod
@@ -301,7 +301,15 @@ def _spawn_first_mate(*, now: int) -> None:
         log.warning("first-mate spawn: tmux window create failed: %s", msg)
         return
     target = f"{FIRST_MATE_SESSION}:{FIRST_MATE_WINDOW}"
-    exec_cmd = f"{claude_exec()} --append-system-prompt {shlex.quote(ROLE_PROMPT)}"
+    # Deliver the (multi-line) role prompt via a file, not inline: send-keys
+    # strips embedded newlines (CLAUDE.md note 5), which mangles a multi-line
+    # --append-system-prompt arg AND the ~1.5k-char command line never lands
+    # intact. Writing it to a file keeps the launch command short and
+    # single-line; the shell substitutes the file's content as the arg.
+    prompt_path = config.ACTIVITY_DB.parent / "first-mate-prompt.txt"
+    prompt_path.write_text(ROLE_PROMPT)
+    exec_cmd = (f"{claude_exec()} --append-system-prompt "
+                f'"$(cat {shlex.quote(str(prompt_path))})"')
     _time.sleep(0.1)  # let rc finish before the command lands (CLAUDE.md note 5)
     _tmux_mutate("send-keys", "-t", target, exec_cmd, "Enter")
     if "--dangerously-load-development-channels" in exec_cmd:
