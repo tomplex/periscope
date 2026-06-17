@@ -6,7 +6,34 @@ import pytest
 
 from periscope.pids import (
     _mint_pid, _stamp_pid, _rebind_pid, resolve_pids, _PID_TTL_S,
+    _gc_windows,
 )
+
+
+def test_gc_windows_keeps_spawned_by_only_entry():
+    """A freshly-written provenance entry (spawned_by set, NO last_seen yet)
+    must survive a GC pass that doesn't see its window — otherwise a poll
+    straddling spawn_claude reaps the breadcrumb before the window's first
+    resolve stamps last_seen. Regression: report() found no spawner because
+    spawned_by was GC'd at write time."""
+    now = int(time.time())
+    wblock = {"child99": {"spawned_by": "parent11"}}  # no last_seen
+    # child99 not in `taken` (its window absent from this pass) → only
+    # immunity can save it.
+    deleted = _gc_windows(wblock, taken=set(), now_ts=now)
+    assert "child99" in wblock
+    assert wblock["child99"]["spawned_by"] == "parent11"
+    assert deleted is False
+
+
+def test_gc_windows_reaps_stale_unannotated_entry():
+    """Control: an entry with no immunity field and an expired last_seen IS
+    reaped — confirms the test above isn't passing for a trivial reason."""
+    now = int(time.time())
+    wblock = {"stale01": {"last_seen": {"ts": now - _PID_TTL_S - 100}}}
+    deleted = _gc_windows(wblock, taken=set(), now_ts=now)
+    assert "stale01" not in wblock
+    assert deleted is True
 
 
 def test_mint_pid_format():
