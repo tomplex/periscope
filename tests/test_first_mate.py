@@ -161,11 +161,9 @@ def test_curate_pane_not_blocked_when_newest_alert_is_not_need_human():
 
 
 def test_render_delta_mentions_changed_panes_and_budget():
-    prev = FleetDigest(panes=(PaneDigest("@1","w","s","run",False,None,None,0),),
-                       budget_pct=60, budget_resets_at=None, at=1)
     cur = FleetDigest(panes=(PaneDigest("@1","w","s","run",True,None,None,0),),
                       budget_pct=71, budget_resets_at=None, at=2)
-    text = _render_delta(prev, cur, "@1 blocked")
+    text = _render_delta(cur, "@1 blocked")
     assert "@1" in text and "71" in text
 
 
@@ -296,3 +294,26 @@ def test_supervisor_respawns_when_marked_pane_dead(monkeypatch, fresh_activity_d
     monkeypatch.setattr(first_mate, "_spawn_first_mate", lambda *, now: called.append(now))
     first_mate.supervisor_pass(now=5)
     assert called == [5]
+
+
+def test_spawn_leaves_marker_unset_on_empty_pane_id(monkeypatch, fresh_activity_db):
+    # If display-message can't read the new window's %N, stamping pane_id="" would
+    # be a marker never in the live set -> the supervisor respawns every tick (a
+    # window/budget leak). The guard must leave the marker unset instead.
+    from periscope import first_mate, activity
+    import periscope.tmux as tmuxmod
+    import periscope.config as config
+    import periscope.channels as channels
+    import periscope.pids as pids
+    import periscope.open_ops as open_ops
+
+    monkeypatch.setattr(config, "is_prod", lambda: True)
+    monkeypatch.setattr(open_ops, "_session_live", lambda name: True)
+    monkeypatch.setattr(tmuxmod, "_tmux_mutate", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(config, "claude_exec", lambda: "claude")
+    monkeypatch.setattr(channels, "dismiss_dev_channels_consent_bg", lambda *a, **k: None)
+    monkeypatch.setattr(pids, "stamp_new_window", lambda t: "")
+    monkeypatch.setattr(tmuxmod, "tmux", lambda *a, **k: "")   # display-message read fails
+
+    first_mate._spawn_first_mate(now=1)
+    assert activity.get_first_mate() is None   # no phantom marker -> no respawn loop

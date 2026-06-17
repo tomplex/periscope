@@ -124,8 +124,6 @@ def build_fleet_digest(
     )
 
 
-from dataclasses import dataclass
-
 # --- v1b IO half: cross-tick state, role prompt, pure decision helpers ----
 
 _LAST_SENT: FleetDigest | None = None   # last digest pushed to the first mate
@@ -187,8 +185,10 @@ def _curate_pane(*, handle, name, session, is_claude, status_line, alerts,
     }
 
 
-def _render_delta(prev: FleetDigest | None, cur: FleetDigest, reason: str) -> str:
-    """PURE: a short human-readable delta for the push body."""
+def _render_delta(cur: FleetDigest, reason: str) -> str:
+    """PURE: a short human-readable delta for the push body. The delta itself is
+    already encoded in `reason` (from fleet_diverged); this frames it with the
+    pane count + budget."""
     budget = ""
     if cur.budget_pct is not None:
         budget = f" · budget {cur.budget_pct}%"
@@ -207,7 +207,7 @@ def heartbeat_decide(*, prev, cur, marker) -> "Push | None":
     diverged, reason = fleet_diverged(prev, cur)
     if not diverged:
         return None
-    return Push(pane_id=marker.pane_id, content=_render_delta(prev, cur, reason))
+    return Push(pane_id=marker.pane_id, content=_render_delta(cur, reason))
 
 
 def assemble_pane_views(panes: list, now: int) -> list[dict]:
@@ -282,6 +282,7 @@ def _spawn_first_mate(*, now: int) -> None:
     from periscope.channels import dismiss_dev_channels_consent_bg
     from periscope.pids import stamp_new_window
     from periscope.open_ops import _session_live   # socket-aware has-session
+    from periscope.log import log
     from periscope import activity
 
     if not is_prod():
@@ -289,11 +290,16 @@ def _spawn_first_mate(*, now: int) -> None:
 
     home = os.path.expanduser("~")
     if not _session_live(FIRST_MATE_SESSION):
-        _tmux_mutate("new-session", "-d", "-s", FIRST_MATE_SESSION,
-                     "-c", home, "-n", FIRST_MATE_WINDOW)
+        ok, msg = _tmux_mutate("new-session", "-d", "-s", FIRST_MATE_SESSION,
+                               "-c", home, "-n", FIRST_MATE_WINDOW)
     else:
-        _tmux_mutate("new-window", "-t", f"{FIRST_MATE_SESSION}:",
-                     "-c", home, "-n", FIRST_MATE_WINDOW)
+        ok, msg = _tmux_mutate("new-window", "-t", f"{FIRST_MATE_SESSION}:",
+                               "-c", home, "-n", FIRST_MATE_WINDOW)
+    if not ok:
+        # Don't stamp a marker for a window that doesn't exist — the next tick
+        # retries cleanly. Stamping now would leak a bogus marker.
+        log.warning("first-mate spawn: tmux window create failed: %s", msg)
+        return
     target = f"{FIRST_MATE_SESSION}:{FIRST_MATE_WINDOW}"
     exec_cmd = f"{claude_exec()} --append-system-prompt {shlex.quote(ROLE_PROMPT)}"
     _time.sleep(0.1)  # let rc finish before the command lands (CLAUDE.md note 5)
@@ -302,4 +308,10 @@ def _spawn_first_mate(*, now: int) -> None:
         dismiss_dev_channels_consent_bg(target)
     stamp_new_window(target)
     pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
+    if not pane_id:
+        # A bogus empty marker is never in the live set, so the supervisor would
+        # respawn every tick — an unbounded window/budget leak. Leave the marker
+        # unset; the next tick retries cleanly.
+        log.warning("first-mate spawn: could not read pane_id; leaving marker unset")
+        return
     activity.set_first_mate(pane_id=pane_id, session_id=None, at=now)
