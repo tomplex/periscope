@@ -459,3 +459,34 @@ def test_send_to_missing_args(mocker):
     from periscope import channels
     body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "", "message": "hi"})))
     assert body["ok"] is False and "handle" in body["error"]
+
+
+def test_report_routes_to_spawner(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
+    mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "parent11"})
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("parent11", "%2", {}))
+    emit = mocker.patch("periscope.channels.emit_channel_event", new=AsyncMock(return_value=True))
+
+    body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
+
+    emit.assert_awaited_once_with("%2", "done")
+    assert body == {"ok": True, "to": "parent11"}
+
+
+def test_report_no_spawner_errors(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
+    mocker.patch("periscope.channels.get_window", return_value={})  # no spawned_by
+    body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
+    assert body["ok"] is False and "no spawner" in body["error"]
+
+
+def test_report_spawner_gone(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
+    mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "parent11"})
+    mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
+    assert body["ok"] is False and "no longer live" in body["error"]

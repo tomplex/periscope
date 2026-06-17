@@ -751,6 +751,28 @@ async def _do_send_to_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+async def _do_report_tool(pane: str, arguments: dict):
+    """Report back to the pane that spawned this one. Sugar over send_to,
+    routed via the spawned_by provenance breadcrumb — the worker doesn't carry
+    the parent's handle, the server knows it."""
+    message = str(arguments.get("message", "")).strip()
+    if not message:
+        return _tool_result({"ok": False, "error": "message is required"})
+    caller_pid = _resolve_pid_for_pane(pane)
+    if not caller_pid:
+        return _tool_result({"ok": False, "error": f"could not resolve pid for pane {pane}"})
+    spawned_by = get_window(caller_pid).get("spawned_by")
+    if not spawned_by:
+        return _tool_result({"ok": False, "error": "this pane has no spawner to report to"})
+    _pid, pane_id, _w = _resolve_window_by_pid(spawned_by)
+    if not pane_id:
+        return _tool_result({"ok": False, "error": "spawner is no longer live"})
+    body = await _deliver(pane_id, message, pane)
+    if body.get("ok"):
+        body = {"ok": True, "to": spawned_by}
+    return _tool_result(body)
+
+
 # --- MCP tool registry ---
 # Each record co-locates a tool's name, JSON schema, and handler. `_list_tools`
 # maps it to `types.Tool` objects (mcp `types` is lazy-imported, so the registry
@@ -1044,6 +1066,24 @@ _CHANNEL_TOOLS = [
             "required": ["handle", "message"],
         },
         "handler": _do_send_to_tool,
+    },
+    {
+        "name": "report",
+        "description": (
+            "Report a message back to the Claude that spawned this pane. Use "
+            "when you were delegated a task and want to return your result to "
+            "your lead — it wakes them with your message. Errors if this pane "
+            "has no recorded spawner (it was hand-created or its spawner has "
+            "exited)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Message to send to your spawner."},
+            },
+            "required": ["message"],
+        },
+        "handler": _do_report_tool,
     },
 ]
 
