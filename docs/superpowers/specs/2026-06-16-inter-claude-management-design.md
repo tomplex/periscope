@@ -88,12 +88,36 @@ into them.
 
 ### Addressing: handles are `@periscope_id` (pid)
 
-A handle is the stable `@periscope_id` string (`pid`) that `spawn_claude`
-already returns. Rationale: `pane_id` (`%N`) churns across tmux server
-restarts; `pid` survives renames/moves and is rebound across restarts
-(`periscope/pids.py`). Tools resolve `pid → pane_id` internally via the
-existing `_resolve_window(lambda w: w.get("pid") == handle)` helper, which
-returns `(pid, pane_id)` or `("", "")` if the window has vanished.
+A handle is the `@periscope_id` string (`pid`) that `spawn_claude` already
+returns. Rationale: `pane_id` (`%N`) churns across tmux server restarts; `pid`
+survives renames/moves and is rebound across restarts (`periscope/pids.py`).
+
+**`pid` is stable within a tmux server lifetime and best-effort rebound across
+restarts — it is *not* a forever-stable handle.** `_rebind_pid` matches orphan
+pids heuristically on `(session, name)` or `(branch, cwd)` (`pids.py:47`), so
+after a tmux server restart a handle *may* resolve to a different window or
+fail to resolve. Inter-Claude management is a within-session, live-orchestration
+feature; this limitation is acceptable and called out again under
+`report()` / Error handling.
+
+**Resolution helper — pids must be resolved before matching.** A naive
+`_resolve_window(lambda w: w.get("pid") == handle)` does **not** work:
+`_resolve_window` evaluates the predicate against raw `list_windows()` rows,
+which carry `pid_raw` (the raw `@periscope_id`), and only attaches the resolved
+`pid` *after* a match (`channels.py:209`, `panes.py:290`). Two correct options:
+
+- Match on `pid_raw` directly: `lambda w: w.get("pid_raw") == handle`. Works
+  for any window whose `@periscope_id` is already stamped — which is every
+  window a handle could have come from (handles are returned only after
+  resolution stamps the window).
+- Or add a `_resolve_window_by_pid(handle)` helper that runs
+  `_attach_git_then_resolve_pids(windows)` over the full list first, then
+  matches on the now-attached `pid`. Robust against the never-stamped edge at
+  the cost of a redundant resolve pass (the 3s poll already does this).
+
+The plan picks one; the spec mandates resolving-before-matching either way. The
+chosen helper returns `(pid, pane_id, window)` (peek/terminate also need the
+window's `session`/`index`), or empties if the handle resolves to nothing.
 
 `emit_channel_event` and `_MCP_SESSIONS` are keyed by `pane_id`, so every tool
 does `handle (pid) → pane_id → action`.
@@ -115,12 +139,27 @@ a valid root — `report()` simply errors for it.
 `spawn_claude`'s response shape is unchanged: the caller *is* the parent and
 already knows its own pid, so it needs nothing new echoed back.
 
+**Reading it back.** `store.py` exposes `set_window_fields(pid, **fields)`
+(write) but no getter, and `channels.py` deliberately never touches `_STATE`
+directly (module docstring). `report()` therefore needs a new
+`get_window_fields(pid) -> dict` (or `get_window_field(pid, key)`) accessor in
+`store.py` to read `spawned_by`. Add it alongside `set_window_fields`.
+
+**GC interaction (not a problem for live windows).** `spawned_by` is not in
+`_IMMUNITY_FIELDS`, but `_gc_windows` only drops entries that weren't refreshed
+this poll *and* are >30 days old (`pids.py:170`). A live child's row is
+refreshed every poll, so its `spawned_by` survives as long as the window lives.
+The only loss is the intended one: a long-dead parent's row is GC'd, after
+which `report()` to it errors (correct — it's gone).
+
 ### Tools
 
 All handlers follow the existing `channels.py` convention: `(pane, arguments)
 → _tool_result(body)`, registered in the tool list with name / description /
-`inputSchema` / handler. Async only where they sleep; these don't, so all are
-sync except where noted.
+`inputSchema` / handler. `send_to` and `report` are async (they `await
+emit_channel_event`); `list_claudes` is async if the view-builder it reuses
+awaits; `peek` and `terminate` are sync. The per-tool notes below are
+authoritative.
 
 #### `send_to(handle, message)`
 
@@ -143,7 +182,8 @@ Lead → any live Claude.
 Worker → its spawner. Sugar over `send_to(my_spawner, message)`.
 
 - Resolve caller: `caller_pid = _resolve_pid_for_pane(pane)`.
-- Read `spawned_by` from the caller's window entry. If absent: error
+- Read `spawned_by` via the new `get_window_fields(caller_pid)` accessor
+  (see Provenance). If absent: error
   (`{"ok": False, "error": "this pane has no spawner to report to"}`).
 - Resolve `spawned_by (pid) → pane_id` and `await emit_channel_event(...)`,
   with the same not-live / not-attached error handling as `send_to`. A spawner
@@ -157,25 +197,48 @@ Worker → its spawner. Sugar over `send_to(my_spawner, message)`.
 Discovery: **all** live Claude panes (flat — supports peer discovery and
 handoff, not just a subtree).
 
-- Iterate `list_windows()`, keep entries with `is_claude` true.
-- For each, emit a trimmed row: `pid` (the handle), `name`, `session`,
-  `cwd`, `status_line` (already merged into window views from the narrator),
-  `attached` (from `channel_state_for(pane_id)["attached"]`), and `spawned_by`
-  (lineage). Omit `pane_id` from the payload — `pid` is the public handle.
-- No arguments.
+Correctness note: `is_claude`, `status_line`, and `pid` are **not** present on
+raw `list_windows()` rows. `is_claude` comes from `build_window_view` →
+`parse_pane` (a `capture()` subprocess per pane); `status_line` is merged from
+`pane_status_lines()` only in the `/api/state` route (`routes/state.py`); `pid`
+is attached by `resolve_pids`. So `list_claudes()` is **not** a cheap sync
+iteration — it must reuse the same view-building path `/api/state` runs (or a
+shared extract of it), and it does a per-window subprocess fan-out.
+
+- Build window views via the shared `/api/state` builder (`build_window_view` +
+  the status-line merge), filter to `is_claude`.
+- For each, emit a trimmed row: `pid` (the handle), `name`, `session`, `cwd`,
+  `status_line`, `attached` (from `channel_state_for(pane_id)["attached"]`),
+  and `spawned_by` (lineage). Omit `pane_id` — `pid` is the public handle.
+- No arguments. Cost is bounded by window count (~dozens); acceptable for an
+  occasional tool call. Make it async if the builder does any awaiting.
 - Returns `{"ok": True, "claudes": [...]}`.
+- Cheaper alternative considered and rejected for v1: iterate `_MCP_SESSIONS`
+  keys (channel-attached panes only) — avoids the fan-out and lists exactly the
+  *messageable* Claudes, but under-reports Claudes that are running without the
+  channel (still `peek`/`terminate`-able). Listing all panes with an `attached`
+  flag is more useful; revisit if fan-out cost ever bites.
 
 #### `peek(handle)`
 
 Read another Claude's recent transcript instead of waiting for a report.
 
-- Resolve `handle (pid) → window` (need `session` + `index`).
-- `turns = get_turns_for_pane(session, index)` (`periscope/turns.py`). Returns
-  `None` if the pane has no resolvable session (no `pane_sessions` row yet) —
-  surface as `{"ok": False, "error": "no transcript for handle ..."}`.
-- Return a **compact tail slice**, mirroring `_do_get_history_session_tool`'s
-  token economy: default to the last N turns (N≈20), strip UI-only fields.
-  Exact field trimming finalized against `get_turns_for_pane`'s return shape
+**Must not inherit the cwd fallback.** `get_turns_for_pane(session, index)`
+does *not* return `None` for an unmapped pane — when `session_id_for_pane`
+misses, it falls back to `activity.live_transcript_for(cwd)` (newest-mtime
+JSONL in that cwd, `turns.py:51`). On a shared cwd that silently returns a
+*sibling* Claude's transcript — the exact collision the narrator refuses ("a
+wrong-session status is worse than none"). For cross-pane inspection, wrong-pane
+data is actively misleading, so:
+
+- Resolve `handle (pid) → window` (need `pane_id`, `session`, `index`).
+- Gate on the explicit mapping: `session_id_for_pane(pane_id)`. If `None`,
+  refuse — `{"ok": False, "error": "no recorded session for handle ..."}` —
+  do **not** fall through to the cwd guess.
+- Only on a hit, read the transcript (via `get_turns_for_pane`, or directly off
+  the resolved session id) and return a **compact tail slice**, mirroring
+  `_do_get_history_session_tool`'s token economy: last N turns (N≈20), UI-only
+  fields stripped. Exact field trimming finalized against the real return shape
   during implementation.
 - Returns `{"ok": True, "handle": handle, "turns": [...]}`.
 
@@ -243,6 +306,9 @@ Claude A: exits. Worker runs on; report() to A would just error (not attached).
   error. Covers worker-exited and worker-mid-boot.
 - **`report()` with no `spawned_by`** → explicit error (root / hand-created
   pane).
+- **Handle resolves across a tmux server restart** → may mis-route or fail, by
+  the pid-rebind limitation (see Addressing). Acceptable for a live-orchestration
+  feature; not defended against in v1.
 - **Self-send / self-terminate** → refused with an error.
 - **Message storms / ping-pong.** Lead wakes worker, worker reports, wakes
   lead, lead sends again… is the *intended* autonomous loop, but a runaway
@@ -251,11 +317,18 @@ Claude A: exits. Worker runs on; report() to A would just error (not attached).
 
 ## Testing strategy
 
-- **Tool handlers are unit-testable** with `emit_channel_event`,
-  `_resolve_window`/`_resolve_pid_for_pane`, `set_window_fields`, and
-  `get_turns_for_pane` mocked — no tmux, no live Claude in the test path.
-  One `tests/test_channels_*` case per tool covering: happy path, handle
-  resolves to nothing, target not attached, and the self-target guard.
+- **Tool handlers are unit-testable** with `emit_channel_event`, the
+  pid-resolution helper, `get_window_fields`/`set_window_fields`,
+  `session_id_for_pane`/`get_turns_for_pane`, and `_tmux_mutate` mocked — no
+  tmux, no live Claude in the test path. One `tests/test_channels_*` case per
+  tool covering: happy path, handle resolves to nothing, target not attached,
+  and the self-target guard.
+- **`peek` cwd-fallback refusal**: assert that when `session_id_for_pane`
+  returns `None`, `peek` errors and never calls the cwd-fallback path (the
+  collision footgun). Mock `session_id_for_pane → None` and assert no
+  transcript is returned.
+- **pid resolution**: assert the resolver matches a stamped window by its
+  handle (resolve-before-match), not the broken `w.get("pid")`-on-raw-row path.
 - **`report()` routing**: assert it reads `spawned_by` and routes to the
   resolved parent pane; assert the no-spawner error.
 - **Provenance**: assert `spawn_claude` writes `spawned_by` on the child's
