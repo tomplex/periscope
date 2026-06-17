@@ -721,6 +721,36 @@ async def _handle_mcp_connection(
             pass
 
 
+async def _deliver(pane_id: str, message: str, caller_pane: str) -> dict:
+    """Shared send_to/report delivery: self-send guard, channel push, and the
+    not-attached error mapping. Returns the tool body dict (callers augment
+    success with their own fields)."""
+    if pane_id == caller_pane:
+        return {"ok": False, "error": "refusing to send to your own pane"}
+    sent = await emit_channel_event(pane_id, message)
+    if not sent:
+        return {"ok": False, "error": "target not attached to periscope channel"}
+    return {"ok": True}
+
+
+async def _do_send_to_tool(pane: str, arguments: dict):
+    """Deliver a message to another live Claude by handle (pid). Wakes the
+    recipient via the channel rail."""
+    handle = str(arguments.get("handle", "")).strip()
+    message = str(arguments.get("message", "")).strip()
+    if not handle:
+        return _tool_result({"ok": False, "error": "handle is required"})
+    if not message:
+        return _tool_result({"ok": False, "error": "message is required"})
+    _pid, pane_id, _w = _resolve_window_by_pid(handle)
+    if not pane_id:
+        return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
+    body = await _deliver(pane_id, message, pane)
+    if body.get("ok"):
+        body = {"ok": True, "handle": handle, "pane_id": pane_id}
+    return _tool_result(body)
+
+
 # --- MCP tool registry ---
 # Each record co-locates a tool's name, JSON schema, and handler. `_list_tools`
 # maps it to `types.Tool` objects (mcp `types` is lazy-imported, so the registry
@@ -994,6 +1024,26 @@ _CHANNEL_TOOLS = [
             "required": ["session_id"],
         },
         "handler": _do_resume_session_tool,
+    },
+    {
+        "name": "send_to",
+        "description": (
+            "Send a message to another live Claude pane by its handle "
+            "(the pid returned by spawn_claude / list_claudes). The message "
+            "wakes the recipient and arrives as a channel block it acts on. "
+            "Use to delegate a task to, or nudge, another Claude. Errors if "
+            "the handle resolves to no live window or the target isn't "
+            "attached to periscope's channel."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+                "message": {"type": "string", "description": "Message to deliver."},
+            },
+            "required": ["handle", "message"],
+        },
+        "handler": _do_send_to_tool,
     },
 ]
 

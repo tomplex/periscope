@@ -414,3 +414,48 @@ def test_spawn_claude_no_parent_tolerated(mocker):
     for call in set_fields.call_args_list:
         assert "spawned_by" not in call.kwargs
     assert json.loads(result[0].text)["ok"] is True
+
+
+def test_send_to_happy(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {"session": "s", "index": 2}))
+    emit = mocker.patch("periscope.channels.emit_channel_event",
+                        new=AsyncMock(return_value=True))
+
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
+
+    emit.assert_awaited_once_with("%9", "hi")
+    assert body == {"ok": True, "handle": "ab12", "pane_id": "%9"}
+
+
+def test_send_to_no_window(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
+    assert body["ok"] is False and "no live window" in body["error"]
+
+
+def test_send_to_not_attached(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%9", {}))
+    mocker.patch("periscope.channels.emit_channel_event", new=AsyncMock(return_value=False))
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
+    assert body["ok"] is False and "not attached" in body["error"]
+
+
+def test_send_to_self_refused(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("ab12", "%1", {}))
+    emit = mocker.patch("periscope.channels.emit_channel_event", new=AsyncMock(return_value=True))
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
+    assert body["ok"] is False and "own pane" in body["error"]
+    emit.assert_not_awaited()
+
+
+def test_send_to_missing_args(mocker):
+    from periscope import channels
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "", "message": "hi"})))
+    assert body["ok"] is False and "handle" in body["error"]
