@@ -73,6 +73,8 @@ def fleet_diverged(prev: FleetDigest | None, cur: FleetDigest) -> tuple[bool, st
         if _idle_bucket(c.idle_s) != _idle_bucket(p.idle_s):
             return True, f"{h} idle state changed"
 
+    # Only compare when both are known: a None<->value flip is the usage
+    # endpoint dropping in/out, not real fleet news — don't wake on it.
     if prev.budget_pct is not None and cur.budget_pct is not None:
         if abs(cur.budget_pct - prev.budget_pct) >= BUDGET_MATERIAL_PCT:
             return True, f"budget {prev.budget_pct}%->{cur.budget_pct}%"

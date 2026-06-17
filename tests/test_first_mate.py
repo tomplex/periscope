@@ -50,6 +50,23 @@ def test_pane_appearing_is_divergent():
     assert "@2" in reason
 
 
+def test_pane_disappearing_is_divergent():
+    prev = _fleet([_pane("@1"), _pane("@2")])
+    cur = _fleet([_pane("@1")])
+    diverged, reason = fleet_diverged(prev, cur)
+    assert diverged is True
+    assert "@2" in reason
+
+
+def test_pr_ci_change_is_divergent():
+    before = PaneDigest(handle="@1", name="w", session="s", status_line="working",
+                        blocked=False, pr=1234, ci="⟳", idle_s=0)
+    after = PaneDigest(handle="@1", name="w", session="s", status_line="working",
+                       blocked=False, pr=1234, ci="✗", idle_s=0)  # CI went red
+    diverged, _ = fleet_diverged(_fleet([before]), _fleet([after]))
+    assert diverged is True
+
+
 def test_small_budget_tick_is_not_divergent():
     prev = _fleet([_pane()], budget_pct=50)
     cur = _fleet([_pane()], budget_pct=51)
