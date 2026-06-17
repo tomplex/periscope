@@ -221,6 +221,23 @@ def _resolve_pid_for_pane(pane_id: str) -> str:
     return pid
 
 
+def _resolve_window_by_pid(handle: str) -> tuple[str, str, dict]:
+    """Resolve an @periscope_id handle to (pid, pane_id, window).
+
+    Matches on `pid_raw` — the stamped @periscope_id on the raw list_windows
+    row — BEFORE resolution, because resolution attaches `pid` only after a
+    match (raw rows carry pid_raw, not pid). peek/terminate read
+    session/index off the returned window dict. Returns ("", "", {}) when no
+    live window matches."""
+    if not handle:
+        return "", "", {}
+    for w in list_windows():
+        if w.get("pid_raw") == handle:
+            _attach_git_then_resolve_pids([w])
+            return w.get("pid") or "", w.get("pane_id") or "", w
+    return "", "", {}
+
+
 def _do_link_pr_tool(pane: str, arguments: dict):
     """Persist a linked PR number on the window's state.json entry.
     Overrides the auto-detected `pr` field when present."""

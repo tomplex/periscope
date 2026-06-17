@@ -331,3 +331,44 @@ def test_resume_session_tool_requires_session_id():
     from periscope.channels import _do_resume_session_tool
     body = _body(_do_resume_session_tool("%5", {"session_id": ""}))
     assert body["ok"] is False
+
+
+# --- inter-claude management tools ---
+
+import asyncio
+import json
+from unittest.mock import AsyncMock
+
+
+def test_resolve_window_by_pid_matches_stamped_handle(mocker):
+    from periscope import channels
+    rows = [
+        {"session": "s", "index": 2, "name": "w", "cwd": "/x",
+         "pane_id": "%7", "pid_raw": "abcd1234"},
+    ]
+    mocker.patch("periscope.channels.list_windows", return_value=rows)
+
+    def _attach(ws):
+        for w in ws:
+            w["pid"] = w.pop("pid_raw")
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
+
+    pid, pane_id, window = channels._resolve_window_by_pid("abcd1234")
+    assert pid == "abcd1234"
+    assert pane_id == "%7"
+    assert window["session"] == "s" and window["index"] == 2
+
+
+def test_resolve_window_by_pid_miss_returns_empty(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels.list_windows", return_value=[
+        {"session": "s", "index": 2, "pane_id": "%7", "pid_raw": "other"},
+    ])
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids")
+    assert channels._resolve_window_by_pid("abcd1234") == ("", "", {})
+
+
+def test_resolve_window_by_pid_empty_handle_returns_empty(mocker):
+    from periscope import channels
+    mocker.patch("periscope.channels.list_windows")
+    assert channels._resolve_window_by_pid("") == ("", "", {})
