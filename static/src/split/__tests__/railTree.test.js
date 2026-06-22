@@ -59,14 +59,14 @@ describe("mergeLiveAndPrefs", () => {
       win({ pid: "a", session: "myproj" }),
       win({ pid: "b", session: "feat", project_pinned_dir: "/dev/wt/feat" }),
     ];
-    const m = mergeLiveAndPrefs(ws, projects, [], {}, {});
+    const m = mergeLiveAndPrefs(ws, projects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/dev/myproj"]);
     expect(m.worktreesByRepo["/dev/myproj"]).toEqual(["myproj", "feat"]);
   });
 
   it("a cd'd-away pane stays in its project group", () => {
     const ws = [win({ pid: "a", repo_key: "/dev/other", cwd: "/dev/other" })];
-    const m = mergeLiveAndPrefs(ws, projects, [], {}, {});
+    const m = mergeLiveAndPrefs(ws, projects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/dev/myproj"]);
     expect(m.panesByWorktree["myproj"]).toEqual(["a", "review"]);
   });
@@ -77,21 +77,21 @@ describe("mergeLiveAndPrefs", () => {
       win({ pid: "x", session: "main", project_pinned_dir: MAIN_KEY }),
       win({ pid: "y", session: "scratch", project_pinned_dir: MAIN_KEY }),
     ];
-    const m = mergeLiveAndPrefs(ws, projects, [], {}, {});
+    const m = mergeLiveAndPrefs(ws, projects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/dev/myproj", MAIN_KEY]);
     expect(m.worktreesByRepo[MAIN_KEY]).toEqual([]);
     expect(m.panesByWorktree[MAIN_KEY]).toEqual(["x", "y"]);
   });
 
   it("no dev group when no dev windows", () => {
-    const m = mergeLiveAndPrefs([win()], projects, [], {}, {});
+    const m = mergeLiveAndPrefs([win()], projects, [], [], {}, {});
     expect(m.repoOrder).not.toContain(MAIN_KEY);
   });
 
   it("null-repo project sessions get no review sentinel", () => {
     const notesProjects = [proj({ pinned_dir: "/notes", repo: null, tmux_session: "notes", name: "Notes" })];
     const ws = [win({ pid: "n1", session: "notes", project_pinned_dir: "/notes" })];
-    const m = mergeLiveAndPrefs(ws, notesProjects, [], {}, {});
+    const m = mergeLiveAndPrefs(ws, notesProjects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/notes"]);
     expect(m.panesByWorktree["notes"]).toEqual(["n1"]);  // no "review"
   });
@@ -99,7 +99,7 @@ describe("mergeLiveAndPrefs", () => {
   it("the bridge session renders as its own 'bridge' group, not folded into dev", () => {
     const bridgeProjects = [proj({ pinned_dir: "/Users/tom", repo: null, tmux_session: "bridge", name: "bridge" })];
     const ws = [win({ pid: "fm", session: "bridge", project_pinned_dir: "/Users/tom" })];
-    const m = mergeLiveAndPrefs(ws, bridgeProjects, [], {}, {});
+    const m = mergeLiveAndPrefs(ws, bridgeProjects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/Users/tom"]);                 // own group, not MAIN_KEY
     expect(m.worktreesByRepo["/Users/tom"]).toEqual(["bridge"]);
     expect(m.panesByWorktree["bridge"]).toEqual(["fm"]);         // the first-mate pane, no review row
@@ -111,12 +111,12 @@ describe("mergeLiveAndPrefs", () => {
       win({ pid: "x", session: "main", project_pinned_dir: MAIN_KEY }),
       win({ pid: "y", session: "scratch", project_pinned_dir: MAIN_KEY }),
     ];
-    const m = mergeLiveAndPrefs(ws, projects, [], {}, { [MAIN_KEY]: ["y"] });
+    const m = mergeLiveAndPrefs(ws, projects, [], [], {}, { [MAIN_KEY]: ["y"] });
     expect(m.panesByWorktree[MAIN_KEY]).toEqual(["y", "x"]);  // pref first, new appended
   });
 
   it("stale repo_order pref keys (old cwd-repo paths) are dropped", () => {
-    const m = mergeLiveAndPrefs([win()], projects, ["/old/cwd/key", "/dev/myproj"], {}, {});
+    const m = mergeLiveAndPrefs([win()], projects, [], ["/old/cwd/key", "/dev/myproj"], {}, {});
     expect(m.repoOrder).toEqual(["/dev/myproj"]);
   });
 
@@ -125,8 +125,50 @@ describe("mergeLiveAndPrefs", () => {
       win({ pid: "a" }),
       win({ pid: "x", session: "main", project_pinned_dir: MAIN_KEY }),
     ];
-    const m = mergeLiveAndPrefs(ws, projects, [MAIN_KEY, "/dev/myproj"], {}, {});
+    const m = mergeLiveAndPrefs(ws, projects, [], [MAIN_KEY, "/dev/myproj"], {}, {});
     expect(m.repoOrder).toEqual(["/dev/myproj", MAIN_KEY]);
+  });
+});
+
+const wsRow = (over = {}) => ({ id: "ws_a", name: "Auth", base_repo: "/dev/myproj", ...over });
+
+describe("mergeLiveAndPrefs — workspaces", () => {
+  const projects = [proj(), MAIN_PROJ];
+
+  it("a tagged window groups under ws:<id> and leaves the repo group", () => {
+    const wins = [
+      win({ pid: "a", session: "myproj", workspace_id: "ws_a" }),
+      win({ pid: "b", session: "myproj" }),
+    ];
+    const m = mergeLiveAndPrefs(wins, projects, [wsRow()], [], {}, {});
+    expect(m.repoOrder).toContain("ws:ws_a");
+    expect(m.repoOrder).toContain("/dev/myproj");
+    expect(m.worktreesByRepo["ws:ws_a"]).toEqual([]);
+    expect(m.panesByWorktree["ws:ws_a"]).toEqual(["a"]);
+    // 'a' is NOT under the repo group (exactly one top-level group)
+    expect(m.panesByWorktree["myproj"]).toEqual(["b", "review"]);
+  });
+
+  it("a workspace with no live tagged tabs still renders (parked)", () => {
+    const m = mergeLiveAndPrefs([], projects, [wsRow()], [], {}, {});
+    expect(m.repoOrder).toContain("ws:ws_a");
+    expect(m.panesByWorktree["ws:ws_a"]).toEqual([]);
+  });
+
+  it("ws: keys are interleaved per pref, not bottom-pinned like dev", () => {
+    const wins = [
+      win({ pid: "a", session: "myproj", workspace_id: "ws_a" }),
+      win({ pid: "b", session: "myproj" }),
+    ];
+    const m = mergeLiveAndPrefs(wins, projects, [wsRow()], ["ws:ws_a", "/dev/myproj"], {}, {});
+    expect(m.repoOrder.indexOf("ws:ws_a")).toBeLessThan(m.repoOrder.indexOf("/dev/myproj"));
+  });
+
+  it("a stale tag for an unknown workspace folds back to repo sorting", () => {
+    const wins = [win({ pid: "a", session: "myproj", workspace_id: "ws_gone" })];
+    const m = mergeLiveAndPrefs(wins, projects, [], [], {}, {});
+    expect(m.repoOrder).toEqual(["/dev/myproj"]);
+    expect(m.panesByWorktree["myproj"]).toEqual(["a", "review"]);
   });
 });
 
