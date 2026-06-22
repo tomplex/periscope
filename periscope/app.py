@@ -28,6 +28,7 @@ from periscope.routes import (
 from periscope.routes import lgtm as lgtm_route
 from periscope.routes import open as open_route
 from periscope.routes import projects as projects_routes
+from periscope.routes import workspaces as workspaces_routes
 from periscope.routes import cleanup as cleanup_routes
 from periscope.routes import settings as settings_routes
 
@@ -131,8 +132,8 @@ app = FastAPI(lifespan=lifespan)
 # `/api/*` and `/ws/*` paths take precedence over `StaticFiles`.
 for r in (
     alerts, auto_rename, channel, events, cleanup_routes, fs, healthz, history, lgtm_route,
-    open_route, pane, paste_image, prefs, projects_routes, send, sessions, settings_routes,
-    state, ws,
+    open_route, pane, paste_image, prefs, projects_routes, workspaces_routes, send, sessions,
+    settings_routes, state, ws,
 ):
     app.include_router(r.router)
 
