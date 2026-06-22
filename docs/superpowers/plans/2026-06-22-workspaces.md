@@ -225,13 +225,13 @@ def all_workspaces() -> dict[str, Workspace]:
 
 
 def update_workspace(wid: str, **fields) -> bool:
+    # Blanket merge, mirroring projects.update_project — the route's PatchBody
+    # constrains which fields reach here.
     with store._STATE_LOCK:
         row = store._STATE["workspaces"].get(wid)
         if row is None:
             return False
-        for k, v in fields.items():
-            if k in ("name", "base_repo", "base_worktree"):
-                row[k] = v
+        row.update(fields)
         store._write_state(store._STATE)
         return True
 
@@ -460,32 +460,35 @@ git commit -m "feat(workspaces): prune dead tab tags in lifespan housekeeping"
 - Modify: `periscope/pids.py` (add `_gc_workspaces`, call it where `_gc_projects` is called)
 - Modify: `tests/test_pids.py` (or `tests/test_workspaces.py` — wherever `_gc_projects` is tested)
 
+**CRITICAL pattern note:** `_gc_projects(projects: dict, now_ts: int) -> bool` runs **inside `resolve_pids`**, which already holds `store._STATE_LOCK` (a non-reentrant `threading.Lock`). It does NOT acquire the lock itself, does NOT write state, and returns a `dirty` flag — `resolve_pids` batches one write at the end. `_gc_workspaces` MUST mirror this exactly; a self-locking version would deadlock at the call site.
+
 - [ ] **Step 1: Write the failing test**
 
-Locate the `_gc_projects` test (grep `grep -rn "_gc_projects" tests/`). Mirror it. In `tests/test_workspaces.py`:
+In `tests/test_workspaces.py` (read `pids.py`'s `_gc_projects` + `resolve_pids` first for the exact idiom):
 
 ```python
 import time
 from periscope.pids import _gc_workspaces
-from periscope.workspaces import create_workspace, archive_workspace, all_workspaces
+from periscope.workspaces import create_workspace, archive_workspace
 
 
 def test_gc_drops_old_archived(clean_state):
     ws = create_workspace(name="Old")
     archive_workspace(ws["id"])
-    # Backdate the archive stamp 31 days.
     clean_state["workspaces"][ws["id"]]["archived_at"] = int(time.time()) - 31 * 86400
-    _gc_workspaces()
-    assert ws["id"] not in all_workspaces()
+    dirty = _gc_workspaces(clean_state["workspaces"], int(time.time()))
+    assert dirty is True
+    assert ws["id"] not in clean_state["workspaces"]
 
 
 def test_gc_keeps_recent_archived_and_live(clean_state):
     live = create_workspace(name="Live")
     recent = create_workspace(name="Recent")
     archive_workspace(recent["id"])
-    _gc_workspaces()
-    assert live["id"] in all_workspaces()
-    assert recent["id"] in all_workspaces()
+    dirty = _gc_workspaces(clean_state["workspaces"], int(time.time()))
+    assert dirty is False
+    assert live["id"] in clean_state["workspaces"]
+    assert recent["id"] in clean_state["workspaces"]
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -493,32 +496,40 @@ def test_gc_keeps_recent_archived_and_live(clean_state):
 Run: `uv run pytest tests/test_workspaces.py -k gc -q`
 Expected: FAIL (`ImportError: cannot import name '_gc_workspaces'`).
 
-- [ ] **Step 3: Implement `_gc_workspaces`**
+- [ ] **Step 3: Implement `_gc_workspaces` (lock-free, returns dirty)**
 
-In `periscope/pids.py`, mirror `_gc_projects` (lines ~199–220). Read it first for the exact `_STATE`/lock/threshold idiom; then:
+In `periscope/pids.py`, mirror `_gc_projects` exactly — no lock, no write, return dirty:
 
 ```python
-def _gc_workspaces() -> None:
-    """Drop workspaces archived more than 30 days ago (mirrors _gc_projects)."""
-    cutoff = int(time.time()) - 30 * 86400
-    with store._STATE_LOCK:
-        wss = store._STATE.get("workspaces", {})
-        dead = [k for k, v in wss.items()
-                if v.get("archived_at") and v["archived_at"] < cutoff]
-        for k in dead:
-            del wss[k]
-        if dead:
-            store._write_state(store._STATE)
+def _gc_workspaces(workspaces: dict, now_ts: int) -> bool:
+    """Drop workspaces archived >30 days ago. Runs inside the caller's
+    _STATE_LOCK; does NOT acquire it or write — returns whether it mutated."""
+    cutoff = now_ts - 30 * 86400
+    dead = [k for k, v in workspaces.items()
+            if v.get("archived_at") and v["archived_at"] < cutoff]
+    for k in dead:
+        del workspaces[k]
+    return bool(dead)
 ```
 
-Call it adjacent to the existing `_gc_projects()` call site (same scheduled pass).
+- [ ] **Step 4: Hook it into `resolve_pids`**
 
-- [ ] **Step 4: Run to verify pass**
+In `periscope/pids.py` `resolve_pids` (next to the existing `_gc_projects` call, ~lines 263–265, while `_STATE_LOCK` is held):
+
+```python
+        wss = _store._STATE.setdefault("workspaces", {})
+        if _gc_workspaces(wss, now_ts):
+            dirty = True
+```
+
+(Use whatever alias `pids.py` already imports `store` under — the file uses `_store`. Match the surrounding `now_ts`/`dirty` variable names exactly.)
+
+- [ ] **Step 5: Run to verify pass**
 
 Run: `uv run pytest tests/test_workspaces.py -k gc -q`
 Expected: PASS (2 passed).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add periscope/pids.py tests/test_workspaces.py
@@ -750,7 +761,7 @@ def workspaces_untag(body: UntagBody):
 
 - [ ] **Step 4: Register the router**
 
-In `periscope/app.py`, find the `include_router` loop / list and add `workspaces` to it (mirror how `projects` route is registered — likely an import + `app.include_router(workspaces.router)` or an entry in a routers tuple).
+In `periscope/app.py`: add `workspaces` to the routes import block (~lines 24–32, where `projects` route is imported) AND add its entry to the routers tuple (~lines 129–133) that the `include_router` loop iterates. Mirror the `projects` route entry exactly.
 
 - [ ] **Step 5: Run to verify pass**
 
@@ -837,8 +848,10 @@ Spawn a new worktree off the workspace's `base_worktree` (resolved to a branch),
 `tests/test_workspaces_spawn.py` (mirror `tests/test_worktree_spawn.py`'s `@needs_tmux` + `PERISCOPE_TMUX_SOCKET`/`PERISCOPE_CLAUDE_EXEC` harness — read it for the exact fixtures):
 
 ```python
+import shutil
 import pytest
-from tests.conftest import needs_tmux  # or however the marker is exposed
+
+needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="needs tmux")
 
 
 @needs_tmux
@@ -853,7 +866,7 @@ def test_spawn_into_workspace_tags_pane(clean_state, fresh_activity_db,
     assert activity.get_pane_workspace(pane_id) == ws["id"]
 ```
 
-(Names `tmux_test_server`, `tmp_git_repo`, and the marker must match the existing harness in `tests/test_worktree_spawn.py`. Read it and copy the decorator/fixtures exactly.)
+(`needs_tmux` is defined LOCALLY per module — it is NOT in `conftest.py`. `tmux_test_server` and `tmp_git_repo` ARE real conftest fixtures. Read `tests/test_worktree_spawn.py` and copy its decorator/fixture wiring exactly.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -895,16 +908,26 @@ def workspaces_spawn(body: SpawnBody):
         ws["base_repo"], body.branch, base_branch=base_branch, fetch=False,
     )
     result = open_ops.open_target(open_ops.PathTarget(path=spawn["path"]))
-    activity.set_pane_workspace_for_pid(result.claude_pid, body.workspace_id)
+    activity.set_pane_workspace(result.claude_pane_id, body.workspace_id)
     return {"ok": True, "workspace_id": body.workspace_id,
-            "pane_id": result.claude_pid, "path": spawn["path"], "ui": result.ui}
+            "pane_id": result.claude_pane_id, "path": spawn["path"], "ui": result.ui}
 ```
 
-**Wrinkle to resolve in this task:** `open_target`/`OpenResult.claude_pid` is the `@periscope_id` (`pid_raw`), but the tag keys on **`pane_id`** (`%N`). You need the tmux `pane_id` of the spawned claude window. Two options — pick one and implement it:
-- (a) Have `open_ops` return the claude window's `pane_id` alongside `claude_pid` (extend `OpenResult`), then `activity.set_pane_workspace(pane_id, ws_id)` directly. **Preferred.**
-- (b) Resolve `pid_raw → pane_id` via `list_windows()` (find the window whose `pid_raw == result.claude_pid`, read its `pane_id`). Add `set_pane_workspace_for_pid(pid_raw, ws_id)` as a thin helper doing that lookup.
+**Required `open_ops` change (the tag keys on `pane_id`, but `OpenResult` only carries `claude_pid` = `@periscope_id`).** `OpenResult` (in `periscope/open_ops.py`) currently has `tmux_session, repo, claude_pid, ui` and **no** `claude_pane_id`. `_open_path` collects `w["pid_raw"]` into a list comprehension and discards the claude window dict — so the pane_id is NOT currently retained. Fix:
+1. Add `claude_pane_id: str` to the `OpenResult` dataclass.
+2. In `_open_path`, after `ensure_session` returns `(session, claude_pid)`, scan `list_windows()` for the window whose `pid_raw == claude_pid` and read its `pane_id`:
 
-The test asserts on `get_pane_workspace(pane_id)`, so whichever path, the tag must end up keyed on the real `%N`. Implement (a): add `claude_pane_id` to `OpenResult` (populated from the same `list_windows()` scan `_open_path` already does — it has the window dict), and tag with that. Update the endpoint to `activity.set_pane_workspace(result.claude_pane_id, body.workspace_id)`.
+```python
+    claude_pane_id = next(
+        (w["pane_id"] for w in list_windows()
+         if w.get("pid_raw") == claude_pid and w.get("pane_id")),
+        "",
+    )
+    return OpenResult(tmux_session=session, repo=repo, claude_pid=claude_pid,
+                      claude_pane_id=claude_pane_id, ui=ui)
+```
+
+3. Audit every other `OpenResult(...)` constructor call (BranchTarget/PRTarget paths converge on `_open_path`, but confirm) so each populates `claude_pane_id`. The spawn test asserts on `get_pane_workspace(pane_id)` keyed on the real `%N`, so this is load-bearing, not optional.
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -966,7 +989,7 @@ Workspaces become top-level `ws:<id>` groups modeled on the dev-flat (`MAIN_KEY`
 In `static/src/split/__tests__/railTree.test.js`, add a `wsproj`/`ws` factory and cases (mirror the existing `win`/`proj` style):
 
 ```javascript
-const ws = (over = {}) => ({ id: "ws_a", name: "Auth", base_repo: "/dev/myproj", ...over });
+const wsRow = (over = {}) => ({ id: "ws_a", name: "Auth", base_repo: "/dev/myproj", ...over });
 
 describe("mergeLiveAndPrefs — workspaces", () => {
   const projects = [proj(), MAIN_PROJ];
@@ -976,7 +999,7 @@ describe("mergeLiveAndPrefs — workspaces", () => {
       win({ pid: "a", session: "myproj", workspace_id: "ws_a" }),
       win({ pid: "b", session: "myproj" }),
     ];
-    const m = mergeLiveAndPrefs(wins, projects, [ws()], [], {}, {});
+    const m = mergeLiveAndPrefs(wins, projects, [wsRow()], [], {}, {});
     expect(m.repoOrder).toContain("ws:ws_a");
     expect(m.repoOrder).toContain("/dev/myproj");
     expect(m.worktreesByRepo["ws:ws_a"]).toEqual([]);
@@ -986,7 +1009,7 @@ describe("mergeLiveAndPrefs — workspaces", () => {
   });
 
   it("a workspace with no live tagged tabs still renders (parked)", () => {
-    const m = mergeLiveAndPrefs([], projects, [ws()], [], {}, {});
+    const m = mergeLiveAndPrefs([], projects, [wsRow()], [], {}, {});
     expect(m.repoOrder).toContain("ws:ws_a");
     expect(m.panesByWorktree["ws:ws_a"]).toEqual([]);
   });
@@ -996,7 +1019,7 @@ describe("mergeLiveAndPrefs — workspaces", () => {
       win({ pid: "a", session: "myproj", workspace_id: "ws_a" }),
       win({ pid: "b", session: "myproj" }),
     ];
-    const m = mergeLiveAndPrefs(wins, projects, [ws()], ["ws:ws_a", "/dev/myproj"], {}, {});
+    const m = mergeLiveAndPrefs(wins, projects, [wsRow()], ["ws:ws_a", "/dev/myproj"], {}, {});
     expect(m.repoOrder.indexOf("ws:ws_a")).toBeLessThan(m.repoOrder.indexOf("/dev/myproj"));
   });
 
@@ -1253,7 +1276,7 @@ Branch (place alongside the `isDev` branch):
 })()}
 ```
 
-`windowsByPid` is the across-all-windows map the dev branch builds (`indexWindowsByWorktree` is per-session; for the flat ws/dev lists build `const windowsByPid = {}; for (const w of windows.value) windowsByPid[w.pid] = w;` once per render — the dev branch already needs this).
+`windowsByPid` does NOT already exist — the dev branch resolves pids via `live.find((w) => w.pid === pid)` and the only `windowsByPid` in `Rail.jsx` is built *inside* the `!isDev` worktree map (scoped to one worktree). Build a fresh across-all-windows map once in the component body for the flat ws/dev lists: `const windowsByPid = {}; for (const w of windows.value) windowsByPid[w.pid] = w;`.
 
 - [ ] **Step 4: Workspace header row (RepoRow with chip + draggable)**
 
@@ -1522,7 +1545,7 @@ Expected: FAIL (`TypeError: unexpected keyword argument 'workspace_name'`).
 
 - [ ] **Step 3: Add the prompt params + clause**
 
-In `periscope/narrator.py`, `build_narrator_prompt` signature gains `workspace_name: str | None = None, sibling_names: list[str] | None = None`. After the rename rules splice, add (only when a workspace is supplied):
+In `periscope/narrator.py`, `build_narrator_prompt` signature gains `workspace_name: str | None = None, sibling_names: list[str] | None = None`. The rename rules are spliced inside the single `lines = [...]` literal; a `lines += [...]` block can only append AFTER that literal closes. Place this block **immediately before the closing `Return ONLY a JSON object …` instruction** (after the branch/signals section), only when a workspace is supplied:
 
 ```python
     if workspace_name:
