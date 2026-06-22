@@ -102,6 +102,7 @@ _STATE_DEFAULTS: dict = {
     "windows": {},
     "commands": [],
     "projects": {},
+    "workspaces": {},
     "settings": {},
 }
 
