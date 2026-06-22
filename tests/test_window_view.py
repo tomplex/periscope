@@ -310,3 +310,21 @@ def test_skipped_pane_still_reflects_fresh_focus(mocker, clean_state):
     expected = panes._focused_at[f"{w['session']}:{w['index']}"]
     view, _ = window_view.build_window_view(w, now_ts=1001)  # activity unchanged → skip capture
     assert view["focused_at"] == expected
+
+
+def test_window_view_emits_workspace_id(mocker, clean_state, fresh_activity_db):
+    from periscope import activity
+    from periscope.window_view import build_window_view
+    from periscope.workspaces import create_workspace
+    _stub_subsystems(mocker)
+    ws = create_workspace(name="WS")
+    activity.set_pane_workspace("%9", ws["id"])
+    view, _ = build_window_view(_window(pane_id="%9"), now_ts=1000)
+    assert view["workspace_id"] == ws["id"]
+
+
+def test_window_view_workspace_id_none_when_untagged(mocker, clean_state, fresh_activity_db):
+    from periscope.window_view import build_window_view
+    _stub_subsystems(mocker)
+    view, _ = build_window_view(_window(pane_id="%8"), now_ts=1000)
+    assert view.get("workspace_id") is None
