@@ -193,3 +193,18 @@ def test_state_merges_status_rail_when_present(client, mocker, clean_state,
     assert w["status_line"] == "comparing figv2 lookup hit rates"
     assert w["status_at"] == 1234
     assert w["status_rail"] == "comparing hit rates"
+
+
+def test_state_includes_workspaces(client, mocker, clean_state, fresh_activity_db):
+    """The /api/state payload carries non-archived workspaces."""
+    from periscope.workspaces import create_workspace
+    ws = create_workspace(name="WS", base_repo="/dev/fdy")
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+
+    body = client.get("/api/state").json()
+    ids = [w["id"] for w in body["workspaces"]]
+    assert ws["id"] in ids

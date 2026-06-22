@@ -117,9 +117,15 @@ def state():
         if not v.get("archived_at")
     ]
 
+    from periscope.workspaces import all_workspaces
+    workspaces_view = [
+        v for v in all_workspaces().values() if not v.get("archived_at")
+    ]
+
     return {
         "windows": result,
         "projects": projects_view,
+        "workspaces": workspaces_view,
         "ts": int(time.time()),
         "usage": cached_claude_usage(),
         "usage_plan": cached_plan_usage(),
