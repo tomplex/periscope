@@ -33,6 +33,8 @@ export function classify(query, catalog) {
       cards.push({ kind: "worktree", label: `${r.label} · new worktree…`,
                    sub: `off origin/${r.default_branch || "HEAD"}`,
                    repo: r.repo, branches: r.branches, descriptor: null });
+      cards.push({ kind: "workspace", label: `${r.label} · new workspace…`,
+                   sub: "goal-scoped group", repo: r.repo, descriptor: null });
     }
   }
   const pr = parsePrRef(q);
