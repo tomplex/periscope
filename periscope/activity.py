@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS pane_sessions (
   session_id  TEXT NOT NULL,         -- Claude CLAUDE_CODE_SESSION_ID (JSONL stem)
   updated_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pane_workspaces (
+  pane_id      TEXT PRIMARY KEY,   -- tmux pane id, e.g. '%56'
+  workspace_id TEXT NOT NULL,      -- workspaces[].id (state.json)
+  updated_at   INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS usage_samples (
   at        INTEGER NOT NULL,
   meter     TEXT NOT NULL,           -- 'session' | 'week_all' | 'week_opus' | 'week_sonnet'
@@ -204,6 +209,65 @@ def prune_pane_sessions(alive_pane_ids: set[str]) -> int:
         if not dead:
             return 0
         c.executemany("DELETE FROM pane_sessions WHERE pane_id=?",
+                      [(p,) for p in dead])
+        c.commit()
+        return len(dead)
+
+
+# --- pane_workspaces: tmux pane id -> workspace id tag -----------------
+#
+# The per-tab membership tag for workspaces (state['workspaces'] entity).
+# Keyed on tmux pane_id exactly like pane_sessions/pane_status, so it reuses
+# the dead-pane prune verbatim.
+
+def set_pane_workspace(pane_id: str, workspace_id: str | None) -> None:
+    """Tag a tab into a workspace, or clear the tag when workspace_id is None."""
+    with _LOCK:
+        c = _conn()
+        if workspace_id is None:
+            c.execute("DELETE FROM pane_workspaces WHERE pane_id=?", (pane_id,))
+        else:
+            c.execute(
+                "INSERT INTO pane_workspaces (pane_id, workspace_id, updated_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(pane_id) DO UPDATE SET "
+                "workspace_id=excluded.workspace_id, updated_at=excluded.updated_at",
+                (pane_id, workspace_id, int(time.time())),
+            )
+        c.commit()
+
+
+def get_pane_workspace(pane_id: str) -> str | None:
+    """The workspace id this tab is tagged into, or None."""
+    if not pane_id:
+        return None
+    with _LOCK:
+        c = _conn()
+        row = c.execute(
+            "SELECT workspace_id FROM pane_workspaces WHERE pane_id=?",
+            (pane_id,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def pane_workspace_map() -> dict[str, str]:
+    """All live tags as {pane_id: workspace_id} — one bulk read for the worker
+    tick and window_view fan-out."""
+    with _LOCK:
+        c = _conn()
+        return {pid: wid for pid, wid
+                in c.execute("SELECT pane_id, workspace_id FROM pane_workspaces")}
+
+
+def prune_pane_workspaces(alive_pane_ids: set[str]) -> int:
+    """Drop tags for tmux pane ids that no longer exist (tab died). Returns
+    the number of rows deleted."""
+    with _LOCK:
+        c = _conn()
+        existing = {r[0] for r in c.execute("SELECT pane_id FROM pane_workspaces")}
+        dead = existing - alive_pane_ids
+        if not dead:
+            return 0
+        c.executemany("DELETE FROM pane_workspaces WHERE pane_id=?",
                       [(p,) for p in dead])
         c.commit()
         return len(dead)

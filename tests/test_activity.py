@@ -475,3 +475,42 @@ def test_first_mate_marker_clear(fresh_activity_db):
     activity.set_first_mate(pane_id="%9", session_id=None, at=100)
     activity.clear_first_mate()
     assert activity.get_first_mate() is None
+
+
+def test_pane_workspace_set_get(fresh_activity_db):
+    activity = fresh_activity_db
+    assert activity.get_pane_workspace("%1") is None
+    activity.set_pane_workspace("%1", "ws_auth")
+    assert activity.get_pane_workspace("%1") == "ws_auth"
+
+
+def test_pane_workspace_retag_overwrites(fresh_activity_db):
+    activity = fresh_activity_db
+    activity.set_pane_workspace("%1", "ws_a")
+    activity.set_pane_workspace("%1", "ws_b")
+    assert activity.get_pane_workspace("%1") == "ws_b"
+
+
+def test_pane_workspace_untag_clears(fresh_activity_db):
+    activity = fresh_activity_db
+    activity.set_pane_workspace("%1", "ws_a")
+    activity.set_pane_workspace("%1", None)
+    assert activity.get_pane_workspace("%1") is None
+
+
+def test_pane_workspace_map(fresh_activity_db):
+    activity = fresh_activity_db
+    activity.set_pane_workspace("%1", "ws_a")
+    activity.set_pane_workspace("%2", "ws_a")
+    activity.set_pane_workspace("%3", "ws_b")
+    assert activity.pane_workspace_map() == {"%1": "ws_a", "%2": "ws_a", "%3": "ws_b"}
+
+
+def test_prune_pane_workspaces(fresh_activity_db):
+    activity = fresh_activity_db
+    activity.set_pane_workspace("%1", "ws_a")
+    activity.set_pane_workspace("%2", "ws_a")
+    dropped = activity.prune_pane_workspaces({"%1"})
+    assert dropped == 1
+    assert activity.get_pane_workspace("%2") is None
+    assert activity.get_pane_workspace("%1") == "ws_a"
