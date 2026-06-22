@@ -48,7 +48,17 @@ Cross-repo workspaces are out of scope. A workspace is near-always single-repo;
 3. **tmux sessions are a backend primitive, never a user-facing unit.**
    Periscope is free to map a workspace's tabs onto one session or many; the
    user never reasons about sessions. Membership therefore keys on the tab's
-   periscope identity (`@periscope_id`), not on a session name.
+   tmux **`pane_id`** (`%N`), *not* on a session name and *not* on
+   `@periscope_id`. `pane_id` is invariant across `cd`/rename for the pane's
+   whole life and dies exactly when the pane dies — which matches the v1 "tag
+   dies with the tab" semantics (decision 4). It is also the key every existing
+   per-pane table (`pane_sessions`, `pane_status`) uses, so the tag map reuses
+   their dead-pane prune verbatim, and it is the only id the narrator worker
+   tick has in hand (the tick gets `pid_raw`, never the resolved `@periscope_id`).
+   `@periscope_id` was rejected here: its re-mint path silently orphans
+   pid-keyed state (`pids.py` warns of exactly this), and it isn't indexable
+   from the narrator tick. Durable-across-server-restart membership is the
+   future roster layer's concern (Non-goals 2), not v1's.
 
 4. **v1 persistence = "just the named shell."** A workspace persists only as a
    named entity plus `base_repo` / `base_worktree`. When nothing is live it is
@@ -84,15 +94,15 @@ workspace = {
 
 There is **no `members` list.** Membership is live, via a per-tab tag:
 
-- A map `periscope_id → workspace_id`, stored keyed by the pane's
-  `@periscope_id`.
-- Pruned when the pane no longer exists — same lifecycle as the `pane_sessions`
-  prune (`migrate_legacy_pane_sessions` / dead-pane reaping pattern).
-- Storage location: the tag map lives wherever the prune cadence is cheapest to
-  share with existing pane reaping; `store.py` owns the `workspaces` dict, the
-  tag map can live alongside `pane_sessions` in `periscope.db` or in state —
-  the plan picks one (the prune-with-dead-panes requirement is the deciding
-  constraint, not where the bytes sit).
+- A map `pane_id → workspace_id`, stored in `periscope.db` alongside
+  `pane_sessions` / `pane_status` (the entity dict lives in `state.json`; the
+  tag map lives in the db so it shares the dead-pane prune).
+- Pruned by the **existing** dead-pane reaper: the lifespan housekeeping builds
+  `alive = {w["pane_id"] for w in list_windows()}` and calls
+  `prune_pane_sessions(alive)` / `prune_pane_status(alive)` (`app.py` startup);
+  a `prune_pane_workspaces(alive)` joins that same call site, keyed identically.
+- The `state.json` half (`workspaces` dict) is never pruned by pane liveness —
+  it persists until explicitly archived/GC'd (see Lifecycle).
 
 **Single-membership invariant:** a tab has exactly one `workspace_id` or none.
 Tagging a tab already in another workspace re-tags it (move, not duplicate).
@@ -125,13 +135,20 @@ Rendering rules:
 2. **Repo shows as one chip on the workspace header**, not per-tab (near-always
    single-repo).
 3. **The chip moves to the tab's metadata line (line 2).** Today the
-   branch/affiliation chip sits inline on line 1 between name and status dot and
-   eats the name's width. New layout:
+   branch/affiliation chip sits inline on line 1 (`pane-row-main`) between name
+   and status dot and eats the name's width, and line 2 renders **only when
+   `w.status_line` is truthy**. New layout:
    - **Line 1 = identity:** tab name (full width) + status dot.
    - **Line 2 = context + activity:** branch/worktree chip · narrator summary.
+   - **Line 2 now renders when `chip || status_line`** — not status-only.
+     Without this, a chip-but-no-status tab (shell tabs, brand-new Claude panes
+     before their first narrator line) would lose its chip entirely.
    - In a narrow rail the **chip truncates first** — it is the lower-signal half;
      the narrator summary (the verb) is what gets scanned.
-   This new line-2 layout applies to tab rows generally, not only workspace tabs.
+   This is a render change to **every pane row, not workspace tabs only**
+   (including dev panes, whose `paneChip(w, {isDev:true})` session-prefix chip
+   must keep working in the new line-2 slot) — a larger blast radius than the
+   workspace feature alone, called out so the plan tests all row variants.
 4. **Parked workspace** renders its header + base affordance (`spawn from base ·
    <base_worktree-or-repo>`), no tab rows.
 
@@ -144,39 +161,60 @@ Rendering rules:
 - **Tag / untag:** drag a tab into a workspace group, or a row action; untag
   reverts the tab to normal sort. Re-tagging moves (single-membership).
 - **Spawn into:** the open-omnibox can spawn a new tab **pre-tagged** to a
-  workspace; if the workspace has a `base_worktree`, the new work defaults to
-  branching from it.
+  workspace. `_layout_two_window` stamps the spawned pane synchronously, so its
+  `pane_id` is known in-band and the tag is written before the response returns
+  (no next-poll wait). If the workspace has a `base_worktree`, the new work
+  defaults to branching from it — but `spawn_worktree(repo, branch, base_branch=…)`
+  takes a *branch name*, while `base_worktree` is a *path*, so the route first
+  resolves `base_branch = git -C <base_worktree> rev-parse --abbrev-ref HEAD`
+  and passes `fetch=False` (the base is typically an unpushed local feature
+  branch — the existing new-tab convention).
 - **Archive / delete:** explicit, mirrors `archive_project` — archived
-  workspaces are hidden from the `/api/state` payload.
+  workspaces are hidden from the `/api/state` payload. A `_gc_workspaces`
+  mirrors `_gc_projects` (30-day GC of archived rows); without it archived
+  workspaces would accrete forever.
 
-## Workspace-aware narrator (v1)
+## Workspace-aware narrator (v1, sequenced last)
 
-`narrator.py`'s per-pane tick gains workspace context:
+**Sequencing:** this lands *after* the entity + tag map + rail + at least one
+tagging surface, as its own isolated commit(s). It depends on the tag map and
+on `workspace_id` resolution, and it touches a dense-invariant subsystem; keeping
+it separable preserves the `git revert` recovery path (the commit-as-you-go
+convention) even though it ships in the v1 cut.
 
-- Look up the pane's `workspace_id` → workspace name + the **sibling tab names**
-  in that workspace.
-- Feed both into the Haiku prompt.
-- `RENAME_RULES` (shared with `rename_ai.py`) gains a clause: *when a workspace
-  is supplied, don't repeat the goal in the name; carry what distinguishes this
-  tab from its siblings.*
+`narrator.py`'s per-pane tick gains workspace context. This is **new data
+plumbing**, not merely a richer prompt string — the tick must:
 
-The return shape (`{status, rename}`), the human-rename cooldown, the
-session-id-first regeneration, and all other narrator invariants are unchanged —
-this is strictly better prompt context, not new control flow.
+- Resolve each pane to its `workspace_id` via the tag map. The tick already
+  holds each window's `pane_id` (`w.get("pane_id")`, used throughout `tick`), so
+  with `pane_id`-keyed tags this is a direct lookup — no resolve-pid step (the
+  tick never runs `resolve_pids`; it only has `pid_raw`).
+- Assemble **sibling tab names** with one pass over the tick's `panes` list,
+  grouping live window names by `workspace_id`. This is a new per-tick index.
+- Feed workspace name + siblings into the Haiku prompt (a slightly larger call).
+
+`RENAME_RULES` (shared with `rename_ai.py`) gains a clause: *when a workspace is
+supplied, don't repeat the goal in the name; carry what distinguishes this tab
+from its siblings.*
+
+The return shape (`{status, rename}`), the human-rename cooldown, and the
+session-id-first regeneration are **unchanged** — the new work is the
+workspace/sibling lookup feeding the prompt, not the decision/apply control flow.
 
 ## Modules & files
 
 | Module | Role |
 |---|---|
-| `periscope/workspaces.py` (new) | Entity CRUD + tag map (`periscope_id → ws_id`) + `resolve_workspace_for_window` + prune-dead-tags |
-| `periscope/store.py` | `workspaces` dict in `state.json` + migration; tag-map persistence |
-| `periscope/window_view.py` | emit `workspace_id` per window (lookup by `@periscope_id`) |
+| `periscope/workspaces.py` (new) | Entity CRUD (`state.json`) + tag map (`pane_id → ws_id`, `periscope.db`) + `resolve_workspace_for_window` + `prune_pane_workspaces(alive)` + `_gc_workspaces` |
+| `periscope/store.py` | `workspaces` dict in `state.json` + migration |
+| `periscope/app.py` | lifespan: add `prune_pane_workspaces(alive)` to the existing prune call site |
+| `periscope/window_view.py` | emit `workspace_id` per window (tag-map lookup by `w["pane_id"]`) |
 | `periscope/routes/workspaces.py` (new) | REST: create / promote / tag / untag / archive / delete |
 | `periscope/open_ops.py` | spawn-into-workspace (pre-tag the spawned tab; honor `base_worktree`) |
 | `periscope/narrator.py` | workspace-aware prompt (name + siblings; don't-repeat-goal rule) |
 | `periscope/rename_ai.py` | `RENAME_RULES` gains the workspace clause (shared taste block) |
 | `/api/state` (`routes/state.py`) | new `workspaces` payload (like `projects`) |
-| `static/src/split/railTree.js` | merge gains a workspace-grouping pass **before** the repo fallback; persistent workspaces always render; line-2 chip in the row shape |
+| `static/src/split/railTree.js` | merge gains a workspace-grouping pass **before** the repo fallback; `ws:<id>` keys adopt the **dev-flat (`MAIN_KEY`) child shape** (flat pid list, synthetic child key) so the existing pane drag rules apply unchanged; persistent workspaces always render; line-2 chip in the row shape |
 | `static/src/split/Rail.jsx`, `RailRows.jsx` | workspace groups, parked state, chip moved to line 2, spawn-into affordance |
 | `static/src/overlays/OpenOmnibox.jsx`, `open/classify.js` | "new workspace" + spawn-into + promote actions |
 | `static/src/store.js`, `poll.js` | `workspaces` signal fed from `/api/state` |
@@ -186,7 +224,7 @@ this is strictly better prompt context, not new control flow.
 
 | Module | Approach |
 |---|---|
-| `railTree.js` | **vitest unit**: tagged window → workspace group; untagged → repo fallback unchanged; empty (parked) workspace renders; top-level interleave ordering; line-2 chip shape; old prefs self-heal. |
+| `railTree.js` | **vitest unit**: tagged window → workspace group **and removed from repo fallback** (exactly one group); untagged → repo fallback unchanged; empty (parked) workspace renders; top-level interleave ordering (`ws:` keys kept, not bottom-pinned); `ws:<id>` dev-flat child shape + pref carryover; line-2 chip renders on `chip || status_line` (incl. chip-without-status); old prefs self-heal. |
 | `workspaces.py` | **pytest unit** against `clean_state`: CRUD, tag/untag, single-membership (re-tag moves), prune-on-dead-pane, archived hidden. |
 | `routes/test_workspaces.py` (new) | **pytest route tests** (TestClient + mocked tmux, established pattern): create / promote / tag / untag / archive / delete; error conventions (`HTTPException`, real status codes). |
 | `narrator.py` | **pytest**: workspace name + siblings present in the prompt; don't-repeat-goal rule applied; human-rename cooldown still holds; no-workspace path unchanged. |
@@ -207,11 +245,27 @@ this is strictly better prompt context, not new control flow.
 4. **MCP exposure.** `spawn_claude` gaining a `workspace` param (so a Claude can
    fan out work into a workspace) is a natural extension, not v1.
 
-## Open implementation wrinkle for the plan
+## Open implementation wrinkles for the plan
 
-The current rail keys worktree membership by tmux **session name**; workspace
-membership keys on `@periscope_id`. These two keying schemes coexist (workspaces
-are a separate top-level pass) but the plan must confirm the merge cleanly
-routes a tagged window into its workspace group and *removes* it from the
-repo-fallback grouping for that poll — a tagged window must appear in exactly
-one top-level group.
+1. **Single-top-level-group, via the dev-flat shape.** The workspace pre-pass
+   runs before `groupKeyForWindow`'s repo/`MAIN_KEY` partition and diverts any
+   tagged window into its `ws:<id>` bucket, so a tagged window appears in
+   **exactly one** top-level group (it must *not* also land in repo fallback).
+   `ws:<id>` groups are modeled on `MAIN_KEY` (dev), not on repo groups: a flat
+   `panesByWorktree["ws:<id>"]` pid list with `worktreesByRepo["ws:<id>"] = []`
+   and a synthetic child key — this is what makes the existing pane drag
+   descriptors (`isValidDropTarget`'s same-`worktreeKey` rule) apply without new
+   plumbing. The mockup (flat tabs inside a workspace) already matches this.
+
+2. **The five `MAIN_KEY` enforcement points + `syncRailPrefs` each need a
+   `ws:`-key sibling decision.** Unlike `MAIN_KEY`, workspace keys are **kept and
+   interleaved** in `repo_order` (not bottom-pinned, not stripped). `syncRailPrefs`
+   must persist `panesByWorktree["ws:<id>"]` (like it does for `MAIN_KEY`) *and*
+   keep `ws:<id>` in `repo_order` (unlike `MAIN_KEY`, which it strips). The plan
+   must enumerate all of these.
+
+3. **`pane_id` vs `@periscope_id` coexist by design.** Existing rail worktree
+   membership keys on tmux session name; per-pane state (`pane_sessions`,
+   `pane_status`, and now the workspace tag) keys on `pane_id`; `@periscope_id`
+   remains the drag/detail identity. The workspace pass keys on `pane_id` and
+   never touches the session-name keying — they don't interact.
