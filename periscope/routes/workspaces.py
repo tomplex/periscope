@@ -4,13 +4,16 @@ Create (with optional initial pane tags = "promote"), patch, archive, tag,
 untag, and spawn-into-workspace. The entity lives in periscope.workspaces;
 the per-tab tag map lives in periscope.activity (pane_workspaces table).
 """
+import subprocess
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from periscope import activity
+from periscope import activity, open_ops, worktree_spawn
 from periscope.workspaces import (
     create_workspace, get_workspace, update_workspace, archive_workspace,
 )
+from periscope.workspaces import get_workspace as _get_ws
 
 router = APIRouter()
 
@@ -80,3 +83,33 @@ class UntagBody(BaseModel):
 def workspaces_untag(body: UntagBody):
     activity.set_pane_workspace(body.pane_id, None)
     return {"ok": True}
+
+
+class SpawnBody(BaseModel):
+    workspace_id: str
+    branch: str
+
+
+@router.post("/api/workspaces/spawn")
+def workspaces_spawn(body: SpawnBody):
+    ws = _get_ws(body.workspace_id)
+    if not ws:
+        raise HTTPException(404, f"no workspace {body.workspace_id!r}")
+    if not ws.get("base_repo"):
+        raise HTTPException(400, "workspace has no base_repo to spawn from")
+    base_branch = None
+    base_wt = ws.get("base_worktree")
+    if base_wt:
+        # base_worktree is a PATH; spawn_worktree wants a branch NAME.
+        out = subprocess.run(
+            ["git", "-C", base_wt, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True,
+        )
+        base_branch = out.stdout.strip() or None
+    spawn = worktree_spawn.spawn_worktree(
+        ws["base_repo"], body.branch, base_branch=base_branch, fetch=False,
+    )
+    result = open_ops.open_target(open_ops.PathTarget(path=spawn["path"]))
+    activity.set_pane_workspace(result.claude_pane_id, body.workspace_id)
+    return {"ok": True, "workspace_id": body.workspace_id,
+            "pane_id": result.claude_pane_id, "path": spawn["path"], "ui": result.ui}

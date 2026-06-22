@@ -35,7 +35,8 @@ Descriptor = PathTarget | BranchTarget | PRTarget
 class OpenResult:
     tmux_session: str
     repo: str
-    claude_pid: str
+    claude_pid: str          # @periscope_id (pid_raw) of the claude window
+    claude_pane_id: str      # tmux pane_id (%N) of the claude window
     ui: dict
 
 
@@ -192,8 +193,16 @@ def _open_path(path: str) -> OpenResult:
     # synchronously; pid_raw is the @periscope_id, "" for unmanaged.
     pane_pids = [w["pid_raw"] for w in list_windows()
                  if w["session"] == session and w["pid_raw"]]
+    # The membership tag keys on the tmux pane_id (%N), but claude_pid is the
+    # @periscope_id — scan for the claude window to recover its pane_id.
+    claude_pane_id = next(
+        (w["pane_id"] for w in list_windows()
+         if w.get("pid_raw") == claude_pid and w.get("pane_id")),
+        "",
+    )
     ui = place_in_rail(session, project, pane_pids or [claude_pid])
-    return OpenResult(tmux_session=session, repo=repo, claude_pid=claude_pid, ui=ui)
+    return OpenResult(tmux_session=session, repo=repo, claude_pid=claude_pid,
+                      claude_pane_id=claude_pane_id, ui=ui)
 
 
 def open_target(descriptor: Descriptor) -> OpenResult:
