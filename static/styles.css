@@ -1362,9 +1362,10 @@ body.modal-open { overflow: hidden; }
     overflow-y: auto;
 }
 
-/* Alert rows carry a real message — they read brighter than the terse
-   git/CI events around them. (Wrapping is the default for all rows.) */
-.timeline-row-alert .timeline-text {
+/* Alert + channel rows carry a real message — they read brighter than the
+   terse git/CI events around them. (Wrapping is the default for all rows.) */
+.timeline-row-alert .timeline-text,
+.timeline-row-channel .timeline-text {
     color: var(--fg-1);
     font-weight: 500;
 }

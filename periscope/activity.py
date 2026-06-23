@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   scope_kind  TEXT NOT NULL,         -- 'pane' | 'branch'
   scope_key   TEXT NOT NULL,         -- pane_id (%N)  |  repo_path\\x1fbranch
-  event_kind  TEXT NOT NULL,         -- 'alert' | 'reset'
+  event_kind  TEXT NOT NULL,         -- 'alert' | 'reset' | 'rename' | 'channel'
   at          INTEGER NOT NULL,
   text        TEXT NOT NULL,
   detail      TEXT,
@@ -530,6 +530,10 @@ def _row_to_event(event_kind, at, text, detail, url):
     if event_kind == "alert":
         # detail holds the alert kind: done / need_human / info.
         return {"src": "alert", "kind": detail or "info", "at": at, "text": text}
+    if event_kind == "channel":
+        # A message periscope pushed INTO the pane. detail holds the push
+        # kind (message / interrupt / ...); text is the full message body.
+        return {"src": "channel", "kind": detail or "message", "at": at, "text": text}
     # reset — session-sourced rows.
     return {"src": "session", "kind": event_kind, "at": at,
             "text": text, "state": detail, "url": url}

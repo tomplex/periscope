@@ -478,6 +478,38 @@ def test_report_routes_to_spawner(mocker):
     assert body == {"ok": True, "to": "parent11"}
 
 
+def test_emit_channel_event_records_full_text_into_activity(fresh_activity_db):
+    from periscope import channels, activity
+    sess = AsyncMock()
+    with _CHANNELS_LOCK:
+        _MCP_SESSIONS["%5"] = sess
+    body = "a long message periscope pushed into the pane " * 3
+    sent = asyncio.run(channels.emit_channel_event("%5", body))
+    assert sent is True
+    sess._write_stream.send.assert_awaited_once()
+    out = activity.events_for("%5", None, None)
+    assert len(out) == 1
+    assert out[0]["src"] == "channel"
+    assert out[0]["kind"] == "message"
+    assert out[0]["text"] == body   # untruncated
+
+
+def test_emit_channel_event_skips_fleet_digest(fresh_activity_db):
+    from periscope import channels, activity
+    sess = AsyncMock()
+    with _CHANNELS_LOCK:
+        _MCP_SESSIONS["%5"] = sess
+    asyncio.run(channels.emit_channel_event("%5", "big digest", {"kind": "fleet_digest"}))
+    assert activity.events_for("%5", None, None) == []   # too noisy to record
+
+
+def test_emit_channel_event_unattached_records_nothing(fresh_activity_db):
+    from periscope import channels, activity
+    sent = asyncio.run(channels.emit_channel_event("%nope", "hi"))
+    assert sent is False
+    assert activity.events_for("%nope", None, None) == []
+
+
 def test_report_no_spawner_errors(mocker):
     from periscope import channels
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")

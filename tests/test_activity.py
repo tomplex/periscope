@@ -19,6 +19,23 @@ def test_record_then_events_for_roundtrips():
     assert out[0]["at"] == 100
 
 
+def test_channel_event_roundtrips_with_full_text():
+    body = "long message body that periscope pushed into the pane " * 3
+    activity.record("pane", "%1", "channel", body, detail="message", at=200)
+    out = activity.events_for("%1", "/repo", "main")
+    assert len(out) == 1
+    assert out[0]["src"] == "channel"
+    assert out[0]["kind"] == "message"
+    assert out[0]["text"] == body   # untruncated
+    assert out[0]["at"] == 200
+
+
+def test_channel_event_kind_defaults_to_message():
+    activity.record("pane", "%1", "channel", "hi", at=5)   # no detail
+    out = activity.events_for("%1", "/repo", "main")
+    assert out[0]["kind"] == "message"
+
+
 def test_events_for_returns_pane_and_branch_scopes():
     activity.record("pane", "%1", "alert", "a", detail="info", at=10)
     activity.record("branch", "/repo\x1fmain", "note", "m", at=20)

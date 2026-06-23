@@ -142,6 +142,17 @@ def rename_decision(suggestion: str | None, *, current_name: str,
     return suggestion
 
 
+def _is_first_mate(w: dict, pane_id: str) -> bool:
+    """The first mate's own tab. Identity is the live marker pane id, with the
+    fixed bridge/first-mate window as a fallback if the marker is stale."""
+    from periscope.first_mate import FIRST_MATE_SESSION, FIRST_MATE_WINDOW
+    marker = activity.get_first_mate()
+    if marker is not None and marker.pane_id == pane_id:
+        return True
+    return (w.get("session") == FIRST_MATE_SESSION
+            and (w.get("name") or "") == FIRST_MATE_WINDOW)
+
+
 def is_external_rename(row: PaneStatusRow, current_name: str) -> bool:
     """Someone renamed the window since the narrator last looked (human,
     tmux-native, or another route that didn't stamp). seen_name is updated
@@ -288,6 +299,11 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     gate_row = replace(row, renamed_at=renamed_at) if row is not None else None
     new_name = rename_decision(suggestion, current_name=current_name,
                                row=gate_row, now=now)
+    if new_name and _is_first_mate(w, pane_id):
+        # The first mate's own tab is never auto-renamed — its identity in the
+        # rail (the fixed 'first-mate' window) must stay stable. Status still
+        # regenerates; only the rename is suppressed.
+        new_name = None
     if new_name:
         # current_name and row are snapshots from tick start, and a tick can
         # run many seconds (sequential Haiku calls). Re-read the live window

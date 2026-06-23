@@ -177,6 +177,18 @@ function ActivityRow({ e }) {
       </li>
     );
   }
+  if (e.src === "channel") {
+    // A message periscope pushed INTO this pane — full body, not truncated.
+    return (
+      <li class="timeline-row timeline-row-channel" data-kind={e.kind}>
+        <span class="timeline-dot" style="background:var(--accent)"></span>
+        <div class="timeline-body">
+          <div class="timeline-text">{e.text}</div>
+          <div class="timeline-when">periscope · {e.kind} · {relTime(e.at)} ago</div>
+        </div>
+      </li>
+    );
+  }
   return (
     <li class="timeline-row" data-kind={e.kind}>
       <span class="timeline-dot" style={`background:${timelineColor(e.kind, e.state)}`}></span>

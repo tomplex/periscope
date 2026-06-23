@@ -402,6 +402,21 @@ def test_tick_applies_rename_and_records_event(tick_env):
                for e in events)
 
 
+def test_tick_never_renames_first_mate_by_marker(tick_env):
+    activity.set_first_mate(pane_id="%1", session_id=None, at=0)
+    tick_env["response"] = '{"status": "s", "rename": "fs-liveness"}'
+    narrator.tick([_pane()])
+    assert not any(c[0] == "rename-window" for c in tick_env["tmux_calls"])
+    assert activity.get_pane_status("%1").status == "s"   # status still lands
+
+
+def test_tick_never_renames_first_mate_by_window(tick_env):
+    tick_env["set_session"]("%2", "sid-a")
+    tick_env["response"] = '{"status": "s", "rename": "fs-liveness"}'
+    narrator.tick([_pane(pane_id="%2", name="first-mate", session="bridge")])
+    assert not any(c[0] == "rename-window" for c in tick_env["tmux_calls"])
+
+
 def test_tick_haiku_exception_keeps_previous_row(tick_env):
     narrator.tick([_pane()])
     before = activity.get_pane_status("%1")

@@ -710,9 +710,10 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
     """Push a `notifications/claude/channel` event to the Claude connected
     on `pane`. Returns True on send, False if no session attached.
 
-    The push direction has no current consumer in periscope's UI (Tom's
-    framing: this is plumbing for future external producers like webhooks
-    or autonomous TODO loops). Built so it's there when needed."""
+    On a successful send the full message is mirrored into the pane's
+    Activity timeline (a 'channel' event) so the user can see what periscope
+    pushed in. The recurring fleet_digest is excluded — it would flood the
+    first mate's timeline every heartbeat."""
     from mcp.shared.message import SessionMessage
     from mcp.types import JSONRPCMessage, JSONRPCNotification
 
@@ -730,9 +731,17 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
         await session._write_stream.send(  # type: ignore[attr-defined]
             SessionMessage(message=JSONRPCMessage(notification))
         )
-        return True
     except Exception:
         return False
+
+    kind = (meta or {}).get("kind") or "message"
+    if kind != "fleet_digest":
+        try:
+            from periscope import activity
+            activity.record("pane", pane, "channel", content, detail=kind)
+        except Exception:
+            log.warning("activity.record failed for channel push", exc_info=True)
+    return True
 
 
 def _schedule_first_mate_emit(pane_id: str, content: str) -> None:
