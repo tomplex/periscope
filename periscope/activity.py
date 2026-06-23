@@ -768,17 +768,20 @@ def _worker_tick(last_ctx: dict) -> None:
         log.exception("narrator tick failed")
     # First mate: supervisor liveness + heartbeat decision (sync; the async
     # emit is hoisted to run_worker's main loop — see _emit_pending_first_mate).
+    # Skip entirely when disabled (the sentinel kill-switch) — no respawn, no
+    # heartbeat. Killing the pane alone won't stick; the supervisor would respawn.
     try:
         from periscope import first_mate
-        first_mate.supervisor_pass(now=now)
-        cur = first_mate.build_fleet_digest(
-            panes=first_mate.assemble_pane_views(panes, now), usage=_safe_usage(), now=now,
-        )
-        push = first_mate.heartbeat_decide(
-            prev=first_mate._LAST_SENT, cur=cur, marker=get_first_mate(),
-        )
-        if push is not None:
-            last_ctx["_fm_push"] = (push.pane_id, push.content, cur)
+        if not first_mate.first_mate_disabled():
+            first_mate.supervisor_pass(now=now)
+            cur = first_mate.build_fleet_digest(
+                panes=first_mate.assemble_pane_views(panes, now), usage=_safe_usage(), now=now,
+            )
+            push = first_mate.heartbeat_decide(
+                prev=first_mate._LAST_SENT, cur=cur, marker=get_first_mate(),
+            )
+            if push is not None:
+                last_ctx["_fm_push"] = (push.pane_id, push.content, cur)
     except Exception:
         log.exception("first-mate worker pass failed")
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why

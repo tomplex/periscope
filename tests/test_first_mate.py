@@ -345,6 +345,16 @@ def test_spawn_leaves_marker_unset_on_empty_pane_id(monkeypatch, fresh_activity_
     assert activity.get_first_mate() is None   # no phantom marker -> no respawn loop
 
 
+def test_first_mate_disabled_sentinel(fresh_activity_db):
+    from periscope import first_mate, config
+    assert first_mate.first_mate_disabled() is False
+    sentinel = config.ACTIVITY_DB.parent / "first-mate.disabled"
+    sentinel.write_text("")
+    assert first_mate.first_mate_disabled() is True
+    sentinel.unlink()
+    assert first_mate.first_mate_disabled() is False
+
+
 def test_register_bridge_project_creates_null_repo_project(clean_state, tmp_path):
     import os
     from periscope import first_mate, projects

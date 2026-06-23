@@ -261,6 +261,14 @@ FIRST_MATE_SESSION = "bridge"
 FIRST_MATE_WINDOW = "first-mate"
 
 
+def first_mate_disabled() -> bool:
+    """Kill-switch: when this sentinel file exists, the worker skips the
+    supervisor + heartbeat — the first mate stays dead (no respawn) until the
+    file is removed. A bare `kill` doesn't stick; the supervisor would respawn."""
+    from periscope import config
+    return (config.ACTIVITY_DB.parent / "first-mate.disabled").exists()
+
+
 def supervisor_pass(*, now: int) -> None:
     """Ensure exactly one live first-mate pane. No-op if the marked pane is
     alive; (re)spawn + re-mark if the marker is missing or its pane is gone.
