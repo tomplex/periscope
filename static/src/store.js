@@ -10,6 +10,7 @@ import { signal } from "@preact/signals";
 
 export const windows = signal([]);            // /api/state windows (poll-fed)
 export const projects = signal([]);
+export const workspaces = signal([]);  // /api/state workspaces (poll-fed)
 export const currentFilter = signal("all");
 export const activeTarget = signal(null);     // detail-pane focused pane "session:index" (split); shared paste/poll target
 export const railSelection = signal(null);    // string highlight-key: "pane:<pid>" | "review:<worktree>" | null

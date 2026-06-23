@@ -162,7 +162,9 @@ def is_external_rename(row: PaneStatusRow, current_name: str) -> bool:
 
 
 def build_narrator_prompt(*, window_name: str, branch: str | None,
-                          pr: int | None, cwd: str, signals: dict) -> str:
+                          pr: int | None, cwd: str, signals: dict,
+                          workspace_name: str | None = None,
+                          sibling_names: list[str] | None = None) -> str:
     """One pane's status+rename prompt. The rename half splices
     rename_ai.RENAME_RULES so taste can't drift from the manual surface."""
     lines = [
@@ -210,6 +212,15 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
     files = signals.get("files_touched") or []
     if files:
         lines.append(f"files touched: {', '.join(files)}")
+    if workspace_name:
+        sibs = ", ".join(n for n in (sibling_names or []) if n) or "(none yet)"
+        lines += [
+            "",
+            f"This pane is part of the workspace GOAL: \"{workspace_name}\".",
+            f"Sibling tabs in this workspace: {sibs}.",
+            "  - The goal is shared context — do NOT repeat it in the name.",
+            "  - Name what distinguishes THIS tab from its siblings.",
+        ]
     lines += [
         "",
         'Return ONLY a JSON object: {"status": "<status line>",'
@@ -231,6 +242,17 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
     # needs them all anyway, and a per-pane SELECT would acquire
     # activity._LOCK N times per tick.
     rows = {r.pane_id: r for r in activity.all_pane_statuses()}
+    # Workspace context: pane_id → workspace_id (one bulk read) plus a
+    # per-workspace sibling-name index built from this tick's panes, so each
+    # tab can be named against its goal + siblings instead of repeating them.
+    tag_map = activity.pane_workspace_map()
+    from periscope.workspaces import all_workspaces
+    ws_names = {k: v["name"] for k, v in all_workspaces().items()}
+    siblings: dict[str, list[str]] = {}
+    for w, _parsed in panes:
+        wid = tag_map.get(w.get("pane_id") or "")
+        if wid:
+            siblings.setdefault(wid, []).append(w.get("name") or "")
     work: dict[str, tuple[dict, str, Path, int, PaneStatusRow | None, Regen]] = {}
     candidates: list[tuple[int, str]] = []
     for w, _parsed in panes:
@@ -259,15 +281,22 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
             log.exception("narrator candidate scan failed for %s", pane_id)
     for pane_id in pick_regenerations(candidates):
         w, sid, jsonl, size, row, reason = work[pane_id]
+        wid = tag_map.get(pane_id)
+        workspace_name = ws_names.get(wid) if wid else None
+        sibling_names = siblings.get(wid) if wid else None
         try:
             _generate(w, pane_id=pane_id, sid=sid, jsonl=jsonl, size=size,
-                      row=row, reason=reason, now=now)
+                      row=row, reason=reason, now=now,
+                      workspace_name=workspace_name,
+                      sibling_names=sibling_names)
         except Exception:
             log.exception("narrator generation failed for %s", pane_id)
 
 
 def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
-              row: PaneStatusRow | None, reason: Regen, now: int) -> None:
+              row: PaneStatusRow | None, reason: Regen, now: int,
+              workspace_name: str | None = None,
+              sibling_names: list[str] | None = None) -> None:
     """One pane's regeneration: signals → one Haiku call → persist row,
     maybe rename. Raises freely; tick()'s per-pane guard logs and keeps
     the previous row (natural retry next tick)."""
@@ -278,7 +307,8 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     pr = (cached_pr_state(cwd, git.get("branch")) or {}).get("pr")
     raw = claude_complete(build_narrator_prompt(
         window_name=current_name, branch=git.get("branch"), pr=pr,
-        cwd=cwd, signals=signals))
+        cwd=cwd, signals=signals, workspace_name=workspace_name,
+        sibling_names=sibling_names))
     result = parse_response(raw)
     if result is None:
         log.warning("narrator: unparseable response for %s; keeping previous "

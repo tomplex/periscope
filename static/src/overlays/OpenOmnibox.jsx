@@ -24,6 +24,7 @@ const KIND_META = {
   branch:   { group: "Branches",     icon: "⎇" },
   newbranch:{ group: "Branches",     icon: "+" },
   repo:     { group: "Repositories", icon: "◳" },
+  workspace:{ group: "Workspaces",   icon: "▧" },
 };
 
 export function OpenOmnibox() {
@@ -73,9 +74,25 @@ export function OpenOmnibox() {
     close();
   }
 
+  // Create a parked workspace (no rail-placement ui payload — it appears as a
+  // new top-level group on the next /api/state poll), then close.
+  async function post_workspace(body) {
+    const name = window.prompt("Workspace name");
+    if (!name) return;
+    setBusy(true); setError("");
+    const data = await apiCall("create workspace", "/api/workspaces", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, name }),
+    });
+    setBusy(false);
+    if (!data) { setError("create workspace failed"); return; }
+    close();
+  }
+
   function pick(card) {
     if (card.kind === "open") return post(card.descriptor);
     if (card.kind === "pr" && !card.needsRepo) return post({ repo: card.pr.repo, pr: card.pr.pr });
+    if (card.kind === "workspace") return post_workspace({ base_repo: card.repo });
     setDrill({ card });   // worktree → branch entry; pr w/o repo → repo picker
   }
 

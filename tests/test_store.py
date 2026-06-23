@@ -34,6 +34,7 @@ _V2_EMPTY_DEFAULTS = {
     "windows": {},
     "commands": [],
     "projects": {"__main__": _MAIN_PROJECT},
+    "workspaces": {},
     "settings": {},
 }
 

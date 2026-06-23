@@ -27,13 +27,13 @@
 // but keeps MAIN_KEY out of repo_order / worktrees_by_repo).
 import { useRef, useState } from "preact/hooks";
 import { track } from "../track.js";
-import { windows, projects, currentFilter, railSelection, dragState } from "../store.js";
+import { windows, projects, workspaces, currentFilter, railSelection, dragState } from "../store.js";
 import * as prefs from "../prefs.js";
 import { passesFilter } from "../filter.js";
 import { apiCall, targetQuery, shortestUniqueSuffix } from "../util.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
 import {
-  mergeLiveAndPrefs, indexWindowsByWorktree, indexProjects,
+  mergeLiveAndPrefs, indexWindowsByWorktree, indexProjects, indexWorkspaces,
   projectLabel, groupLabel, paneChip, maxSeverity, MAIN_KEY,
 } from "./railTree.js";
 import { PaneRow, ReviewRow, NewTabRow, WorktreeRow, RepoRow, WorktreeMeta } from "./RailRows.jsx";
@@ -51,6 +51,12 @@ function openLauncher(worktreeKey) {
   if (typeof fn === "function") fn(worktreeKey);
 }
 
+// Trailing path segment, for the workspace header's base-repo chip.
+function basename(p) {
+  const parts = String(p || "").split("/").filter(Boolean);
+  return parts[parts.length - 1] || p;
+}
+
 // --- syncRailPrefs: reconcile prefs with live state, throttled to 5s. --------
 // Prune dead pref entries + persist new live entries at their merged position,
 // so ordering is sticky across reloads even when the user hasn't dragged.
@@ -62,17 +68,27 @@ function syncRailPrefs() {
   lastSyncAt = Date.now();
 
   const merged = mergeLiveAndPrefs(
-    live, projects.value, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
+    live, projects.value, workspaces.value, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
   );
   const prefRepoOrder = prefs.getRepoOrder();
   const prefWtByRepo = prefs.getWorktreesByRepo();
   const prefPanesByWt = prefs.getPanesByWorktree();
 
+  // ws: keys are KEPT in repo_order (interleaved, not bottom-pinned like dev);
+  // their flat tagged-pane order persists in panes_by_worktree["ws:<id>"].
+  // Only MAIN_KEY is stripped from repo_order / worktrees_by_repo.
   const nextRepoOrder = merged.repoOrder.filter((r) => r !== MAIN_KEY);
   const nextWtByRepo = { ...merged.worktreesByRepo };
   delete nextWtByRepo[MAIN_KEY];
+  for (const k of Object.keys(nextWtByRepo)) {
+    if (k.startsWith("ws:")) delete nextWtByRepo[k];  // ws: have empty wt lists
+  }
   const nextPanesByWt = {};
   for (const r of nextRepoOrder) {
+    if (r.startsWith("ws:")) {
+      nextPanesByWt[r] = merged.panesByWorktree[r] || [];
+      continue;
+    }
     for (const wt of (nextWtByRepo[r] || [])) {
       nextPanesByWt[wt] = merged.panesByWorktree[wt] || [];
     }
@@ -108,7 +124,7 @@ function spliceMove(list, fromIdx, toIdx, insertAfter) {
 
 function currentMergedOrder() {
   return mergeLiveAndPrefs(
-    windows.value, projects.value, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
+    windows.value, projects.value, workspaces.value, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
   );
 }
 
@@ -199,8 +215,18 @@ export function Rail() {
   const projectsBySession = {};
   for (const p of projs) if (p.tmux_session) projectsBySession[p.tmux_session] = p;
   const mainProject = projsByPin[MAIN_KEY] || {};
+  const wss = workspaces.value || [];
+  const workspacesById = indexWorkspaces(wss);
+  // Options for the per-PaneRow "move to workspace" picker (non-archived; the
+  // /api/state payload already filters archived, but guard anyway).
+  const workspaceOptions = wss.filter((w) => !w.archived_at).map((w) => ({ id: w.id, name: w.name }));
+  // Across-all-windows pid → window map, for the FLAT ws:/dev lists (the
+  // per-worktree `windowsByPid` built inside the !isDev branch is scoped to a
+  // single session and can't resolve cross-session tagged pids).
+  const windowsByPid = {};
+  for (const w of live) windowsByPid[w.pid] = w;
   const { repoOrder, worktreesByRepo, panesByWorktree } = mergeLiveAndPrefs(
-    live, projs, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
+    live, projs, wss, prefs.getRepoOrder(), prefs.getWorktreesByRepo(), prefs.getPanesByWorktree()
   );
   // Universe for shortest-unique-suffix worktree labels: every non-dev
   // project's displayed name, so a label only grows a segment on real collision.
@@ -257,6 +283,50 @@ export function Rail() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: next }),
     });
+  }
+
+  // --- Workspaces ----------------------------------------------------------
+  // Tag/untag key on w.pane_id (the tmux %N the backend tag keys on) — NOT
+  // w.pid (the @periscope_id). The next poll re-merges the tagged pane into
+  // its ws:<id> group.
+  async function tagPane(w, workspaceId) {
+    await apiCall("tag", "/api/workspaces/tag", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_id: workspaceId, pane_id: w.pane_id }),
+    });
+  }
+  async function untagPane(w) {
+    await apiCall("untag", "/api/workspaces/untag", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pane_id: w.pane_id }),
+    });
+  }
+  async function promotePane(w, name) {
+    return apiCall("promote", "/api/workspaces", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, base_repo: w.repo_key || null, tag_panes: [w.pane_id] }),
+    });
+  }
+  // Row-action dispatch: "" no-op, "__new__" prompts for a name then promotes,
+  // any other value is an existing workspace id to tag into.
+  async function moveToWorkspace(w, value) {
+    if (!value) return;
+    if (value === "__new__") {
+      const name = window.prompt("Workspace name");
+      if (!name) return;
+      await promotePane(w, name);
+      return;
+    }
+    await tagPane(w, value);
+  }
+  async function spawnIntoWorkspace(wid) {
+    const branch = window.prompt("New worktree branch for this workspace:");
+    if (!branch) return;
+    const data = await apiCall("spawn", "/api/workspaces/spawn", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_id: wid, branch }),
+    });
+    if (data && data.ui) prefs.setUI(data.ui);
   }
 
   // --- Drag plumbing -------------------------------------------------------
@@ -338,7 +408,15 @@ export function Rail() {
       />
       {!projectsCollapsed && repoOrder.map((repoKey) => {
         const isDev = repoKey === MAIN_KEY;
-        const repoLabel = groupLabel(repoKey, projsByPin);
+        const isWs = repoKey.startsWith("ws:");
+        const wsRow = isWs ? (workspacesById[repoKey.slice(3)] || {}) : null;
+        // ws: groups are flat (like dev) — their tagged windows come from the
+        // across-all-windows pid map, not byWorktree (which keys on session).
+        const wsWindows = isWs
+          ? (panesByWorktree[repoKey] || []).map((pid) => windowsByPid[pid]).filter(Boolean)
+          : [];
+        const repoLabel = isWs ? (wsRow.name || repoKey.slice(3)) : groupLabel(repoKey, projsByPin);
+        const repoChip = isWs && wsRow.base_repo ? basename(wsRow.base_repo) : null;
         const worktrees = worktreesByRepo[repoKey] || [];
         const repoCollapsed = collapsed[`repo:${repoKey}`] === true;
         const devWindows = isDev
@@ -346,10 +424,14 @@ export function Rail() {
           : [];
         const repoChildStates = isDev
           ? devWindows.map((w) => w.state || "shell")
+          : isWs
+          ? wsWindows.map((w) => w.state || "shell")
           : worktrees.flatMap((wt) => (byWorktree[wt] || []).map((w) => w.state || "shell"));
         const repoRolledUp = maxSeverity(repoChildStates);
         const repoDim = isDev
           ? devWindows.some((w) => passesFilter(w, filter))
+          : isWs
+          ? wsWindows.some((w) => passesFilter(w, filter))
           : worktrees.some((wt) => (byWorktree[wt] || []).some((w) => passesFilter(w, filter)));
         const repoKeyStr = `repo:${repoKey}`;
 
@@ -358,6 +440,7 @@ export function Rail() {
             <RepoRow
               repoKey={repoKey}
               label={repoLabel}
+              chip={repoChip}
               collapsed={repoCollapsed}
               rolledUp={repoRolledUp}
               dim={repoDim}
@@ -366,6 +449,46 @@ export function Rail() {
               dragProps={makeDragProps({ kind: "repo", key: repoKeyStr })}
               dropPos={dropPosFor(repoKeyStr)}
             />
+            {isWs && !repoCollapsed && (() => {
+              // Workspace: flat pane list of explicitly-tagged tabs (dev-flat
+              // shape). Drag descriptors use the ws:<id> key as worktreeKey so
+              // cross-tab reorder passes the same-parent drop rule; order
+              // persists via panes_by_worktree["ws:<id>"] (syncRailPrefs).
+              const rows = wsWindows.map((w) => (
+                <PaneRow
+                  key={`pane:${w.pid}`}
+                  w={w}
+                  chip={paneChip(w, { isDev: true })}
+                  selectedKey={selectedKey}
+                  dim={passesFilter(w, filter)}
+                  onSelect={selectKey}
+                  onClose={() => closePane(w)}
+                  onRename={(next) => renamePane(w, next)}
+                  onUntag={() => untagPane(w)}
+                  workspaceOptions={workspaceOptions}
+                  onMoveToWorkspace={(val) => moveToWorkspace(w, val)}
+                  dragProps={makeDragProps({ kind: "pane", key: `pane:${w.pid}`, childKey: w.pid, worktreeKey: repoKey })}
+                  dropPos={dropPosFor(`pane:${w.pid}`)}
+                  pinned={prefs.getPinnedPids().includes(w.pid)}
+                  onTogglePin={() => prefs.togglePin(w.pid)}
+                />
+              ));
+              if (rows.length === 0) {
+                rows.push(
+                  <div key={`parked:${repoKey}`} class="rail-row child-row rail-dim">
+                    <span class="rail-label">parked · spawn from base</span>
+                  </div>
+                );
+              }
+              rows.push(
+                <NewTabRow
+                  key={`newtab:${repoKey}`}
+                  worktreeKey={repoKey}
+                  onOpen={() => spawnIntoWorkspace(repoKey.slice(3))}
+                />
+              );
+              return rows;
+            })()}
             {isDev && !repoCollapsed && (() => {
               // Dev: flat pane list across __main__'s session + folded
               // ad-hoc sessions. Drag descriptors use MAIN_KEY as the
@@ -384,6 +507,8 @@ export function Rail() {
                     onSelect={selectKey}
                     onClose={() => closePane(w)}
                     onRename={(next) => renamePane(w, next)}
+                    workspaceOptions={workspaceOptions}
+                    onMoveToWorkspace={(val) => moveToWorkspace(w, val)}
                     dragProps={makeDragProps({ kind: "pane", key: `pane:${w.pid}`, childKey: w.pid, worktreeKey: MAIN_KEY })}
                     dropPos={dropPosFor(`pane:${w.pid}`)}
                     pinned={prefs.getPinnedPids().includes(w.pid)}
@@ -435,6 +560,8 @@ export function Rail() {
                       onSelect={selectKey}
                       onClose={() => closePane(w)}
                       onRename={(next) => renamePane(w, next)}
+                      workspaceOptions={workspaceOptions}
+                      onMoveToWorkspace={(val) => moveToWorkspace(w, val)}
                       dragProps={makeDragProps({ kind: "pane", key: `pane:${w.pid}`, childKey: w.pid, worktreeKey: wtKey })}
                       dropPos={dropPosFor(`pane:${w.pid}`)}
                       pinned={prefs.getPinnedPids().includes(w.pid)}

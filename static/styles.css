@@ -1872,12 +1872,36 @@ body.modal-open { overflow: hidden; }
    .stale = generated >15 min ago (poll keeps it; the work likely moved on). */
 .rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 0; }
 .pane-row-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.pane-row .rail-status { margin-left: 21px; }  /* icon 14px + 7px gap — align with the label */
+/* Line 2: chip + narrator status share a flex row. The chip truncates first
+   (flex: 0 1 auto + ellipsis); the status verb wins the remaining space
+   (flex: 1 1 auto). Indented to align with the label past the icon column. */
+.rail-meta {
+  display: flex; align-items: baseline; gap: 6px;
+  margin-left: 21px;  /* icon 14px + 7px gap — align with the label */
+  min-width: 0;
+}
+.rail-meta.stale { opacity: .5; }
 .rail-status {
+  flex: 1 1 auto; min-width: 0;
   font-size: 11px; color: var(--fg-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .rail-status.stale { opacity: .5; }
+
+/* Workspace tagging affordances on a pane row (hover-revealed, like the pin). */
+#rail .child-row .rail-ws-pick {
+  opacity: 0; margin-left: auto;
+  background: none; border: 0; color: var(--fg-3); font-size: 10px; cursor: pointer;
+}
+#rail .child-row:hover .rail-ws-pick { opacity: 1; }
+#rail .child-row .rail-ws-clear {
+  opacity: 0; margin-left: auto;
+  background: none; border: 0; color: var(--fg-3); font-size: 11px; cursor: pointer;
+}
+#rail .child-row:hover .rail-ws-clear { opacity: 1; }
+/* When the pane is tagged, the chip lives on line 2; the clear button on line 1
+   needs the margin-left:auto to push it right, same as the picker. */
+.rail-chip-repo { margin-left: 6px; flex: 0 1 auto; min-width: 0; }
 
 /* Affiliation chip — where the pane's cwd actually is when it differs from
    its project's pin (session-anchored rail: the row never moves on cd, the

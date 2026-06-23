@@ -37,11 +37,20 @@ export function indexProjects(projects) {
   return out;
 }
 
+// { id: workspaceRow } from the /api/state workspaces payload.
+export function indexWorkspaces(workspaces) {
+  const out = {};
+  for (const w of (workspaces || [])) out[w.id] = w;
+  return out;
+}
+
 // Window → top-level group key. Folds to MAIN_KEY when the window has no
 // project pin, is pinned to main, or its pin has no row in the payload
 // (archived project or just-deleted race — projects_view filters archived).
 // Null-repo projects key their own group by pinned_dir.
-export function groupKeyForWindow(w, projectsByPin) {
+export function groupKeyForWindow(w, projectsByPin, workspacesById) {
+  const wid = w.workspace_id;
+  if (wid && workspacesById && workspacesById[wid]) return `ws:${wid}`;
   const pin = w.project_pinned_dir;
   if (!pin || pin === MAIN_KEY) return MAIN_KEY;
   const row = projectsByPin[pin];
@@ -60,13 +69,21 @@ export function groupKeyForWindow(w, projectsByPin) {
 //   worktreesByRepo  — group key → ordered session list ([] for MAIN_KEY)
 //   panesByWorktree  — session → ordered child keys (pids + "review");
 //                      panesByWorktree[MAIN_KEY] = flat dev pid order
-export function mergeLiveAndPrefs(windows, projects, prefRepoOrder, prefWtByRepo, prefPanesByWt) {
+export function mergeLiveAndPrefs(windows, projects, workspaces, prefRepoOrder, prefWtByRepo, prefPanesByWt) {
   const projectsByPin = indexProjects(projects);
+  const workspacesById = indexWorkspaces(workspaces);
+  const allWsKeys = (workspaces || []).map(w => `ws:${w.id}`);
   const liveByRepo = {};       // group key → ordered session list (first-seen)
   const livePanesByWt = {};    // session → ordered pane pids (first-seen)
   const liveDevPids = [];      // flat dev membership (cross-session)
+  const livePanesByWs = {};    // ws:<id> → flat tagged pid order (cross-session)
   for (const w of (windows || [])) {
-    const g = groupKeyForWindow(w, projectsByPin);
+    const g = groupKeyForWindow(w, projectsByPin, workspacesById);
+    if (g.startsWith("ws:")) {
+      if (!livePanesByWs[g]) livePanesByWs[g] = [];
+      if (!livePanesByWs[g].includes(w.pid)) livePanesByWs[g].push(w.pid);
+      continue;
+    }
     if (g === MAIN_KEY) {
       if (!liveDevPids.includes(w.pid)) liveDevPids.push(w.pid);
       continue;
@@ -78,17 +95,23 @@ export function mergeLiveAndPrefs(windows, projects, prefRepoOrder, prefWtByRepo
     if (!livePanesByWt[s].includes(w.pid)) livePanesByWt[s].push(w.pid);
   }
 
-  // Repo order: prefs first (filtered to live), then live-new appended.
-  // Dev always lands at the bottom regardless of pref order.
+  // Top-level order: pref-first (kept iff a live repo OR a current ws key),
+  // then live-new repos, then ws keys not yet in pref (parked / new). ws keys
+  // are interleaved (NOT bottom-pinned). Dev (MAIN_KEY) is always last.
   const liveRepoSet = new Set(Object.keys(liveByRepo));
-  const realRepos = [...prefRepoOrder.filter(r => liveRepoSet.has(r) && r !== MAIN_KEY),
-                     ...Object.keys(liveByRepo).filter(r => !prefRepoOrder.includes(r) && r !== MAIN_KEY)];
-  const repoOrder = liveDevPids.length ? [...realRepos, MAIN_KEY] : realRepos;
+  const wsKeySet = new Set(allWsKeys);
+  const keep = (k) => k !== MAIN_KEY && (liveRepoSet.has(k) || wsKeySet.has(k));
+  const fromPref = prefRepoOrder.filter(keep);
+  const fromPrefSet = new Set(fromPref);
+  const newRepos = Object.keys(liveByRepo).filter(r => !fromPrefSet.has(r) && r !== MAIN_KEY);
+  const newWs = allWsKeys.filter(k => !fromPrefSet.has(k));
+  const realTop = [...fromPref, ...newRepos, ...newWs];
+  const repoOrder = liveDevPids.length ? [...realTop, MAIN_KEY] : realTop;
 
-  // Session order per repo group: same pref-first logic.
+  // Worktree (session) lists: ws:/dev are flat → [].
   const worktreesByRepo = {};
   for (const r of repoOrder) {
-    if (r === MAIN_KEY) { worktreesByRepo[r] = []; continue; }
+    if (r === MAIN_KEY || r.startsWith("ws:")) { worktreesByRepo[r] = []; continue; }
     const live = liveByRepo[r] || [];
     const liveSet = new Set(live);
     const pref = (prefWtByRepo[r] || []).filter(w => liveSet.has(w));
@@ -96,14 +119,11 @@ export function mergeLiveAndPrefs(windows, projects, prefRepoOrder, prefWtByRepo
     worktreesByRepo[r] = [...pref, ...live.filter(w => !prefSet.has(w))];
   }
 
-  // Pane-children order per session: prefs first (filtered), then new live
-  // pids. The "review" sentinel is auto-added for repo-backed project
-  // sessions only — a null-repo project's group gets none (LGTM review of
-  // a non-git dir is a dead row; LGTM just degrades silently).
+  // Pane children per repo session (unchanged); ws:/dev handled flat below.
   const panesByWorktree = {};
   for (const r of repoOrder) {
-    if (r === MAIN_KEY) continue;
-    const own = projectsByPin[r];           // set iff r is a null-repo project's own group
+    if (r === MAIN_KEY || r.startsWith("ws:")) continue;
+    const own = projectsByPin[r];
     const hasReview = !(own && !own.repo);
     for (const w of worktreesByRepo[r]) {
       const live = livePanesByWt[w] || [];
@@ -116,14 +136,21 @@ export function mergeLiveAndPrefs(windows, projects, prefRepoOrder, prefWtByRepo
       panesByWorktree[w] = merged;
     }
   }
-  // Dev: flat unified pid order under the synthetic MAIN_KEY child key —
-  // this is what makes cross-session drag inside dev satisfy the existing
-  // same-worktreeKey drop rule, and what syncRailPrefs persists.
+  // Dev flat (unchanged).
   if (liveDevPids.length) {
     const liveSet = new Set(liveDevPids);
     const pref = (prefPanesByWt[MAIN_KEY] || []).filter(p => liveSet.has(p));
     const prefSet = new Set(pref);
     panesByWorktree[MAIN_KEY] = [...pref, ...liveDevPids.filter(p => !prefSet.has(p))];
+  }
+  // Workspace flat: ALWAYS build (parked → []), so every non-archived
+  // workspace renders. pref-first pid order, then new live tagged pids.
+  for (const k of allWsKeys) {
+    const live = livePanesByWs[k] || [];
+    const liveSet = new Set(live);
+    const pref = (prefPanesByWt[k] || []).filter(p => liveSet.has(p));
+    const prefSet = new Set(pref);
+    panesByWorktree[k] = [...pref, ...live.filter(p => !prefSet.has(p))];
   }
 
   return { repoOrder, worktreesByRepo, panesByWorktree };

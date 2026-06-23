@@ -106,7 +106,10 @@ function RailLabel({ label, kind, renameable, onCommit }) {
   );
 }
 
-export function PaneRow({ w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos, pinned, onTogglePin }) {
+export function PaneRow({
+  w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
+  pinned, onTogglePin, workspaceOptions, onMoveToWorkspace, onUntag,
+}) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey ? " selected" : "";
   const dimCls = dim ? "" : " rail-dim";
@@ -127,13 +130,35 @@ export function PaneRow({ w, chip, selectedKey, onSelect, onClose, onRename, dim
           ? <span class="rail-icon icon-claude">✻</span>
           : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
-        {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
+        {/* chip moved to line 2 (.rail-meta) below */}
         {w.burn_hot && (
           <span
             class="rail-burn"
             title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
           >🔥</span>
         )}
+        {/* Workspace tagging: a tagged tab gets a clear button; an untagged
+            tab gets a hover-revealed picker (existing workspaces + New…). */}
+        {w.workspace_id
+          ? (onUntag && (
+              <button
+                class="rail-ws-clear"
+                title="remove from workspace"
+                onClick={(e) => { e.stopPropagation(); onUntag(); }}
+              >⧉×</button>
+            ))
+          : (onMoveToWorkspace && (
+              <select
+                class="rail-ws-pick"
+                title="move to workspace"
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => { const v = e.target.value; e.target.value = ""; onMoveToWorkspace(v); }}
+              >
+                <option value="">＋ws</option>
+                {(workspaceOptions || []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                <option value="__new__">New workspace…</option>
+              </select>
+            ))}
         <button
           class={`rail-pin${pinned ? " pinned" : ""}`}
           title={pinned ? "unpin" : "pin"}
@@ -146,11 +171,15 @@ export function PaneRow({ w, chip, selectedKey, onSelect, onClose, onRename, dim
           onClick={(e) => { e.stopPropagation(); onClose(); }}
         >×</button>
       </div>
-      {w.status_line && (
-        <span
-          class={`rail-status${statusStale ? " stale" : ""}`}
-          title={w.status_line}
-        >{w.status_rail || w.status_line}</span>
+      {(chip || w.status_line) && (
+        <div class={`rail-meta${statusStale ? " stale" : ""}`}>
+          {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
+          {w.status_line && (
+            <span class="rail-status" title={w.status_line}>
+              {w.status_rail || w.status_line}
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -259,11 +288,13 @@ export function WorktreeRow({
   );
 }
 
-export function RepoRow({ repoKey, label, collapsed, rolledUp, dim, isDev, onToggle, dragProps, dropPos }) {
+export function RepoRow({ repoKey, label, chip, collapsed, rolledUp, dim, isDev, onToggle, dragProps, dropPos }) {
   const chev = collapsed ? "▸" : "▾";
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
+  const isWs = String(repoKey || "").startsWith("ws:");
   // "dev" is pinned to the bottom — never draggable; omit the drag props.
+  // Workspaces ARE reorderable (interleaved among repos), so they keep them.
   return (
     <div
       class={`rail-row repo-row${dimCls}${drop}`}
@@ -275,8 +306,11 @@ export function RepoRow({ repoKey, label, collapsed, rolledUp, dim, isDev, onTog
       <span class="rail-chev">{chev}</span>
       {isDev
         ? <span class="rail-icon icon-other">◇</span>
+        : isWs
+        ? <span class="rail-icon icon-workspace">▧</span>
         : <span class="rail-icon icon-repo">◆</span>}
       <span class="rail-label"><b>{label}</b></span>
+      {chip && <span class="rail-chip rail-chip-repo" title={chip}>⟨{chip}⟩</span>}
       <span class={statusDotClass(rolledUp)}></span>
     </div>
   );

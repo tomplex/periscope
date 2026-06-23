@@ -178,6 +178,11 @@ def build_window_view(
     pinned_for_aff = project_key if project_key and project_key != "__main__" else None
     aff = affiliation(w.get("cwd", ""), pinned_for_aff, project.get("repo"))
 
+    # Function-scope import: workspaces → activity, avoiding any import-order
+    # surprise at module load. Resolves the pane's workspace tag (or None).
+    from periscope.workspaces import resolve_workspace_for_window
+    workspace_id = resolve_workspace_for_window(w)
+
     view = {
         **w, **parsed, **git, **pr,
         "target": target,
@@ -196,6 +201,7 @@ def build_window_view(
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,
         "lgtm": lgtm,
+        "workspace_id": workspace_id,
         "project_pinned_dir": project_key,
         "project_name": project.get("name"),
         "project_archived": bool(project.get("archived_at")),

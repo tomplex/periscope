@@ -8,6 +8,7 @@
 import {
   windows,
   projects,
+  workspaces,
   usage,
   editingTarget,
   dragState,
@@ -38,6 +39,7 @@ export async function poll() {
     const data = await res.json();
     windows.value = data.windows || [];
     projects.value = data.projects || [];
+    workspaces.value = data.workspaces || [];
     syncTabsFromWindows(windows.value);
     // UsagePill reads { plan, fallback }.
     usage.value = { plan: data.usage_plan, fallback: data.usage };

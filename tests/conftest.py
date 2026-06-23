@@ -73,6 +73,7 @@ def clean_state(tmp_xdg_home, monkeypatch):
         "windows": {},
         "commands": [],
         "projects": {},
+        "workspaces": {},
         "settings": {},
     }
     monkeypatch.setattr(store, "_STATE", fresh)

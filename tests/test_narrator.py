@@ -268,6 +268,28 @@ def test_build_narrator_prompt_includes_rail_rules():
     assert "f2-post-deploy" in rules_block
 
 
+def test_prompt_includes_workspace_and_siblings():
+    from periscope.narrator import build_narrator_prompt
+    p = build_narrator_prompt(
+        window_name="token-store", branch="auth-core", pr=None, cwd="/dev/fdy",
+        signals={}, workspace_name="Auth refactor",
+        sibling_names=["rename-flow", "token-store"],
+    )
+    assert "Auth refactor" in p
+    assert "rename-flow" in p
+    # the don't-repeat-the-goal rule is present
+    assert "don't repeat" in p.lower() or "do not repeat" in p.lower()
+
+
+def test_prompt_without_workspace_unchanged():
+    from periscope.narrator import build_narrator_prompt
+    p = build_narrator_prompt(
+        window_name="x", branch=None, pr=None, cwd="/dev/x", signals={},
+        workspace_name=None, sibling_names=[],
+    )
+    assert "Auth refactor" not in p
+
+
 # ---- disabled latch ----
 
 def test_enabled_true_with_key(monkeypatch):

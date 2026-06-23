@@ -220,6 +220,21 @@ def _gc_projects(projects: dict, now_ts: int) -> bool:
     return dirty
 
 
+def _gc_workspaces(workspaces: dict, now_ts: int) -> bool:
+    """GC the `workspaces` block: drop workspaces archived more than 30 days
+    ago. Mirrors `_gc_projects` — runs inside the caller's `_STATE_LOCK`,
+    does NOT acquire it or write state, returns True if anything was deleted.
+    """
+    dirty = False
+    cutoff = now_ts - _PID_TTL_S
+    for key in list(workspaces.keys()):
+        archived_at = workspaces[key].get("archived_at")
+        if archived_at and archived_at < cutoff:
+            del workspaces[key]
+            dirty = True
+    return dirty
+
+
 def resolve_pids(windows: list[dict]) -> None:
     """Mutates `windows` in place, adding a `pid` field to every entry.
 
@@ -262,6 +277,10 @@ def resolve_pids(windows: list[dict]) -> None:
         # Phase 3: archived-project GC.
         projects = _store._STATE.setdefault("projects", {})
         if _gc_projects(projects, now_ts):
+            dirty = True
+        # Phase 4: archived-workspace GC.
+        wss = _store._STATE.setdefault("workspaces", {})
+        if _gc_workspaces(wss, now_ts):
             dirty = True
         if dirty:
             _store._write_state(_store._STATE)

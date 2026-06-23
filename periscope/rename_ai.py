@@ -44,6 +44,8 @@ RENAME_RULES = [
     "- Good: 'postcode-ingestion', 'monitoring-cert', 'rust-port', 'fs-liveness'",
     "- If the existing name still captures the work accurately, KEEP IT.",
     "  Don't change names just to feel like progress.",
+    "- If a workspace goal is provided, don't repeat the goal; pick the name",
+    "  that sets this tab apart from its siblings.",
 ]
 
 
