@@ -75,14 +75,15 @@ export function OpenOmnibox() {
   }
 
   // Create a parked workspace (no rail-placement ui payload — it appears as a
-  // new top-level group on the next /api/state poll), then close.
-  async function post_workspace(body) {
-    const name = window.prompt("Workspace name");
+  // new top-level group on the next /api/state poll), then close. Name comes
+  // from the inline NameDrill, NOT window.prompt — prompt() is a silent no-op
+  // in the Tauri WKWebView shell.
+  async function post_workspace(repo, name) {
     if (!name) return;
     setBusy(true); setError("");
     const data = await apiCall("create workspace", "/api/workspaces", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, name }),
+      body: JSON.stringify({ base_repo: repo || null, name }),
     });
     setBusy(false);
     if (!data) { setError("create workspace failed"); return; }
@@ -92,8 +93,7 @@ export function OpenOmnibox() {
   function pick(card) {
     if (card.kind === "open") return post(card.descriptor);
     if (card.kind === "pr" && !card.needsRepo) return post({ repo: card.pr.repo, pr: card.pr.pr });
-    if (card.kind === "workspace") return post_workspace({ base_repo: card.repo });
-    setDrill({ card });   // worktree → branch entry; pr w/o repo → repo picker
+    setDrill({ card });   // worktree → branch entry; workspace → name entry; pr w/o repo → repo picker
   }
 
   // Main palette items = ranked cards, decorated with section + glyph.
@@ -114,6 +114,11 @@ export function OpenOmnibox() {
         {drill && drill.card.kind === "worktree" && (
           <BranchDrill card={drill.card}
             onPick={(branch) => post({ repo: drill.card.repo, branch })}
+            onBack={() => setDrill(null)} />
+        )}
+        {drill && drill.card.kind === "workspace" && (
+          <NameDrill card={drill.card}
+            onPick={(name) => post_workspace(drill.card.repo, name)}
             onBack={() => setDrill(null)} />
         )}
         {drill && drill.card.kind === "pr" && (
@@ -208,6 +213,23 @@ function BranchDrill({ card, onPick, onBack }) {
     <Palette value={val} onInput={setVal} placeholder={`branch in ${card.repo}…`}
              items={items} onPick={(it) => onPick(it.value)} onBack={onBack}
              empty="type a new branch name…" />
+  );
+}
+
+// Name entry for a new workspace. Typing a name surfaces a single "create"
+// card; Enter (or click) creates it. Inline so it works in the Tauri shell,
+// where window.prompt is a silent no-op.
+function NameDrill({ card, onPick, onBack }) {
+  const [val, setVal] = useState("");
+  const name = val.trim();
+  const items = name
+    ? [{ key: `__ws:${name}`, group: "New workspace", icon: "▧",
+         label: `create workspace "${name}"`, sub: card.repo, value: name }]
+    : [];
+  return (
+    <Palette value={val} onInput={setVal} placeholder={`name this workspace (base: ${card.repo})…`}
+             items={items} onPick={(it) => onPick(it.value)} onBack={onBack}
+             empty="type a workspace name…" />
   );
 }
 
