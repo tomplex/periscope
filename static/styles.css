@@ -1892,6 +1892,19 @@ body.modal-open { overflow: hidden; }
    tag, out to untag) — no inline button, so the name keeps the full width. */
 .rail-chip-repo { margin-left: 6px; flex: 0 1 auto; min-width: 0; }
 
+/* Parked-workspace body doubles as a drop zone for tagging tabs by drag. The
+   "drop here" state (only while a tab is being dragged) gets a dashed accent
+   outline so the target is obvious — an empty workspace's header alone is too
+   thin to hit reliably. */
+.rail-row.child-row.ws-park { font-style: italic; }
+.rail-row.child-row.ws-park-drop {
+  outline: 1px dashed var(--accent);
+  outline-offset: -3px;
+  border-radius: 4px;
+  color: var(--accent);
+  font-style: normal;
+}
+
 /* Affiliation chip — where the pane's cwd actually is when it differs from
    its project's pin (session-anchored rail: the row never moves on cd, the
    chip carries the location instead). */

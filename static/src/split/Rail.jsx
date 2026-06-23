@@ -482,9 +482,23 @@ export function Rail() {
                 />
               ));
               if (rows.length === 0) {
+                // Parked (no tagged tabs yet). Make the body a real drop zone —
+                // an empty workspace's header is a 1-line target that's easy to
+                // miss; this gives the whole body the same {kind:"repo"} drop
+                // desc so a dragged tab tags into the workspace. Reading
+                // dragState here re-renders the row when a drag starts/ends so
+                // the "drop here" affordance shows only while dragging a tab.
+                const draggingPane = dragState.value && dragState.value.kind === "pane";
                 rows.push(
-                  <div key={`parked:${repoKey}`} class="rail-row child-row rail-dim">
-                    <span class="rail-label">parked · spawn from base</span>
+                  <div
+                    key={`parked:${repoKey}`}
+                    class={`rail-row child-row ws-park${draggingPane ? " ws-park-drop" : " rail-dim"}${dropPosFor(repoKeyStr) ? " drop-target" : ""}`}
+                    data-drop-pos={dropPosFor(repoKeyStr) || undefined}
+                    {...makeDragProps({ kind: "repo", key: repoKeyStr })}
+                  >
+                    <span class="rail-label">
+                      {draggingPane ? "drop a tab here to add it" : "parked · drag a tab in, or spawn ↓"}
+                    </span>
                   </div>
                 );
               }
