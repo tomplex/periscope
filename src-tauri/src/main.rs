@@ -5,6 +5,7 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuild
 use tauri::Manager;
 
 mod notifications;
+mod text_behavior;
 
 fn main() {
     tauri::Builder::default()
@@ -24,6 +25,7 @@ fn main() {
             // submenu, paste in input fields silently fails.
             let handle = app.handle();
             notifications::init(handle);
+            text_behavior::disable_automatic_text_behaviors();
             let app_submenu = SubmenuBuilder::new(handle, "Periscope")
                 .item(&PredefinedMenuItem::about(handle, Some("Periscope"), None)?)
                 .separator()
