@@ -31,7 +31,7 @@ import { windows, projects, workspaces, currentFilter, railSelection, dragState 
 import * as prefs from "../prefs.js";
 import { passesFilter } from "../filter.js";
 import { apiCall, targetQuery, shortestUniqueSuffix } from "../util.js";
-import { confirmDialog } from "../overlays/Dialog.jsx";
+import { confirmDialog, promptDialog } from "../overlays/Dialog.jsx";
 import {
   mergeLiveAndPrefs, indexWindowsByWorktree, indexProjects, indexWorkspaces,
   projectLabel, groupLabel, paneChip, maxSeverity, MAIN_KEY,
@@ -315,8 +315,11 @@ export function Rail() {
     });
   }
   async function spawnIntoWorkspace(wid) {
-    const branch = window.prompt("New worktree branch for this workspace:");
-    if (!branch) return;
+    // In-app dialog, not window.prompt (a silent no-op in the Tauri shell).
+    const branch = await promptDialog("New worktree branch for this workspace:", {
+      placeholder: "branch name",
+    });
+    if (!branch || !branch.trim()) return;
     const data = await apiCall("spawn", "/api/workspaces/spawn", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspace_id: wid, branch }),
