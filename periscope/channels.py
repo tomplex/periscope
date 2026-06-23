@@ -599,6 +599,18 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
                      if w["session"] == session and w.get("pid_raw")]
         open_ops.place_in_rail(session, project, pane_pids or [pid])
 
+    # Tag the spawned pane into a periscope workspace (goal-scoped rail group),
+    # if asked. Keyed on the tmux pane_id (%N) — the same id the dashboard's
+    # drag-to-tag uses. Distinct from `workspace` (same/new), which controls
+    # tmux placement. Unknown id → skip silently (the spawn still succeeded).
+    tagged_workspace = None
+    ws_id = str(arguments.get("workspace_id") or "").strip()
+    if ws_id and pane_id:
+        from periscope import activity, workspaces as _workspaces
+        if _workspaces.get_workspace(ws_id):
+            activity.set_pane_workspace(pane_id, ws_id)
+            tagged_workspace = ws_id
+
     body = {
         "ok": True,
         "target": target,
@@ -606,6 +618,7 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         "index": index,
         "pid": pid,
         "pane_id": pane_id,
+        "workspace_id": tagged_workspace,
     }
     return _tool_result(body)
 
@@ -1095,9 +1108,10 @@ _CHANNEL_TOOLS = [
             "in a different worktree; \"new\" when the spawn is "
             "DISTINCT work the user would track separately — it "
             "becomes its own top-level item anchored to its "
-            "worktree. Returns target / session / index / pid / "
-            "pane_id for the spawned pane — keep them so you can "
-            "address it again later."
+            "worktree. Pass `workspace_id` to tag the spawned tab "
+            "into a goal-scoped periscope workspace. Returns target "
+            "/ session / index / pid / pane_id for the spawned pane "
+            "— keep them so you can address it again later."
         ),
         "inputSchema": {
             "type": "object",
@@ -1132,6 +1146,16 @@ _CHANNEL_TOOLS = [
                 "name": {
                     "type": "string",
                     "description": "Optional name for the new tmux window.",
+                },
+                "workspace_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional periscope workspace id (e.g. \"ws_auth-refactor\") "
+                        "to tag the spawned tab into — it then renders under that "
+                        "goal-scoped rail group. Use to fan out several tabs toward "
+                        "one goal. Distinct from `workspace` (which controls tmux "
+                        "placement). Unknown ids are ignored."
+                    ),
                 },
             },
             "required": ["prompt"],
