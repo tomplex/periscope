@@ -32,4 +32,14 @@ describe("classify", () => {
   it("returns nothing for an empty query", () => {
     expect(classify("", catalog)).toEqual([]);
   });
+  it("pins the create actions (worktree, workspace) above open-existing", () => {
+    const cards = classify("splash", catalog);
+    const firstOpen = cards.findIndex(c => c.kind === "open");
+    const wt = cards.findIndex(c => c.kind === "worktree");
+    const ws = cards.findIndex(c => c.kind === "workspace");
+    expect(wt).toBeGreaterThanOrEqual(0);
+    expect(ws).toBeGreaterThanOrEqual(0);
+    expect(wt).toBeLessThan(firstOpen);
+    expect(ws).toBeLessThan(firstOpen);
+  });
 });

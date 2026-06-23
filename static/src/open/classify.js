@@ -21,20 +21,29 @@ export function classify(query, catalog) {
   const cards = [];
   if (!q) return cards;
 
-  for (const w of catalog.worktrees || []) {
-    if (match(w.path, q) || match(w.branch || "", q)) {
-      const repoLabel = (catalog.repos.find(r => r.repo === w.repo) || {}).label || w.repo;
-      cards.push({ kind: "open", label: `${repoLabel} · ${w.branch || "detached"}`,
-                   sub: w.path, descriptor: { path: w.path } });
-    }
-  }
+  // Create actions lead — a new worktree or workspace is almost always the
+  // target, so they sit above "open existing". Grouped by kind (all new-worktree
+  // cards, then all new-workspace cards) so each section header appears once
+  // even when several repos match.
   for (const r of catalog.repos || []) {
     if (match(r.label, q) || match(r.repo, q)) {
       cards.push({ kind: "worktree", label: `${r.label} · new worktree…`,
                    sub: `off origin/${r.default_branch || "HEAD"}`,
                    repo: r.repo, branches: r.branches, descriptor: null });
+    }
+  }
+  for (const r of catalog.repos || []) {
+    if (match(r.label, q) || match(r.repo, q)) {
       cards.push({ kind: "workspace", label: `${r.label} · new workspace…`,
                    sub: "goal-scoped group", repo: r.repo, descriptor: null });
+    }
+  }
+  // Open an existing worktree by path/branch match.
+  for (const w of catalog.worktrees || []) {
+    if (match(w.path, q) || match(w.branch || "", q)) {
+      const repoLabel = (catalog.repos.find(r => r.repo === w.repo) || {}).label || w.repo;
+      cards.push({ kind: "open", label: `${repoLabel} · ${w.branch || "detached"}`,
+                   sub: w.path, descriptor: { path: w.path } });
     }
   }
   const pr = parsePrRef(q);
