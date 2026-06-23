@@ -61,10 +61,10 @@ counts:
 
 1. **Reuses what periscope already is.** Periscope already spawns Claude panes
    (`first_mate._spawn_first_mate`, `worktree_spawn._layout_two_window`),
-   delivers input to panes (`/api/send` → `tmux.deliver_input`, paste-buffer +
-   Enter), and renders a pane's conversation as a structured transcript
-   (`turns.get_turns_for_pane`, `GET /api/pane/turns`). A commander pane is just
-   a pane.
+   delivers input to panes (`/api/send` → `send._send_to_target`, paste-buffer +
+   Enter with the bracketed-paste delay), and renders a pane's conversation as a
+   structured transcript (`turns.get_turns_for_pane`, `GET /api/pane/turns`). A
+   commander pane is just a pane.
 2. **The pane-scoping "problem" inverts into a feature.** The channel MCP tools
    key off the caller's `$TMUX_PANE`. The commander, being a real pane with a
    pane id, uses them with correct context — no refactor to make them
@@ -86,14 +86,14 @@ omnibox "⚡ run: <text>"
    │  POST /api/command {text}
    ▼
 routes/command.py
-   │  1. ensure_commander()      ← boot-spawn + lazy heal (respawn if dead)
-   │  2. deliver text as a turn  ← tmux.deliver_input (paste-buffer + Enter)
-   │  3. return {session, index} ← the commander pane's address
+   │  1. ensure_commander()         ← boot-spawn + lazy heal (respawn if dead), single-flight locked
+   │  2. _send_to_target(paste=text, keys=["Enter"])  ← send.py paste-buffer + 100ms + Enter
+   │  3. return {session, index}     ← the commander pane's address
    ▼
 commander pane  (bridge:commander — a real Claude Code, Sonnet)
    │  reads code to resolve refs (Grep/Glob/Read)
    │  calls channel MCP tools:
-   │    create_workspace · open · spawn_claude · list_claudes · peek · send_to …
+   │    create_workspace · open · spawn_claude(workspace="new") · list_claudes · peek · send_to …
    ▼
 periscope state mutates → rail updates on next /api/state poll
    │
@@ -107,11 +107,12 @@ to X and another to Y"*
 
 1. Omnibox `POST /api/command {text}`.
 2. `ensure_commander()` confirms the marker's pane is live (respawns if not),
-   then `deliver_input(commander_target, text)`.
+   then `send._send_to_target(commander_target, paste=text, keys=["Enter"])`
+   delivers the command as a submitted turn.
 3. The commander Greps/Reads to resolve "attribute config refactor" → a repo,
    calls `create_workspace(name="attribute config refactor", base_repo=<repo>)`
-   → `workspace_id`, then `spawn_claude(prompt=X, workspace_id, cwd=<repo>)` and
-   `spawn_claude(prompt=Y, workspace_id, cwd=<repo>)`.
+   → `workspace_id`, then `spawn_claude(prompt=X, workspace="new", workspace_id,
+   cwd=<repo>)` and the same for Y.
 4. Each tool mutates periscope; the workspace and two panes materialize and
    appear in the rail on the next 3s `/api/state` poll.
 5. The omnibox console polls `/api/pane/turns` for the commander pane, rendering
@@ -121,39 +122,53 @@ to X and another to Y"*
 
 ### `periscope/first_mate.py` → commander core
 
-Rename the module and its identifiers to `commander` (via refactor-mcp, LSP-backed)
-for clarity; the marker table, session/window constants, and spawn function come
-along. (If churn is a concern, the names can stay; the behavior change is what
-matters. Default: rename.)
+Rename the module and its identifiers to `commander` (via refactor-mcp,
+LSP-backed) for clarity; the marker table, session/window constants, and spawn
+function come along. **The rename must update `narrator.py`** (see below), which
+imports `FIRST_MATE_SESSION`/`FIRST_MATE_WINDOW` and calls `get_first_mate`. (If
+churn is a concern the names can stay; behavior change is what matters. Default:
+rename.)
 
 **Strip** (the proactive "tick with ongoing work"):
 - `fleet_diverged`, `heartbeat_decide`, `_render_delta`, `Push`, `_LAST_SENT`.
+- `build_fleet_digest`, `assemble_pane_views`, `_curate_pane` — these existed
+  only to feed digests/the `fleet_digest` tool, which is dropped (see channels).
 - `supervisor_pass` as a *tick* entry point (the ensure logic survives as
   `ensure_commander`, called at boot + on send rather than every 30s).
 - `first_mate_disabled()` sentinel kill-switch (a manual feature with no
   autonomous respawn to suppress; a stop is "kill the pane").
+- `register_bridge_project` — **deleted**, not repurposed (there is no
+  "exclude project" concept in `projects.py`; hiding is "don't register +
+  filter", see Visibility). Its test is deleted too.
 
 **Keep / repurpose:**
 - `_spawn_first_mate` → `_spawn_commander`: same sequence (ensure session, open
   window, `claude_exec()` + `--append-system-prompt "$(cat file)"`,
   `dismiss_dev_channels_consent_bg`, `stamp_new_window`, read pane id, set
-  marker). Add `--model sonnet` and the read-only tool lockdown to the launch
-  command (see Tooling). Still `is_prod()`-gated.
-- `build_fleet_digest` + `assemble_pane_views` + `_curate_pane`: kept to back an
-  **on-demand** `fleet_digest` tool (built fresh per call, since the push that
-  populated `_LAST_SENT` is gone).
+  marker). Add `--model sonnet` and the read-only tool lockdown flags to the
+  launch command (see Tooling). Still `is_prod()`-gated.
 - `ROLE_PROMPT`: rewritten (see Role prompt).
 - Session/window constants (`bridge` / `commander`), marker accessors.
 
-`register_bridge_project` is **removed from the rail-visibility path** — the
-commander is hidden (see Visibility). The function may be deleted or repurposed
-to *exclude* rather than register.
+New: `ensure_commander()` — `supervisor_pass`'s "marker live? else spawn" logic,
+wrapped in a **single-flight lock** (an `asyncio.Lock` or a threading lock) so a
+lifespan boot-spawn and a racing first `/api/command` can't both spawn during the
+multi-hundred-ms window before the marker is set.
+
+### `periscope/narrator.py` — stop narrating the commander
+
+`narrator._is_first_mate` (and its import of the first-mate constants) must be
+updated for the rename. The commander is hidden, so the narrator should **skip
+it entirely** in its per-pane tick rather than only suppressing its rename —
+otherwise periscope pays a Haiku call every 30s to generate a status line for a
+pane no one sees. (Consequence: `peek` on the commander shows no narrator
+status line — acceptable for a hidden orchestrator.)
 
 ### `periscope/activity.py` — strip the tick, keep the marker
 
 - Remove the first-mate branches from `_worker_tick` (the `supervisor_pass`
   call, the `assemble_pane_views`/`build_fleet_digest`/`heartbeat_decide`
-  block, and the stashed `_fm_push`) and `_emit_pending_first_mate`.
+  block, and the stashed `_fm_push`) and delete `_emit_pending_first_mate`.
 - Keep the `first_mate` singleton marker table and `set/get/clear_first_mate`
   (renamed with the module). Keep `captain_log` + `append_captain_log` /
   `recent_captain_log` (durable scratch, unused by UI).
@@ -161,63 +176,94 @@ to *exclude* rather than register.
 ### `periscope/channels.py` — re-gate, drop the interrupt, add actuators
 
 - **Drop** the `need_human` → `_schedule_first_mate_emit` interrupt hook in
-  `_do_notify_tool` (the commander is not an autonomous listener).
+  `_do_notify_tool`, and delete `_schedule_first_mate_emit` (its only caller is
+  that hook).
+- **Drop** `fleet_digest` (`_do_fleet_digest_tool`) and its registration — it
+  read `_LAST_SENT`, which is gone, and rebuilding it on-demand would mean
+  running the worker's blocking capture loop inside the async tool handler.
+  `list_claudes` + `peek` already give the commander read-state.
 - **Re-gate**: `_require_first_mate` → `_require_commander` (same singleton-marker
-  check). Continues to guard `captains_log_read/append` and `fleet_digest`.
-- **Rewire** `_do_fleet_digest_tool` to build a fresh digest on call
-  (`assemble_pane_views` + `build_fleet_digest`) instead of returning the now-
-  unpopulated `_LAST_SENT`.
+  check). Continues to guard `captains_log_read/append`.
 - **Add two MCP tools** (today these capabilities are HTTP-only):
-  - `create_workspace(name, base_repo?)` → `workspaces.create_workspace`,
-    returns the workspace id.
+  - `create_workspace(name, base_repo?)` → `workspaces.create_workspace(name=…,
+    base_repo=…)`, returns the new workspace's `id`.
   - `open(path? | repo+branch? | repo+pr?)` → `open_ops.open_target` over the
     existing `PathTarget`/`BranchTarget`/`PRTarget` descriptors (the same dispatch
-    `routes/open.py` does). `repo+branch` already creates the worktree if absent,
-    so "create a worktree for X" is `open(repo, branch)` — no separate tool.
+    `routes/open.py` does). `open_target` is HTTP-free (its docstring says so) and
+    raises plain `ValueError`; the tool catches it into `{"ok": False, "error": …}`
+    and ignores `OpenResult.ui`. `repo+branch` already creates the worktree if
+    absent, so "create a worktree for X" is `open(repo, branch)` — no separate
+    tool.
 
-  These are general channel tools (any pane could use them); they are not
-  commander-gated. The commander reaches them like any other pane.
+  These are general channel tools (any pane could use them); not commander-gated.
 
-The commander **inherits the entire existing channel toolset** by virtue of
+- **`spawn_claude` default for the commander.** `_do_spawn_claude_tool` defaults
+  `workspace="same"`, which would place a spawned worker as a window in the
+  *commander's own hidden session* — invisible and misfiled. Change the handler
+  so that **when the caller pane is the commander**, `workspace` defaults to
+  `"new"` (anchored to the spawn's `cwd` worktree as its own rail item). The role
+  prompt also mandates explicit `workspace="new"` + `cwd`. Failure mode if both
+  the default and the prompt are bypassed: the worker silently nests under the
+  hidden commander session — call this out for the implementer.
+
+The commander **inherits the rest of the existing channel toolset** by virtue of
 being a pane: `spawn_claude`, `send_to`, `list_claudes`, `peek`, `report`,
 `terminate`, `resume_session`, `search_history`, `get_history_session`,
-`notify`, `link_pr`, `link_linear`, `open_document`. No new read-state tool is
-needed — `list_claudes` + `peek` + the on-demand `fleet_digest` cover it.
+`notify`, `link_pr`, `link_linear`, `open_document`.
 
 ### `periscope/routes/command.py` — new route
 
-- `POST /api/command {text}`: `ensure_commander()`, then
-  `deliver_input(commander_target, text)`; returns the commander pane's
-  `{session, index}` so the client knows which transcript to tail. `409`/`503`
-  if the commander can't be ensured (e.g. not prod — see Constraints).
+- `POST /api/command {text}`: `await ensure_commander()`, then
+  `send._send_to_target(commander_target, paste=text, keys=["Enter"])`; returns
+  the commander pane's `{session, index}` so the client knows which transcript to
+  tail. Returns a clear error (`503`) when the commander can't be ensured —
+  notably in dev, where it can't spawn (see Constraints).
 - The console feed reuses the existing `GET /api/pane/turns?session=&index=` —
   no new transcript endpoint.
 
 ### `periscope/app.py` — boot-spawn instead of supervise
 
 - Replace the worker-tick supervisor with a prod-gated **boot-spawn** of the
-  commander in the lifespan (`ensure_commander()` once at startup). Lazy heal on
-  `/api/command` covers a mid-session death.
+  commander in the lifespan (`await ensure_commander()` once at startup). Remove
+  the `register_bridge_project()` call. Lazy heal on `/api/command` covers a
+  mid-session death.
 
-### `periscope/routes/state.py` — hide the commander
+### Visibility — hide the commander from the rail
 
-Unregistered sessions fold into the bottom-pinned "dev" `MAIN_KEY` group, so
-they are **still visible** by default. To honor "manages but doesn't display,"
-filter the commander session out of `windows` right after `list_windows()` in
-the `/api/state` handler (a single exclusion on `FIRST_MATE_SESSION`/its window).
-This is a real task, not free — note it for the reviewer.
+Three coupled changes (they must land together):
+
+1. **Stop registering** the bridge session as a project (delete the
+   `register_bridge_project` call + function). Today that registration is what
+   makes the commander a visible rail group.
+2. **Clean the stale project row.** A prior prod run persisted a `bridge`
+   project in `state.json`; a one-shot migration removes it (otherwise it stays a
+   visible group regardless of window filtering).
+3. **Filter the window from the `/api/state` payload at the end.** Do NOT filter
+   right after `list_windows()` — that raw list feeds `update_focus_from_windows`,
+   `_attach_git_then_resolve_pids` (the commander still needs a stamped pid for
+   tool resolution), and `_channel_gc` (which would garbage-collect the
+   commander's own channel/alert state every 3s poll). Exclude the commander row
+   from the final `result` list immediately before `return`.
+
+`list_claudes`/`peek` read tmux directly, so the commander stays reachable to
+those tools — only the dashboard rail hides it.
 
 ### Frontend — `static/src/open/classify.js` + `overlays/OpenOmnibox.jsx`
 
-- `classify.js`: always append a synthetic `{ kind: "command", label: "⚡ run:
-  <query>", text: query }` card (pinned last) whenever the query is non-empty.
-  Add `command` to `KIND_META`.
-- `OpenOmnibox.jsx`: picking the `command` card switches the card into **console
-  mode** — `POST /api/command {text}`, then poll `GET /api/pane/turns` for the
-  returned pane every ~1s, rendering new turns, until the transcript stops
-  growing (idle). Esc dismisses the console (the command keeps running
-  server-side). Disable the input/send while a turn is in flight ("commander
-  busy").
+- `classify.js`: append a synthetic `{ kind: "command", label: "⚡ run: <query>",
+  text: query }` card (pinned last) whenever the query is non-empty. **Add
+  `command` to `KIND_META`** — `OpenOmnibox` indexes `KIND_META[c.kind]`
+  unconditionally, so a missing key crashes the render. (A card with no
+  `descriptor` is not novel — `pr`/`worktree`/`workspace` cards already lack one.)
+- `OpenOmnibox.jsx`: this adds a **fourth render branch** alongside `Palette` and
+  the two `drill` branches, and `pick()` must get an explicit
+  `if (card.kind === "command")` arm — otherwise it falls through to
+  `setDrill({card})` and renders nothing. Console mode = `POST /api/command
+  {text}`, then poll `GET /api/pane/turns` for the returned pane every ~1s,
+  rendering new turns until the transcript stops growing (idle). The Esc handling
+  needs a tweak: Esc dismisses the console but leaves the command running
+  server-side (today `useEscape` closes the whole omnibox). Disable input/send
+  while a turn is in flight ("commander busy").
 
 ## Role prompt
 
@@ -226,13 +272,14 @@ Rewrite `ROLE_PROMPT` from observer to orchestrator. Shape (not final wording):
 - You are periscope's commander. The user sends you commands from the omnibox;
   act on them immediately with your tools.
 - You orchestrate, you don't edit. To do work in a repo, **spawn a worker**
-  (`spawn_claude`) with a clear first-message prompt and the right `cwd` /
-  `workspace_id`; the worker has full tools. You have read-only code access
-  (`Read`/`Grep`/`Glob`) to understand and route — resolve fuzzy references
-  ("the attribute config refactor" → which repo/dir) before acting.
+  (`spawn_claude` with `workspace="new"` and an explicit `cwd`) with a clear
+  first-message prompt and the right `workspace_id`; the worker has full tools.
+  You have read-only code access (`Read`/`Grep`/`Glob`) to understand and route —
+  resolve fuzzy references ("the attribute config refactor" → which repo/dir)
+  before acting.
 - Tools: `create_workspace`, `open` (path/branch/pr — `open(repo, branch)`
-  creates a worktree), `spawn_claude`, `list_claudes`, `peek`, `send_to`,
-  `fleet_digest`, the captain's log.
+  creates a worktree), `spawn_claude`, `list_claudes`, `peek`, `send_to`, the
+  captain's log.
 - Best-guess and proceed; narrate what you did concisely so the console reads
   cleanly. Keep the absolute prohibitions (never merge an fdy PR, never
   force-push, never prod-touching actions).
@@ -245,10 +292,10 @@ Delivered via the existing file + `--append-system-prompt "$(cat …)"` path
 Two independent tool layers:
 
 - **Claude built-in tools** — locked at launch to `Read`, `Grep`, `Glob`
-  (allow-list); `Bash`, `Edit`, `Write` disallowed. The mechanism is the
-  `claude` launch flags (e.g. `--allowedTools` / `--disallowedTools`) appended
-  to `claude_exec()` for the commander spawn only. Exact flag spelling to confirm
-  in planning.
+  (allow-list); `Bash`, `Edit`, `Write` disallowed. The mechanism is `claude`
+  launch flags (e.g. `--allowedTools` / `--disallowedTools`) appended to
+  `claude_exec()` for the commander spawn only. Exact flag spelling to confirm in
+  planning.
 - **Periscope MCP tools** — all channel tools are available to the commander
   (it's a pane). This is the actuator surface; it is intentionally broad
   (including `spawn_claude`, `send_to`, `terminate`). The lockdown above is about
@@ -258,9 +305,11 @@ Two independent tool layers:
 ## Error handling
 
 - **Dead commander on send** → `ensure_commander()` respawns before delivering.
-- **Commander can't start** (e.g. not authed) → its failure surfaces as the
-  pane's terminal output; the console shows the transcript (or its absence) and
-  the route returns a clear error if no marker can be set.
+- **Concurrent ensure** → the single-flight lock serializes boot-spawn and a
+  racing first command so they can't double-spawn.
+- **Commander can't start** (e.g. not authed, or not prod) → the route returns a
+  clear `503`; any partial pane failure surfaces as the pane's terminal output in
+  the console.
 - **Tool failure inside the commander** → surfaces in its transcript; the
   commander decides whether to continue or stop. No half-spawn is hidden.
 - **A turn already in flight** → the omnibox disables send and shows "commander
@@ -268,52 +317,62 @@ Two independent tool layers:
 
 ## Constraints
 
-- **Prod-only.** Channels bind the MCP socket only in prod (dev periscope on
-  :8766 doesn't), and `_spawn_commander` is `is_prod()`-gated. So the end-to-end
-  send→act loop only works against prod (:8765). The omnibox *UI* (the run row,
-  console rendering) is dev-iterable against stubbed/poll data; full verification
-  is in the browser against prod. `POST /api/command` returns a clear error in
-  dev.
+- **Prod-only.** Channels bind the MCP socket only in prod (`is_prod()` =
+  `PORT==8765 and not PERISCOPE_DEV`); dev periscope on :8766 doesn't bind it, and
+  `_spawn_commander` is `is_prod()`-gated. So the end-to-end send→act loop only
+  works against prod (:8765); `POST /api/command` returns `503` in dev. The
+  console feed (`/api/pane/turns`) reads real session JSONL — in dev there is no
+  commander pane, so the console renders empty; verifying console *rendering* in
+  dev requires pointing it at another live Claude pane's turns or a fixture.
 - **One tmux server dependency.** Subscription auth holds only if the commander
   pane lives in the user's interactive tmux server (the default socket). Confirm
   empirically in planning.
 
 ## Testing
 
-- **Pure functions kept** (`build_fleet_digest`, `_curate_pane`, and
-  `assemble_pane_views`'s pure parts) keep their existing unit tests.
 - **New MCP tools** `create_workspace` / `open` get handler tests with stubbed
-  `workspaces.create_workspace` / `open_ops.open_target` (mirrors how the open
-  route + open_ops are tested; the real-tmux integration tests in
-  `tests/test_open_ops.py` already cover `open_target`).
+  `workspaces.create_workspace` / `open_ops.open_target` (the real-tmux
+  integration tests in `tests/test_open_ops.py` already cover `open_target`).
+- **`spawn_claude` commander default**: a test that a spawn whose caller is the
+  marked commander pane defaults to `workspace="new"` (not `"same"`).
 - **Commander spawn** adapts the existing real-tmux test
   (`tests/test_first_mate_spawn.py`) to the renamed `_spawn_commander` (asserts
-  spawn → marker; the respawn-loop assertions for the supervisor are dropped).
-- **`/api/command` route** test: `ensure_commander` + `deliver_input` mocked;
-  assert it delivers the text to the marked pane and returns its address;
-  asserts the dev/no-marker error path.
-- **Rail exclusion**: a `tests/routes/test_state.py`-level assertion that the
-  commander session is absent from `/api/state` windows.
+  spawn → marker; the supervisor respawn-loop assertions are dropped).
+- **`ensure_commander` single-flight**: a test that two concurrent calls spawn
+  once (lock holds).
+- **`/api/command` route** test: `ensure_commander` + `_send_to_target` mocked;
+  assert it delivers `paste=text, keys=["Enter"]` to the marked pane and returns
+  its address; assert the dev/no-marker `503` path.
+- **Rail exclusion**: a `tests/routes/test_state.py` assertion that the commander
+  session is absent from the final `/api/state` windows, *and* that its channel
+  state is not GC'd (the exclusion is post-`_channel_gc`).
 - **Send + transcript-tail end-to-end**: verified in the browser (per the
   project's UI-testing norm — a real Claude is a poor unit-test oracle).
-- **Delete** the heartbeat/divergence/supervisor-respawn/interrupt tests in
-  `tests/test_first_mate.py`; keep the marker tests in `tests/test_activity.py`
-  (renamed).
+- **Delete** the heartbeat/divergence/supervisor-respawn/interrupt tests and the
+  `register_bridge_project` test in `tests/test_first_mate.py`; keep the marker
+  tests in `tests/test_activity.py` (renamed). Update `narrator` tests for the
+  skip-commander behavior.
 
-## Open questions for review
+## Resolved review questions
 
-1. **Rail exclusion point.** Is filtering `FIRST_MATE_SESSION` out of
-   `/api/state` `windows` the right seam, or should the exclusion live in
-   `list_windows()` / `build_window_view` so other consumers (focus tracking,
-   pane→session mapping) also skip it? Filtering only in the state route leaves
-   the commander visible to the narrator and other workers — is that desired
-   (so the commander could still be `peek`'d) or should it be globally hidden?
-2. **`fleet_digest` retention.** Worth keeping at all, given `list_claudes` +
-   `peek` exist? Dropping it removes `build_fleet_digest`/`assemble_pane_views`
-   entirely (more deletion). Keeping it gives the commander the budget snapshot
-   in one call.
-3. **Console idle detection.** "Transcript stopped growing" is heuristic. Is a
-   fixed quiet-period (e.g. no new turn for N seconds) acceptable for v1, or do
-   we need a firmer "commander finished" signal?
-4. **Naming.** `first_mate` → `commander` rename (refactor-mcp) vs. keep the
-   internal name and only repurpose behavior. Default is rename.
+1. **Rail exclusion point** → exclude from the final `/api/state` `result` (after
+   `_channel_gc` + pid attach), delete `register_bridge_project`, migrate away the
+   stale `bridge` project row, and skip the commander in the narrator tick. The
+   commander stays reachable to `list_claudes`/`peek` (tmux-direct), hidden only
+   from the rail and the narrator.
+2. **`fleet_digest` retention** → dropped. `assemble_pane_views` is worker-thread
+   shaped (blocking captures, `%N` handles to dodge non-thread-safe pid
+   resolution) and unsafe in the async tool handler; `list_claudes`/`peek` cover
+   read-state.
+3. **Console idle detection** → v1 uses a fixed quiet-period heuristic (no new
+   turn for N seconds after the transcript last grew). Good enough; revisit if it
+   misfires.
+4. **Naming** → rename `first_mate` → `commander` (refactor-mcp), and the rename
+   must update `narrator.py`'s import + `_is_first_mate`.
+
+## Open dependency to verify in planning
+
+- The commander pane inherits the user's GUI-login subscription auth via the
+  default tmux socket (Architecture #3 / Constraints). This is a runtime/env fact,
+  not a code fact — confirm empirically before building (spawn a pane the way
+  `_spawn_commander` will and check it's subscription-authed, not API-keyed).
