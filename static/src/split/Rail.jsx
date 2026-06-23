@@ -171,6 +171,13 @@ async function reorderChildren(dragChildKey, targetChildKey, worktreeKey, insert
 }
 
 // Same-kind, same-parent drop rule. Identity from the drag descriptor.
+// The top-level group a drop row belongs to: a repo path, MAIN_KEY, or
+// "ws:<id>". A group header's key is "repo:<group>"; a child row carries its
+// group as worktreeKey.
+function rowGroup(d) {
+  return d.kind === "repo" ? d.key.slice("repo:".length) : d.worktreeKey;
+}
+
 function isValidDropTarget(drag, target) {
   if (drag.kind === "repo") {
     if (target.kind !== "repo") return false;
@@ -182,9 +189,18 @@ function isValidDropTarget(drag, target) {
     if (target.kind !== "worktree") return false;
     return drag.repoKey === target.repoKey;
   }
-  // pane / review
-  if (target.kind !== "pane" && target.kind !== "review") return false;
-  return drag.worktreeKey === target.worktreeKey;
+  // pane / review drag.
+  const dragGroup = drag.worktreeKey;
+  const targetGroup = rowGroup(target);
+  if (dragGroup === targetGroup) {
+    // Same group → reorder; only onto child rows, never the group header.
+    return target.kind === "pane" || target.kind === "review";
+  }
+  // Cross-group is a workspace tag/untag/move — panes only (not the review
+  // sentinel), and only when a workspace is the source or the destination.
+  // The drop lands on the workspace's header OR any of its child rows.
+  if (drag.kind !== "pane") return false;
+  return targetGroup.startsWith("ws:") || dragGroup.startsWith("ws:");
 }
 
 export function Rail() {
@@ -217,9 +233,6 @@ export function Rail() {
   const mainProject = projsByPin[MAIN_KEY] || {};
   const wss = workspaces.value || [];
   const workspacesById = indexWorkspaces(wss);
-  // Options for the per-PaneRow "move to workspace" picker (non-archived; the
-  // /api/state payload already filters archived, but guard anyway).
-  const workspaceOptions = wss.filter((w) => !w.archived_at).map((w) => ({ id: w.id, name: w.name }));
   // Across-all-windows pid → window map, for the FLAT ws:/dev lists (the
   // per-worktree `windowsByPid` built inside the !isDev branch is scoped to a
   // single session and can't resolve cross-session tagged pids).
@@ -301,24 +314,6 @@ export function Rail() {
       body: JSON.stringify({ pane_id: w.pane_id }),
     });
   }
-  async function promotePane(w, name) {
-    return apiCall("promote", "/api/workspaces", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, base_repo: w.repo_key || null, tag_panes: [w.pane_id] }),
-    });
-  }
-  // Row-action dispatch: "" no-op, "__new__" prompts for a name then promotes,
-  // any other value is an existing workspace id to tag into.
-  async function moveToWorkspace(w, value) {
-    if (!value) return;
-    if (value === "__new__") {
-      const name = window.prompt("Workspace name");
-      if (!name) return;
-      await promotePane(w, name);
-      return;
-    }
-    await tagPane(w, value);
-  }
   async function spawnIntoWorkspace(wid) {
     const branch = window.prompt("New worktree branch for this workspace:");
     if (!branch) return;
@@ -366,7 +361,20 @@ export function Rail() {
         } else if (d.kind === "worktree") {
           await reorderWorktrees(d.key, desc.key, d.repoKey, insertAfter);
         } else {
-          await reorderChildren(d.childKey, desc.childKey, desc.worktreeKey, insertAfter);
+          // pane/review. Same group → reorder. Cross-group (a workspace is
+          // involved) → tag into the destination workspace, or untag when the
+          // tab is dragged out of its workspace onto a repo/dev group.
+          const dragGroup = d.worktreeKey;
+          const targetGroup = rowGroup(desc);
+          if (dragGroup === targetGroup) {
+            await reorderChildren(d.childKey, desc.childKey, desc.worktreeKey, insertAfter);
+          } else {
+            const w = windowsByPid[d.childKey];
+            if (w) {
+              if (targetGroup.startsWith("ws:")) await tagPane(w, targetGroup.slice(3));
+              else await untagPane(w);
+            }
+          }
         }
       },
       onDragEnd: () => {
@@ -464,9 +472,6 @@ export function Rail() {
                   onSelect={selectKey}
                   onClose={() => closePane(w)}
                   onRename={(next) => renamePane(w, next)}
-                  onUntag={() => untagPane(w)}
-                  workspaceOptions={workspaceOptions}
-                  onMoveToWorkspace={(val) => moveToWorkspace(w, val)}
                   dragProps={makeDragProps({ kind: "pane", key: `pane:${w.pid}`, childKey: w.pid, worktreeKey: repoKey })}
                   dropPos={dropPosFor(`pane:${w.pid}`)}
                   pinned={prefs.getPinnedPids().includes(w.pid)}
@@ -507,8 +512,6 @@ export function Rail() {
                     onSelect={selectKey}
                     onClose={() => closePane(w)}
                     onRename={(next) => renamePane(w, next)}
-                    workspaceOptions={workspaceOptions}
-                    onMoveToWorkspace={(val) => moveToWorkspace(w, val)}
                     dragProps={makeDragProps({ kind: "pane", key: `pane:${w.pid}`, childKey: w.pid, worktreeKey: MAIN_KEY })}
                     dropPos={dropPosFor(`pane:${w.pid}`)}
                     pinned={prefs.getPinnedPids().includes(w.pid)}
@@ -560,8 +563,6 @@ export function Rail() {
                       onSelect={selectKey}
                       onClose={() => closePane(w)}
                       onRename={(next) => renamePane(w, next)}
-                      workspaceOptions={workspaceOptions}
-                      onMoveToWorkspace={(val) => moveToWorkspace(w, val)}
                       dragProps={makeDragProps({ kind: "pane", key: `pane:${w.pid}`, childKey: w.pid, worktreeKey: wtKey })}
                       dropPos={dropPosFor(`pane:${w.pid}`)}
                       pinned={prefs.getPinnedPids().includes(w.pid)}

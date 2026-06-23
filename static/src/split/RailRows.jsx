@@ -108,7 +108,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
 
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
-  pinned, onTogglePin, workspaceOptions, onMoveToWorkspace, onUntag,
+  pinned, onTogglePin,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey ? " selected" : "";
@@ -130,35 +130,15 @@ export function PaneRow({
           ? <span class="rail-icon icon-claude">✻</span>
           : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
-        {/* chip moved to line 2 (.rail-meta) below */}
+        {/* chip moved to line 2 (.rail-meta) below. Workspace membership is set
+            by DRAGGING the tab onto a workspace group (and removed by dragging
+            it out) — no inline picker, so the name keeps the full line width. */}
         {w.burn_hot && (
           <span
             class="rail-burn"
             title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
           >🔥</span>
         )}
-        {/* Workspace tagging: a tagged tab gets a clear button; an untagged
-            tab gets a hover-revealed picker (existing workspaces + New…). */}
-        {w.workspace_id
-          ? (onUntag && (
-              <button
-                class="rail-ws-clear"
-                title="remove from workspace"
-                onClick={(e) => { e.stopPropagation(); onUntag(); }}
-              >⧉×</button>
-            ))
-          : (onMoveToWorkspace && (
-              <select
-                class="rail-ws-pick"
-                title="move to workspace"
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => { const v = e.target.value; e.target.value = ""; onMoveToWorkspace(v); }}
-              >
-                <option value="">＋ws</option>
-                {(workspaceOptions || []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                <option value="__new__">New workspace…</option>
-              </select>
-            ))}
         <button
           class={`rail-pin${pinned ? " pinned" : ""}`}
           title={pinned ? "unpin" : "pin"}

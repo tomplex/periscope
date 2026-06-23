@@ -1888,19 +1888,8 @@ body.modal-open { overflow: hidden; }
 }
 .rail-status.stale { opacity: .5; }
 
-/* Workspace tagging affordances on a pane row (hover-revealed, like the pin). */
-#rail .child-row .rail-ws-pick {
-  opacity: 0; margin-left: auto;
-  background: none; border: 0; color: var(--fg-3); font-size: 10px; cursor: pointer;
-}
-#rail .child-row:hover .rail-ws-pick { opacity: 1; }
-#rail .child-row .rail-ws-clear {
-  opacity: 0; margin-left: auto;
-  background: none; border: 0; color: var(--fg-3); font-size: 11px; cursor: pointer;
-}
-#rail .child-row:hover .rail-ws-clear { opacity: 1; }
-/* When the pane is tagged, the chip lives on line 2; the clear button on line 1
-   needs the margin-left:auto to push it right, same as the picker. */
+/* Workspace membership is drag-driven (drag a tab onto a workspace group to
+   tag, out to untag) — no inline button, so the name keeps the full width. */
 .rail-chip-repo { margin-left: 6px; flex: 0 1 auto; min-width: 0; }
 
 /* Affiliation chip — where the pane's cwd actually is when it differs from
