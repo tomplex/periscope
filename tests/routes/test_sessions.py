@@ -37,9 +37,11 @@ def test_session_delete_kills_placement_set_sparing_ws_pane(
            side_effect=lambda *a: (calls.append(a), (True, ""))[1])
     r = client.delete("/api/session?session=sess_a")
     assert r.status_code == 200
-    assert ("kill-pane", "-t", "sess_a:1") in calls   # shell killed
+    # Kill by stable pane_id (renumber-windows-safe), not session:index.
+    assert ("kill-pane", "-t", "%shell") in calls      # shell killed by pane_id
     assert not any(a[0] == "kill-session" for a in calls)
-    assert all("sess_a:0" not in a for a in calls)     # claude (ws) spared
+    assert not any("sess_a:" in a for a in calls)       # never index-targeted
+    assert all("%claude" not in a for a in calls)       # claude (ws) spared
 
 
 def test_window_new_simple_shell(client, mocker):

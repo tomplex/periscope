@@ -72,8 +72,13 @@ def session_delete(session: str):
         raise HTTPException(400, f"session {session!r} is not a closable worktree")
     windows = [w for w in list_windows() if w.get("session") == session]
     kill = placement_kill_set(project_key, windows)
-    for target, _pane_id in kill:
-        ok, msg = _tmux_mutate("kill-pane", "-t", target)
+    # Kill by the STABLE pane_id (%N), never the session:index target — with
+    # tmux `renumber-windows on`, killing one window renumbers the rest, so
+    # index targets captured up front go stale mid-loop and land on the wrong
+    # pane (this killed a workspace-tagged pane we'd excluded). pane_id is
+    # renumber-immune. `target` is only for the focus-dict key.
+    for target, pane_id in kill:
+        ok, msg = _tmux_mutate("kill-pane", "-t", pane_id)
         if not ok:
             raise HTTPException(500, msg)
         drop_target_focus(target)
