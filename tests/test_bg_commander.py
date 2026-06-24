@@ -45,3 +45,45 @@ def test_dispatch_argv_pins_the_security_flags(monkeypatch):
 def test_dispatch_env_sets_caller_id():
     env = bgc._dispatch_env(session_id="sid-1")
     assert env["PERISCOPE_CALLER_ID"] == "cmdr:sid-1"
+
+
+import pytest
+from periscope import bg_commander as bgc
+
+
+@pytest.fixture(autouse=True)
+def _db(fresh_activity_db):
+    # bg_commander._conn() opens config.ACTIVITY_DB fresh each call; the fixture
+    # repoints it at a temp file. No bg_commander-side connection cache to reset.
+    yield
+
+
+def test_insert_then_list_and_get():
+    bgc.insert_job(id="j1", text="hello", cwd="/tmp", at=100)
+    bgc.insert_job(id="j2", text="world", cwd="/tmp", at=200)
+    jobs = bgc.list_jobs()
+    assert [j.id for j in jobs] == ["j2", "j1"]          # newest-first
+    assert bgc.get_job("j1") == bgc.Job(id="j1", text="hello", cwd="/tmp", status="running", started_at=100)
+    assert bgc.get_job("nope") is None
+
+
+def test_running_job_ids_excludes_done():
+    bgc.insert_job(id="r", text="x", cwd="/tmp", at=1)
+    bgc.insert_job(id="d", text="y", cwd="/tmp", at=2)
+    bgc._set_status("d", "done")
+    assert bgc.running_job_ids() == {"r"}
+
+
+def test_dispatch_inserts_running_row_then_popens(monkeypatch):
+    spawned = {}
+    def fake_popen(argv, **kw):
+        spawned["argv"], spawned["kw"] = argv, kw
+        return object()
+    monkeypatch.setattr(bgc.subprocess, "Popen", fake_popen)
+    jid = bgc.dispatch("do it", cwd="/tmp")
+    # row exists immediately (closes the absent-window race from the write side)
+    job = bgc.get_job(jid)
+    assert job is not None and job.status == "running" and job.text == "do it"
+    assert spawned["kw"]["cwd"] == "/tmp"
+    assert spawned["kw"]["env"]["PERISCOPE_CALLER_ID"] == f"cmdr:{jid}"
+    assert spawned["argv"][-1] == "do it"

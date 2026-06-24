@@ -130,3 +130,70 @@ def _dispatch_env(*, session_id: str) -> dict[str, str]:
     """Inherit the process env + the per-command caller handle. channel_shim
     reads PERISCOPE_CALLER_ID (falling back to TMUX_PANE)."""
     return {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{session_id}"}
+
+
+# --- table CRUD (shared ACTIVITY_DB file, own schema) ---
+
+def _conn() -> sqlite3.Connection:
+    c = sqlite3.connect(config.ACTIVITY_DB)
+    c.execute(_SCHEMA.strip())
+    return c
+
+
+def insert_job(*, id: str, text: str, cwd: str, at: int) -> None:
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO commands (id, text, cwd, status, started_at) VALUES (?,?,?,?,?)",
+            (id, text, cwd, "running", at),
+        )
+
+
+def list_jobs() -> list[Job]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, text, cwd, status, started_at FROM commands "
+            "ORDER BY started_at DESC, id DESC"
+        ).fetchall()
+    return [Job(*r) for r in rows]
+
+
+def get_job(job_id: str) -> Job | None:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT id, text, cwd, status, started_at FROM commands WHERE id=?",
+            (job_id,),
+        ).fetchone()
+    return Job(*row) if row else None
+
+
+def running_job_ids() -> set[str]:
+    """The validation set for is_commander() — a cmdr:<id> hello is trusted only
+    if <id> is a live (status='running') dispatched job."""
+    with _conn() as c:
+        rows = c.execute("SELECT id FROM commands WHERE status='running'").fetchall()
+    return {r[0] for r in rows}
+
+
+def _set_status(job_id: str, status: str) -> None:
+    with _conn() as c:
+        c.execute("UPDATE commands SET status=? WHERE id=?", (status, job_id))
+
+
+# --- dispatch ---
+
+def dispatch(text: str, *, cwd: str | None = None) -> str:
+    """Mint a session id, insert the running row, fire-and-forget `claude --bg`,
+    return the id. Insert-before-Popen so is_commander() + the job list see the
+    job the instant /api/command returns, independent of `claude agents` lag."""
+    session_id = str(uuid.uuid4())
+    cwd = cwd or os.path.expanduser("~")
+    if not os.path.isdir(cwd):
+        cwd = os.path.expanduser("~")
+    insert_job(id=session_id, text=text, cwd=cwd, at=int(time.time()))
+    subprocess.Popen(
+        _dispatch_argv(session_id=session_id, text=text),
+        cwd=cwd,
+        env=_dispatch_env(session_id=session_id),
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    return session_id
