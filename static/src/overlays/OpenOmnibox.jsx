@@ -28,11 +28,71 @@ const KIND_META = {
   command:  { group: "Command",       icon: "⚡" },
 };
 
+// Commander console: POST the command, then tail the commander pane's
+// transcript via /api/pane/turns until it goes idle (no new turn for ~4s).
+// Esc dismisses the console but the command keeps running server-side — the
+// poll's `alive` flag tears down the timer on unmount without cancelling work.
+function useCommanderConsole(text, onError) {
+  const [lines, setLines] = useState([]);   // rendered transcript messages
+  const [running, setRunning] = useState(true);
+  useEffect(() => {
+    let alive = true, pane = null, timer = null, lastGrow = Date.now();
+    (async () => {
+      const data = await apiCall("command", "/api/command", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!alive) return;
+      if (!data) { setRunning(false); onError?.("command failed"); return; }
+      pane = data;   // { session, index }
+      const poll = async () => {
+        if (!alive) return;
+        const t = await apiCall("turns",
+          `/api/pane/turns?session=${encodeURIComponent(pane.session)}&index=${pane.index}`);
+        if (!alive) return;
+        // /api/pane/turns returns {messages:[…]} (or {turns:null} before a
+        // transcript exists) — read messages, not turns.
+        const msgs = (t && t.messages) || [];
+        setLines((prev) => {
+          if (msgs.length > prev.length) lastGrow = Date.now();
+          return msgs;
+        });
+        // idle: no growth for 4s after at least one turn landed.
+        if (msgs.length > 0 && Date.now() - lastGrow > 4000) { setRunning(false); return; }
+        timer = setTimeout(poll, 1000);
+      };
+      poll();
+    })();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [text]);
+  return { lines, running };
+}
+
+// One-line summary of a transcript message (the /api/pane/turns shape:
+// {role, text, tool_uses?}). Assistant tool calls render as `Name(arg)`; prose
+// turns render their first non-empty line; system compact markers as a divider.
+function renderTurn(t) {
+  if (t.role === "system") return "— context compacted —";
+  const role = t.role === "user" ? "❯" : "⏺";
+  const tools = t.tool_uses || [];
+  if (tools.length) {
+    const tu = tools[0];
+    const inp = tu.input || {};
+    const arg = inp.command || inp.file_path || inp.path || inp.pattern
+      || inp.description || inp.query || inp.url || "";
+    const extra = tools.length > 1 ? ` +${tools.length - 1}` : "";
+    return `${role} ${tu.name || "tool"}${arg ? `(${arg})` : ""}${extra}`;
+  }
+  const firstLine = String(t.text || "").split("\n").find((l) => l.trim()) || "";
+  return `${role} ${firstLine}`;
+}
+
 export function OpenOmnibox() {
   useEscape(close, open.value);
   const [catalog, setCatalog] = useState({ repos: [], worktrees: [] });
   const [query, setQuery] = useState("");
   const [drill, setDrill] = useState(null);   // { card } when drilling into worktree/pr
+  const [console_, setConsole] = useState(null);   // { text } when in commander-console mode
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -54,7 +114,7 @@ export function OpenOmnibox() {
 
   useEffect(() => {
     if (!open.value) return;
-    setQuery(""); setDrill(null); setError("");
+    setQuery(""); setDrill(null); setConsole(null); setError("");
     (async () => {
       const data = await apiCall("open catalog", "/api/open/catalog");
       if (data) setCatalog(data);
@@ -93,6 +153,7 @@ export function OpenOmnibox() {
 
   function pick(card) {
     if (card.kind === "open") return post(card.descriptor);
+    if (card.kind === "command") return setConsole({ text: card.text });
     if (card.kind === "pr" && !card.needsRepo) return post({ repo: card.pr.repo, pr: card.pr.pr });
     setDrill({ card });   // worktree → branch entry; workspace → name entry; pr w/o repo → repo picker
   }
@@ -106,11 +167,16 @@ export function OpenOmnibox() {
     <div id="open-omnibox" class="open-omnibox-overlay"
          onClick={(e) => { if (e.target.id === "open-omnibox") close(); }}>
       <div class="open-omnibox-card">
-        {!drill && (
+        {!drill && !console_ && (
           <Palette
             value={query} onInput={setQuery} placeholder="repo, path, #PR…"
             items={items} onPick={pick} onClose={close}
             empty={query ? "no matches" : "type a repo, path, or #PR…"} />
+        )}
+        {console_ && (
+          <CommanderConsole text={console_.text}
+            onClose={() => { setConsole(null); close(); }}
+            onError={setError} />
         )}
         {drill && drill.card.kind === "worktree" && (
           <BranchDrill card={drill.card}
@@ -129,6 +195,34 @@ export function OpenOmnibox() {
         )}
         {error && <div class="open-omnibox-error">{error}</div>}
         {busy && <div class="open-omnibox-busy">opening…</div>}
+      </div>
+    </div>
+  );
+}
+
+// Commander console render: the command line + a scrollable transcript log +
+// a working spinner. Esc dismisses (the command keeps running server-side); the
+// nested useEscape pushes onto the LIFO stack so it wins over OpenOmnibox's close.
+function CommanderConsole({ text, onClose, onError }) {
+  const { lines, running } = useCommanderConsole(text, onError);
+  const logRef = useRef(null);
+  useEscape(onClose, true);
+  // Keep the newest turn in view as the transcript grows.
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [lines.length, running]);
+  return (
+    <div class="open-omnibox-console">
+      <div class="open-omnibox-console-cmd">⚡ {text}</div>
+      <div class="open-omnibox-console-log" ref={logRef}>
+        {lines.map((t, i) => (
+          <div class="open-omnibox-console-line" key={t.uuid || i}>{renderTurn(t)}</div>
+        ))}
+        {running && <div class="open-omnibox-console-spin">commander working…</div>}
+        {!running && lines.length === 0 && (
+          <div class="open-omnibox-console-spin">no transcript yet — esc to dismiss</div>
+        )}
       </div>
     </div>
   );
