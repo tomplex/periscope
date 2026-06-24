@@ -31,6 +31,14 @@ def jsonl_for_session(session_id: str):
     return matches[0] if matches else None
 
 
+def jsonl_for_session_prefix(prefix: str):
+    """Like jsonl_for_session but matches by id PREFIX. bg commander job ids are
+    claude's SHORT session id (the 8-hex `backgrounded · <id>` stdout token),
+    while the JSONL is named with the full uuid — the short id is its prefix."""
+    matches = list(activity._PROJECTS_DIR.glob(f"*/{prefix}*.jsonl"))
+    return matches[0] if matches else None
+
+
 def get_turns_for_pane(session: str, index: int) -> dict | None:
     """Resolve a pane (session:index) to its transcript messages.
 

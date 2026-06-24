@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import time
@@ -66,13 +67,17 @@ _ABSENT_GRACE_S = 60   # absent from `claude agents` AND younger than this => st
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS commands (
-  id          TEXT PRIMARY KEY,   -- the --bg session_id (uuid)
+  id          TEXT PRIMARY KEY,   -- claude's --bg session id (short, captured from stdout)
   text        TEXT NOT NULL,
   cwd         TEXT NOT NULL,
   status      TEXT NOT NULL,      -- 'running' | 'done'
   started_at  INTEGER NOT NULL
 );
 """
+
+# `claude --bg` prints `backgrounded · <id>` and mints its OWN session id
+# (it IGNORES --session-id). We capture that id as the job id.
+_BG_ID_RE = re.compile(r"([0-9a-f]{8}(?:-[0-9a-f]+)*)")
 
 
 @dataclass(frozen=True)
@@ -112,24 +117,41 @@ def map_state(state: str | None, *, started_at: int, now: int, present: bool) ->
     return "done" if now - started_at >= _ABSENT_GRACE_S else "running"
 
 
-def _dispatch_argv(*, session_id: str, text: str) -> list[str]:
+def _dispatch_argv() -> list[str]:
     """The launchd-auth risk boundary (Step 0). If a login-shell/env wrapper is
-    needed, ONLY this function changes."""
+    needed, ONLY this function changes.
+
+    `-p` is REQUIRED: without it `claude --bg` creates an idle session and never
+    submits the prompt. `--session-id` is omitted — `--bg` mints its own. The
+    prompt is NOT a trailing positional: `--allowedTools <tools...>` is variadic
+    and would swallow it (leaving -p with no input → crash). The prompt goes via
+    stdin instead (see dispatch), so --allowedTools stays the last token."""
     return [
-        config.claude_bin(), "--bg",
-        "--session-id", session_id,
+        config.claude_bin(), "--bg", "-p",
         "--append-system-prompt-file", str(config.ORCHESTRATOR_PROMPT_FILE),
         "--mcp-config", str(config.PERISCOPE_MCP_CONFIG), "--strict-mcp-config",
         "--model", config.BG_COMMANDER_MODEL,
         "--allowedTools", config.BG_COMMANDER_ALLOWED_TOOLS,
-        text,
     ]
 
 
-def _dispatch_env(*, session_id: str) -> dict[str, str]:
-    """Inherit the process env + the per-command caller handle. channel_shim
-    reads PERISCOPE_CALLER_ID (falling back to TMUX_PANE)."""
-    return {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{session_id}"}
+def _dispatch_env(*, handle: str) -> dict[str, str]:
+    """Inherit the process env + a per-command caller handle. channel_shim reads
+    PERISCOPE_CALLER_ID (falling back to TMUX_PANE). The handle is a unique
+    cmdr:<token> — its only jobs are to (a) trip is_commander's prefix check and
+    (b) key _MCP_SESSIONS uniquely across concurrent commanders. It is NOT the
+    claude session id (which isn't known until claude prints it post-spawn)."""
+    return {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
+
+
+def _parse_session_id(stdout: str) -> str | None:
+    """Pull claude's minted session id out of the `backgrounded · <id>` line."""
+    for line in stdout.splitlines():
+        if "backgrounded" in line:
+            m = _BG_ID_RE.search(line)
+            if m:
+                return m.group(1)
+    return None
 
 
 # --- table CRUD (shared ACTIVITY_DB file, own schema) ---
@@ -166,14 +188,6 @@ def get_job(job_id: str) -> Job | None:
     return Job(*row) if row else None
 
 
-def running_job_ids() -> set[str]:
-    """The validation set for is_commander() — a cmdr:<id> hello is trusted only
-    if <id> is a live (status='running') dispatched job."""
-    with _conn() as c:
-        rows = c.execute("SELECT id FROM commands WHERE status='running'").fetchall()
-    return {r[0] for r in rows}
-
-
 def _set_status(job_id: str, status: str) -> None:
     with _conn() as c:
         c.execute("UPDATE commands SET status=? WHERE id=?", (status, job_id))
@@ -182,20 +196,30 @@ def _set_status(job_id: str, status: str) -> None:
 # --- dispatch ---
 
 def dispatch(text: str, *, cwd: str | None = None) -> str:
-    """Mint a session id, insert the running row, fire-and-forget `claude --bg`,
-    return the id. Insert-before-Popen so is_commander() + the job list see the
-    job the instant /api/command returns, independent of `claude agents` lag."""
-    session_id = str(uuid.uuid4())
+    """Spawn `claude --bg -p <text>`, capture the session id it mints (it ignores
+    --session-id), record the running job, and return the id. `claude --bg`
+    backgrounds itself to the supervisor and returns in seconds, so this blocks
+    only briefly. Raises RuntimeError if the spawn fails or prints no id."""
     cwd = cwd or os.path.expanduser("~")
     if not os.path.isdir(cwd):
         cwd = os.path.expanduser("~")
+    handle = uuid.uuid4().hex   # cmdr handle (env, pre-spawn) — distinct from claude's id
+    try:
+        proc = subprocess.run(
+            _dispatch_argv(),
+            input=text,                 # prompt via stdin (not a positional --allowedTools would eat)
+            cwd=cwd, env=_dispatch_env(handle=handle),
+            capture_output=True, text=True, timeout=120,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        log.warning("bg commander dispatch failed: %s", e)
+        raise RuntimeError(f"bg commander dispatch failed: {e}")
+    session_id = _parse_session_id(proc.stdout or "")
+    if not session_id:
+        log.warning("bg dispatch: no session id in output (stdout=%r stderr=%r)",
+                    proc.stdout, proc.stderr)
+        raise RuntimeError("bg commander dispatch produced no session id")
     insert_job(id=session_id, text=text, cwd=cwd, at=int(time.time()))
-    subprocess.Popen(
-        _dispatch_argv(session_id=session_id, text=text),
-        cwd=cwd,
-        env=_dispatch_env(session_id=session_id),
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
     return session_id
 
 
@@ -234,8 +258,11 @@ def sync_jobs(*, now: int | None = None, agents_raw: str | None = None, stop_fn=
     for job in list_jobs():
         if job.status != "running":
             continue
-        present = job.id in states
-        new_status = map_state(states.get(job.id), started_at=job.started_at, now=now, present=present)
+        # job.id is claude's SHORT session id; `claude agents` reports the full
+        # uuid (short is its prefix) — match by prefix.
+        state = next((st for sid, st in states.items() if sid.startswith(job.id)), None)
+        present = state is not None
+        new_status = map_state(state, started_at=job.started_at, now=now, present=present)
         if new_status == "done":
             _set_status(job.id, "done")
             if present:        # still listed => free the supervisor slot now (spec resolution #4)

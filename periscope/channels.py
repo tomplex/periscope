@@ -206,13 +206,12 @@ def _do_notify_tool(pane: str, arguments: dict):
 
 
 def is_commander(handle: str) -> bool:
-    """True iff `handle` is a live commander: the cmdr: prefix AND a currently
-    running dispatched job (defense-in-depth against a self-asserted prefix; the
-    socket is already owner-only). Replaces the singleton marker check."""
-    if not handle.startswith("cmdr:"):
-        return False
-    from periscope import bg_commander
-    return handle[len("cmdr:"):] in bg_commander.running_job_ids()
+    """True iff `handle` is a commander handle (the cmdr: prefix). The handle is a
+    self-asserted token set at dispatch; we trust the prefix because the MCP
+    socket is owner-only (0o600). The job-table cross-check was dropped: a
+    commander's cmdr:<token> is a fresh per-dispatch uuid, distinct from claude's
+    own session id, so it isn't in the jobs table to validate against."""
+    return handle.startswith("cmdr:")
 
 
 def _resolve_window(match) -> tuple[str, str]:
@@ -476,7 +475,7 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # the worktree; resolve_worktree_session registers the project + dedupes a
     # foreign-name clash, and returns None when cwd isn't in a git repo (no
     # worktree to anchor → fall back to the caller's session).
-    from periscope import open_ops
+    from periscope import open_ops, activity
     workspace = str(arguments.get("workspace") or "same").strip().lower()
     if commander_caller:
         # The commander is ALWAYS cwd-anchored: it has no pane (cmdr:<id> is not

@@ -36,18 +36,27 @@ def test_map_state_absent_old_is_done():
 
 def test_dispatch_argv_pins_the_security_flags(monkeypatch):
     monkeypatch.setenv("PERISCOPE_CLAUDE_BIN", "/usr/bin/claude")
-    argv = bgc._dispatch_argv(session_id="sid-1", text="do the thing")
+    argv = bgc._dispatch_argv()
     assert argv[0] == "/usr/bin/claude"        # the BARE binary, never the multi-word claude_exec() string
     assert "--bg" in argv
-    assert argv[argv.index("--session-id") + 1] == "sid-1"
+    assert "-p" in argv                         # REQUIRED — without it --bg never submits the prompt
+    assert "--session-id" not in argv          # --bg ignores it; we capture the id it mints instead
     assert "--strict-mcp-config" in argv
-    assert argv[argv.index("--allowedTools") + 1] == bgc.config.BG_COMMANDER_ALLOWED_TOOLS
-    assert argv[-1] == "do the thing"          # the command is the trailing positional
+    # --allowedTools is the LAST token: it's variadic, so a trailing prompt
+    # positional would be swallowed → the prompt goes via stdin instead.
+    assert argv[-2] == "--allowedTools"
+    assert argv[-1] == bgc.config.BG_COMMANDER_ALLOWED_TOOLS
 
 
 def test_dispatch_env_sets_caller_id():
-    env = bgc._dispatch_env(session_id="sid-1")
-    assert env["PERISCOPE_CALLER_ID"] == "cmdr:sid-1"
+    env = bgc._dispatch_env(handle="tok-1")
+    assert env["PERISCOPE_CALLER_ID"] == "cmdr:tok-1"
+
+
+def test_parse_session_id_from_backgrounded_line():
+    assert bgc._parse_session_id("backgrounded · 5bf0d4d5\n  claude agents") == "5bf0d4d5"
+    assert bgc._parse_session_id("backgrounded · 5bf0d4d5-4751-4cd7-8c33") == "5bf0d4d5-4751-4cd7-8c33"
+    assert bgc._parse_session_id("no id here") is None
 
 
 @pytest.fixture(autouse=True)
@@ -66,26 +75,35 @@ def test_insert_then_list_and_get():
     assert bgc.get_job("nope") is None
 
 
-def test_running_job_ids_excludes_done():
-    bgc.insert_job(id="r", text="x", cwd="/tmp", at=1)
-    bgc.insert_job(id="d", text="y", cwd="/tmp", at=2)
-    bgc._set_status("d", "done")
-    assert bgc.running_job_ids() == {"r"}
-
-
-def test_dispatch_inserts_running_row_then_popens(monkeypatch):
+def test_dispatch_captures_claude_id_and_records_job(monkeypatch):
     spawned = {}
-    def fake_popen(argv, **kw):
+    class FakeProc:
+        stdout = "backgrounded · 9ab3cd12\n  claude agents   list sessions"
+        stderr = ""
+    def fake_run(argv, **kw):
         spawned["argv"], spawned["kw"] = argv, kw
-        return object()
-    monkeypatch.setattr(bgc.subprocess, "Popen", fake_popen)
+        return FakeProc()
+    monkeypatch.setattr(bgc.subprocess, "run", fake_run)
     jid = bgc.dispatch("do it", cwd="/tmp")
-    # row exists immediately (closes the absent-window race from the write side)
+    # the job id is claude's minted id, parsed from stdout (NOT a pre-mint)
+    assert jid == "9ab3cd12"
     job = bgc.get_job(jid)
     assert job is not None and job.status == "running" and job.text == "do it"
     assert spawned["kw"]["cwd"] == "/tmp"
-    assert spawned["kw"]["env"]["PERISCOPE_CALLER_ID"] == f"cmdr:{jid}"
-    assert spawned["argv"][-1] == "do it"
+    assert spawned["kw"]["input"] == "do it"     # prompt goes via stdin, not argv
+    # the cmdr handle is a fresh token, distinct from claude's session id
+    handle = spawned["kw"]["env"]["PERISCOPE_CALLER_ID"]
+    assert handle.startswith("cmdr:") and handle != f"cmdr:{jid}"
+    assert "do it" not in spawned["argv"]        # prompt is via stdin, not a positional
+
+
+def test_dispatch_raises_when_no_session_id(monkeypatch):
+    class FakeProc:
+        stdout = "something went wrong"
+        stderr = "error"
+    monkeypatch.setattr(bgc.subprocess, "run", lambda *a, **k: FakeProc())
+    with pytest.raises(RuntimeError):
+        bgc.dispatch("do it", cwd="/tmp")
 
 
 def test_sync_jobs_marks_done_and_stops_present(monkeypatch):

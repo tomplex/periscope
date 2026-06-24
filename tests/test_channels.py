@@ -720,14 +720,14 @@ def test_terminate_mutate_failure(mocker):
 
 # --- commander identity ---
 
-def test_is_commander_requires_live_job(fresh_activity_db):
-    from periscope import channels, bg_commander
+def test_is_commander_checks_the_cmdr_prefix():
+    from periscope import channels
+    # prefix-only: the cmdr handle is a self-asserted token (owner-only socket);
+    # it is NOT claude's session id, so there's no jobs-table cross-check.
     assert channels.is_commander("%3") is False
-    assert channels.is_commander("cmdr:unknown") is False
-    bg_commander.insert_job(id="live", text="x", cwd="/tmp", at=1)
-    assert channels.is_commander("cmdr:live") is True
-    bg_commander._set_status("live", "done")
-    assert channels.is_commander("cmdr:live") is False     # only running jobs count
+    assert channels.is_commander("") is False
+    assert channels.is_commander("cmdr:anything") is True
+    assert channels.is_commander("cmdr:7f3a9b21") is True
 
 
 def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_activity_db, mocker):

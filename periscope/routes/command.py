@@ -36,7 +36,7 @@ def command_jobs():
 def command_job_turns(job_id: str):
     if bg_commander.get_job(job_id) is None:
         raise HTTPException(404, "unknown job")
-    jsonl = turns.jsonl_for_session(job_id)     # session id IS the job id
+    jsonl = turns.jsonl_for_session_prefix(job_id)   # job id is claude's SHORT session id
     if jsonl is None:
         raise HTTPException(404, "no transcript yet")
     return {"session_id": job_id, "messages": messages_from_jsonl(str(jsonl))}
