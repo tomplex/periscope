@@ -83,8 +83,9 @@ Accessors mirror the `pane_workspaces` set: `set_pane_project`,
 ### Backfill (one-shot, lifespan startup)
 
 Seed `pane_projects` from today's grouping so the rail is byte-identical at
-cutover: for every live pane with no `pane_projects` row, write the result of
-the *current* session-match `resolve_project_for_window`. Idempotent.
+cutover: for every live pane that resolves to a real project (a `pinned_dir`),
+write that tag. Unmanaged/external panes (`MAIN_KEY`) stay untagged and resolve
+to dev by default — a row means "belongs to managed project X". Idempotent.
 
 It must run **synchronously in the lifespan before `yield`** — not bolted onto
 `_pane_sessions_housekeeping`, which is dispatched via `_bg(...)` (app.py:61-77),
