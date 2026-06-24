@@ -28,15 +28,18 @@ const KIND_META = {
   command:  { group: "Command",       icon: "⚡" },
 };
 
-// Commander console: POST the command, then tail the commander pane's
-// transcript via /api/pane/turns until it goes idle (no new turn for ~4s).
-// Esc dismisses the console but the command keeps running server-side — the
-// poll's `alive` flag tears down the timer on unmount without cancelling work.
+// Commander console: POST the command, then tail the commander pane's transcript
+// (/api/pane/turns) while polling /api/command/status for the commander's actual
+// busy state — done once it's worked and gone idle. Esc dismisses the console but
+// the command keeps running server-side (the `alive` flag tears down the timer on
+// unmount without cancelling work).
 function useCommanderConsole(text, onError) {
   const [lines, setLines] = useState([]);   // rendered transcript messages
   const [running, setRunning] = useState(true);
   useEffect(() => {
-    let alive = true, pane = null, timer = null, lastGrow = Date.now();
+    let alive = true, pane = null, timer = null;
+    let sawBusy = false, idleStreak = 0;
+    const started = Date.now();
     (async () => {
       const data = await apiCall("command", "/api/command", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -47,18 +50,26 @@ function useCommanderConsole(text, onError) {
       pane = data;   // { session, index }
       const poll = async () => {
         if (!alive) return;
-        const t = await apiCall("turns",
-          `/api/pane/turns?session=${encodeURIComponent(pane.session)}&index=${pane.index}`);
+        // /api/pane/turns returns {messages:[…]} (read messages, not turns).
+        // /api/command/status.running = the commander pane is actively
+        // generating — a reliable done-signal vs. guessing from transcript gaps.
+        const [t, st] = await Promise.all([
+          apiCall("turns",
+            `/api/pane/turns?session=${encodeURIComponent(pane.session)}&index=${pane.index}`),
+          apiCall("cmd-status", "/api/command/status"),
+        ]);
         if (!alive) return;
-        // /api/pane/turns returns {messages:[…]} (or {turns:null} before a
-        // transcript exists) — read messages, not turns.
-        const msgs = (t && t.messages) || [];
-        setLines((prev) => {
-          if (msgs.length > prev.length) lastGrow = Date.now();
-          return msgs;
-        });
-        // idle: no growth for 4s after at least one turn landed.
-        if (msgs.length > 0 && Date.now() - lastGrow > 4000) { setRunning(false); return; }
+        setLines((t && t.messages) || []);
+        // Done once the commander has actually worked, then gone idle for a few
+        // consecutive polls (debounces the multi-second gaps between its tool
+        // calls). Hard 3-min cap so a wedged commander can't poll forever.
+        const busy = !!(st && st.running);
+        if (busy) sawBusy = true;
+        idleStreak = busy ? 0 : idleStreak + 1;
+        if ((sawBusy && idleStreak >= 3) || Date.now() - started > 180000) {
+          setRunning(false);
+          return;
+        }
         timer = setTimeout(poll, 1000);
       };
       poll();

@@ -29,3 +29,30 @@ def test_command_503_when_no_commander(client, monkeypatch):
     monkeypatch.setattr(commander, "ensure_commander", fake_ensure)
     r = client.post("/api/command", json={"text": "x"})
     assert r.status_code == 503
+
+
+def test_command_status_reports_busy(client, fresh_activity_db, monkeypatch):
+    from periscope import activity
+    from periscope.routes import command as cmd_route
+    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    monkeypatch.setattr(cmd_route, "list_windows",
+                        lambda: [{"pane_id": "%C", "session": "bridge", "index": 0}])
+    monkeypatch.setattr(cmd_route, "capture", lambda target: "<pane>")
+    monkeypatch.setattr(cmd_route, "parse_pane", lambda content: {"state": "working"})
+    r = client.get("/api/command/status")
+    assert r.status_code == 200 and r.json() == {"alive": True, "running": True}
+
+
+def test_command_status_idle_and_absent(client, fresh_activity_db, monkeypatch):
+    from periscope import activity
+    from periscope.routes import command as cmd_route
+    # No commander marker → alive False.
+    monkeypatch.setattr(cmd_route, "list_windows", lambda: [])
+    assert client.get("/api/command/status").json() == {"alive": False, "running": False}
+    # Marked + idle → alive True, running False.
+    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    monkeypatch.setattr(cmd_route, "list_windows",
+                        lambda: [{"pane_id": "%C", "session": "bridge", "index": 0}])
+    monkeypatch.setattr(cmd_route, "capture", lambda target: "<pane>")
+    monkeypatch.setattr(cmd_route, "parse_pane", lambda content: {"state": "idle"})
+    assert client.get("/api/command/status").json() == {"alive": True, "running": False}
