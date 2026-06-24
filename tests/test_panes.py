@@ -721,3 +721,15 @@ def test_list_windows_filters_input_ctl_session(mocker):
     # periscope's internal control-mode session is scaffolding, not state.
     assert len(out) == 1
     assert out[0]["session"] == "main"
+
+
+def test_drop_target_focus_pops_both_dicts():
+    from periscope import panes
+    panes._focused_at["sess:1"] = 100
+    panes._acted_at["sess:1"] = 100
+    panes._focused_at["sess:2"] = 200
+    panes.drop_target_focus("sess:1")
+    assert "sess:1" not in panes._focused_at
+    assert "sess:1" not in panes._acted_at
+    assert panes._focused_at["sess:2"] == 200   # untouched
+    panes._focused_at.pop("sess:2", None)        # cleanup
