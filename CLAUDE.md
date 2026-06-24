@@ -101,13 +101,17 @@ Rule choices and *why* (config in `pyproject.toml` `[tool.ruff]` /
   (line length) and `E701`/`E702` (terse multi-statement lines) are OFF:
   that terse style is deliberate here. Tests per-file-ignore `E402`
   (section-divider import grouping) and `E731` (lambda fixtures).
-- **ty** gates **source only**. Tests and `build_icons.py` are excluded
-  (`[tool.ty.src] exclude`): tests are mock-heavy (`MagicMock`), so a
-  structural checker yields ~100 noise diagnostics with no bug-catching
-  value — they're verified by running them; `build_icons.py` is a manual
-  icon script with an undeclared optional dep (Pillow). One inline
-  `# ty: ignore[unresolved-attribute]` exists in `channels.py` for
-  `asyncio.Server.close_clients()` (real since 3.13; ty's typeshed lags).
+- **ty** checks source AND tests. Source is fully strict. Tests stay in the
+  gate so real test-code bugs (undefined names, bad imports, syntax) are
+  caught, but six rules that *only* fire as noise on mock-heavy
+  (`MagicMock`) / monkeypatched / happy-path test code are silenced there
+  via `[[tool.ty.overrides]]` (`unresolved-attribute`, `invalid-argument-type`,
+  `not-subscriptable`, `invalid-assignment`, `unsupported-operator`,
+  `not-iterable`) — they stay strict on source. `build_icons.py` is excluded
+  (`[tool.ty.src] exclude`): a manual icon script with an undeclared optional
+  dep (Pillow). One inline `# ty: ignore[unresolved-attribute]` exists in
+  `channels.py` for `asyncio.Server.close_clients()` (real since 3.13; ty's
+  typeshed lags).
 - **Biome** is a **linter only — the formatter is OFF**. An opinionated
   formatter fights the hand-written terse style (same reason E701/E702 are
   off on the Python side), so we keep lint + `organizeImports` without

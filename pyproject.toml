@@ -52,8 +52,22 @@ ignore = ["E501", "E701", "E702"]
 python-version = "3.11"
 
 [tool.ty.src]
-# Tests are mock-heavy (MagicMock); a structural type checker can't introspect
-# them, so strict checking yields ~100 noise diagnostics with no bug-catching
-# value — tests are verified by running them. build_icons.py is a manual
-# icon-build script with an undeclared optional dep (Pillow). Gate source only.
-exclude = ["tests/**", "history/tests/**", "build_icons.py"]
+# build_icons.py is a manual icon-build script with an undeclared optional dep
+# (Pillow); not part of the server or tests.
+exclude = ["build_icons.py"]
+
+# Tests stay in the gate so the rules that catch real test-code bugs (undefined
+# names, bad imports, syntax) still fire. But tests are mock-heavy
+# (MagicMock) / monkeypatched / happy-path, so the six rules below only ever
+# fire as noise there — never a real bug. Silence them for tests only; they
+# stay strict on source.
+[[tool.ty.overrides]]
+include = ["tests/**", "history/tests/**"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+invalid-argument-type = "ignore"
+not-subscriptable = "ignore"
+invalid-assignment = "ignore"
+unsupported-operator = "ignore"
+not-iterable = "ignore"
