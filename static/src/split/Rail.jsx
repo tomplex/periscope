@@ -36,7 +36,7 @@ import {
   mergeLiveAndPrefs, indexWindowsByWorktree, indexProjects, indexWorkspaces,
   projectLabel, groupLabel, paneChip, maxSeverity, MAIN_KEY,
 } from "./railTree.js";
-import { PaneRow, ReviewRow, NewTabRow, WorktreeRow, RepoRow, WorktreeMeta } from "./RailRows.jsx";
+import { PaneRow, ReviewRow, NewTabRow, WorktreeRow, RepoRow } from "./RailRows.jsx";
 import { SectionHeader } from "./SectionHeader.jsx";
 import { AttentionTop, ActivitySection } from "./AttentionSections.jsx";
 
@@ -509,7 +509,7 @@ export function Rail() {
                   onOpen={() => spawnIntoWorkspace(repoKey.slice(3))}
                 />
               );
-              return rows;
+              return <div class="rail-group rail-group-ws"><div class="rail-group-body">{rows}</div></div>;
             })()}
             {isDev && !repoCollapsed && (() => {
               // Dev: flat pane list across __main__'s session + folded
@@ -543,7 +543,7 @@ export function Rail() {
                   onOpen={openLauncher}
                 />
               );
-              return rows;
+              return <div class="rail-group rail-group-dev"><div class="rail-group-body">{rows}</div></div>;
             })()}
             {!isDev && !repoCollapsed && worktrees.map((wtKey) => {
               const wtWindows = byWorktree[wtKey] || [];
@@ -598,7 +598,7 @@ export function Rail() {
               const childCount = childOrder.filter((c) => c === "review" || windowsByPid[c]).length;
 
               return (
-                <RailFragment key={`wt:${wtKey}`}>
+                <div class="rail-group" key={`wt:${wtKey}`}>
                   <WorktreeRow
                     worktreeKey={wtKey}
                     label={label}
@@ -612,9 +612,8 @@ export function Rail() {
                     dragProps={makeDragProps({ kind: "worktree", key: `wt:${wtKey}`, repoKey })}
                     dropPos={dropPosFor(`wt:${wtKey}`)}
                   />
-                  <WorktreeMeta wtWindows={wtWindows} />
-                  {!wtCollapsed && childRows}
-                </RailFragment>
+                  {!wtCollapsed && <div class="rail-group-body">{childRows}</div>}
+                </div>
               );
             })}
           </RailFragment>

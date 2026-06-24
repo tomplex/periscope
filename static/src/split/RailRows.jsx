@@ -16,7 +16,7 @@
 // <input>; Enter/blur commit, Escape cancels. A `settled` guard reproduces the
 // vanilla Enter-then-blur double-submit protection.
 import { useState, useRef, useEffect } from "preact/hooks";
-import { prUrl } from "../util.js";
+import { prUrl, relTime } from "../util.js";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
 // quiet) and the one-liner no longer reflects "now".
@@ -35,6 +35,28 @@ function ciClass(ci) {
   if (ci === "✗") return "bad";
   if (ci === "⟳") return "running";
   return "neutral";
+}
+
+// Status-line model field carries a parenthetical context window ("Opus 4.8
+// (1M context)"); the rail badge only wants the model name.
+function shortModel(m) {
+  if (!m) return null;
+  return m.replace(/\s*\(.*$/, "").trim();
+}
+
+// Context-window fill drives a quiet→warn→hot color ramp: a pane near its
+// context limit is the one about to compact / lose history.
+function ctxClass(p) {
+  if (p == null) return "";
+  if (p >= 80) return " ctx-hot";
+  if (p >= 60) return " ctx-warn";
+  return "";
+}
+
+// A worktree's git field is "clean" / "clean *" (untracked only) when there's
+// nothing to surface; anything else ("+149 -118") is a real dirty count.
+function isDirty(git) {
+  return git && git !== "clean" && git !== "clean *";
 }
 
 // Inline-rename label. `kind` is "pane" or "worktree" (only those rename).
@@ -106,33 +128,57 @@ function RailLabel({ label, kind, renameable, onCommit }) {
   );
 }
 
+// Adaptive pane row. Default state is a COMPACT two-line row (stripe + name +
+// one key metric, plus the always-visible narrator summary). A pane LIFTS into
+// an expanded card — gaining a model badge and a PR/Linear/git/ctx/time footer
+// — only when it's selected or needs input. State rides the left stripe at both
+// sizes, so collapsing never loses what a pane is or how it's doing.
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
   pinned, onTogglePin,
 }) {
   const k = `pane:${w.pid}`;
-  const sel = k === selectedKey ? " selected" : "";
+  const sel = k === selectedKey;
+  const expanded = sel || w.state === "needs-input";
+  const stateCls = w.is_claude ? (w.state || "idle") : "shell";
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
   const label = w.name || (w.is_claude ? "claude" : "shell");
+  const statusText = w.status_rail || w.status_line;
   const statusStale =
     w.status_at && Math.floor(Date.now() / 1000) - w.status_at > STATUS_STALE_S;
+  const model = shortModel(w.model);
+  const prHref = w.pr ? prUrl(w.repo_slug, w.pr) : null;
+  const prInner = (
+    <>#{w.pr}{w.ci ? <span class={`pane-ci pane-ci-${ciClass(w.ci)}`}> {w.ci}</span> : null}</>
+  );
+
   return (
     <div
-      class={`rail-row child-row pane-row${sel}${dimCls}${drop}`}
+      class={`rail-row child-row pane-row pane-state-${stateCls}${expanded ? " pane-expanded" : ""}${sel ? " selected" : ""}${dimCls}${drop}`}
       data-drop-pos={dropPos || undefined}
       draggable
       onClick={() => onSelect(k)}
       {...dragProps}
     >
+      <span class="pane-stripe" aria-hidden="true"></span>
       <div class="pane-row-main">
         {w.is_claude
           ? <span class="rail-icon icon-claude">✻</span>
           : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
-        {/* chip moved to line 2 (.rail-meta) below. Workspace membership is set
-            by DRAGGING the tab onto a workspace group (and removed by dragging
-            it out) — no inline picker, so the name keeps the full line width. */}
+        {/* Expanded: model badge. Compact: the pane's one key metric (PR# +
+            context%). PR/Linear/git move to the footer when expanded. */}
+        {expanded
+          ? (model && <span class="pane-model" title={w.model}>{model}</span>)
+          : (
+            <span class="pane-mini">
+              {w.pr && <span class="pane-mini-pr">#{w.pr}</span>}
+              {w.context_pct != null && (
+                <span class={`pane-mini-ctx${ctxClass(w.context_pct)}`}>{w.context_pct}%</span>
+              )}
+            </span>
+          )}
         {w.burn_hot && (
           <span
             class="rail-burn"
@@ -144,21 +190,36 @@ export function PaneRow({
           title={pinned ? "unpin" : "pin"}
           onClick={(e) => { e.stopPropagation(); onTogglePin && onTogglePin(); }}
         >{pinned ? "★" : "☆"}</button>
-        <span class={statusDotClass(w.state)}></span>
         <button
           class="rail-close"
           title="kill this tab"
           onClick={(e) => { e.stopPropagation(); onClose(); }}
         >×</button>
       </div>
-      {(chip || w.status_line) && (
+      {(chip || statusText) && (
         <div class={`rail-meta${statusStale ? " stale" : ""}`}>
           {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
-          {w.status_line && (
-            <span class="rail-status" title={w.status_line}>
-              {w.status_rail || w.status_line}
-            </span>
+          {statusText && (
+            <span class="rail-status" title={w.status_line}>{statusText}</span>
           )}
+        </div>
+      )}
+      {expanded && (w.pr || w.linked_linear || isDirty(w.git) || w.context_pct != null) && (
+        <div class="pane-foot">
+          {w.pr && (
+            prHref
+              ? <a class="pane-pill pane-pill-pr" href={prHref} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`PR #${w.pr}`}>{prInner}</a>
+              : <span class="pane-pill pane-pill-pr" title={`PR #${w.pr}`}>{prInner}</span>
+          )}
+          {w.linked_linear && (
+            <a class="pane-pill pane-pill-linear" href={`https://linear.app/issue/${w.linked_linear}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`Linear ${w.linked_linear}${w.linked_linear_status ? ` [${w.linked_linear_status}]` : ""}`}>{w.linked_linear}</a>
+          )}
+          {isDirty(w.git) && <span class="pane-pill pane-pill-git" title="git status">{w.git}</span>}
+          <span class="pane-foot-spacer"></span>
+          {w.context_pct != null && (
+            <span class={`pane-pill pane-pill-ctx${ctxClass(w.context_pct)}`} title="context window used">{w.context_pct}%</span>
+          )}
+          {w.status_at ? <span class="pane-time">{relTime(w.status_at)}</span> : null}
         </div>
       )}
     </div>
