@@ -429,6 +429,17 @@ export function Rail() {
         const repoLabel = isWs ? (wsRow.name || repoKey.slice(3)) : groupLabel(repoKey, projsByPin);
         const repoChip = isWs && wsRow.base_repo ? basename(wsRow.base_repo) : null;
         const worktrees = worktreesByRepo[repoKey] || [];
+        // A repo's PRIMARY session is the worktree whose display name matches
+        // the repo itself — its general-purpose tabs (working on the repo
+        // directly), not a dedicated branch worktree. It renders headerless,
+        // straight under the repo label (no ⎇); real worktrees keep their card
+        // header. Rendered first so it reads as "the repo's own tabs."
+        const primaryWt = (isDev || isWs)
+          ? null
+          : worktrees.find((wt) => projectLabel(projectsBySession[wt], wt) === repoLabel);
+        const orderedWts = primaryWt
+          ? [primaryWt, ...worktrees.filter((wt) => wt !== primaryWt)]
+          : worktrees;
         const repoCollapsed = collapsed[`repo:${repoKey}`] === true;
         const devWindows = isDev
           ? (panesByWorktree[MAIN_KEY] || []).map((pid) => live.find((w) => w.pid === pid)).filter(Boolean)
@@ -545,7 +556,8 @@ export function Rail() {
               );
               return <div class="rail-group rail-group-dev"><div class="rail-group-body">{rows}</div></div>;
             })()}
-            {!isDev && !repoCollapsed && worktrees.map((wtKey) => {
+            {!isDev && !repoCollapsed && orderedWts.map((wtKey) => {
+              const isPrimary = wtKey === primaryWt;
               const wtWindows = byWorktree[wtKey] || [];
               const windowsByPid = Object.fromEntries(wtWindows.map((w) => [w.pid, w]));
               const childOrder = panesByWorktree[wtKey] || [];
@@ -597,6 +609,15 @@ export function Rail() {
               const wtDim = wtWindows.some((w) => passesFilter(w, filter));
               const childCount = childOrder.filter((c) => c === "review" || windowsByPid[c]).length;
 
+              // Primary session: headerless card (no ⎇), tabs straight under
+              // the repo label. Real worktrees keep their WorktreeRow header.
+              if (isPrimary) {
+                return (
+                  <div class="rail-group rail-group-primary" key={`wt:${wtKey}`}>
+                    <div class="rail-group-body">{childRows}</div>
+                  </div>
+                );
+              }
               return (
                 <div class="rail-group" key={`wt:${wtKey}`}>
                   <WorktreeRow

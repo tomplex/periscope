@@ -83,12 +83,13 @@ CREATE TABLE IF NOT EXISTS captain_log (
   text  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_captain_log_at ON captain_log (at);
-CREATE TABLE IF NOT EXISTS first_mate (
+CREATE TABLE IF NOT EXISTS commander (
   id          INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
   pane_id     TEXT NOT NULL,
   session_id  TEXT,
   updated_at  INTEGER NOT NULL
 );
+DROP TABLE IF EXISTS first_mate;
 """
 
 _CONN: sqlite3.Connection | None = None
@@ -421,12 +422,12 @@ def prune_pane_status(alive_pane_ids: set[str]) -> int:
         return len(dead)
 
 
-# --- captain_log + first_mate marker: first-mate substrate --------------
+# --- captain_log + commander marker: commander substrate ----------------
 #
-# captain_log is the first mate's durable scratch — standing orders, a
+# captain_log is the commander's durable scratch — standing orders, a
 # watch-list, narrative notes — appended via the captains_log MCP tools.
-# first_mate is a singleton (id=1) marker naming which pane currently holds
-# the first-mate role; the tools self-guard against it (channels.py).
+# commander is a singleton (id=1) marker naming which pane currently holds
+# the commander role; the tools self-guard against it (channels.py).
 
 @dataclass(frozen=True)
 class CaptainLogRow:
@@ -437,7 +438,7 @@ class CaptainLogRow:
 
 
 @dataclass(frozen=True)
-class FirstMateMarker:
+class CommanderMarker:
     pane_id: str
     session_id: str | None
     updated_at: int
@@ -464,21 +465,21 @@ def recent_captain_log(*, limit: int = 50) -> list[CaptainLogRow]:
     return [CaptainLogRow(*r) for r in rows]
 
 
-def get_first_mate() -> FirstMateMarker | None:
+def get_commander() -> CommanderMarker | None:
     with _LOCK:
         c = _conn()
         row = c.execute(
-            "SELECT pane_id, session_id, updated_at FROM first_mate WHERE id=1"
+            "SELECT pane_id, session_id, updated_at FROM commander WHERE id=1"
         ).fetchone()
-    return FirstMateMarker(*row) if row else None
+    return CommanderMarker(*row) if row else None
 
 
-def set_first_mate(*, pane_id: str, session_id: str | None, at: int) -> None:
-    """Upsert the singleton (id=1) first-mate marker."""
+def set_commander(*, pane_id: str, session_id: str | None, at: int) -> None:
+    """Upsert the singleton (id=1) commander marker."""
     with _LOCK:
         c = _conn()
         c.execute(
-            "INSERT INTO first_mate (id, pane_id, session_id, updated_at) "
+            "INSERT INTO commander (id, pane_id, session_id, updated_at) "
             "VALUES (1, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET "
             "  pane_id=excluded.pane_id, session_id=excluded.session_id, "
@@ -488,11 +489,17 @@ def set_first_mate(*, pane_id: str, session_id: str | None, at: int) -> None:
         c.commit()
 
 
-def clear_first_mate() -> None:
+def clear_commander() -> None:
     with _LOCK:
         c = _conn()
-        c.execute("DELETE FROM first_mate WHERE id=1")
+        c.execute("DELETE FROM commander WHERE id=1")
         c.commit()
+
+
+def is_commander_pane(pane: str) -> bool:
+    """True iff `pane` (a tmux %N id) is the registered commander singleton."""
+    marker = get_commander()
+    return marker is not None and marker.pane_id == pane
 
 
 # --- usage_samples: plan-usage time series ------------------------------
@@ -787,32 +794,8 @@ def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
 # it captures each active Claude pane, runs the context-reset check, and
 # drives the narrator (semantic status + auto-rename).
 
-def _safe_usage() -> dict | None:
-    try:
-        from periscope.usage import cached_plan_usage
-        return cached_plan_usage()
-    except Exception:
-        return None
-
-
-async def _emit_pending_first_mate(last_ctx: dict) -> None:
-    """Main-loop side of the heartbeat: send a Push stashed by _worker_tick.
-    Awaited in run_worker (the MCP sessions are main-loop-affine — must NOT be
-    emitted from the worker thread)."""
-    pending = last_ctx.pop("_fm_push", None)
-    if not pending:
-        return
-    pane_id, content, cur = pending
-    from periscope.channels import emit_channel_event
-    from periscope import first_mate
-    ok = await emit_channel_event(pane_id, content, {"kind": "fleet_digest"})
-    if ok:
-        first_mate._LAST_SENT = cur     # advance only on a successful send
-
-
 def _worker_tick(last_ctx: dict) -> None:
     """One worker pass. Blocking (tmux + git subprocesses) — run off-loop."""
-    now = int(time.time())
     panes: list[tuple[dict, dict]] = []
     for w in list_windows():
         target = f"{w['session']}:{w['index']}"
@@ -834,24 +817,6 @@ def _worker_tick(last_ctx: dict) -> None:
         narrator.tick(panes)
     except Exception:
         log.exception("narrator tick failed")
-    # First mate: supervisor liveness + heartbeat decision (sync; the async
-    # emit is hoisted to run_worker's main loop — see _emit_pending_first_mate).
-    # Skip entirely when disabled (the sentinel kill-switch) — no respawn, no
-    # heartbeat. Killing the pane alone won't stick; the supervisor would respawn.
-    try:
-        from periscope import first_mate
-        if not first_mate.first_mate_disabled():
-            first_mate.supervisor_pass(now=now)
-            cur = first_mate.build_fleet_digest(
-                panes=first_mate.assemble_pane_views(panes, now), usage=_safe_usage(), now=now,
-            )
-            push = first_mate.heartbeat_decide(
-                prev=first_mate._LAST_SENT, cur=cur, marker=get_first_mate(),
-            )
-            if push is not None:
-                last_ctx["_fm_push"] = (push.pane_id, push.content, cur)
-    except Exception:
-        log.exception("first-mate worker pass failed")
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()
@@ -864,7 +829,6 @@ async def run_worker() -> None:
     while True:
         try:
             await asyncio.to_thread(_worker_tick, last_ctx)
-            await _emit_pending_first_mate(last_ctx)
         except Exception:
             log.exception("activity worker tick failed")
         await asyncio.sleep(30)

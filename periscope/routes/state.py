@@ -122,6 +122,13 @@ def state():
         v for v in all_workspaces().values() if not v.get("archived_at")
     ]
 
+    # Drop the hidden commander pane from the SHIPPED list only. The raw
+    # `windows` above must keep it so update_focus_from_windows, pid attach,
+    # and _channel_gc all see it (gc'ing the commander's channel state every
+    # 3s would tear down its MCP registration).
+    from periscope import activity
+    result = [w for w in result if not activity.is_commander_pane(w.get("pane_id", ""))]
+
     return {
         "windows": result,
         "projects": projects_view,

@@ -382,6 +382,14 @@ def test_tick_generates_first_status(tick_env):
     assert tick_env["tmux_calls"] == []   # rename: null → no tmux
 
 
+def test_narrator_skips_commander(tick_env):
+    # The hidden commander pane must never burn a Haiku call. _pane() uses %1;
+    # marking that pane as the commander → candidate scan continues past it.
+    activity.set_commander(pane_id="%1", session_id=None, at=1)
+    narrator.tick([_pane()])
+    assert tick_env["haiku_calls"] == []   # commander skipped → zero Haiku spend
+
+
 def test_tick_persists_rail(tick_env):
     tick_env["response"] = ('{"status": "fixing flaky reconcile test", '
                             '"rail": "comparing hit rates", "rename": null}')
@@ -424,18 +432,21 @@ def test_tick_applies_rename_and_records_event(tick_env):
                for e in events)
 
 
-def test_tick_never_renames_first_mate_by_marker(tick_env):
-    activity.set_first_mate(pane_id="%1", session_id=None, at=0)
+def test_tick_never_renames_commander_by_marker(tick_env):
+    # The marker-identified commander is skipped in the candidate loop (before
+    # Haiku) — so it never renames AND never generates a status row.
+    activity.set_commander(pane_id="%1", session_id=None, at=0)
     tick_env["response"] = '{"status": "s", "rename": "fs-liveness"}'
     narrator.tick([_pane()])
     assert not any(c[0] == "rename-window" for c in tick_env["tmux_calls"])
-    assert activity.get_pane_status("%1").status == "s"   # status still lands
+    assert tick_env["haiku_calls"] == []           # no Haiku spend on the commander
+    assert activity.get_pane_status("%1") is None   # no status row generated
 
 
-def test_tick_never_renames_first_mate_by_window(tick_env):
+def test_tick_never_renames_commander_by_window(tick_env):
     tick_env["set_session"]("%2", "sid-a")
     tick_env["response"] = '{"status": "s", "rename": "fs-liveness"}'
-    narrator.tick([_pane(pane_id="%2", name="first-mate", session="bridge")])
+    narrator.tick([_pane(pane_id="%2", name="commander", session="bridge")])
     assert not any(c[0] == "rename-window" for c in tick_env["tmux_calls"])
 
 

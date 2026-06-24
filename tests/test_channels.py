@@ -419,6 +419,50 @@ def test_spawn_claude_no_parent_tolerated(mocker):
     assert json.loads(result[0].text)["ok"] is True
 
 
+def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
+    from periscope import channels, activity, open_ops
+    activity.set_commander(pane_id="%C", session_id=None, at=1)   # caller IS commander
+    monkeypatch.setattr(open_ops, "resolve_worktree_session",
+                        lambda cwd: ("proj-sess", object()))      # git cwd resolves
+    # Mirror the full mock set from test_spawn_claude_writes_spawned_by: the
+    # spawn handler shells out heavily, so all of these must be stubbed or the
+    # test hits real tmux.
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    cap = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    mocker.patch("periscope.channels.set_window_fields")
+    # The commander path makes `anchored` truthy, so place_in_rail fires:
+    # stub list_windows + place_in_rail so it never touches real tmux/state.
+    mocker.patch("periscope.channels.list_windows", return_value=[])
+    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+
+    asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "x", "cwd": "/r"}))
+
+    # The session the worker landed in must be the RESOLVED "proj-sess",
+    # never the commander's own caller session ("sess"). Inspect the
+    # new-session/new-window _tmux_mutate call args for "proj-sess".
+    targets = [c.args for c in cap.call_args_list]
+    assert any("proj-sess" in a for args in targets for a in args)
+    assert not any("sess:" in a for args in targets for a in args
+                   if isinstance(a, str) and a.startswith("sess:"))
+
+
+def test_spawn_commander_non_git_cwd_errors(fresh_activity_db, monkeypatch):
+    from periscope import channels, activity, open_ops
+    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    monkeypatch.setattr(open_ops, "resolve_worktree_session", lambda cwd: None)
+    monkeypatch.setattr("os.path.isdir", lambda p: True)
+    res = asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "x", "cwd": "/tmp"}))
+    assert _body(res)["ok"] is False and "git" in _body(res)["error"].lower()
+
+
 def test_send_to_happy(mocker):
     from periscope import channels
     mocker.patch("periscope.channels._resolve_window_by_pid",
@@ -492,15 +536,6 @@ def test_emit_channel_event_records_full_text_into_activity(fresh_activity_db):
     assert out[0]["src"] == "channel"
     assert out[0]["kind"] == "message"
     assert out[0]["text"] == body   # untruncated
-
-
-def test_emit_channel_event_skips_fleet_digest(fresh_activity_db):
-    from periscope import channels, activity
-    sess = AsyncMock()
-    with _CHANNELS_LOCK:
-        _MCP_SESSIONS["%5"] = sess
-    asyncio.run(channels.emit_channel_event("%5", "big digest", {"kind": "fleet_digest"}))
-    assert activity.events_for("%5", None, None) == []   # too noisy to record
 
 
 def test_emit_channel_event_unattached_records_nothing(fresh_activity_db):
@@ -637,9 +672,9 @@ def test_terminate_mutate_failure(mocker):
     assert body["ok"] is False and body["error"] == "no such window"
 
 
-# --- first-mate captain's-log tools ---
+# --- commander captain's-log tools ---
 
-def test_first_mate_tools_are_registered():
+def test_commander_tools_are_registered():
     from periscope.channels import _CHANNEL_TOOLS
     names = {t["name"] for t in _CHANNEL_TOOLS}
     assert {"captains_log_read", "captains_log_append"} <= names
@@ -648,19 +683,19 @@ def test_first_mate_tools_are_registered():
             assert "inputSchema" in t and callable(t["handler"])
 
 
-def test_captains_log_tools_refuse_non_first_mate(fresh_activity_db):
+def test_captains_log_tools_refuse_non_commander(fresh_activity_db):
     from periscope.channels import _do_captains_log_read_tool, _do_captains_log_append_tool
     # no marker set -> every caller is refused
     r = _body(_do_captains_log_read_tool("%5", {}))
-    assert r["ok"] is False and "first-mate" in r["error"].lower()
+    assert r["ok"] is False and "commander" in r["error"].lower()
     a = _body(_do_captains_log_append_tool("%5", {"kind": "watch", "text": "x"}))
     assert a["ok"] is False
 
 
-def test_captains_log_append_and_read_for_first_mate(fresh_activity_db):
+def test_captains_log_append_and_read_for_commander(fresh_activity_db):
     from periscope import activity
     from periscope.channels import _do_captains_log_read_tool, _do_captains_log_append_tool
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    activity.set_commander(pane_id="%9", session_id=None, at=1)
 
     ok = _body(_do_captains_log_append_tool("%9", {"kind": "standing_order", "text": "watch propensity"}))
     assert ok["ok"] is True
@@ -673,7 +708,7 @@ def test_captains_log_append_and_read_for_first_mate(fresh_activity_db):
 def test_captains_log_append_rejects_bad_kind(fresh_activity_db):
     from periscope import activity
     from periscope.channels import _do_captains_log_append_tool
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    activity.set_commander(pane_id="%9", session_id=None, at=1)
     bad = _body(_do_captains_log_append_tool("%9", {"kind": "nonsense", "text": "x"}))
     assert bad["ok"] is False and "kind" in bad["error"].lower()
 
@@ -681,60 +716,9 @@ def test_captains_log_append_rejects_bad_kind(fresh_activity_db):
 def test_captains_log_append_rejects_empty_text(fresh_activity_db):
     from periscope import activity
     from periscope.channels import _do_captains_log_append_tool
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    activity.set_commander(pane_id="%9", session_id=None, at=1)
     bad = _body(_do_captains_log_append_tool("%9", {"kind": "watch", "text": "  "}))
     assert bad["ok"] is False
-
-
-def test_need_human_notify_schedules_emit_to_first_mate(fresh_activity_db, monkeypatch):
-    from periscope import activity
-    from periscope.channels import _do_notify_tool
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
-    sent = []
-    # Replace the scheduler so we don't need a running loop in this sync test.
-    monkeypatch.setattr("periscope.channels._schedule_first_mate_emit",
-                        lambda pane_id, content: sent.append((pane_id, content)))
-    _do_notify_tool("%5", {"message": "blocked on schema", "kind": "need_human"})
-    assert sent and sent[0][0] == "%9" and "blocked on schema" in sent[0][1]
-
-
-def test_non_need_human_notify_schedules_no_emit(fresh_activity_db, monkeypatch):
-    from periscope import activity
-    from periscope.channels import _do_notify_tool
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
-    sent = []
-    monkeypatch.setattr("periscope.channels._schedule_first_mate_emit",
-                        lambda pane_id, content: sent.append((pane_id, content)))
-    _do_notify_tool("%5", {"message": "done", "kind": "done"})
-    assert sent == []
-
-
-def test_need_human_notify_no_marker_is_safe(fresh_activity_db, monkeypatch):
-    from periscope.channels import _do_notify_tool
-    sent = []
-    monkeypatch.setattr("periscope.channels._schedule_first_mate_emit",
-                        lambda pane_id, content: sent.append((pane_id, content)))
-    _do_notify_tool("%5", {"message": "x", "kind": "need_human"})  # no first mate set
-    assert sent == []
-
-
-def test_fleet_digest_tool_refuses_non_first_mate(fresh_activity_db):
-    from periscope.channels import _do_fleet_digest_tool
-    r = _body(_do_fleet_digest_tool("%5", {}))
-    assert r["ok"] is False and "first-mate" in r["error"].lower()
-
-
-def test_fleet_digest_tool_returns_cached_digest(fresh_activity_db):
-    from periscope import activity, first_mate
-    from periscope.channels import _do_fleet_digest_tool
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
-    first_mate._LAST_SENT = first_mate.FleetDigest(
-        panes=(first_mate.PaneDigest("@1", "w", "s", "run", False, 7, "✓", 3),),
-        budget_pct=55, budget_resets_at=None, at=10)
-    r = _body(_do_fleet_digest_tool("%9", {}))
-    assert r["ok"] is True and r["digest"]["budget_pct"] == 55
-    assert r["digest"]["panes"][0]["handle"] == "@1"
-    first_mate._LAST_SENT = None   # reset module global for other tests
 
 
 def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_activity_db, mocker):
@@ -763,3 +747,38 @@ def test_list_workspaces_tool_excludes_archived(clean_state, fresh_activity_db, 
     mocker.patch("periscope.channels.list_windows", return_value=[])
     r = _body(_do_list_workspaces_tool("%1", {}))
     assert all(w["id"] != ws["id"] for w in r["workspaces"])
+
+
+def test_create_workspace_tool(monkeypatch):
+    from periscope import channels
+    monkeypatch.setattr(channels.workspaces, "create_workspace",
+                        lambda *, name, base_repo=None: {"id": "ws_x", "name": name})
+    res = channels._do_create_workspace_tool("%1", {"name": "x", "base_repo": "/r"})
+    body = _body(res)
+    assert body["ok"] is True and body["workspace_id"] == "ws_x"
+
+
+def test_open_tool_dispatches_path(monkeypatch):
+    from periscope import channels, open_ops
+    seen = {}
+    def fake_open(desc):
+        seen["desc"] = desc
+        class R: tmux_session="s"; repo="/r"; claude_pid="@1"; claude_pane_id="%2"; ui={}
+        return R()
+    monkeypatch.setattr(open_ops, "open_target", fake_open)
+    res = channels._do_open_tool("%1", {"path": "/r"})
+    body = _body(res)
+    assert body["ok"] is True and isinstance(seen["desc"], open_ops.PathTarget)
+
+
+def test_open_tool_bad_args(monkeypatch):
+    from periscope import channels
+    res = channels._do_open_tool("%1", {})   # none of path|repo+branch|repo+pr
+    assert _body(res)["ok"] is False
+
+
+def test_catalog_tool(monkeypatch):
+    from periscope import channels, open_ops
+    monkeypatch.setattr(open_ops, "build_catalog", lambda: {"repos": [], "worktrees": []})
+    res = channels._do_catalog_tool("%1", {})
+    assert _body(res)["ok"] is True

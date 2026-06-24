@@ -53,5 +53,8 @@ export function classify(query, catalog) {
                  sub: pr.repo || "choose a repo",
                  needsRepo: !pr.repo, pr });
   }
+  // Free-text fallthrough: any non-empty query can be handed to the commander.
+  // Pinned last so structured cards (open/worktree/pr) always rank above it.
+  cards.push({ kind: "command", label: `⚡ run: ${q}`, text: q });
   return cards;
 }

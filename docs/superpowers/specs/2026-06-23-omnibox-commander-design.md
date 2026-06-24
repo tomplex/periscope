@@ -150,19 +150,27 @@ rename.)
 - `ROLE_PROMPT`: rewritten (see Role prompt).
 - Session/window constants (`bridge` / `commander`), marker accessors.
 
-New: `ensure_commander()` — `supervisor_pass`'s "marker live? else spawn" logic,
-wrapped in a **single-flight lock** (an `asyncio.Lock` or a threading lock) so a
+New: `async def ensure_commander()` — `supervisor_pass`'s "marker live? else
+spawn" logic, wrapped in a module-level **`asyncio.Lock`** (the lifespan and the
+route both run on the single main event loop, so a threading lock is wrong) so a
 lifespan boot-spawn and a racing first `/api/command` can't both spawn during the
-multi-hundred-ms window before the marker is set.
+multi-hundred-ms window before the marker is set. `_spawn_commander` is
+synchronous and blocking (`time.sleep` + blocking tmux subprocess calls); today
+it runs in the worker *thread*. Called from an async `ensure_commander` it must
+run via **`asyncio.to_thread(...)`** so the spawn doesn't stall the event loop
+that serves every other pane's MCP connection.
 
 ### `periscope/narrator.py` — stop narrating the commander
 
 `narrator._is_first_mate` (and its import of the first-mate constants) must be
 updated for the rename. The commander is hidden, so the narrator should **skip
-it entirely** in its per-pane tick rather than only suppressing its rename —
-otherwise periscope pays a Haiku call every 30s to generate a status line for a
-pane no one sees. (Consequence: `peek` on the commander shows no narrator
-status line — acceptable for a hidden orchestrator.)
+it entirely** — but the skip must land in the **candidate-scan loop in `tick()`**
+(early `continue` once the pane is identified as the commander), *not* the
+existing `_is_first_mate` call site, which runs **after** the Haiku call and only
+suppresses rename. Skipping at line 332 would still pay a Haiku call every 30s
+for a pane no one sees; skipping in the `tick()` loop avoids the spend.
+(Consequence: `peek` on the commander shows no narrator status line — acceptable
+for a hidden orchestrator.)
 
 ### `periscope/activity.py` — strip the tick, keep the marker
 
@@ -178,10 +186,12 @@ status line — acceptable for a hidden orchestrator.)
 - **Drop** the `need_human` → `_schedule_first_mate_emit` interrupt hook in
   `_do_notify_tool`, and delete `_schedule_first_mate_emit` (its only caller is
   that hook).
-- **Drop** `fleet_digest` (`_do_fleet_digest_tool`) and its registration — it
-  read `_LAST_SENT`, which is gone, and rebuilding it on-demand would mean
-  running the worker's blocking capture loop inside the async tool handler.
-  `list_claudes` + `peek` already give the commander read-state.
+- **Drop** `fleet_digest` (`_do_fleet_digest_tool`), its registration, **and
+  `_serialize_digest`** (its only caller is `_do_fleet_digest_tool`, so it goes
+  dead). `fleet_digest` read `_LAST_SENT`, which is gone, and rebuilding it
+  on-demand would mean running the worker's blocking capture loop inside the
+  async tool handler. `list_claudes` + `peek` already give the commander
+  read-state.
 - **Re-gate**: `_require_first_mate` → `_require_commander` (same singleton-marker
   check). Continues to guard `captains_log_read/append`.
 - **Add three MCP tools** (today these capabilities are HTTP-only):
@@ -197,7 +207,11 @@ status line — acceptable for a hidden orchestrator.)
   - `catalog()` → `open_ops.build_catalog()` (HTTP-free), returning
     `{repos:[{repo,label,default_branch,branches}], worktrees:[{path,repo,branch,is_main}]}`.
     This is the commander's view of *dormant* repos + worktrees — `list_claudes`
-    only shows live sessions. It grounds placement guesses (see Placement).
+    only shows live sessions. It grounds placement guesses (see Placement). Cost:
+    ~3 git subprocesses per repo (uncached `git branch` + default-branch detect;
+    worktrees are 30s-cached) — the same payload the HTTP catalog serves on every
+    omnibox open, so tolerable, but the role prompt should call it **once per
+    turn and reuse**, not poll it.
 
   These are general channel tools (any pane could use them); not commander-gated.
 
@@ -206,13 +220,19 @@ status line — acceptable for a hidden orchestrator.)
   the commander is its *own hidden session*, so a forgotten arg would misfile the
   worker there (invisible, nested under the commander). Change the handler so that
   **when the caller pane is the commander, placement derives from `cwd` (or an
-  explicit `session`), never the caller's session**: run `cwd` through
-  `resolve_worktree_session` (the `workspace="new"` path) so the worker lands in
-  the cwd's project/worktree session — a window in the main checkout when
-  `cwd=<repo root>`, the worktree's session when `cwd=<worktree path>`. The
-  commander's own session is never a spawn target. (This subsumes the cruder
-  "always new" guard: "new" is cwd-anchored, and which cwd the commander picks
-  *is* the placement decision — see Placement.)
+  explicit `session`), never the caller's session**: detect caller-is-commander
+  via the marker (`_require_commander(pane)` / `marker.pane_id == pane`), then run
+  `cwd` through `resolve_worktree_session` (the `workspace="new"` path) so the
+  worker lands in the cwd's project/worktree session — a window in the main
+  checkout when `cwd=<repo root>`, the worktree's session when `cwd=<worktree
+  path>`. **Non-git `cwd` guard:** `resolve_worktree_session` returns `None` for a
+  cwd outside any repo; for the commander this must **error the tool**
+  (`{"ok": False, "error": "cwd is not in a git repo"}`) — it must NOT fall
+  through to the `caller_session` default (the current `channels.py:510`
+  fallback), which is the commander's own hidden session and the exact misfile
+  this change prevents. (This subsumes the cruder "always new" guard: "new" is
+  cwd-anchored, and which cwd the commander picks *is* the placement decision —
+  see Placement.)
 
 The commander **inherits the rest of the existing channel toolset** by virtue of
 being a pane: `spawn_claude`, `send_to`, `list_claudes`, `peek`, `report`,
@@ -224,8 +244,11 @@ being a pane: `spawn_claude`, `send_to`, `list_claudes`, `peek`, `report`,
 - `POST /api/command {text}`: `await ensure_commander()`, then
   `send._send_to_target(commander_target, paste=text, keys=["Enter"])`; returns
   the commander pane's `{session, index}` so the client knows which transcript to
-  tail. Returns a clear error (`503`) when the commander can't be ensured —
-  notably in dev, where it can't spawn (see Constraints).
+  tail. The marker stores the commander's `pane_id` (`%N`), not a `session:index`
+  — resolve `{session, index}` (and the `commander_target`) from `list_windows()`
+  by matching `pane_id`, not from `_send_to_target`'s return. Returns a clear
+  error (`503`) when the commander can't be ensured — notably in dev, where it
+  can't spawn (see Constraints).
 - The console feed reuses the existing `GET /api/pane/turns?session=&index=` —
   no new transcript endpoint.
 
@@ -244,8 +267,11 @@ Three coupled changes (they must land together):
    `register_bridge_project` call + function). Today that registration is what
    makes the commander a visible rail group.
 2. **Clean the stale project row.** A prior prod run persisted a `bridge`
-   project in `state.json`; a one-shot migration removes it (otherwise it stays a
-   visible group regardless of window filtering).
+   project in `state.json` (keyed by `realpath(home)`, with `tmux_session="bridge"`).
+   `projects.py` has no `delete_project`; the row is removed from the rail by
+   **`archive_project`** (the state route already drops archived projects at
+   `routes/state.py:117`). A one-shot lifespan migration finds the project whose
+   `tmux_session == FIRST_MATE_SESSION` via `all_projects()` and archives it.
 3. **Filter the window from the `/api/state` payload at the end.** Do NOT filter
    right after `list_windows()` — that raw list feeds `update_focus_from_windows`,
    `_attach_git_then_resolve_pids` (the commander still needs a stamped pid for
@@ -391,9 +417,13 @@ Two independent tool layers:
 - **Send + transcript-tail end-to-end**: verified in the browser (per the
   project's UI-testing norm — a real Claude is a poor unit-test oracle).
 - **Delete** the heartbeat/divergence/supervisor-respawn/interrupt tests and the
-  `register_bridge_project` test in `tests/test_first_mate.py`; keep the marker
-  tests in `tests/test_activity.py` (renamed). Update `narrator` tests for the
-  skip-commander behavior.
+  `register_bridge_project` test in `tests/test_first_mate.py` (these import the
+  dropped pure functions `build_fleet_digest`/`_curate_pane`/`assemble_pane_views`,
+  so they break at import if left), **and** the fleet-digest tests in
+  `tests/test_channels.py` (`test_emit_channel_event_skips_fleet_digest`,
+  `test_fleet_digest_tool_*`). Keep the marker tests in `tests/test_activity.py`
+  (renamed). Update `narrator` tests for the skip-commander behavior. After the
+  strip, grep the suite for the dropped symbols to confirm nothing imports them.
 
 ## Resolved review questions
 

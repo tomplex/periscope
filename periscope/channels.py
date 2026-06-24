@@ -30,6 +30,7 @@ import time
 import uuid
 from typing import Any
 
+from periscope import workspaces
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
 from periscope.panes import list_windows, note_focus, note_action
@@ -200,17 +201,6 @@ def _do_notify_tool(pane: str, arguments: dict):
     except Exception:
         log.warning("activity.record failed for notify()", exc_info=True)
 
-    # Interrupt tier: a need_human wakes the first mate immediately, out of band
-    # from the 30s heartbeat. (Other kinds ride the next heartbeat digest.)
-    if kind == "need_human":
-        try:
-            from periscope import activity as _activity
-            marker = _activity.get_first_mate()
-            if marker is not None:
-                _schedule_first_mate_emit(marker.pane_id, f"need_human from {pane}: {message}")
-        except Exception:
-            log.warning("first-mate need_human hook failed", exc_info=True)
-
     body = {"ok": True, "kind": kind, "severity": severity}
     return _tool_result(body)
 
@@ -218,20 +208,18 @@ def _do_notify_tool(pane: str, arguments: dict):
 _CAPTAINS_LOG_KINDS = {"standing_order", "watch", "narrative"}
 
 
-def _require_first_mate(pane: str) -> bool:
-    """True iff `pane` is the registered first-mate singleton. The tool
-    registry is flat (every attached pane sees every tool), so first-mate-only
-    tools self-guard. Lazy-import activity (channels.py never top-imports it)."""
+def _require_commander(pane: str) -> bool:
+    """True iff `pane` is the registered commander singleton. Channel tools that
+    are commander-only self-guard with this (the registry is flat)."""
     from periscope import activity
 
-    marker = activity.get_first_mate()
-    return marker is not None and marker.pane_id == pane
+    return activity.is_commander_pane(pane)
 
 
 def _do_captains_log_read_tool(pane: str, arguments: dict):
-    """Return recent captain's-log entries (first-mate-only)."""
-    if not _require_first_mate(pane):
-        return _tool_result({"ok": False, "error": "first-mate-only tool"})
+    """Return recent captain's-log entries (commander-only)."""
+    if not _require_commander(pane):
+        return _tool_result({"ok": False, "error": "commander-only tool"})
     from periscope import activity
 
     limit = int(arguments.get("limit", 50))
@@ -241,9 +229,9 @@ def _do_captains_log_read_tool(pane: str, arguments: dict):
 
 
 def _do_captains_log_append_tool(pane: str, arguments: dict):
-    """Append a captain's-log entry (first-mate-only)."""
-    if not _require_first_mate(pane):
-        return _tool_result({"ok": False, "error": "first-mate-only tool"})
+    """Append a captain's-log entry (commander-only)."""
+    if not _require_commander(pane):
+        return _tool_result({"ok": False, "error": "commander-only tool"})
     kind = str(arguments.get("kind", "")).strip()
     text = str(arguments.get("text", "")).strip()
     if kind not in _CAPTAINS_LOG_KINDS:
@@ -255,27 +243,6 @@ def _do_captains_log_append_tool(pane: str, arguments: dict):
 
     activity.append_captain_log(kind=kind, text=text)
     return _tool_result({"ok": True})
-
-
-def _serialize_digest(d) -> dict:
-    return {
-        "at": d.at, "budget_pct": d.budget_pct, "budget_resets_at": d.budget_resets_at,
-        "panes": [
-            {"handle": p.handle, "name": p.name, "session": p.session,
-             "status_line": p.status_line, "blocked": p.blocked, "pr": p.pr,
-             "ci": p.ci, "idle_s": p.idle_s}
-            for p in d.panes
-        ],
-    }
-
-
-def _do_fleet_digest_tool(pane: str, arguments: dict):
-    """Return the last-pushed fleet digest (first-mate-only on-demand pull)."""
-    if not _require_first_mate(pane):
-        return _tool_result({"ok": False, "error": "first-mate-only tool"})
-    from periscope import first_mate
-    d = first_mate._LAST_SENT
-    return _tool_result({"ok": True, "digest": _serialize_digest(d) if d else None})
 
 
 def _resolve_window(match) -> tuple[str, str]:
@@ -501,13 +468,27 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # the worktree; resolve_worktree_session registers the project + dedupes a
     # foreign-name clash, and returns None when cwd isn't in a git repo (no
     # worktree to anchor → fall back to the caller's session).
-    from periscope import open_ops
+    from periscope import open_ops, activity
+    is_commander = activity.is_commander_pane(pane)
     workspace = str(arguments.get("workspace") or "same").strip().lower()
-    anchored = open_ops.resolve_worktree_session(cwd) if workspace == "new" else None
-    if anchored:
+    if is_commander:
+        # The commander is ALWAYS cwd-anchored: it's a hidden pane, so deriving
+        # the session from its own caller session would misfile the worker into
+        # the commander's invisible session. Force the cwd-resolution path and
+        # refuse a non-git cwd rather than fall back to the caller session.
+        anchored = open_ops.resolve_worktree_session(cwd)
+        if anchored is None:
+            body = {"ok": False,
+                    "error": "cwd is not in a git repo — the commander's spawns "
+                             "must target a repo/worktree dir"}
+            return _tool_result(body)
         session, project = anchored
     else:
-        session = str(arguments.get("session") or caller_session or "spawned").strip()
+        anchored = open_ops.resolve_worktree_session(cwd) if workspace == "new" else None
+        if anchored:
+            session, project = anchored
+        else:
+            session = str(arguments.get("session") or caller_session or "spawned").strip()
 
     # Create the session if missing, otherwise add a window to it. Both
     # paths use `-P -F #{window_index}` so we know the spawned slot — with
@@ -629,6 +610,57 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+def _do_create_workspace_tool(pane: str, arguments: dict):
+    """Create a periscope workspace (goal-scoped rail group)."""
+    from periscope import workspaces
+    name = str(arguments.get("name", "")).strip()
+    if not name:
+        return _tool_result({"ok": False, "error": "name is required"})
+    base_repo = (arguments.get("base_repo") or None)
+    # create_workspace returns a DICT (Workspace TypedDict), not an object —
+    # subscript access, NOT ws.id (the structure proposal §7 is wrong on this).
+    ws = workspaces.create_workspace(name=name, base_repo=base_repo)
+    return _tool_result({"ok": True, "workspace_id": ws["id"], "name": ws["name"]})
+
+
+def _open_descriptor(arguments: dict):
+    """dict -> open_ops.Descriptor. Mirrors routes/open.py:_to_descriptor but
+    over a tool-args dict and raising ValueError (the tool maps it to an error)."""
+    from periscope import open_ops
+    path = arguments.get("path")
+    repo = arguments.get("repo")
+    branch = arguments.get("branch")
+    pr = arguments.get("pr")
+    if path and not (repo or branch or pr):
+        return open_ops.PathTarget(path=str(path))
+    if repo and branch and pr is None and not path:
+        return open_ops.BranchTarget(repo=str(repo), branch=str(branch))
+    if repo and pr is not None and not (path or branch):
+        return open_ops.PRTarget(repo=str(repo), pr=int(pr))
+    raise ValueError("exactly one of {path | repo+branch | repo+pr} required")
+
+
+def _do_open_tool(pane: str, arguments: dict):
+    """Open a path / branch / PR into the rail (creates a worktree for repo+branch)."""
+    from periscope import open_ops
+    # Broad except on purpose: _open_descriptor raises ValueError for bad args,
+    # but open_target's branch/PR paths (spawn_worktree / fetch_pr_into_worktree)
+    # raise arbitrary git/subprocess errors — all become a clean tool error frame.
+    try:
+        descriptor = _open_descriptor(arguments)
+        result = open_ops.open_target(descriptor)
+    except Exception as e:
+        return _tool_result({"ok": False, "error": str(e)})
+    return _tool_result({"ok": True, "tmux_session": result.tmux_session,
+                         "repo": result.repo, "pane_id": result.claude_pane_id})
+
+
+def _do_catalog_tool(pane: str, arguments: dict):
+    """List discoverable repos + their worktrees (dormant + live)."""
+    from periscope import open_ops
+    return _tool_result({"ok": True, **open_ops.build_catalog()})
+
+
 def _do_search_history_tool(pane: str, arguments: dict):
     """FTS search over the history index, trimmed for token economy: the
     full normalized row carries UI-only fields (counts, rerank metadata,
@@ -731,8 +763,7 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
 
     On a successful send the full message is mirrored into the pane's
     Activity timeline (a 'channel' event) so the user can see what periscope
-    pushed in. The recurring fleet_digest is excluded — it would flood the
-    first mate's timeline every heartbeat."""
+    pushed in."""
     from mcp.shared.message import SessionMessage
     from mcp.types import JSONRPCMessage, JSONRPCNotification
 
@@ -754,21 +785,12 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
         return False
 
     kind = (meta or {}).get("kind") or "message"
-    if kind != "fleet_digest":
-        try:
-            from periscope import activity
-            activity.record("pane", pane, "channel", content, detail=kind)
-        except Exception:
-            log.warning("activity.record failed for channel push", exc_info=True)
+    try:
+        from periscope import activity
+        activity.record("pane", pane, "channel", content, detail=kind)
+    except Exception:
+        log.warning("activity.record failed for channel push", exc_info=True)
     return True
-
-
-def _schedule_first_mate_emit(pane_id: str, content: str) -> None:
-    """Fire-and-forget a channel push to the first-mate pane from a main-loop
-    context (the MCP tool handler runs there). Wrapped in _task so a crash is
-    logged, not swallowed (CLAUDE.md invariant 8)."""
-    from periscope.log import _task
-    _task("first-mate-interrupt", emit_channel_event(pane_id, content, {"kind": "interrupt"}))
 
 
 async def _mcp_listener() -> None:
@@ -1418,13 +1440,35 @@ _CHANNEL_TOOLS = [
         "handler": _do_captains_log_append_tool,
     },
     {
-        "name": "fleet_digest",
-        "description": (
-            "Return the current fleet digest (per-pane who/status/blocked/PR-CI/"
-            "idle + budget). First-mate-only on-demand pull."
-        ),
+        "name": "create_workspace",
+        "description": ("Create a periscope workspace — a goal-scoped rail group "
+                        "that spawned tabs can be tagged into (pass the returned "
+                        "workspace_id to spawn_claude). Args: name, optional base_repo."),
+        "inputSchema": {"type": "object", "properties": {
+            "name": {"type": "string"},
+            "base_repo": {"type": "string", "description": "absolute repo path (optional)"},
+        }, "required": ["name"]},
+        "handler": _do_create_workspace_tool,
+    },
+    {
+        "name": "open",
+        "description": ("Materialize a session into the rail. Exactly one of: "
+                        "{path} to open a directory; {repo, branch} to open (and "
+                        "create if absent) a worktree; {repo, pr} to fetch a PR "
+                        "into a worktree. 'create a worktree for X' = open(repo, branch=X)."),
+        "inputSchema": {"type": "object", "properties": {
+            "path": {"type": "string"}, "repo": {"type": "string"},
+            "branch": {"type": "string"}, "pr": {"type": "integer"},
+        }},
+        "handler": _do_open_tool,
+    },
+    {
+        "name": "catalog",
+        "description": ("List discoverable repos and their worktrees (dormant + "
+                        "live) to ground placement decisions. Git-subprocess-heavy "
+                        "— call once per command and reuse; do not poll."),
         "inputSchema": {"type": "object", "properties": {}},
-        "handler": _do_fleet_digest_tool,
+        "handler": _do_catalog_tool,
     },
 ]
 

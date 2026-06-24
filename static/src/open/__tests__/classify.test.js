@@ -32,6 +32,15 @@ describe("classify", () => {
   it("returns nothing for an empty query", () => {
     expect(classify("", catalog)).toEqual([]);
   });
+  it("always offers a run-command card for non-empty query", () => {
+    const cards = classify("create a worktree for foo", { repos: [], worktrees: [] });
+    const cmd = cards.find(c => c.kind === "command");
+    expect(cmd).toBeTruthy();
+    expect(cmd.text).toBe("create a worktree for foo");
+  });
+  it("no command card for empty query", () => {
+    expect(classify("", { repos: [], worktrees: [] })).toEqual([]);
+  });
   it("pins the create actions (worktree, workspace) above open-existing", () => {
     const cards = classify("splash", catalog);
     const firstOpen = cards.findIndex(c => c.kind === "open");

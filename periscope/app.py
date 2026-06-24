@@ -22,7 +22,7 @@ from periscope.usage import cached_plan_usage
 
 # Routes — each module owns an APIRouter that we mount into `app` below.
 from periscope.routes import (
-    alerts, auto_rename, channel, events, fs, healthz, history, pane, paste_image,
+    alerts, auto_rename, channel, command, events, fs, healthz, history, pane, paste_image,
     prefs, send, sessions, state, ws,
 )
 from periscope.routes import lgtm as lgtm_route
@@ -31,6 +31,18 @@ from periscope.routes import projects as projects_routes
 from periscope.routes import workspaces as workspaces_routes
 from periscope.routes import cleanup as cleanup_routes
 from periscope.routes import settings as settings_routes
+
+
+def _archive_stale_commander_project() -> None:
+    """The old first-mate registered the bridge session as a rail project. The
+    commander is hidden, so archive that project (projects has no delete API; the
+    state route drops archived projects)."""
+    from periscope import projects, commander
+    for key, p in projects.all_projects().items():
+        if key == projects.MAIN_KEY:
+            continue  # never archivable; can't share the commander session anyway
+        if p.get("tmux_session") == commander.COMMANDER_SESSION and not p.get("archived_at"):
+            projects.archive_project(key)
 
 
 @asynccontextmanager
@@ -88,13 +100,18 @@ async def lifespan(_app: FastAPI):
     # spent Haiku on every narrator tick. Same guard as the MCP listener.
     # NB: _task's signature is _task(name, coro).
     if config.is_prod():
-        from periscope import activity, first_mate
+        from periscope import activity, commander
         activity_task = _task("activity-worker", activity.run_worker())
-        # Register the bridge rail project so the supervisor-spawned first-mate
-        # pane is reachable in the dashboard (not folded into 'dev'). Main-loop
-        # state write — safe here, unlike the worker thread. Prod-only: dev never
-        # spawns a first mate.
-        first_mate.register_bridge_project()
+        # One-shot migration: the old first-mate registered the bridge session
+        # as a rail project; the commander is hidden, so drop it from the rail.
+        _archive_stale_commander_project()
+        # Best-effort boot-spawn so the commander is warm before the first
+        # /api/command; a tmux hiccup here must not take down the dashboard
+        # (lazy-heal on the first command instead).
+        try:
+            await commander.ensure_commander()
+        except Exception:
+            log.warning("commander boot-spawn failed; will lazy-heal on first command", exc_info=True)
     else:
         activity_task = None
     try:
@@ -131,7 +148,7 @@ app = FastAPI(lifespan=lifespan)
 # by path — but we mount them before the static catch-all below so
 # `/api/*` and `/ws/*` paths take precedence over `StaticFiles`.
 for r in (
-    alerts, auto_rename, channel, events, cleanup_routes, fs, healthz, history, lgtm_route,
+    alerts, auto_rename, channel, command, events, cleanup_routes, fs, healthz, history, lgtm_route,
     open_route, pane, paste_image, prefs, projects_routes, workspaces_routes, send, sessions,
     settings_routes, state, ws,
 ):
