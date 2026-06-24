@@ -110,6 +110,16 @@ def note_action(target: str) -> None:
     _acted_at[target] = int(time.time())
 
 
+def drop_target_focus(target: str) -> None:
+    """Drop a single window target's focus/acted bookkeeping. Shared by every
+    per-target kill site (session_delete, cleanup_archive, window_move,
+    window_delete) so the per-target cleanup rule lives in one place — a
+    per-session prefix sweep would wipe a surviving workspace-tagged pane's
+    state still living in that session."""
+    _focused_at.pop(target, None)
+    _acted_at.pop(target, None)
+
+
 def update_focus_from_windows(windows: list[dict]) -> None:
     """Walk the freshly-listed windows and stamp focus times when the active
     window for a session changes."""

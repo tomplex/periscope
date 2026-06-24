@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS pane_workspaces (
   workspace_id TEXT NOT NULL,      -- workspaces[].id (state.json)
   updated_at   INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pane_projects (
+  pane_id    TEXT PRIMARY KEY,   -- tmux pane id, e.g. '%56'
+  project    TEXT NOT NULL,      -- project pinned_dir (projects[] key)
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS usage_samples (
   at        INTEGER NOT NULL,
   meter     TEXT NOT NULL,           -- 'session' | 'week_all' | 'week_opus' | 'week_sonnet'
@@ -269,6 +274,64 @@ def prune_pane_workspaces(alive_pane_ids: set[str]) -> int:
         if not dead:
             return 0
         c.executemany("DELETE FROM pane_workspaces WHERE pane_id=?",
+                      [(p,) for p in dead])
+        c.commit()
+        return len(dead)
+
+
+# --- pane_projects: tmux pane id -> project pinned_dir tag --------------
+#
+# The per-tab project-context tag. Demotes session-derived project grouping
+# to explicit per-pane metadata. Sibling of pane_workspaces — keyed on tmux
+# pane_id, reuses the dead-pane prune verbatim. A row means "this pane
+# belongs to managed project X"; unmanaged/dev panes stay untagged.
+
+def set_pane_project(pane_id: str, project: str | None) -> None:
+    """Tag a pane's project context, or clear it when project is None."""
+    with _LOCK:
+        c = _conn()
+        if project is None:
+            c.execute("DELETE FROM pane_projects WHERE pane_id=?", (pane_id,))
+        else:
+            c.execute(
+                "INSERT INTO pane_projects (pane_id, project, updated_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(pane_id) DO UPDATE SET "
+                "project=excluded.project, updated_at=excluded.updated_at",
+                (pane_id, project, int(time.time())),
+            )
+        c.commit()
+
+
+def get_pane_project(pane_id: str) -> str | None:
+    """The project pinned_dir this pane is tagged with, or None."""
+    if not pane_id:
+        return None
+    with _LOCK:
+        c = _conn()
+        row = c.execute(
+            "SELECT project FROM pane_projects WHERE pane_id=?",
+            (pane_id,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def pane_project_map() -> dict[str, str]:
+    """All project tags as {pane_id: project} — one bulk read."""
+    with _LOCK:
+        c = _conn()
+        return {pid: proj for pid, proj
+                in c.execute("SELECT pane_id, project FROM pane_projects")}
+
+
+def prune_pane_projects(alive_pane_ids: set[str]) -> int:
+    """Drop tags for tmux pane ids that no longer exist. Returns rows deleted."""
+    with _LOCK:
+        c = _conn()
+        existing = {r[0] for r in c.execute("SELECT pane_id FROM pane_projects")}
+        dead = existing - alive_pane_ids
+        if not dead:
+            return 0
+        c.executemany("DELETE FROM pane_projects WHERE pane_id=?",
                       [(p,) for p in dead])
         c.commit()
         return len(dead)

@@ -15,12 +15,31 @@ def _patch(mocker, name, **kwargs):
             continue
 
 
-def test_session_delete(client, mocker):
+def test_session_delete_unmanaged_session_400(client, mocker):
+    # Contract narrowed: a session no project owns is not a closable worktree.
     _patch(mocker, "_tmux_mutate", return_value=(True, ""))
     r = client.delete("/api/session?session=foo")
-    body = r.json()
-    assert body["ok"] is True
-    assert body["session"] == "foo"
+    assert r.status_code == 400
+
+
+def test_session_delete_kills_placement_set_sparing_ws_pane(
+        client, clean_state, fresh_activity_db, mocker):
+    clean_state["projects"]["/repo/a"] = {
+        "tmux_session": "sess_a", "repo": "/repo", "archived_at": None}
+    clean_state["workspaces"]["ws_goal"] = {"id": "ws_goal", "archived_at": None}
+    fresh_activity_db.set_pane_workspace("%claude", "ws_goal")   # dragged out
+    mocker.patch("periscope.routes.sessions.list_windows", return_value=[
+        {"session": "sess_a", "index": 0, "pane_id": "%claude"},
+        {"session": "sess_a", "index": 1, "pane_id": "%shell"},
+    ])
+    calls = []
+    _patch(mocker, "_tmux_mutate",
+           side_effect=lambda *a: (calls.append(a), (True, ""))[1])
+    r = client.delete("/api/session?session=sess_a")
+    assert r.status_code == 200
+    assert ("kill-pane", "-t", "sess_a:1") in calls   # shell killed
+    assert not any(a[0] == "kill-session" for a in calls)
+    assert all("sess_a:0" not in a for a in calls)     # claude (ws) spared
 
 
 def test_window_new_simple_shell(client, mocker):

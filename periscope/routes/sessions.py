@@ -21,9 +21,11 @@ from periscope.channels import dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC
 from periscope.panes import (
     _acted_at, _active_per_session, _focused_at, _resuming,
-    note_action, note_focus,
+    drop_target_focus, list_windows, note_action, note_focus,
 )
-from periscope.projects import MAIN_KEY, get_project, resolve_project_for_window
+from periscope.projects import (
+    MAIN_KEY, get_project, placement_kill_set, resolve_project_for_window,
+)
 from periscope.tmux import _run, _tmux_mutate, tmux
 from periscope.worktree_spawn import spawn_worktree
 
@@ -59,16 +61,27 @@ def session_rename(session: str, body: RenameSessionBody):
 
 @router.delete("/api/session")
 def session_delete(session: str):
-    ok, msg = _tmux_mutate("kill-session", "-t", session)
-    if not ok:
-        raise HTTPException(500, msg)
-    prefix = f"{session}:"
-    for t in [t for t in _focused_at if t.startswith(prefix)]:
-        _focused_at.pop(t, None)
-    for t in [t for t in _acted_at if t.startswith(prefix)]:
-        _acted_at.pop(t, None)
-    _active_per_session.pop(session, None)
-    return {"ok": True, "session": session}
+    # Close the worktree row = kill the panes whose rail placement is this
+    # project, NOT the whole tmux session. A pane dragged into a workspace has
+    # a different placement, so it survives (see the metadata-anchored-rail
+    # spec). Contract narrowed: only managed worktree sessions are closable —
+    # the sole UI caller is closeWorktree on worktree rows; dev/MAIN_KEY rows
+    # use closePane instead.
+    project_key = resolve_project_for_window({"session": session})
+    if not project_key or project_key == MAIN_KEY:
+        raise HTTPException(400, f"session {session!r} is not a closable worktree")
+    windows = [w for w in list_windows() if w.get("session") == session]
+    kill = placement_kill_set(project_key, windows)
+    for target, _pane_id in kill:
+        ok, msg = _tmux_mutate("kill-pane", "-t", target)
+        if not ok:
+            raise HTTPException(500, msg)
+        drop_target_focus(target)
+    # Drop the session's active-tracking only once it is actually empty — a
+    # surviving workspace-tagged pane keeps the session (and its stamp) alive.
+    if not [w for w in list_windows() if w.get("session") == session]:
+        _active_per_session.pop(session, None)
+    return {"ok": True, "session": session, "killed": [t for t, _ in kill]}
 
 
 def _send_and_stamp(target: str, cmd: str) -> None:
@@ -399,9 +412,10 @@ def window_move(session: str, index: int, dest: str):
     # Carry focus / acted bookkeeping over to the new target so the moved
     # window keeps its sort position instead of dropping to the bottom.
     if src in _focused_at:
-        _focused_at[new_target] = _focused_at.pop(src)
+        _focused_at[new_target] = _focused_at[src]
     if src in _acted_at:
-        _acted_at[new_target] = _acted_at.pop(src)
+        _acted_at[new_target] = _acted_at[src]
+    drop_target_focus(src)
     return {"ok": True, "src": src, "dest": dest, "index": new_index, "target": new_target}
 
 
@@ -411,6 +425,5 @@ def window_delete(session: str, index: int):
     ok, msg = _tmux_mutate("kill-window", "-t", target)
     if not ok:
         raise HTTPException(500, msg)
-    _focused_at.pop(target, None)
-    _acted_at.pop(target, None)
+    drop_target_focus(target)
     return {"ok": True, "target": target}

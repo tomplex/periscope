@@ -47,6 +47,9 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     """
     mocker.patch("periscope.app.prewarm_pr_cache")
     mocker.patch("periscope.app.cached_plan_usage")
+    # Lifespan runs a synchronous pane_projects backfill before yield; mock it
+    # so tests don't shell out to real tmux or write the real periscope.db.
+    mocker.patch("periscope.projects.backfill_pane_projects", return_value=0)
 
     async def _noop():
         return None
@@ -86,6 +89,9 @@ def test_lifespan_skips_mcp_on_dev_port(mocker, monkeypatch, caplog):
 
     mocker.patch("periscope.app.prewarm_pr_cache")
     mocker.patch("periscope.app.cached_plan_usage")
+    # Lifespan runs a synchronous pane_projects backfill before yield; mock it
+    # so tests don't shell out to real tmux or write the real periscope.db.
+    mocker.patch("periscope.projects.backfill_pane_projects", return_value=0)
     async def _noop():
         return None
     mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)
@@ -111,6 +117,9 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
 
     mocker.patch("periscope.app.prewarm_pr_cache")
     mocker.patch("periscope.app.cached_plan_usage")
+    # Lifespan runs a synchronous pane_projects backfill before yield; mock it
+    # so tests don't shell out to real tmux or write the real periscope.db.
+    mocker.patch("periscope.projects.backfill_pane_projects", return_value=0)
     async def _noop():
         return None
     mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)

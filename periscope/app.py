@@ -73,6 +73,9 @@ async def lifespan(_app: FastAPI):
         dropped_ws = activity.prune_pane_workspaces(alive)
         if dropped_ws:
             log.info("pruned %d dead pane_workspaces row(s)", dropped_ws)
+        dropped_proj = activity.prune_pane_projects(alive)
+        if dropped_proj:
+            log.info("pruned %d dead pane_projects row(s)", dropped_proj)
 
     _bg("pane-sessions-housekeeping", _pane_sessions_housekeeping)
     # Kick off cache prewarms eagerly so the first /api/state poll already
@@ -114,6 +117,18 @@ async def lifespan(_app: FastAPI):
             log.warning("commander boot-spawn failed; will lazy-heal on first command", exc_info=True)
     else:
         activity_task = None
+    # Synchronous (pre-serve) backfill: seed pane_projects from today's
+    # session-derived grouping so the rail is byte-identical at cutover. NOT
+    # _bg — the collapse follow-on deletes the session-match fallback, so this
+    # must already be a blocking step. Failure degrades to the fallback.
+    from periscope import projects as _projects
+    try:
+        seeded = _projects.backfill_pane_projects()
+        if seeded:
+            log.info("backfilled %d pane_projects row(s)", seeded)
+    except Exception:
+        log.warning("pane_projects backfill failed; using session-match fallback",
+                    exc_info=True)
     try:
         yield
     finally:
