@@ -8,7 +8,7 @@ import { signal } from "@preact/signals";
 import { useEffect, useState, useRef } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
 import { track } from "../track.js";
-import { apiCall } from "../util.js";
+import { apiCall, relTime } from "../util.js";
 import { setUI } from "../prefs.js";
 import { classify } from "../open/classify.js";
 
@@ -28,55 +28,46 @@ const KIND_META = {
   command:  { group: "Command",       icon: "⚡" },
 };
 
-// Commander console: POST the command, then tail the commander pane's transcript
-// (/api/pane/turns) while polling /api/command/status for the commander's actual
-// busy state — done once it's worked and gone idle. Esc dismisses the console but
-// the command keeps running server-side (the `alive` flag tears down the timer on
-// unmount without cancelling work).
-function useCommanderConsole(text, onError) {
-  const [lines, setLines] = useState([]);   // rendered transcript messages
-  const [running, setRunning] = useState(true);
+const JOBS_POLL_MS = 3000;
+
+// Poll the server-backed job list while the jobs view is open. The list lives
+// server-side (the `commands` table); closing/reopening the omnibox reads the
+// same rows. Returns the freshest jobs array; the poll tears down on unmount.
+function useJobList(active) {
+  const [jobs, setJobs] = useState([]);
   useEffect(() => {
-    let alive = true, pane = null, timer = null;
-    let sawBusy = false, idleStreak = 0;
-    const started = Date.now();
-    (async () => {
-      const data = await apiCall("command", "/api/command", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
+    if (!active) return;
+    let alive = true, timer = null;
+    const poll = async () => {
+      const data = await apiCall("jobs", "/api/command/jobs");
       if (!alive) return;
-      if (!data) { setRunning(false); onError?.("command failed"); return; }
-      pane = data;   // { session, index }
-      const poll = async () => {
-        if (!alive) return;
-        // /api/pane/turns returns {messages:[…]} (read messages, not turns).
-        // /api/command/status.running = the commander pane is actively
-        // generating — a reliable done-signal vs. guessing from transcript gaps.
-        const [t, st] = await Promise.all([
-          apiCall("turns",
-            `/api/pane/turns?session=${encodeURIComponent(pane.session)}&index=${pane.index}`),
-          apiCall("cmd-status", "/api/command/status"),
-        ]);
-        if (!alive) return;
-        setLines((t && t.messages) || []);
-        // Done once the commander has actually worked, then gone idle for a few
-        // consecutive polls (debounces the multi-second gaps between its tool
-        // calls). Hard 3-min cap so a wedged commander can't poll forever.
-        const busy = !!(st && st.running);
-        if (busy) sawBusy = true;
-        idleStreak = busy ? 0 : idleStreak + 1;
-        if ((sawBusy && idleStreak >= 3) || Date.now() - started > 180000) {
-          setRunning(false);
-          return;
-        }
-        timer = setTimeout(poll, 1000);
-      };
-      poll();
-    })();
+      if (Array.isArray(data)) setJobs(data);
+      timer = setTimeout(poll, JOBS_POLL_MS);
+    };
+    poll();
     return () => { alive = false; if (timer) clearTimeout(timer); };
-  }, [text]);
-  return { lines, running };
+  }, [active]);
+  return jobs;
+}
+
+// Fetch a job's transcript on demand. Dispatch is prod-only, so in dev (and for
+// a just-dispatched job) /jobs/{id}/turns 404s with "no transcript yet" — apiCall
+// surfaces that as a toast and returns null, which we render as a pending state
+// rather than crashing. Returns { messages, pending }.
+function useJobTurns(jobId) {
+  const [messages, setMessages] = useState(null);   // null = not yet loaded
+  useEffect(() => {
+    if (!jobId) { setMessages(null); return; }
+    let alive = true;
+    setMessages(null);
+    (async () => {
+      const data = await apiCall("job-turns", `/api/command/jobs/${encodeURIComponent(jobId)}/turns`);
+      if (!alive) return;
+      setMessages((data && data.messages) || []);
+    })();
+    return () => { alive = false; };
+  }, [jobId]);
+  return { messages, pending: messages === null };
 }
 
 // One-line summary of a transcript message (the /api/pane/turns shape:
@@ -103,7 +94,8 @@ export function OpenOmnibox() {
   const [catalog, setCatalog] = useState({ repos: [], worktrees: [] });
   const [query, setQuery] = useState("");
   const [drill, setDrill] = useState(null);   // { card } when drilling into worktree/pr
-  const [console_, setConsole] = useState(null);   // { text } when in commander-console mode
+  const [jobsView, setJobsView] = useState(false);   // true when showing the commander job list
+  const [selectedJob, setSelectedJob] = useState(null);   // job id whose transcript is open
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -125,7 +117,7 @@ export function OpenOmnibox() {
 
   useEffect(() => {
     if (!open.value) return;
-    setQuery(""); setDrill(null); setConsole(null); setError("");
+    setQuery(""); setDrill(null); setSelectedJob(null); setError("");
     (async () => {
       const data = await apiCall("open catalog", "/api/open/catalog");
       if (data) setCatalog(data);
@@ -162,9 +154,24 @@ export function OpenOmnibox() {
     close();
   }
 
+  // Dispatch a free-text command as a fresh `claude --bg` commander, then switch
+  // to the job-list view and select the new job. The job runs server-side (the
+  // `commands` table) — closing the omnibox doesn't cancel it.
+  async function runCommand(text) {
+    setBusy(true); setError("");
+    const data = await apiCall("command", "/api/command", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    setBusy(false);
+    if (!data) { setError("command failed"); return; }
+    setSelectedJob(null);
+    setJobsView(true);
+  }
+
   function pick(card) {
     if (card.kind === "open") return post(card.descriptor);
-    if (card.kind === "command") return setConsole({ text: card.text });
+    if (card.kind === "command") return runCommand(card.text);
     if (card.kind === "pr" && !card.needsRepo) return post({ repo: card.pr.repo, pr: card.pr.pr });
     setDrill({ card });   // worktree → branch entry; workspace → name entry; pr w/o repo → repo picker
   }
@@ -178,16 +185,19 @@ export function OpenOmnibox() {
     <div id="open-omnibox" class="open-omnibox-overlay"
          onClick={(e) => { if (e.target.id === "open-omnibox") close(); }}>
       <div class="open-omnibox-card">
-        {!drill && !console_ && (
+        {!drill && !jobsView && (
           <Palette
             value={query} onInput={setQuery} placeholder="repo, path, #PR…"
             items={items} onPick={pick} onClose={close}
             empty={query ? "no matches" : "type a repo, path, or #PR…"} />
         )}
-        {console_ && (
-          <CommanderConsole text={console_.text}
-            onClose={() => { setConsole(null); close(); }}
-            onError={setError} />
+        {jobsView && (
+          <JobList
+            selectedJob={selectedJob}
+            onSelect={setSelectedJob}
+            onBack={selectedJob ? () => setSelectedJob(null)
+                                : () => { setJobsView(false); setQuery(""); }}
+            onClose={close} />
         )}
         {drill && drill.card.kind === "worktree" && (
           <BranchDrill card={drill.card}
@@ -211,29 +221,63 @@ export function OpenOmnibox() {
   );
 }
 
-// Commander console render: the command line + a scrollable transcript log +
-// a working spinner. Esc dismisses (the command keeps running server-side); the
-// nested useEscape pushes onto the LIFO stack so it wins over OpenOmnibox's close.
-function CommanderConsole({ text, onClose, onError }) {
-  const { lines, running } = useCommanderConsole(text, onError);
-  const logRef = useRef(null);
-  useEscape(onClose, true);
-  // Keep the newest turn in view as the transcript grows.
-  useEffect(() => {
-    const el = logRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [lines.length, running]);
+// The commander job list — server-backed (the `commands` table), polled while
+// open. A selected row drills into that job's read-only transcript. Esc pushes
+// onto the LIFO stack via useEscape: from a transcript it goes back to the list,
+// from the list it leaves the jobs view (onBack carries the right target).
+function JobList({ selectedJob, onSelect, onBack, onClose }) {
+  const jobs = useJobList(!selectedJob);   // pause list polling while a transcript is open
+  useEscape(onBack, true);
+
+  if (selectedJob) {
+    return <JobTranscript jobId={selectedJob} onBack={onBack} />;
+  }
+
+  return (
+    <div class="open-omnibox-jobs">
+      <div class="open-omnibox-jobs-head">Commands</div>
+      <div class="open-omnibox-list">
+        {jobs.length === 0 && (
+          <div class="open-omnibox-empty">no commands yet</div>
+        )}
+        {jobs.map((j) => (
+          <button class="open-omnibox-row" key={j.id} onClick={() => onSelect(j.id)}>
+            <span class={`open-omnibox-jobdot${j.status === "running" ? " is-running" : ""}`}>
+              {j.status === "running" ? "●" : "✓"}
+            </span>
+            <span class="open-omnibox-label">{j.text}</span>
+            <span class="open-omnibox-sub">{relTime(j.started_at)}</span>
+          </button>
+        ))}
+      </div>
+      <div class="open-omnibox-footer">
+        <span><kbd>esc</kbd> back</span>
+      </div>
+    </div>
+  );
+}
+
+// Read-only transcript for one job, rendered as one-line turn summaries (the
+// same shape /api/pane/turns / /jobs/{id}/turns return). Dispatch is prod-only,
+// so a fresh job (or any job in dev) has no JSONL yet — the route 404s and we
+// render a pending state instead of crashing.
+function JobTranscript({ jobId, onBack }) {
+  const { messages, pending } = useJobTurns(jobId);
   return (
     <div class="open-omnibox-console">
-      <div class="open-omnibox-console-cmd">⚡ {text}</div>
-      <div class="open-omnibox-console-log" ref={logRef}>
-        {lines.map((t, i) => (
+      <div class="open-omnibox-console-cmd">
+        <button class="open-omnibox-jobback" onClick={onBack}>← back</button>
+      </div>
+      <div class="open-omnibox-console-log">
+        {pending && (
+          <div class="open-omnibox-console-spin">no transcript yet — the commander is still starting…</div>
+        )}
+        {!pending && messages.length === 0 && (
+          <div class="open-omnibox-console-spin">no transcript yet</div>
+        )}
+        {!pending && messages.map((t, i) => (
           <div class="open-omnibox-console-line" key={t.uuid || i}>{renderTurn(t)}</div>
         ))}
-        {running && <div class="open-omnibox-console-spin">commander working…</div>}
-        {!running && lines.length === 0 && (
-          <div class="open-omnibox-console-spin">no transcript yet — esc to dismiss</div>
-        )}
       </div>
     </div>
   );
