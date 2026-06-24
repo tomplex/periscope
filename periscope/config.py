@@ -2,6 +2,7 @@
 from any other periscope.* module — keep this a leaf."""
 
 import os
+import shutil
 from pathlib import Path
 
 # Static asset root for FastAPI's app.mount("/", StaticFiles(...)) call.
@@ -73,6 +74,31 @@ def config_dir() -> Path:
 # state (prefs, projects) that may migrate out of state.json later; the
 # generic name avoids a future rename. Path mirrors store.py:_state_path.
 ACTIVITY_DB = config_dir() / "periscope.db"
+
+# --- bg commander (per-command `claude --bg` dispatch) ---
+def claude_bin() -> str:
+    """The BARE `claude` executable for argv[0]. NOT claude_exec() — that returns
+    a multi-word shell-command string with --dangerously-load-development-channels
+    (the dev-channels MCP transport). A --bg commander reaches MCP via --mcp-config
+    instead, dispatched through subprocess (no shell), so it needs the binary alone.
+    PERISCOPE_CLAUDE_BIN overrides for tests."""
+    return os.environ.get("PERISCOPE_CLAUDE_BIN") or shutil.which("claude") or "claude"
+
+
+PERISCOPE_MCP_CONFIG = config_dir() / "bg-mcp-config.json"        # generated at boot
+ORCHESTRATOR_PROMPT_FILE = config_dir() / "orchestrator-prompt.txt"  # written from bg_commander.ROLE_PROMPT
+CHANNEL_SHIM_PATH = Path(__file__).resolve().parent.parent / "channel_shim.py"
+BG_COMMANDER_MODEL = "sonnet"
+# Pinned to the four pane-INDEPENDENT tools (NOT mcp__periscope__*). The wildcard
+# would grant pane-dependent tools (notify/link_pr/open_document/report/…) that
+# resolve the caller against a real %N window or feed the handle to tmux; a cmdr:
+# handle matches no window, so those error or leak alert state _channel_gc never
+# reaps. These four are exactly the delegator set the role prompt advertises.
+BG_COMMANDER_ALLOWED_TOOLS = (
+    "Read,Grep,Glob,"
+    "mcp__periscope__catalog,mcp__periscope__open,"
+    "mcp__periscope__create_workspace,mcp__periscope__spawn_claude"
+)
 
 # Activity timeline window: git commits + CI runs newer than this many
 # days show in the modal's Activity section. Was a hardcoded 24h.
