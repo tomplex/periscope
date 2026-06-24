@@ -201,6 +201,15 @@ def _open_path(path: str) -> OpenResult:
         "",
     )
     ui = place_in_rail(session, project, pane_pids or [claude_pid])
+    # Tag every pane in this session with its project context (the key the
+    # session-match would resolve), so grouping/close work off metadata, not
+    # the session. Uses resolve to get the canonical project key.
+    from periscope import activity
+    proj_key = projects.resolve_project_for_window({"session": session})
+    if proj_key and proj_key != projects.MAIN_KEY:
+        for w in list_windows():
+            if w.get("session") == session and w.get("pane_id"):
+                activity.set_pane_project(w["pane_id"], proj_key)
     return OpenResult(tmux_session=session, repo=repo, claude_pid=claude_pid,
                       claude_pane_id=claude_pane_id, ui=ui)
 

@@ -618,6 +618,12 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         pane_pids = [w["pid_raw"] for w in list_windows()
                      if w["session"] == session and w.get("pid_raw")]
         open_ops.place_in_rail(session, project, pane_pids or [pid])
+        # Tag the spawned pane with its project context (metadata-anchored
+        # grouping), keyed on the canonical project key for this session.
+        from periscope import projects as _projects
+        proj_key = _projects.resolve_project_for_window({"session": session})
+        if pane_id and proj_key and proj_key != _projects.MAIN_KEY:
+            activity.set_pane_project(pane_id, proj_key)
 
     # Tag the spawned pane into a periscope workspace (goal-scoped rail group),
     # if asked. Keyed on the tmux pane_id (%N) — the same id the dashboard's
