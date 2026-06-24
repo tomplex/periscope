@@ -226,9 +226,9 @@ placement set" under the same call.
    collapse follow-on?** Doing it now is *safe* (session==project is 1:1 today,
    so it's a no-behavior-change refactor) and makes the collapse a pure
    tmux-plumbing no-op. Deferring keeps this spec smaller but leaves the
-   re-keying coupled to the riskier collapse step. **Recommendation: defer** —
-   this spec is the bug fix + metadata demotion; the rail key is only load-
-   bearing once sessions actually merge.
+   re-keying coupled to the riskier collapse step. **DECIDED: defer** — the rail
+   key is only load-bearing once sessions actually merge, so it lands with the
+   collapse follow-on. This spec stays the bug fix + metadata demotion.
 2. **Retain the session-match fallback** in `resolve_project_for_window` through
    this phase (deleted in the follow-on) vs. require full backfill coverage now.
    Recommendation: retain — it's the robustness net for external panes and any
