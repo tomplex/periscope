@@ -88,13 +88,8 @@ async def lifespan(_app: FastAPI):
     # spent Haiku on every narrator tick. Same guard as the MCP listener.
     # NB: _task's signature is _task(name, coro).
     if config.is_prod():
-        from periscope import activity, commander
+        from periscope import activity
         activity_task = _task("activity-worker", activity.run_worker())
-        # Register the bridge rail project so the supervisor-spawned commander
-        # pane is reachable in the dashboard (not folded into 'dev'). Main-loop
-        # state write — safe here, unlike the worker thread. Prod-only: dev never
-        # spawns a commander.
-        commander.register_bridge_project()
     else:
         activity_task = None
     try:

@@ -788,32 +788,8 @@ def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
 # it captures each active Claude pane, runs the context-reset check, and
 # drives the narrator (semantic status + auto-rename).
 
-def _safe_usage() -> dict | None:
-    try:
-        from periscope.usage import cached_plan_usage
-        return cached_plan_usage()
-    except Exception:
-        return None
-
-
-async def _emit_pending_first_mate(last_ctx: dict) -> None:
-    """Main-loop side of the heartbeat: send a Push stashed by _worker_tick.
-    Awaited in run_worker (the MCP sessions are main-loop-affine — must NOT be
-    emitted from the worker thread)."""
-    pending = last_ctx.pop("_fm_push", None)
-    if not pending:
-        return
-    pane_id, content, cur = pending
-    from periscope.channels import emit_channel_event
-    from periscope import commander
-    ok = await emit_channel_event(pane_id, content, {"kind": "fleet_digest"})
-    if ok:
-        commander._LAST_SENT = cur     # advance only on a successful send
-
-
 def _worker_tick(last_ctx: dict) -> None:
     """One worker pass. Blocking (tmux + git subprocesses) — run off-loop."""
-    now = int(time.time())
     panes: list[tuple[dict, dict]] = []
     for w in list_windows():
         target = f"{w['session']}:{w['index']}"
@@ -835,24 +811,6 @@ def _worker_tick(last_ctx: dict) -> None:
         narrator.tick(panes)
     except Exception:
         log.exception("narrator tick failed")
-    # Commander: supervisor liveness + heartbeat decision (sync; the async
-    # emit is hoisted to run_worker's main loop — see _emit_pending_first_mate).
-    # Skip entirely when disabled (the sentinel kill-switch) — no respawn, no
-    # heartbeat. Killing the pane alone won't stick; the supervisor would respawn.
-    try:
-        from periscope import commander
-        if not commander.first_mate_disabled():
-            commander.supervisor_pass(now=now)
-            cur = commander.build_fleet_digest(
-                panes=commander.assemble_pane_views(panes, now), usage=_safe_usage(), now=now,
-            )
-            push = commander.heartbeat_decide(
-                prev=commander._LAST_SENT, cur=cur, marker=get_commander(),
-            )
-            if push is not None:
-                last_ctx["_fm_push"] = (push.pane_id, push.content, cur)
-    except Exception:
-        log.exception("commander worker pass failed")
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()
@@ -865,7 +823,6 @@ async def run_worker() -> None:
     while True:
         try:
             await asyncio.to_thread(_worker_tick, last_ctx)
-            await _emit_pending_first_mate(last_ctx)
         except Exception:
             log.exception("activity worker tick failed")
         await asyncio.sleep(30)

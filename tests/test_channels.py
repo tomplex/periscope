@@ -494,15 +494,6 @@ def test_emit_channel_event_records_full_text_into_activity(fresh_activity_db):
     assert out[0]["text"] == body   # untruncated
 
 
-def test_emit_channel_event_skips_fleet_digest(fresh_activity_db):
-    from periscope import channels, activity
-    sess = AsyncMock()
-    with _CHANNELS_LOCK:
-        _MCP_SESSIONS["%5"] = sess
-    asyncio.run(channels.emit_channel_event("%5", "big digest", {"kind": "fleet_digest"}))
-    assert activity.events_for("%5", None, None) == []   # too noisy to record
-
-
 def test_emit_channel_event_unattached_records_nothing(fresh_activity_db):
     from periscope import channels, activity
     sent = asyncio.run(channels.emit_channel_event("%nope", "hi"))
@@ -684,57 +675,6 @@ def test_captains_log_append_rejects_empty_text(fresh_activity_db):
     activity.set_commander(pane_id="%9", session_id=None, at=1)
     bad = _body(_do_captains_log_append_tool("%9", {"kind": "watch", "text": "  "}))
     assert bad["ok"] is False
-
-
-def test_need_human_notify_schedules_emit_to_commander(fresh_activity_db, monkeypatch):
-    from periscope import activity
-    from periscope.channels import _do_notify_tool
-    activity.set_commander(pane_id="%9", session_id=None, at=1)
-    sent = []
-    # Replace the scheduler so we don't need a running loop in this sync test.
-    monkeypatch.setattr("periscope.channels._schedule_first_mate_emit",
-                        lambda pane_id, content: sent.append((pane_id, content)))
-    _do_notify_tool("%5", {"message": "blocked on schema", "kind": "need_human"})
-    assert sent and sent[0][0] == "%9" and "blocked on schema" in sent[0][1]
-
-
-def test_non_need_human_notify_schedules_no_emit(fresh_activity_db, monkeypatch):
-    from periscope import activity
-    from periscope.channels import _do_notify_tool
-    activity.set_commander(pane_id="%9", session_id=None, at=1)
-    sent = []
-    monkeypatch.setattr("periscope.channels._schedule_first_mate_emit",
-                        lambda pane_id, content: sent.append((pane_id, content)))
-    _do_notify_tool("%5", {"message": "done", "kind": "done"})
-    assert sent == []
-
-
-def test_need_human_notify_no_marker_is_safe(fresh_activity_db, monkeypatch):
-    from periscope.channels import _do_notify_tool
-    sent = []
-    monkeypatch.setattr("periscope.channels._schedule_first_mate_emit",
-                        lambda pane_id, content: sent.append((pane_id, content)))
-    _do_notify_tool("%5", {"message": "x", "kind": "need_human"})  # no commander set
-    assert sent == []
-
-
-def test_fleet_digest_tool_refuses_non_commander(fresh_activity_db):
-    from periscope.channels import _do_fleet_digest_tool
-    r = _body(_do_fleet_digest_tool("%5", {}))
-    assert r["ok"] is False and "commander" in r["error"].lower()
-
-
-def test_fleet_digest_tool_returns_cached_digest(fresh_activity_db):
-    from periscope import activity, commander
-    from periscope.channels import _do_fleet_digest_tool
-    activity.set_commander(pane_id="%9", session_id=None, at=1)
-    commander._LAST_SENT = commander.FleetDigest(
-        panes=(commander.PaneDigest("@1", "w", "s", "run", False, 7, "✓", 3),),
-        budget_pct=55, budget_resets_at=None, at=10)
-    r = _body(_do_fleet_digest_tool("%9", {}))
-    assert r["ok"] is True and r["digest"]["budget_pct"] == 55
-    assert r["digest"]["panes"][0]["handle"] == "@1"
-    commander._LAST_SENT = None   # reset module global for other tests
 
 
 def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_activity_db, mocker):
