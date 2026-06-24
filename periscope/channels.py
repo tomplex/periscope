@@ -200,16 +200,16 @@ def _do_notify_tool(pane: str, arguments: dict):
     except Exception:
         log.warning("activity.record failed for notify()", exc_info=True)
 
-    # Interrupt tier: a need_human wakes the first mate immediately, out of band
+    # Interrupt tier: a need_human wakes the commander immediately, out of band
     # from the 30s heartbeat. (Other kinds ride the next heartbeat digest.)
     if kind == "need_human":
         try:
             from periscope import activity as _activity
-            marker = _activity.get_first_mate()
+            marker = _activity.get_commander()
             if marker is not None:
                 _schedule_first_mate_emit(marker.pane_id, f"need_human from {pane}: {message}")
         except Exception:
-            log.warning("first-mate need_human hook failed", exc_info=True)
+            log.warning("commander need_human hook failed", exc_info=True)
 
     body = {"ok": True, "kind": kind, "severity": severity}
     return _tool_result(body)
@@ -218,20 +218,20 @@ def _do_notify_tool(pane: str, arguments: dict):
 _CAPTAINS_LOG_KINDS = {"standing_order", "watch", "narrative"}
 
 
-def _require_first_mate(pane: str) -> bool:
-    """True iff `pane` is the registered first-mate singleton. The tool
-    registry is flat (every attached pane sees every tool), so first-mate-only
+def _require_commander(pane: str) -> bool:
+    """True iff `pane` is the registered commander singleton. The tool
+    registry is flat (every attached pane sees every tool), so commander-only
     tools self-guard. Lazy-import activity (channels.py never top-imports it)."""
     from periscope import activity
 
-    marker = activity.get_first_mate()
+    marker = activity.get_commander()
     return marker is not None and marker.pane_id == pane
 
 
 def _do_captains_log_read_tool(pane: str, arguments: dict):
-    """Return recent captain's-log entries (first-mate-only)."""
-    if not _require_first_mate(pane):
-        return _tool_result({"ok": False, "error": "first-mate-only tool"})
+    """Return recent captain's-log entries (commander-only)."""
+    if not _require_commander(pane):
+        return _tool_result({"ok": False, "error": "commander-only tool"})
     from periscope import activity
 
     limit = int(arguments.get("limit", 50))
@@ -241,9 +241,9 @@ def _do_captains_log_read_tool(pane: str, arguments: dict):
 
 
 def _do_captains_log_append_tool(pane: str, arguments: dict):
-    """Append a captain's-log entry (first-mate-only)."""
-    if not _require_first_mate(pane):
-        return _tool_result({"ok": False, "error": "first-mate-only tool"})
+    """Append a captain's-log entry (commander-only)."""
+    if not _require_commander(pane):
+        return _tool_result({"ok": False, "error": "commander-only tool"})
     kind = str(arguments.get("kind", "")).strip()
     text = str(arguments.get("text", "")).strip()
     if kind not in _CAPTAINS_LOG_KINDS:
@@ -270,11 +270,11 @@ def _serialize_digest(d) -> dict:
 
 
 def _do_fleet_digest_tool(pane: str, arguments: dict):
-    """Return the last-pushed fleet digest (first-mate-only on-demand pull)."""
-    if not _require_first_mate(pane):
-        return _tool_result({"ok": False, "error": "first-mate-only tool"})
-    from periscope import first_mate
-    d = first_mate._LAST_SENT
+    """Return the last-pushed fleet digest (commander-only on-demand pull)."""
+    if not _require_commander(pane):
+        return _tool_result({"ok": False, "error": "commander-only tool"})
+    from periscope import commander
+    d = commander._LAST_SENT
     return _tool_result({"ok": True, "digest": _serialize_digest(d) if d else None})
 
 
@@ -732,7 +732,7 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
     On a successful send the full message is mirrored into the pane's
     Activity timeline (a 'channel' event) so the user can see what periscope
     pushed in. The recurring fleet_digest is excluded — it would flood the
-    first mate's timeline every heartbeat."""
+    commander's timeline every heartbeat."""
     from mcp.shared.message import SessionMessage
     from mcp.types import JSONRPCMessage, JSONRPCNotification
 
@@ -764,11 +764,11 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
 
 
 def _schedule_first_mate_emit(pane_id: str, content: str) -> None:
-    """Fire-and-forget a channel push to the first-mate pane from a main-loop
+    """Fire-and-forget a channel push to the commander pane from a main-loop
     context (the MCP tool handler runs there). Wrapped in _task so a crash is
     logged, not swallowed (CLAUDE.md invariant 8)."""
     from periscope.log import _task
-    _task("first-mate-interrupt", emit_channel_event(pane_id, content, {"kind": "interrupt"}))
+    _task("commander-interrupt", emit_channel_event(pane_id, content, {"kind": "interrupt"}))
 
 
 async def _mcp_listener() -> None:

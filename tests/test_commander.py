@@ -1,5 +1,5 @@
-from periscope.first_mate import PaneDigest, FleetDigest, fleet_diverged
-from periscope.first_mate import build_fleet_digest
+from periscope.commander import PaneDigest, FleetDigest, fleet_diverged
+from periscope.commander import build_fleet_digest
 
 
 def _pane(handle="@1", *, status_line="working", blocked=False, idle_s=0):
@@ -133,10 +133,10 @@ def test_build_stamps_now():
     assert d.panes == ()
 
 
-from periscope.first_mate import (
+from periscope.commander import (
     _curate_pane, _render_delta, heartbeat_decide,
 )
-from periscope.activity import FirstMateMarker
+from periscope.activity import CommanderMarker
 
 
 def test_curate_pane_derives_blocked_from_newest_need_human_alert():
@@ -168,7 +168,7 @@ def test_render_delta_mentions_changed_panes_and_budget():
 
 
 def test_heartbeat_decide_pushes_on_divergence_when_marker_present():
-    marker = FirstMateMarker(pane_id="%9", session_id=None, updated_at=1)
+    marker = CommanderMarker(pane_id="%9", session_id=None, updated_at=1)
     prev = None
     cur = FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
     push = heartbeat_decide(prev=prev, cur=cur, marker=marker)
@@ -181,14 +181,14 @@ def test_heartbeat_decide_none_when_no_marker():
 
 
 def test_heartbeat_decide_none_when_not_diverged():
-    marker = FirstMateMarker(pane_id="%9", session_id=None, updated_at=1)
+    marker = CommanderMarker(pane_id="%9", session_id=None, updated_at=1)
     a = FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=1)
     b = FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
     assert heartbeat_decide(prev=a, cur=b, marker=marker) is None
 
 
 def test_heartbeat_decide_pushes_on_ci_red_even_if_otherwise_nominal():
-    marker = FirstMateMarker(pane_id="%9", session_id=None, updated_at=1)
+    marker = CommanderMarker(pane_id="%9", session_id=None, updated_at=1)
     prev = FleetDigest(panes=(PaneDigest("@1","w","s","x",False,7,"✓",0),),
                        budget_pct=50, budget_resets_at=None, at=1)
     cur = FleetDigest(panes=(PaneDigest("@1","w","s","x",False,7,"✗",0),),
@@ -198,7 +198,7 @@ def test_heartbeat_decide_pushes_on_ci_red_even_if_otherwise_nominal():
 
 
 def test_assemble_pane_views_uses_curate_and_skips_non_claude(monkeypatch, fresh_activity_db):
-    from periscope import first_mate, activity
+    from periscope import commander, activity
     import periscope.channels as channels
     import periscope.panes as panes
     import periscope.git_pr as git_pr
@@ -219,7 +219,7 @@ def test_assemble_pane_views_uses_curate_and_skips_non_claude(monkeypatch, fresh
     monkeypatch.setattr(panes, "recency_stamps_for",
                         lambda t: {"focused_at": 100, "acted_at": 100})
 
-    views = first_mate.assemble_pane_views(panes_in, now=130)
+    views = commander.assemble_pane_views(panes_in, now=130)
     assert len(views) == 1
     v = views[0]
     assert v["handle"] == "%5" and v["status_line"] == "running tests"   # handle = pane_id (%N)
@@ -227,16 +227,16 @@ def test_assemble_pane_views_uses_curate_and_skips_non_claude(monkeypatch, fresh
     assert v["idle_s"] == 30
 
 
-def test_assemble_pane_views_excludes_the_first_mate_itself(monkeypatch, fresh_activity_db):
-    # The first mate is a Claude pane; if it appears in its own digest, its
+def test_assemble_pane_views_excludes_the_commander_itself(monkeypatch, fresh_activity_db):
+    # The commander is a Claude pane; if it appears in its own digest, its
     # reactions change its status, which the next tick reads as divergence and
     # pushes again — a feedback loop. The marked pane must be excluded.
-    from periscope import first_mate, activity
+    from periscope import commander, activity
     import periscope.channels as channels
     import periscope.panes as panes
     import periscope.git_pr as git_pr
 
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)   # %9 == the first mate
+    activity.set_commander(pane_id="%9", session_id=None, at=1)   # %9 == the commander
     panes_in = [
         ({"session": "bridge", "index": "1", "cwd": "/r", "pane_id": "%9", "pid": "@fm"},
          {"is_claude": True}),
@@ -249,13 +249,13 @@ def test_assemble_pane_views_excludes_the_first_mate_itself(monkeypatch, fresh_a
     monkeypatch.setattr(git_pr, "cached_pr_state", lambda p, b: {})
     monkeypatch.setattr(panes, "recency_stamps_for", lambda t: {})
 
-    views = first_mate.assemble_pane_views(panes_in, now=10)
+    views = commander.assemble_pane_views(panes_in, now=10)
     assert [v["handle"] for v in views] == ["%5"]   # self (%9) excluded; only the worker
 
 
 def test_run_worker_emits_pending_push_and_advances_last_sent(monkeypatch):
     import asyncio
-    from periscope import activity, first_mate
+    from periscope import activity, commander
     sent = []
 
     async def fake_emit(pane_id, content, meta=None):
@@ -263,62 +263,62 @@ def test_run_worker_emits_pending_push_and_advances_last_sent(monkeypatch):
         return True
 
     monkeypatch.setattr("periscope.channels.emit_channel_event", fake_emit)
-    first_mate._LAST_SENT = None
-    cur = first_mate.FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
+    commander._LAST_SENT = None
+    cur = commander.FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
     last_ctx = {"_fm_push": ("%9", "delta text", cur)}
 
     asyncio.run(activity._emit_pending_first_mate(last_ctx))   # sync test: drive the coro
     assert sent == [("%9", "delta text")]
-    assert first_mate._LAST_SENT is cur          # advanced on ok
+    assert commander._LAST_SENT is cur          # advanced on ok
     assert "_fm_push" not in last_ctx            # consumed
-    first_mate._LAST_SENT = None                 # reset module global for other tests
+    commander._LAST_SENT = None                 # reset module global for other tests
 
 
 def test_run_worker_keeps_last_sent_on_failed_emit(monkeypatch):
     import asyncio
-    from periscope import activity, first_mate
+    from periscope import activity, commander
 
     async def fake_emit(pane_id, content, meta=None):
         return False                              # pane not attached
 
     monkeypatch.setattr("periscope.channels.emit_channel_event", fake_emit)
-    first_mate._LAST_SENT = None
-    cur = first_mate.FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
+    commander._LAST_SENT = None
+    cur = commander.FleetDigest(panes=(), budget_pct=50, budget_resets_at=None, at=2)
     last_ctx = {"_fm_push": ("%9", "delta", cur)}
 
     asyncio.run(activity._emit_pending_first_mate(last_ctx))
-    assert first_mate._LAST_SENT is None          # NOT advanced -> next tick re-pushes
+    assert commander._LAST_SENT is None          # NOT advanced -> next tick re-pushes
 
 
 def test_supervisor_noop_when_marker_alive(monkeypatch, fresh_activity_db):
-    from periscope import first_mate, activity
+    from periscope import commander, activity
     import periscope.panes as panes
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    activity.set_commander(pane_id="%9", session_id=None, at=1)
     monkeypatch.setattr(panes, "list_windows", lambda: [{"pane_id": "%9"}])
     called = []
-    monkeypatch.setattr(first_mate, "_spawn_first_mate", lambda *, now: called.append(now))
-    first_mate.supervisor_pass(now=5)
+    monkeypatch.setattr(commander, "_spawn_commander", lambda *, now: called.append(now))
+    commander.supervisor_pass(now=5)
     assert called == []                       # alive -> no respawn
 
 
 def test_supervisor_respawns_when_marker_missing(monkeypatch, fresh_activity_db):
-    from periscope import first_mate
+    from periscope import commander
     import periscope.panes as panes
     monkeypatch.setattr(panes, "list_windows", lambda: [])
     called = []
-    monkeypatch.setattr(first_mate, "_spawn_first_mate", lambda *, now: called.append(now))
-    first_mate.supervisor_pass(now=5)
+    monkeypatch.setattr(commander, "_spawn_commander", lambda *, now: called.append(now))
+    commander.supervisor_pass(now=5)
     assert called == [5]                      # no marker -> spawn
 
 
 def test_supervisor_respawns_when_marked_pane_dead(monkeypatch, fresh_activity_db):
-    from periscope import first_mate, activity
+    from periscope import commander, activity
     import periscope.panes as panes
-    activity.set_first_mate(pane_id="%9", session_id=None, at=1)
+    activity.set_commander(pane_id="%9", session_id=None, at=1)
     monkeypatch.setattr(panes, "list_windows", lambda: [{"pane_id": "%7"}])  # %9 gone
     called = []
-    monkeypatch.setattr(first_mate, "_spawn_first_mate", lambda *, now: called.append(now))
-    first_mate.supervisor_pass(now=5)
+    monkeypatch.setattr(commander, "_spawn_commander", lambda *, now: called.append(now))
+    commander.supervisor_pass(now=5)
     assert called == [5]
 
 
@@ -326,7 +326,7 @@ def test_spawn_leaves_marker_unset_on_empty_pane_id(monkeypatch, fresh_activity_
     # If display-message can't read the new window's %N, stamping pane_id="" would
     # be a marker never in the live set -> the supervisor respawns every tick (a
     # window/budget leak). The guard must leave the marker unset instead.
-    from periscope import first_mate, activity
+    from periscope import commander, activity
     import periscope.tmux as tmuxmod
     import periscope.config as config
     import periscope.channels as channels
@@ -341,24 +341,24 @@ def test_spawn_leaves_marker_unset_on_empty_pane_id(monkeypatch, fresh_activity_
     monkeypatch.setattr(pids, "stamp_new_window", lambda t: "")
     monkeypatch.setattr(tmuxmod, "tmux", lambda *a, **k: "")   # display-message read fails
 
-    first_mate._spawn_first_mate(now=1)
-    assert activity.get_first_mate() is None   # no phantom marker -> no respawn loop
+    commander._spawn_commander(now=1)
+    assert activity.get_commander() is None   # no phantom marker -> no respawn loop
 
 
 def test_first_mate_disabled_sentinel(fresh_activity_db):
-    from periscope import first_mate, config
-    assert first_mate.first_mate_disabled() is False
+    from periscope import commander, config
+    assert commander.first_mate_disabled() is False
     sentinel = config.ACTIVITY_DB.parent / "first-mate.disabled"
     sentinel.write_text("")
-    assert first_mate.first_mate_disabled() is True
+    assert commander.first_mate_disabled() is True
     sentinel.unlink()
-    assert first_mate.first_mate_disabled() is False
+    assert commander.first_mate_disabled() is False
 
 
 def test_register_bridge_project_creates_null_repo_project(clean_state, tmp_path):
     import os
-    from periscope import first_mate, projects
-    first_mate.register_bridge_project(home=str(tmp_path))
+    from periscope import commander, projects
+    commander.register_bridge_project(home=str(tmp_path))
     pinned = os.path.realpath(str(tmp_path))
     proj = projects.get_project(pinned)
     assert proj["name"] == "bridge"
@@ -366,5 +366,5 @@ def test_register_bridge_project_creates_null_repo_project(clean_state, tmp_path
     assert proj.get("repo") is None        # null-repo -> renders as its own named rail group
     # Idempotent: a second call must not raise (create_project would ValueError
     # on a duplicate pinned_dir — register must take the update path instead).
-    first_mate.register_bridge_project(home=str(tmp_path))
+    commander.register_bridge_project(home=str(tmp_path))
     assert projects.get_project(pinned)["tmux_session"] == "bridge"

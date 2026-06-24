@@ -1,4 +1,4 @@
-"""First mate — pure decision core (v1a substrate).
+"""Commander — pure decision core (v1a substrate).
 
 Mirrors narrator.py's pure half: frozen value-data + zero-IO functions over
 it. NO database, tmux, or MCP imports — `build_fleet_digest` takes already-
@@ -126,7 +126,7 @@ def build_fleet_digest(
 
 # --- v1b IO half: cross-tick state, role prompt, pure decision helpers ----
 
-_LAST_SENT: FleetDigest | None = None   # last digest pushed to the first mate
+_LAST_SENT: FleetDigest | None = None   # last digest pushed to the commander
 
 
 ROLE_PROMPT = """\
@@ -199,7 +199,7 @@ def _render_delta(cur: FleetDigest, reason: str) -> str:
 
 
 def heartbeat_decide(*, prev, cur, marker) -> "Push | None":
-    """PURE: decide whether to push `cur` to the first mate. Returns a Push
+    """PURE: decide whether to push `cur` to the commander. Returns a Push
     (pane_id + rendered delta) or None. No IO; the caller computes `cur` and
     awaits the emit on the main loop."""
     if marker is None:
@@ -220,12 +220,12 @@ def assemble_pane_views(panes: list, now: int) -> list[dict]:
     from periscope.panes import recency_stamps_for
 
     status_lines = activity.pane_status_lines()
-    # The first mate must NOT see itself in the digest. It IS a Claude pane, so
+    # The commander must NOT see itself in the digest. It IS a Claude pane, so
     # including it creates a feedback loop: it reacts to a push, its own status
     # changes, the next tick diverges on *its own* change, pushes again, ad
     # infinitum. Skip the marked pane so only real fleet (worker) changes drive
     # pushes.
-    marker = activity.get_first_mate()
+    marker = activity.get_commander()
     self_pane = marker.pane_id if marker else None
     out = []
     for w, parsed in panes:
@@ -238,7 +238,7 @@ def assemble_pane_views(panes: list, now: int) -> list[dict]:
         # as the digest handle directly.
         pane_id = w.get("pane_id") or ""
         if pane_id and pane_id == self_pane:
-            continue   # don't let the first mate watch itself (feedback loop)
+            continue   # don't let the commander watch itself (feedback loop)
         cwd = w.get("cwd") or ""
         target = f"{w.get('session')}:{w.get('index')}"
         st = status_lines.get(pane_id)     # pane_status is keyed by %N
@@ -257,34 +257,34 @@ def assemble_pane_views(panes: list, now: int) -> list[dict]:
     return out
 
 
-FIRST_MATE_SESSION = "bridge"
-FIRST_MATE_WINDOW = "first-mate"
+COMMANDER_SESSION = "bridge"
+COMMANDER_WINDOW = "commander"
 
 
 def first_mate_disabled() -> bool:
     """Kill-switch: when this sentinel file exists, the worker skips the
-    supervisor + heartbeat — the first mate stays dead (no respawn) until the
+    supervisor + heartbeat — the commander stays dead (no respawn) until the
     file is removed. A bare `kill` doesn't stick; the supervisor would respawn."""
     from periscope import config
     return (config.ACTIVITY_DB.parent / "first-mate.disabled").exists()
 
 
 def supervisor_pass(*, now: int) -> None:
-    """Ensure exactly one live first-mate pane. No-op if the marked pane is
+    """Ensure exactly one live commander pane. No-op if the marked pane is
     alive; (re)spawn + re-mark if the marker is missing or its pane is gone.
     Idempotent — a live marker short-circuits, preventing double-spawn."""
     from periscope import activity
     from periscope.panes import list_windows
 
-    marker = activity.get_first_mate()
+    marker = activity.get_commander()
     live = {w.get("pane_id") for w in list_windows()}
     if marker is not None and marker.pane_id in live:
         return
-    _spawn_first_mate(now=now)
+    _spawn_commander(now=now)
 
 
-def _spawn_first_mate(*, now: int) -> None:
-    """Ensure the `bridge` session, open a single `first-mate` window running
+def _spawn_commander(*, now: int) -> None:
+    """Ensure the `bridge` session, open a single `commander` window running
     claude_exec() + --append-system-prompt ROLE_PROMPT, stamp it, set the
     marker. Borrows worktree_spawn._layout_two_window's sequence (single window,
     no HTTPException — this is a lifespan task, not a request)."""
@@ -306,24 +306,24 @@ def _spawn_first_mate(*, now: int) -> None:
         return  # defense in depth: never spawn a budget-spender off prod
 
     home = os.path.expanduser("~")
-    if not _session_live(FIRST_MATE_SESSION):
-        ok, msg = _tmux_mutate("new-session", "-d", "-s", FIRST_MATE_SESSION,
-                               "-c", home, "-n", FIRST_MATE_WINDOW)
+    if not _session_live(COMMANDER_SESSION):
+        ok, msg = _tmux_mutate("new-session", "-d", "-s", COMMANDER_SESSION,
+                               "-c", home, "-n", COMMANDER_WINDOW)
     else:
-        ok, msg = _tmux_mutate("new-window", "-t", f"{FIRST_MATE_SESSION}:",
-                               "-c", home, "-n", FIRST_MATE_WINDOW)
+        ok, msg = _tmux_mutate("new-window", "-t", f"{COMMANDER_SESSION}:",
+                               "-c", home, "-n", COMMANDER_WINDOW)
     if not ok:
         # Don't stamp a marker for a window that doesn't exist — the next tick
         # retries cleanly. Stamping now would leak a bogus marker.
-        log.warning("first-mate spawn: tmux window create failed: %s", msg)
+        log.warning("commander spawn: tmux window create failed: %s", msg)
         return
-    target = f"{FIRST_MATE_SESSION}:{FIRST_MATE_WINDOW}"
+    target = f"{COMMANDER_SESSION}:{COMMANDER_WINDOW}"
     # Deliver the (multi-line) role prompt via a file, not inline: send-keys
     # strips embedded newlines (CLAUDE.md note 5), which mangles a multi-line
     # --append-system-prompt arg AND the ~1.5k-char command line never lands
     # intact. Writing it to a file keeps the launch command short and
     # single-line; the shell substitutes the file's content as the arg.
-    prompt_path = config.ACTIVITY_DB.parent / "first-mate-prompt.txt"
+    prompt_path = config.ACTIVITY_DB.parent / "commander-prompt.txt"
     prompt_path.write_text(ROLE_PROMPT)
     exec_cmd = (f"{claude_exec()} --append-system-prompt "
                 f'"$(cat {shlex.quote(str(prompt_path))})"')
@@ -337,14 +337,14 @@ def _spawn_first_mate(*, now: int) -> None:
         # A bogus empty marker is never in the live set, so the supervisor would
         # respawn every tick — an unbounded window/budget leak. Leave the marker
         # unset; the next tick retries cleanly.
-        log.warning("first-mate spawn: could not read pane_id; leaving marker unset")
+        log.warning("commander spawn: could not read pane_id; leaving marker unset")
         return
-    activity.set_first_mate(pane_id=pane_id, session_id=None, at=now)
+    activity.set_commander(pane_id=pane_id, session_id=None, at=now)
 
 
 def register_bridge_project(*, home: str | None = None) -> None:
     """Register the `bridge` session as a first-class rail project so the
-    first-mate pane is reachable in the dashboard instead of folding into the
+    commander pane is reachable in the dashboard instead of folding into the
     'dev' group. Idempotent; `repo=None` (the rail renders a null-repo project as
     its own group labelled by `name`). Writes state.json, so call from the
     main loop (the prod-gated lifespan), NOT the worker thread."""
@@ -353,7 +353,7 @@ def register_bridge_project(*, home: str | None = None) -> None:
 
     pinned = os.path.realpath(home or os.path.expanduser("~"))
     if projects.get_project(pinned):
-        projects.update_project(pinned, tmux_session=FIRST_MATE_SESSION, name="bridge")
+        projects.update_project(pinned, tmux_session=COMMANDER_SESSION, name="bridge")
     else:
         projects.create_project(pinned, name="bridge",
-                                tmux_session=FIRST_MATE_SESSION, repo=None, base_branch=None)
+                                tmux_session=COMMANDER_SESSION, repo=None, base_branch=None)

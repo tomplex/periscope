@@ -454,27 +454,27 @@ def test_captain_log_recent_honors_limit(fresh_activity_db):
     assert [r.text for r in rows] == ["w4", "w3"]
 
 
-def test_first_mate_marker_set_get_roundtrips(fresh_activity_db):
+def test_commander_marker_set_get_roundtrips(fresh_activity_db):
     from periscope import activity
-    assert activity.get_first_mate() is None
-    activity.set_first_mate(pane_id="%9", session_id="abc", at=100)
-    m = activity.get_first_mate()
+    assert activity.get_commander() is None
+    activity.set_commander(pane_id="%9", session_id="abc", at=100)
+    m = activity.get_commander()
     assert m.pane_id == "%9" and m.session_id == "abc" and m.updated_at == 100
 
 
-def test_first_mate_marker_is_singleton(fresh_activity_db):
+def test_commander_marker_is_singleton(fresh_activity_db):
     from periscope import activity
-    activity.set_first_mate(pane_id="%9", session_id="abc", at=100)
-    activity.set_first_mate(pane_id="%12", session_id="def", at=200)
-    m = activity.get_first_mate()
+    activity.set_commander(pane_id="%9", session_id="abc", at=100)
+    activity.set_commander(pane_id="%12", session_id="def", at=200)
+    m = activity.get_commander()
     assert m.pane_id == "%12"  # second set replaces, not a second row
 
 
-def test_first_mate_marker_clear(fresh_activity_db):
+def test_commander_marker_clear(fresh_activity_db):
     from periscope import activity
-    activity.set_first_mate(pane_id="%9", session_id=None, at=100)
-    activity.clear_first_mate()
-    assert activity.get_first_mate() is None
+    activity.set_commander(pane_id="%9", session_id=None, at=100)
+    activity.clear_commander()
+    assert activity.get_commander() is None
 
 
 def test_pane_workspace_set_get(fresh_activity_db):
