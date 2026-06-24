@@ -463,6 +463,49 @@ def test_spawn_commander_non_git_cwd_errors(fresh_activity_db, monkeypatch):
     assert _body(res)["ok"] is False and "git" in _body(res)["error"].lower()
 
 
+def test_spawn_with_branch_creates_worktree(fresh_activity_db, monkeypatch, mocker):
+    from periscope import channels, activity, open_ops, worktree_spawn
+    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    created = {}
+    monkeypatch.setattr(worktree_spawn, "spawn_worktree",
+                        lambda repo, branch: created.update(repo=repo, branch=branch) or {"path": "/wt/foo"})
+    seen = {}
+    def fake_resolve(cwd):
+        seen["cwd"] = cwd
+        return ("wt-sess", object())
+    monkeypatch.setattr(open_ops, "resolve_worktree_session", fake_resolve)
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    cap = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    mocker.patch("periscope.channels.set_window_fields")
+    mocker.patch("periscope.channels.list_windows", return_value=[])
+    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+
+    asyncio.run(channels._do_spawn_claude_tool(
+        "%C", {"prompt": "go", "repo": "/r", "branch": "tc/x"}))
+
+    assert created == {"repo": "/r", "branch": "tc/x"}   # worktree created off repo+branch
+    assert seen["cwd"] == "/wt/foo"                      # cwd overridden to the new worktree
+    targets = [c.args for c in cap.call_args_list]
+    assert any("wt-sess" in a for args in targets for a in args)
+
+
+def test_spawn_branch_without_repo_errors(fresh_activity_db, monkeypatch, mocker):
+    from periscope import channels, activity
+    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    res = asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "go", "branch": "tc/x"}))
+    assert _body(res)["ok"] is False and "repo" in _body(res)["error"].lower()
+
+
 def test_send_to_happy(mocker):
     from periscope import channels
     mocker.patch("periscope.channels._resolve_window_by_pid",

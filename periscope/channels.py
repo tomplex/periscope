@@ -475,6 +475,23 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         cwd = os.path.expanduser("~")
     name = str(arguments.get("name") or "").strip()
 
+    # Worktree creation: when `branch` is given, create the worktree off `repo`
+    # first and spawn the worker INTO it — cwd is forced to the new worktree path
+    # (workspace="new", its own rail item). One call = worktree + placed worker,
+    # so the commander owns worktree creation rather than delegating it.
+    branch = str(arguments.get("branch") or "").strip()
+    if branch:
+        repo = str(arguments.get("repo") or "").strip()
+        if not repo:
+            return _tool_result({"ok": False, "error": "branch requires repo (the repo to branch from)"})
+        from periscope import worktree_spawn
+        try:
+            wt = worktree_spawn.spawn_worktree(repo, branch)
+        except Exception as e:
+            return _tool_result({"ok": False, "error": f"worktree create failed: {e}"})
+        cwd = wt["path"]
+        arguments = {**arguments, "workspace": "new"}
+
     # Where the spawned pane lands in the dashboard. "same" (default) keeps it
     # a window in the caller's session, so fan-out / related sub-work nests
     # under the caller's rail item (the rail is session-anchored). "new"
@@ -1214,6 +1231,19 @@ _CHANNEL_TOOLS = [
                 "cwd": {
                     "type": "string",
                     "description": "Working directory for the spawned window. Defaults to the caller's pane cwd. With workspace=\"new\", its worktree anchors the new dashboard item.",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "With `branch`: absolute path of the repo to branch from. Required when `branch` is set.",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": (
+                        "Create a fresh worktree on this branch (off `repo`) and "
+                        "spawn the worker INTO it — one call makes the worktree and "
+                        "places the worker. Forces workspace=\"new\". Use this to put "
+                        "a worker in a new worktree (vs. delegating worktree creation)."
+                    ),
                 },
                 "name": {
                     "type": "string",
