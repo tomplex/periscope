@@ -27,8 +27,8 @@ from typing import TypedDict
 from periscope import worktrees
 from periscope.gitutil import detect_default_branch
 from periscope.log import log
-from periscope.projects import MAIN_KEY, all_projects
-from periscope.store import get_settings
+from periscope.projects import MAIN_KEY, Project, all_projects
+from periscope.store import WindowAnnotation, get_settings
 from periscope.tmux import _run
 
 # === Caches ================================================================
@@ -177,8 +177,8 @@ def _evaluate_worktree(
     branch: str | None,
     repo: str,
     default: str,
-    project_by_pinned: dict[str, dict],
-    windows_snapshot: dict[str, dict],
+    project_by_pinned: dict[str, Project],
+    windows_snapshot: dict[str, WindowAnnotation],
     alive_sessions: set[str],
     idle_threshold: int,
 ) -> Candidate | None:
@@ -289,10 +289,10 @@ def compute_candidates(repo_filter: str | None = None) -> list[Candidate]:
     # Build (repo → project_rows) so we can correlate worktrees with
     # their owning project rows. We also need to surface UNTRACKED
     # worktrees: ones on disk via `git worktree list` with no matching project row.
-    project_by_pinned: dict[str, dict] = {
+    project_by_pinned: dict[str, Project] = {
         k: v for k, v in projects.items() if k != MAIN_KEY
     }
-    project_by_repo: dict[str, list[tuple[str, dict]]] = {}
+    project_by_repo: dict[str, list[tuple[str, Project]]] = {}
     repos: set[str] = set()
     for pinned, row in project_by_pinned.items():
         repo = row.get("repo")

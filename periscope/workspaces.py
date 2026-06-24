@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from periscope import activity, store
 
@@ -48,15 +48,15 @@ def create_workspace(*, name: str, base_repo: str | None = None,
         }
         existing[wid] = row
         store._write_state(store._STATE)
-        return dict(row)
+        return cast(Workspace, dict(row))
 
 
 def get_workspace(wid: str) -> Workspace:
-    return dict(store._STATE["workspaces"].get(wid, {}))
+    return cast(Workspace, dict(store._STATE["workspaces"].get(wid, {})))
 
 
 def all_workspaces() -> dict[str, Workspace]:
-    return {k: dict(v) for k, v in store._STATE["workspaces"].items()}
+    return {k: cast(Workspace, dict(v)) for k, v in store._STATE["workspaces"].items()}
 
 
 def update_workspace(wid: str, **fields) -> bool:

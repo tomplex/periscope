@@ -13,7 +13,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from fastapi import HTTPException
 
@@ -77,14 +77,14 @@ def get_project(pinned_dir: str) -> Project:
     with _store._STATE_LOCK:
         projects = _store._STATE.get("projects", {})
         key = _lookup_key(pinned_dir, projects)
-        return dict(projects.get(key, {}))  # type: ignore[return-value]
+        return cast(Project, dict(projects.get(key, {})))
 
 
 def all_projects() -> dict[str, Project]:
     """Snapshot of all projects (copies)."""
     with _store._STATE_LOCK:
         return {
-            k: dict(v)
+            k: cast(Project, dict(v))
             for k, v in _store._STATE.get("projects", {}).items()
         }
 
@@ -112,7 +112,7 @@ def create_project(pinned_dir: str, **fields) -> Project:
         }
         projects[key] = dict(row)
         _store._write_state(_store._STATE)
-        return dict(row)
+        return cast(Project, dict(row))
 
 
 def update_project(pinned_dir: str, **fields) -> bool:
@@ -334,7 +334,9 @@ def fetch_pr_into_worktree(repo: str, pr: int, name_override: str | None = None)
 
     is_fork = bool(meta.get("isCrossRepository"))
     pr_state = (meta.get("state") or "").upper()  # OPEN / CLOSED / MERGED
-    base_branch = meta.get("baseRefName") or None
+    # A real GitHub PR always carries a base ref; coerce to "" only as a
+    # type-floor so PRWorktree.base_branch stays a concrete str.
+    base_branch = str(meta.get("baseRefName") or "")
 
     head_ref = (meta.get("headRefName") or "").strip()
     name = ((name_override or "").strip() or head_ref or local_branch).strip()

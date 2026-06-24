@@ -82,7 +82,9 @@ def projects_adopt(body: AdoptBody):
                 break
         tmux_session = matched_session or (body.name or os.path.basename(pinned_dir))
     else:
-        # Adopt an unmanaged tmux session.
+        # Adopt an unmanaged tmux session. The XOR guard above guarantees
+        # tmux_session is truthy here (pinned_dir was falsy).
+        assert body.tmux_session is not None
         windows = [w for w in list_windows() if w["session"] == body.tmux_session]
         if not windows:
             raise HTTPException(404, f"no tmux session named {body.tmux_session!r}")
@@ -302,7 +304,7 @@ def projects_discoverable():
 
     for p in all_projects().values():
         if p.get("repo"):
-            repos.add(os.path.realpath(p["repo"]))
+            repos.add(os.path.realpath(p["repo"] or ""))
 
     dev = Path.home() / "dev"
     if dev.is_dir():

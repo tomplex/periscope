@@ -395,7 +395,10 @@ class _SessionMirror:
             # Runs synchronously inside the reader task at this reply's
             # %end — the ordering rule. No %output can leapfrog the frame.
             cap = got.get("capture")
-            if isinstance(cap, ReplyError) or isinstance(reply, ReplyError):
+            # `cap` is always set (on_capture fires before on_display per the
+            # %end ordering), but guard None so the type checker — and a
+            # protocol violation — both narrow to the dead-pane path.
+            if cap is None or isinstance(cap, ReplyError) or isinstance(reply, ReplyError):
                 self._end_pane(pane_id)  # pane died mid-capture
                 return
             subs = self._subs.get(pane_id)

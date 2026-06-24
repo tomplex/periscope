@@ -29,7 +29,8 @@ import os
 import threading
 import time
 import uuid
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypedDict
 
 from periscope import workspaces
 from periscope.config import MCP_SOCKET_PATH
@@ -829,7 +830,7 @@ async def _mcp_listener() -> None:
         # underlying socket is gone, and an unbounded wait_closed() wedges
         # the lifespan handler so every dev save hangs the server.
         server.close()
-        server.close_clients()
+        server.close_clients()  # ty: ignore[unresolved-attribute]  # asyncio.Server.close_clients() exists since 3.13
         with contextlib.suppress(TimeoutError, Exception):
             await asyncio.wait_for(server.wait_closed(), timeout=1.0)
 
@@ -1048,7 +1049,14 @@ def _do_terminate_tool(pane: str, arguments: dict):
 # itself stays plain data); `_call_tool` dispatches by iterating it. Adding a
 # tool is one record here plus one `_do_*` handler — no separate schema list and
 # dispatch branch to keep in sync.
-_CHANNEL_TOOLS = [
+class _ChannelTool(TypedDict):
+    name: str
+    description: str
+    inputSchema: dict[str, Any]
+    handler: Callable[..., Any]
+
+
+_CHANNEL_TOOLS: list[_ChannelTool] = [
     {
         "name": "notify",
         "description": (

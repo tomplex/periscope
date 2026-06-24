@@ -13,6 +13,7 @@ The `resumes` sentinel session is auto-created on first use.
 
 import os
 import time
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -324,6 +325,7 @@ def window_new_worktree(
         )
 
     repo = project["repo"]
+    assert repo is not None  # guarded by the `not project.get("repo")` 400 above
     base_branch = project.get("base_branch")
     # Two paths based on base_branch presence:
     #   - base_branch set (typical): fork from LOCAL ref (no fetch).
@@ -331,7 +333,7 @@ def window_new_worktree(
     #   - base_branch null (legacy projects): fall back to repo default
     #     branch with fetch=True (defaults are pushed, fetch is safe).
     # base_branch set → fork from local ref (fetch=False); null → detected default + fetch=True.
-    spawn_kwargs = {"base_branch": base_branch, "fetch": False} if base_branch else {}
+    spawn_kwargs: dict[str, Any] = {"base_branch": base_branch, "fetch": False} if base_branch else {}
 
     try:
         res = spawn_worktree(repo, branch, **spawn_kwargs)

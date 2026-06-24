@@ -55,7 +55,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from periscope.config import CLAUDE_EXEC, config_dir
 from periscope.log import log
@@ -330,7 +330,7 @@ _channels_migration_v1()
 def get_window(pid: str) -> WindowAnnotation:
     """Return a copy of windows[pid], or an empty dict if unknown."""
     with _STATE_LOCK:
-        return dict(_STATE.get("windows", {}).get(pid, {}))  # type: ignore[return-value]
+        return cast(WindowAnnotation, dict(_STATE.get("windows", {}).get(pid, {})))
 
 
 def set_window_fields(pid: str, **fields) -> None:
@@ -390,7 +390,7 @@ def delete_window(pid: str) -> bool:
 def all_windows() -> dict[str, WindowAnnotation]:
     """Snapshot of all window annotations (copies of each)."""
     with _STATE_LOCK:
-        return {pid: dict(ann) for pid, ann in _STATE.get("windows", {}).items()}  # type: ignore[misc]
+        return {pid: cast(WindowAnnotation, dict(ann)) for pid, ann in _STATE.get("windows", {}).items()}
 
 
 def get_ui() -> dict:
@@ -444,7 +444,7 @@ def update_settings(patch: dict) -> None:
 def get_commands() -> list[Command]:
     """Snapshot of the command palette (copies of each entry)."""
     with _STATE_LOCK:
-        return [dict(c) for c in _STATE.get("commands", [])]  # type: ignore[misc]
+        return [cast(Command, dict(c)) for c in _STATE.get("commands", [])]
 
 
 def add_command(label: str, exec_cmd: str) -> Command:
@@ -454,7 +454,7 @@ def add_command(label: str, exec_cmd: str) -> Command:
         new: Command = {"label": label, "exec": exec_cmd}
         cmds.append(dict(new))
         _write_state(_STATE)
-        return dict(new)
+        return cast(Command, dict(new))
 
 
 def update_command(

@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+from typing import Any
 
 from .db import connect, get_meta, set_meta
 
@@ -84,7 +85,7 @@ def _cmd_backfill(argv: list[str]) -> int:
         paths = find_jsonl_files(projects) if projects is not None else find_jsonl_files()
         print(f"would scan {len(paths)} jsonl files")
         return 0
-    kwargs = {"workers": args.workers, "db_path": args.db_path,
+    kwargs: dict[str, Any] = {"workers": args.workers, "db_path": args.db_path,
               "since": since_ts, "model": args.model}
     if projects is not None:
         kwargs["projects_dir"] = projects
@@ -209,7 +210,7 @@ def _cmd_reindex(argv: list[str]) -> int:
 
     from .backfill import backfill
     projects = Path(args.projects_dir) if args.projects_dir else None
-    kwargs = {"workers": args.workers, "db_path": args.db_path}
+    kwargs: dict[str, Any] = {"workers": args.workers, "db_path": args.db_path}
     if projects is not None:
         kwargs["projects_dir"] = projects
     result = backfill(**kwargs)

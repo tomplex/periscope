@@ -50,3 +50,10 @@ ignore = ["E501", "E701", "E702"]
 
 [tool.ty.environment]
 python-version = "3.11"
+
+[tool.ty.src]
+# Tests are mock-heavy (MagicMock); a structural type checker can't introspect
+# them, so strict checking yields ~100 noise diagnostics with no bug-catching
+# value — tests are verified by running them. build_icons.py is a manual
+# icon-build script with an undeclared optional dep (Pillow). Gate source only.
+exclude = ["tests/**", "history/tests/**", "build_icons.py"]

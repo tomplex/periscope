@@ -172,7 +172,7 @@ def _discover_repos() -> set[str]:
     repos: set[str] = set()
     for p in projects.all_projects().values():
         if p.get("repo"):
-            repos.add(os.path.realpath(p["repo"]))
+            repos.add(os.path.realpath(p["repo"] or ""))
     dev = Path.home() / "dev"
     if dev.is_dir():
         for child in dev.iterdir():
