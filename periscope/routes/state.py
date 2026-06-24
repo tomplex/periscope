@@ -15,8 +15,10 @@ from fastapi import APIRouter
 from periscope.activity import pane_status_lines
 from periscope.channels import _channel_gc
 from periscope.panes import (
-    _resuming, RESUME_EXPIRY_S,
-    list_windows, update_focus_from_windows,
+    RESUME_EXPIRY_S,
+    _resuming,
+    list_windows,
+    update_focus_from_windows,
 )
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.projects import all_projects

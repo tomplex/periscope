@@ -56,7 +56,7 @@ def _load_font(size_px: int) -> ImageFont.FreeTypeFont:
     for p in FONT_CANDIDATES:
         try:
             f = ImageFont.truetype(p, size_px)
-        except (OSError, IOError):
+        except OSError:
             continue
         bbox = f.getbbox(GLYPH)
         if bbox and bbox[3] > bbox[1]:

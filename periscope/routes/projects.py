@@ -19,15 +19,18 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from periscope.gitutil import resolve_repo_and_branch
 from periscope.log import log
 from periscope.panes import list_windows
 from periscope.projects import (
-    all_projects, archive_project, create_project, get_project,
-    update_project, MAIN_KEY,
+    MAIN_KEY,
+    all_projects,
+    archive_project,
+    create_project,
+    get_project,
+    update_project,
 )
-from periscope.gitutil import resolve_repo_and_branch
 from periscope.tmux import _run, _tmux_mutate
-
 
 router = APIRouter()
 

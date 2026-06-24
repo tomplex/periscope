@@ -20,8 +20,11 @@ from typing import Any
 
 from .db import MECHANICAL_VERSION, connect, get_meta
 from .extract import (
-    SessionRecord, compute_summary_input_hash, extract_record,
-    heuristic_summary, is_trivial,
+    SessionRecord,
+    compute_summary_input_hash,
+    extract_record,
+    heuristic_summary,
+    is_trivial,
 )
 from .jsonl import parse_jsonl
 from .summarize import SummaryResult, call_summarizer

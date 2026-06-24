@@ -17,20 +17,33 @@ from periscope.channels import _mcp_listener
 from periscope.config import MCP_SOCKET_PATH, STATIC
 from periscope.git_pr import prewarm_pr_cache
 from periscope.lgtm import _LGTM_SSE_TASKS, _lgtm_periodic_refresh
-from periscope.log import log, _bg, _task
-from periscope.usage import cached_plan_usage
+from periscope.log import _bg, _task, log
 
 # Routes — each module owns an APIRouter that we mount into `app` below.
 from periscope.routes import (
-    alerts, auto_rename, channel, command, events, fs, healthz, history, pane, paste_image,
-    prefs, send, sessions, state, ws,
+    alerts,
+    auto_rename,
+    channel,
+    command,
+    events,
+    fs,
+    healthz,
+    history,
+    pane,
+    paste_image,
+    prefs,
+    send,
+    sessions,
+    state,
+    ws,
 )
+from periscope.routes import cleanup as cleanup_routes
 from periscope.routes import lgtm as lgtm_route
 from periscope.routes import open as open_route
 from periscope.routes import projects as projects_routes
-from periscope.routes import workspaces as workspaces_routes
-from periscope.routes import cleanup as cleanup_routes
 from periscope.routes import settings as settings_routes
+from periscope.routes import workspaces as workspaces_routes
+from periscope.usage import cached_plan_usage
 
 
 @asynccontextmanager

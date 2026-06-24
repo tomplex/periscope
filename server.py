@@ -29,8 +29,8 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
 
-    from dotenv import load_dotenv
     import uvicorn
+    from dotenv import load_dotenv
 
     # Load .env from this script's directory (existing env vars take
     # precedence). Done in __main__ so importing server.py for some
@@ -40,8 +40,8 @@ if __name__ == "__main__":
     from periscope.log import log
     from periscope.pidfile import (
         _reclaim_existing_instance,
-        _write_pidfile,
         _remove_pidfile,
+        _write_pidfile,
     )
 
     # Reclaim any prior periscope before binding the port. Done here (not

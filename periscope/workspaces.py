@@ -9,19 +9,18 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Optional, TypedDict
+from typing import TypedDict
 
-from periscope import store
-from periscope import activity
+from periscope import activity, store
 
 
 class Workspace(TypedDict, total=False):
     id: str
     name: str
-    base_repo: Optional[str]
-    base_worktree: Optional[str]
+    base_repo: str | None
+    base_worktree: str | None
     created_at: int
-    archived_at: Optional[int]
+    archived_at: int | None
 
 
 def _slug(name: str) -> str:
@@ -29,8 +28,8 @@ def _slug(name: str) -> str:
     return s or "workspace"
 
 
-def create_workspace(*, name: str, base_repo: Optional[str] = None,
-                     base_worktree: Optional[str] = None) -> Workspace:
+def create_workspace(*, name: str, base_repo: str | None = None,
+                     base_worktree: str | None = None) -> Workspace:
     base = f"ws_{_slug(name)}"
     with store._STATE_LOCK:
         existing = store._STATE["workspaces"]
@@ -82,7 +81,7 @@ def archive_workspace(wid: str) -> bool:
         return True
 
 
-def resolve_workspace_for_window(w: dict) -> Optional[str]:
+def resolve_workspace_for_window(w: dict) -> str | None:
     """The workspace id a window is tagged into, or None.
 
     Looks up the per-tab tag by tmux pane_id, then validates the workspace

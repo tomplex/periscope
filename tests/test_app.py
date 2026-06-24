@@ -97,9 +97,8 @@ def test_lifespan_skips_mcp_on_dev_port(mocker, monkeypatch, caplog):
     mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)
 
     from periscope.app import app
-    with caplog.at_level("INFO", logger="periscope"):
-        with TestClient(app):
-            pass
+    with caplog.at_level("INFO", logger="periscope"), TestClient(app):
+        pass
 
     assert called["count"] == 0
     assert any("skipping MCP listener" in r.message for r in caplog.records)

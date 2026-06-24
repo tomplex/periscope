@@ -1,5 +1,4 @@
 """Tests for /api/events (UI instrumentation ingest)."""
-import json
 
 import pytest
 

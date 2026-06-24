@@ -3,7 +3,6 @@
 The tmux-resolving variants (safe_read_for_pane / safe_reveal_for_pane)
 are tested in tests/routes/test_fs.py against route-level fixtures.
 """
-import os
 from pathlib import Path
 
 import pytest

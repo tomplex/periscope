@@ -30,7 +30,6 @@ import sqlite3
 import sys
 import time
 
-
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS pane_sessions ("
     "  pane_id TEXT PRIMARY KEY,"

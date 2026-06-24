@@ -16,8 +16,7 @@ import re
 import time
 
 from periscope.config import INPUT_CTL_SESSION
-from periscope.tmux import tmux, _ANSI_SGR_RE, _FG_COLOR_RE
-
+from periscope.tmux import _ANSI_SGR_RE, _FG_COLOR_RE, tmux
 
 # Server-tracked "last user-focused" per target.
 # Tmux's window_activity bumps on any output (Claude streaming, build logs, dev

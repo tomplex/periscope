@@ -13,7 +13,7 @@ when the lack of cross-restart history actually bites.
 
 from fastapi import APIRouter, Query
 
-from periscope.channels import _CHANNELS_LOCK, _CHANNEL_ALERTS
+from periscope.channels import _CHANNEL_ALERTS, _CHANNELS_LOCK
 from periscope.panes import list_windows
 
 router = APIRouter()

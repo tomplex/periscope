@@ -9,11 +9,12 @@ indicators."
 from pathlib import Path
 
 from periscope.lgtm import (
+    _LGTM_BY_REPO,
+    _LGTM_LOCK,
     LGTM_BASE_URL,
-    _normalize_repo_path,
     _lgtm_submitted,
+    _normalize_repo_path,
     cached_lgtm_state,
-    _LGTM_LOCK, _LGTM_BY_REPO,
 )
 
 

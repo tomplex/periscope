@@ -329,6 +329,7 @@ def test_pane_status_migration_adds_rail_to_old_db():
     # the (fixture-redirected) DB path BEFORE activity opens it, then let
     # _conn()'s probe-then-ALTER run on first use.
     import sqlite3
+
     from periscope import config
     db = sqlite3.connect(str(config.ACTIVITY_DB))
     db.execute(
@@ -438,7 +439,7 @@ def test_worker_tick_invokes_narrator_with_claude_panes(monkeypatch):
 
 def test_worker_tick_syncs_bg_jobs(monkeypatch, fresh_activity_db):
     from periscope import activity, bg_commander
-    monkeypatch.setattr(activity, "list_windows", lambda: [])     # no panes => skip narrator path
+    monkeypatch.setattr(activity, "list_windows", list)     # no panes => skip narrator path
     called = {"sync": False}
     monkeypatch.setattr(bg_commander, "sync_jobs", lambda **kw: called.__setitem__("sync", True))
     activity._worker_tick({})

@@ -5,8 +5,12 @@ import subprocess
 import pytest
 
 from periscope.git_pr import (
-    git_state_for, cached_git_state, _gh_run_state,
-    _git_cache, _pr_cache, _GIT_TTL,
+    _GIT_TTL,
+    _gh_run_state,
+    _git_cache,
+    _pr_cache,
+    cached_git_state,
+    git_state_for,
 )
 
 

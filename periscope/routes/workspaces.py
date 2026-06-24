@@ -11,7 +11,10 @@ from pydantic import BaseModel
 
 from periscope import activity, open_ops, worktree_spawn
 from periscope.workspaces import (
-    create_workspace, get_workspace, update_workspace, archive_workspace,
+    archive_workspace,
+    create_workspace,
+    get_workspace,
+    update_workspace,
 )
 from periscope.workspaces import get_workspace as _get_ws
 

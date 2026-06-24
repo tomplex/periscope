@@ -1,4 +1,4 @@
-from history.jsonl import parse_jsonl, Event
+from history.jsonl import parse_jsonl
 
 
 def test_parses_short_session(fixture_dir):

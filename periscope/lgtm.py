@@ -17,8 +17,7 @@ from typing import Any
 
 import httpx
 
-from periscope.log import log, _task
-
+from periscope.log import _task, log
 
 LGTM_BASE_URL = os.environ.get("PERISCOPE_LGTM_URL", "http://127.0.0.1:9900")
 LGTM_REFRESH_S = 30.0  # full /projects refresh interval; SSE handles in-between deltas

@@ -17,7 +17,6 @@ from fastapi import HTTPException
 
 from periscope.tmux import tmux
 
-
 _MAX_BYTES_DEFAULT = 1_000_000
 
 

@@ -20,11 +20,20 @@ from pydantic import BaseModel
 from periscope.channels import dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC
 from periscope.panes import (
-    _acted_at, _active_per_session, _focused_at, _resuming,
-    drop_target_focus, list_windows, note_action, note_focus,
+    _acted_at,
+    _active_per_session,
+    _focused_at,
+    _resuming,
+    drop_target_focus,
+    list_windows,
+    note_action,
+    note_focus,
 )
 from periscope.projects import (
-    MAIN_KEY, get_project, placement_kill_set, resolve_project_for_window,
+    MAIN_KEY,
+    get_project,
+    placement_kill_set,
+    resolve_project_for_window,
 )
 from periscope.tmux import _run, _tmux_mutate, tmux
 from periscope.worktree_spawn import spawn_worktree

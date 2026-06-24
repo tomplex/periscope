@@ -37,7 +37,6 @@ import json
 import os
 import sys
 
-
 SOCKET_PATH = os.environ.get(
     "PERISCOPE_MCP_SOCKET_PATH", "/tmp/periscope-mcp.sock"
 )
@@ -161,7 +160,7 @@ class Shim:
         try:
             await asyncio.wait_for(self._stdin_eof.wait(), timeout=secs)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     async def _serve(

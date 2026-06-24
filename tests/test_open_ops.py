@@ -3,6 +3,7 @@ import shutil
 import subprocess
 
 import pytest
+
 from periscope import open_ops, projects
 from periscope.tmux import _tmux_mutate
 

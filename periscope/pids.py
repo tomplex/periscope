@@ -9,9 +9,9 @@ restarts. Time-to-live is 30 days — older state.json entries get GC'd.
 import time
 import uuid
 
+from periscope import store as _store
 from periscope.git_pr import cached_git_state
 from periscope.log import log
-from periscope import store as _store
 from periscope.tmux import tmux
 
 _PID_TTL_S = 30 * 86400  # 30 days

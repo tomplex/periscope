@@ -22,15 +22,14 @@ routes/cleanup.py is what actually mutates.
 import os
 import threading
 import time
-from typing import TypedDict, Optional
+from typing import TypedDict
 
+from periscope import worktrees
 from periscope.gitutil import detect_default_branch
 from periscope.log import log
-from periscope.projects import all_projects, MAIN_KEY
+from periscope.projects import MAIN_KEY, all_projects
 from periscope.store import get_settings
 from periscope.tmux import _run
-from periscope import worktrees
-
 
 # === Caches ================================================================
 
@@ -38,7 +37,7 @@ _PR_STATE_TTL = 300.0  # 5 minutes
 _BRANCH_TTL = 60.0
 
 _lock = threading.Lock()
-_pr_state_cache: dict[tuple[str, int], tuple[float, Optional[str]]] = {}
+_pr_state_cache: dict[tuple[str, int], tuple[float, str | None]] = {}
 _branch_merged_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 _remote_branch_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 _default_branch_cache: dict[str, tuple[float, str]] = {}
@@ -63,7 +62,7 @@ def _detect_default_branch(repo: str) -> str:
     return branch
 
 
-def _pr_state(repo: str, pr_number: int) -> Optional[str]:
+def _pr_state(repo: str, pr_number: int) -> str | None:
     """Return 'OPEN' / 'CLOSED' / 'MERGED' / None. Cached 5min."""
     key = (repo, pr_number)
     with _lock:
@@ -75,7 +74,7 @@ def _pr_state(repo: str, pr_number: int) -> Optional[str]:
         cwd=repo,
         timeout=10.0,
     )
-    state: Optional[str] = None
+    state: str | None = None
     if code == 0 and out:
         try:
             import json
@@ -157,8 +156,8 @@ class Signal(TypedDict):
 
 class Candidate(TypedDict):
     pinned_dir: str  # the worktree's absolute realpath
-    project_name: Optional[str]  # null if untracked
-    tmux_session: Optional[str]  # null if untracked
+    project_name: str | None  # null if untracked
+    tmux_session: str | None  # null if untracked
     repo: str  # the repo's main-checkout path
     branch: str  # the worktree's current branch (or "(detached)")
     is_fork: bool  # from state.windows[pid].is_fork on the project's claude window
@@ -175,14 +174,14 @@ IDLE_THRESHOLD_DAYS = 14
 
 def _evaluate_worktree(
     wt_path: str,
-    branch: Optional[str],
+    branch: str | None,
     repo: str,
     default: str,
     project_by_pinned: dict[str, dict],
     windows_snapshot: dict[str, dict],
     alive_sessions: set[str],
     idle_threshold: int,
-) -> Optional[Candidate]:
+) -> Candidate | None:
     """Evaluate one worktree of `repo`. Returns a Candidate when any
     staleness signal fires, or None — for the repo's own main checkout, or
     a worktree that is healthy from cleanup's perspective.
@@ -271,7 +270,7 @@ def _evaluate_worktree(
     }
 
 
-def compute_candidates(repo_filter: Optional[str] = None) -> list[Candidate]:
+def compute_candidates(repo_filter: str | None = None) -> list[Candidate]:
     """Walk every repo periscope knows about and return the cleanup
     candidate list. A worktree appears as a candidate if ANY signal
     fires.

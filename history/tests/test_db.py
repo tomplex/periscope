@@ -1,5 +1,6 @@
 import sqlite3
-from history.db import apply_schema, SCHEMA_VERSION, MECHANICAL_VERSION
+
+from history.db import MECHANICAL_VERSION, SCHEMA_VERSION, apply_schema
 
 
 def test_apply_schema_creates_expected_tables():

@@ -146,7 +146,7 @@ def stats(*, db_path: Path | str | None = None) -> dict:
     """Index summary for the route header + footer: total / summarized /
     heuristic counts, distinct projects, last full scan, DB file size.
     Single round trip; not cached (each call ~1-3ms on a populated index)."""
-    from .db import get_meta, DEFAULT_DB_PATH
+    from .db import DEFAULT_DB_PATH, get_meta
     path = Path(db_path) if db_path else DEFAULT_DB_PATH
     conn = connect(db_path)
     try:

@@ -5,15 +5,17 @@ import os
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from periscope import worktrees
 from periscope.cleanup import compute_candidates
 from periscope.log import log
 from periscope.panes import drop_target_focus, list_windows
 from periscope.projects import (
-    archive_project, all_projects, MAIN_KEY, placement_kill_set,
+    MAIN_KEY,
+    all_projects,
+    archive_project,
+    placement_kill_set,
 )
 from periscope.tmux import _run, _tmux_mutate
-from periscope import worktrees
-
 
 router = APIRouter()
 

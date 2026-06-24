@@ -10,14 +10,20 @@ from pydantic import BaseModel
 
 from periscope.store import (
     add_command as store_add_command,
+)
+from periscope.store import (
     delete_command as store_delete_command,
+)
+from periscope.store import (
     get_commands,
     get_window,
     reorder_commands,
     set_window_fields,
     snapshot,
-    update_command as store_update_command,
     update_ui,
+)
+from periscope.store import (
+    update_command as store_update_command,
 )
 
 router = APIRouter()

@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from periscope import projects, store, worktrees
-from periscope.gitutil import detect_default_branch, resolve_repo, resolve_repo_and_branch
+from periscope.gitutil import (
+    detect_default_branch,
+    resolve_repo,
+    resolve_repo_and_branch,
+)
 from periscope.panes import list_windows
 from periscope.tmux import _run, _tmux_mutate
 from periscope.worktree_spawn import _layout_two_window, spawn_worktree

@@ -17,7 +17,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from periscope import config
@@ -704,7 +704,7 @@ def _compact_is_recent(ts: str) -> bool:
         when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except Exception:
         return False
-    return (datetime.now(timezone.utc) - when).total_seconds() < 300
+    return (datetime.now(UTC) - when).total_seconds() < 300
 
 
 def _recent_compact_meta(jsonl_path) -> dict | None:

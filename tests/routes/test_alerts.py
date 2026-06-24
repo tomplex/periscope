@@ -1,6 +1,6 @@
 """Tests for GET /api/alerts/recent."""
 
-from periscope.channels import _do_notify_tool, _CHANNEL_ALERTS, _CHANNELS_LOCK
+from periscope.channels import _CHANNEL_ALERTS, _CHANNELS_LOCK, _do_notify_tool
 
 
 def test_alerts_recent_surfaces_id(client, mocker):

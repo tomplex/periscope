@@ -22,9 +22,30 @@ dev = [
     # tests/test_tmux_mirror.py. Deliberately NOT a runtime dep — the
     # design keeps emulation out of periscope (tmux is the emulator).
     "pyte>=0.8",
+    # Lint + typecheck gate (see bin/check / .pre-commit-config.yaml).
+    "ruff>=0.14",
+    "ty>=0.0.31",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "history/tests"]
 python_files = ["test_*.py"]
 addopts = "-ra --strict-markers --strict-config"
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["static", "node_modules", "src-tauri", ".venv"]
+
+[tool.ruff.lint]
+# Deep set: real bug/quality coverage beyond pyflakes. E501 (line length) and
+# E701/E702 (terse multi-statement lines) are deliberate style here, so off.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PIE", "RET", "PERF"]
+ignore = ["E501", "E701", "E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests group imports under section-divider comments on purpose.
+"tests/**" = ["E402"]
+"history/tests/**" = ["E402"]
+
+[tool.ty.environment]
+python-version = "3.11"

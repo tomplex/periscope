@@ -22,8 +22,8 @@ the next keystroke.
 import asyncio
 
 from periscope.config import INPUT_CTL_SESSION
-from periscope.log import log, _task
-from periscope.tmux import deliver_input, _SEND_KEYS_H_MAX
+from periscope.log import _task, log
+from periscope.tmux import _SEND_KEYS_H_MAX, deliver_input
 
 # Test seam (same shape as tmux_mirror._TMUX): the integration test points
 # this at a dedicated `-L` socket so the control client never touches the

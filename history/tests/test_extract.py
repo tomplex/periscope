@@ -1,9 +1,10 @@
 import json
+
 from history.extract import (
-    extract_record,
     compute_summary_input_hash,
-    is_trivial,
+    extract_record,
     heuristic_summary,
+    is_trivial,
 )
 from history.jsonl import parse_jsonl
 

@@ -78,6 +78,7 @@ def test_pane_turns_returns_messages_end_to_end(client, mocker, tmp_path, monkey
     # tmp transcript (the Q1-2026 mocked-migration lesson: don't mock the path
     # the bug would live in). Only the tmux boundary and the session lookup are faked.
     import json
+
     import periscope.activity as activity
 
     cwd = "/Users/tom/dev/turnsproj"

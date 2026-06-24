@@ -5,8 +5,8 @@ transcript from its session JSONL."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from periscope import bg_commander, turns
 from history.search import messages_from_jsonl
+from periscope import bg_commander, turns
 
 router = APIRouter()
 

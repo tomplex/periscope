@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from history.db import connect
-from history.search import search, _build_fts_query
+from history.search import _build_fts_query, search
 
 
 def _seed_session(conn, session_id, summary, tags, project, branch="main",
@@ -145,8 +145,8 @@ def test_rerank_falls_back_to_fts_order_on_client_failure(seeded_db):
 
 
 def test_get_session_returns_full_row_and_messages(tmp_path, fixture_dir, monkeypatch):
-    from history.search import get_session
     from history.indexer import index_one
+    from history.search import get_session
     archive_dir = tmp_path / "archive"
     monkeypatch.setattr("history.indexer.ARCHIVE_DIR", archive_dir)
     db_path = tmp_path / "h.db"
@@ -184,8 +184,8 @@ def test_get_session_returns_none_for_missing(tmp_path):
 
 
 def test_get_session_marks_jsonl_missing(tmp_path):
-    from history.search import get_session
     from history.db import connect
+    from history.search import get_session
     db_path = tmp_path / "h.db"
     conn = connect(db_path)
     # Insert a row pointing at a path that doesn't exist

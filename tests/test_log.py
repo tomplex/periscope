@@ -9,7 +9,7 @@ import asyncio
 import logging
 import threading
 
-from periscope.log import log, _bg, _task
+from periscope.log import _bg, _task, log
 
 
 def test_log_is_named_periscope():

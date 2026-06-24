@@ -24,15 +24,18 @@ from typing import Literal
 
 import periscope.activity as activity
 from periscope.activity import PaneStatusRow
-from periscope.turns import jsonl_for_session
+
 # Imported into this namespace so tests monkeypatch narrator.claude_complete,
 # narrator.tmux, etc. — the tests/test_activity.py pattern.
 from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.log import log
 from periscope.rename_ai import (
-    RENAME_RULES, claude_complete, transcript_summary_from_path,
+    RENAME_RULES,
+    claude_complete,
+    transcript_summary_from_path,
 )
 from periscope.tmux import tmux
+from periscope.turns import jsonl_for_session
 
 MIN_INTERVAL_S = 90
 MAX_PER_TICK = 5

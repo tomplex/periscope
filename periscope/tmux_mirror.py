@@ -17,10 +17,10 @@ docs/superpowers/specs/2026-06-10-terminal-mirror-reconciliation-design.md
 
 import asyncio
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
-from periscope.log import log, _task
+from periscope.log import _task, log
 
 QUIESCE_S = 0.15        # reconcile this long after output stops
 MAX_INTERVAL_S = 1.0    # ... or at least this often during sustained output

@@ -1,10 +1,13 @@
 from unittest.mock import MagicMock
 
-from history.summarize import (
-    SUMMARIZE_TOOL, SUMMARIZE_SYSTEM_PROMPT,
-    build_summary_prompt, call_summarizer, SummaryResult,
-)
 from history.extract import SessionRecord
+from history.summarize import (
+    SUMMARIZE_SYSTEM_PROMPT,
+    SUMMARIZE_TOOL,
+    SummaryResult,
+    build_summary_prompt,
+    call_summarizer,
+)
 
 
 def _sample_record() -> SessionRecord:
@@ -94,8 +97,8 @@ def test_call_summarizer_returns_none_after_exhausting_retries():
 
 
 def test_call_summarizer_parses_facets():
-    from history.summarize import call_summarizer, SUMMARIZE_TOOL
     from history.extract import SessionRecord
+    from history.summarize import SUMMARIZE_TOOL, call_summarizer
 
     # The tool advertises the four facet fields.
     props = SUMMARIZE_TOOL["input_schema"]["properties"]
@@ -136,8 +139,8 @@ def test_call_summarizer_parses_facets():
 
 
 def test_call_summarizer_rejects_unknown_enum():
-    from history.summarize import call_summarizer
     from history.extract import SessionRecord
+    from history.summarize import call_summarizer
 
     class _Block:
         type = "tool_use"

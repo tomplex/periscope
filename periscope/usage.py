@@ -25,7 +25,6 @@ import httpx
 from periscope import activity
 from periscope.log import _bg, log
 
-
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
 #
 # Claude Code logs every assistant message to ~/.claude/projects/<encoded-cwd>/

@@ -13,23 +13,22 @@ add/remove, call invalidate(repo)).
 import os
 import threading
 import time
-from typing import Optional, TypedDict
+from typing import TypedDict
 
 from periscope.tmux import _run
-
 
 _TTL_S = 60.0
 _lock = threading.Lock()
 # repo_realpath → (fetched_at, [(worktree_realpath, branch_or_none), ...])
-_cache: dict[str, tuple[float, list[tuple[str, Optional[str]]]]] = {}
+_cache: dict[str, tuple[float, list[tuple[str, str | None]]]] = {}
 
 
 class Affiliation(TypedDict):
     kind: str  # "at-pin" | "sibling" | "off-repo" | "no-repo"
-    label: Optional[str]  # branch or worktree basename for chip text
+    label: str | None  # branch or worktree basename for chip text
 
 
-def _list_worktrees(repo: str) -> list[tuple[str, Optional[str]]]:
+def _list_worktrees(repo: str) -> list[tuple[str, str | None]]:
     """Return [(worktree_path_realpath, branch_or_None), ...] for the repo.
     `repo` may be a worktree path; git resolves to the main checkout
     internally. We pass `-C repo` so this works either way.
@@ -39,9 +38,9 @@ def _list_worktrees(repo: str) -> list[tuple[str, Optional[str]]]:
     )
     if code != 0 or not out:
         return []
-    rows: list[tuple[str, Optional[str]]] = []
-    current_path: Optional[str] = None
-    current_branch: Optional[str] = None
+    rows: list[tuple[str, str | None]] = []
+    current_path: str | None = None
+    current_branch: str | None = None
     for line in out.split("\n"):
         if line.startswith("worktree "):
             if current_path is not None:
@@ -59,7 +58,7 @@ def _list_worktrees(repo: str) -> list[tuple[str, Optional[str]]]:
     return [(os.path.realpath(p), b) for p, b in rows]
 
 
-def _cached_worktrees(repo: str) -> list[tuple[str, Optional[str]]]:
+def _cached_worktrees(repo: str) -> list[tuple[str, str | None]]:
     key = os.path.realpath(repo)
     now = time.time()
     with _lock:
@@ -80,7 +79,7 @@ def invalidate(repo: str) -> None:
         _cache.pop(key, None)
 
 
-def affiliation(cwd: str, pinned_dir: Optional[str], repo: Optional[str]) -> Affiliation:
+def affiliation(cwd: str, pinned_dir: str | None, repo: str | None) -> Affiliation:
     """Classify a pane's cwd relative to its project's pinned_dir + repo.
 
     Returns:

@@ -13,7 +13,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict, Optional
+from typing import TypedDict
 
 from fastapi import HTTPException
 
@@ -25,7 +25,6 @@ from periscope.tmux import _run
 from periscope.worktree_spawn import worktree_path
 from periscope.worktrees import invalidate as worktrees_invalidate
 
-
 MAIN_KEY = "__main__"
 
 
@@ -33,11 +32,11 @@ class Project(TypedDict, total=False):
     """A row in state['projects']."""
     name: str
     tmux_session: str
-    repo: Optional[str]
-    pinned_repo: Optional[str]
+    repo: str | None
+    pinned_repo: str | None
     created_at: int
-    archived_at: Optional[int]
-    base_branch: Optional[str]
+    archived_at: int | None
+    base_branch: str | None
 
 
 def _canonical_key(pinned_dir: str) -> str:
@@ -151,7 +150,7 @@ def archive_project(pinned_dir: str) -> bool:
         return True
 
 
-def resolve_project_for_window(window: dict) -> Optional[str]:
+def resolve_project_for_window(window: dict) -> str | None:
     """Map a tmux window (with `session` field) to its owning project key.
 
     Returns the pinned_dir key for a session owned by a project, MAIN_KEY
@@ -167,7 +166,9 @@ def resolve_project_for_window(window: dict) -> Optional[str]:
     """
     pane_id = window.get("pane_id")
     if pane_id:
-        from periscope import activity   # function-level: cycle-sensitivity (narrator precedent)
+        from periscope import (
+            activity,  # function-level: cycle-sensitivity (narrator precedent)
+        )
         tagged = activity.get_pane_project(pane_id)
         if tagged:
             return tagged

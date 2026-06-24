@@ -11,12 +11,16 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from periscope.activity import cached_pane_activity, stamp_pane_rename
 from periscope.channels import channel_state_for
 from periscope.git_pr import cached_git_state, cached_pr_state
-from periscope.activity import cached_pane_activity, stamp_pane_rename
 from periscope.lgtm import cached_lgtm_state
 from periscope.panes import (
-    list_windows, note_action, parse_pane, smooth_is_claude, smooth_spinner,
+    list_windows,
+    note_action,
+    parse_pane,
+    smooth_is_claude,
+    smooth_spinner,
 )
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.store import get_window

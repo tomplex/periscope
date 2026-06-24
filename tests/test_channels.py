@@ -9,9 +9,14 @@ tests cover the pure-logic surface that the listener dispatches into.
 import pytest
 
 from periscope.channels import (
-    _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
+    _CHANNEL_ALERTS,
+    _CHANNEL_UNREAD,
+    _CHANNELS_LOCK,
+    _MCP_SESSIONS,
     _channel_gc,
-    _do_notify_tool, _do_link_pr_tool, _do_link_linear_tool,
+    _do_link_linear_tool,
+    _do_link_pr_tool,
+    _do_notify_tool,
     _do_open_document_tool,
 )
 
@@ -264,7 +269,7 @@ def test_get_history_session_tool_default_tail_slice(mocker):
     assert len(body["messages"]) == 30
     assert body["messages"][0]["text"] == "msg 70"   # tail-30 by default
     assert body["messages"][-1]["text"] == "msg 99"
-    assert "messages" != body.get("final_assistant_msg")  # metadata present
+    assert body.get("final_assistant_msg") != "messages"  # metadata present
     assert body["summary"] == "s"
 
 
@@ -316,6 +321,7 @@ def test_resume_session_tool_wraps_window_new_resume(mocker):
 
 def test_resume_session_tool_maps_http_errors(mocker):
     from fastapi import HTTPException
+
     from periscope.channels import _do_resume_session_tool
     mocker.patch(
         "periscope.routes.sessions._window_new_resume",
@@ -420,7 +426,7 @@ def test_spawn_claude_no_parent_tolerated(mocker):
 
 
 def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
-    from periscope import channels, bg_commander, open_ops
+    from periscope import bg_commander, channels, open_ops
     bg_commander.insert_job(id="c1", text="x", cwd="/tmp", at=1)   # caller IS a live commander
     handle = "cmdr:c1"
     monkeypatch.setattr(open_ops, "resolve_worktree_session",
@@ -460,7 +466,7 @@ def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
 
 
 def test_spawn_commander_non_git_cwd_errors(fresh_activity_db, monkeypatch):
-    from periscope import channels, bg_commander, open_ops
+    from periscope import bg_commander, channels, open_ops
     bg_commander.insert_job(id="c1", text="x", cwd="/tmp", at=1)
     monkeypatch.setattr(open_ops, "resolve_worktree_session", lambda cwd: None)
     monkeypatch.setattr("os.path.isdir", lambda p: True)
@@ -569,7 +575,7 @@ def test_report_routes_to_spawner(mocker):
 
 
 def test_emit_channel_event_records_full_text_into_activity(fresh_activity_db):
-    from periscope import channels, activity
+    from periscope import activity, channels
     sess = AsyncMock()
     with _CHANNELS_LOCK:
         _MCP_SESSIONS["%5"] = sess
@@ -585,7 +591,7 @@ def test_emit_channel_event_records_full_text_into_activity(fresh_activity_db):
 
 
 def test_emit_channel_event_unattached_records_nothing(fresh_activity_db):
-    from periscope import channels, activity
+    from periscope import activity, channels
     sent = asyncio.run(channels.emit_channel_event("%nope", "hi"))
     assert sent is False
     assert activity.events_for("%nope", None, None) == []
@@ -731,9 +737,9 @@ def test_is_commander_checks_the_cmdr_prefix():
 
 
 def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_activity_db, mocker):
+    from periscope import activity
     from periscope.channels import _do_list_workspaces_tool
     from periscope.workspaces import create_workspace
-    from periscope import activity
     ws = create_workspace(name="Auth", base_repo="/d/fdy", base_worktree="/d/fdy-auth")
     activity.set_pane_workspace("%1", ws["id"])
     activity.set_pane_workspace("%99", ws["id"])   # dead pane — excluded from count
@@ -750,7 +756,7 @@ def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_act
 
 def test_list_workspaces_tool_excludes_archived(clean_state, fresh_activity_db, mocker):
     from periscope.channels import _do_list_workspaces_tool
-    from periscope.workspaces import create_workspace, archive_workspace
+    from periscope.workspaces import archive_workspace, create_workspace
     ws = create_workspace(name="Gone")
     archive_workspace(ws["id"])
     mocker.patch("periscope.channels.list_windows", return_value=[])

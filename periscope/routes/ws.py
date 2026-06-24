@@ -13,10 +13,10 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from periscope import tmux_input, tmux_mirror
 from periscope.log import _task
 from periscope.panes import note_action
 from periscope.tmux import tmux
-from periscope import tmux_input, tmux_mirror
 
 router = APIRouter()
 

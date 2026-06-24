@@ -5,7 +5,10 @@ from unittest.mock import MagicMock
 
 from periscope.narrator import build_narrator_prompt
 from periscope.rename_ai import (
-    RENAME_RULES, build_rename_prompt, claude_complete, transcript_summary,
+    RENAME_RULES,
+    build_rename_prompt,
+    claude_complete,
+    transcript_summary,
     transcript_summary_from_path,
 )
 

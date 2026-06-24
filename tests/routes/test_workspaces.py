@@ -1,5 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
+
 from periscope.app import app
 
 client = TestClient(app)
