@@ -184,7 +184,7 @@ status line — acceptable for a hidden orchestrator.)
   `list_claudes` + `peek` already give the commander read-state.
 - **Re-gate**: `_require_first_mate` → `_require_commander` (same singleton-marker
   check). Continues to guard `captains_log_read/append`.
-- **Add two MCP tools** (today these capabilities are HTTP-only):
+- **Add three MCP tools** (today these capabilities are HTTP-only):
   - `create_workspace(name, base_repo?)` → `workspaces.create_workspace(name=…,
     base_repo=…)`, returns the new workspace's `id`.
   - `open(path? | repo+branch? | repo+pr?)` → `open_ops.open_target` over the
@@ -194,17 +194,25 @@ status line — acceptable for a hidden orchestrator.)
     and ignores `OpenResult.ui`. `repo+branch` already creates the worktree if
     absent, so "create a worktree for X" is `open(repo, branch)` — no separate
     tool.
+  - `catalog()` → `open_ops.build_catalog()` (HTTP-free), returning
+    `{repos:[{repo,label,default_branch,branches}], worktrees:[{path,repo,branch,is_main}]}`.
+    This is the commander's view of *dormant* repos + worktrees — `list_claudes`
+    only shows live sessions. It grounds placement guesses (see Placement).
 
   These are general channel tools (any pane could use them); not commander-gated.
 
-- **`spawn_claude` default for the commander.** `_do_spawn_claude_tool` defaults
-  `workspace="same"`, which would place a spawned worker as a window in the
-  *commander's own hidden session* — invisible and misfiled. Change the handler
-  so that **when the caller pane is the commander**, `workspace` defaults to
-  `"new"` (anchored to the spawn's `cwd` worktree as its own rail item). The role
-  prompt also mandates explicit `workspace="new"` + `cwd`. Failure mode if both
-  the default and the prompt are bypassed: the worker silently nests under the
-  hidden commander session — call this out for the implementer.
+- **`spawn_claude` is cwd-anchored for the commander.** `_do_spawn_claude_tool`
+  defaults `workspace="same"`, deriving the session from the caller — which for
+  the commander is its *own hidden session*, so a forgotten arg would misfile the
+  worker there (invisible, nested under the commander). Change the handler so that
+  **when the caller pane is the commander, placement derives from `cwd` (or an
+  explicit `session`), never the caller's session**: run `cwd` through
+  `resolve_worktree_session` (the `workspace="new"` path) so the worker lands in
+  the cwd's project/worktree session — a window in the main checkout when
+  `cwd=<repo root>`, the worktree's session when `cwd=<worktree path>`. The
+  commander's own session is never a spawn target. (This subsumes the cruder
+  "always new" guard: "new" is cwd-anchored, and which cwd the commander picks
+  *is* the placement decision — see Placement.)
 
 The commander **inherits the rest of the existing channel toolset** by virtue of
 being a pane: `spawn_claude`, `send_to`, `list_claudes`, `peek`, `report`,
@@ -265,6 +273,34 @@ those tools — only the dashboard rail hides it.
   server-side (today `useEscape` closes the whole omnibox). Disable input/send
   while a turn is in flight ("commander busy").
 
+## Placement
+
+Where a spawned worker lands — the **main project checkout**, a **fresh
+worktree**, or an **existing project/worktree** — is a per-command judgment the
+commander makes from the request + current context. The user specifies when they
+can; otherwise the commander best-guesses. Each placement is just a choice of
+`cwd` (and whether to create a worktree first):
+
+| Placement | How |
+|---|---|
+| Main project checkout | `spawn_claude(cwd=<repo root>)` → a window in the project's main session. |
+| Fresh worktree | `open(repo, branch=<new>)` (creates the worktree + its own rail item), then spawn into it — or `spawn_claude(cwd=<worktree path>)`. |
+| Existing project / worktree | `spawn_claude(cwd=<that dir>)`, or `open(path=<that dir>)` to focus it. |
+
+**Inference heuristics** (encoded in the role prompt):
+- Signals → worktree: a PR, a refactor, "try/experiment", risky or branch-y work,
+  anything the user wouldn't want touching the main checkout.
+- Signals → main checkout: a quick edit, a question, "look at", read-mostly work.
+- "in <project/repo>" → that project, in its main checkout unless the task says
+  otherwise.
+- **Tiebreak when genuinely ambiguous → fresh worktree.** A stray worktree is
+  cheap to discard; polluting the main checkout isn't. No ask-back — best-guess
+  and proceed (the console shows the choice; the user corrects if wrong).
+
+The commander uses `catalog()` (dormant repos + worktrees) and `list_claudes`
+(live sessions) + `Grep`/`Read` to resolve which repo and whether a suitable
+worktree already exists before choosing.
+
 ## Role prompt
 
 Rewrite `ROLE_PROMPT` from observer to orchestrator. Shape (not final wording):
@@ -272,14 +308,17 @@ Rewrite `ROLE_PROMPT` from observer to orchestrator. Shape (not final wording):
 - You are periscope's commander. The user sends you commands from the omnibox;
   act on them immediately with your tools.
 - You orchestrate, you don't edit. To do work in a repo, **spawn a worker**
-  (`spawn_claude` with `workspace="new"` and an explicit `cwd`) with a clear
-  first-message prompt and the right `workspace_id`; the worker has full tools.
-  You have read-only code access (`Read`/`Grep`/`Glob`) to understand and route —
-  resolve fuzzy references ("the attribute config refactor" → which repo/dir)
-  before acting.
-- Tools: `create_workspace`, `open` (path/branch/pr — `open(repo, branch)`
-  creates a worktree), `spawn_claude`, `list_claudes`, `peek`, `send_to`, the
-  captain's log.
+  (`spawn_claude` with an explicit `cwd`) with a clear first-message prompt and
+  the right `workspace_id`; the worker has full tools. You have read-only code
+  access (`Read`/`Grep`/`Glob`) to understand and route — resolve fuzzy references
+  ("the attribute config refactor" → which repo/dir) before acting.
+- **Choose placement** (main checkout / worktree / existing project) per the
+  Placement heuristics: pick the worker's `cwd` accordingly, creating a worktree
+  first with `open(repo, branch)` when the task wants isolation; tiebreak to a
+  fresh worktree when ambiguous. The user specifies when they can — honor it.
+- Tools: `catalog` (repos + worktrees), `create_workspace`, `open` (path/branch/pr
+  — `open(repo, branch)` creates a worktree), `spawn_claude`, `list_claudes`,
+  `peek`, `send_to`, the captain's log.
 - Best-guess and proceed; narrate what you did concisely so the console reads
   cleanly. Keep the absolute prohibitions (never merge an fdy PR, never
   force-push, never prod-touching actions).
@@ -330,11 +369,14 @@ Two independent tool layers:
 
 ## Testing
 
-- **New MCP tools** `create_workspace` / `open` get handler tests with stubbed
-  `workspaces.create_workspace` / `open_ops.open_target` (the real-tmux
-  integration tests in `tests/test_open_ops.py` already cover `open_target`).
-- **`spawn_claude` commander default**: a test that a spawn whose caller is the
-  marked commander pane defaults to `workspace="new"` (not `"same"`).
+- **New MCP tools** `create_workspace` / `open` / `catalog` get handler tests with
+  stubbed `workspaces.create_workspace` / `open_ops.open_target` /
+  `open_ops.build_catalog` (the real-tmux integration tests in
+  `tests/test_open_ops.py` already cover `open_target`).
+- **`spawn_claude` commander cwd-anchoring**: a test that a spawn whose caller is
+  the marked commander pane derives its session from `cwd` (via
+  `resolve_worktree_session`), never the commander's own caller session — for
+  `cwd=<repo root>` and `cwd=<worktree path>`.
 - **Commander spawn** adapts the existing real-tmux test
   (`tests/test_first_mate_spawn.py`) to the renamed `_spawn_commander` (asserts
   spawn → marker; the supervisor respawn-loop assertions are dropped).
