@@ -30,6 +30,7 @@ import time
 import uuid
 from typing import Any
 
+from periscope import workspaces
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
 from periscope.panes import list_windows, note_focus, note_action
@@ -593,6 +594,57 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         "workspace_id": tagged_workspace,
     }
     return _tool_result(body)
+
+
+def _do_create_workspace_tool(pane: str, arguments: dict):
+    """Create a periscope workspace (goal-scoped rail group)."""
+    from periscope import workspaces
+    name = str(arguments.get("name", "")).strip()
+    if not name:
+        return _tool_result({"ok": False, "error": "name is required"})
+    base_repo = (arguments.get("base_repo") or None)
+    # create_workspace returns a DICT (Workspace TypedDict), not an object —
+    # subscript access, NOT ws.id (the structure proposal §7 is wrong on this).
+    ws = workspaces.create_workspace(name=name, base_repo=base_repo)
+    return _tool_result({"ok": True, "workspace_id": ws["id"], "name": ws["name"]})
+
+
+def _open_descriptor(arguments: dict):
+    """dict -> open_ops.Descriptor. Mirrors routes/open.py:_to_descriptor but
+    over a tool-args dict and raising ValueError (the tool maps it to an error)."""
+    from periscope import open_ops
+    path = arguments.get("path")
+    repo = arguments.get("repo")
+    branch = arguments.get("branch")
+    pr = arguments.get("pr")
+    if path and not (repo or branch or pr):
+        return open_ops.PathTarget(path=str(path))
+    if repo and branch and pr is None and not path:
+        return open_ops.BranchTarget(repo=str(repo), branch=str(branch))
+    if repo and pr is not None and not (path or branch):
+        return open_ops.PRTarget(repo=str(repo), pr=int(pr))
+    raise ValueError("exactly one of {path | repo+branch | repo+pr} required")
+
+
+def _do_open_tool(pane: str, arguments: dict):
+    """Open a path / branch / PR into the rail (creates a worktree for repo+branch)."""
+    from periscope import open_ops
+    # Broad except on purpose: _open_descriptor raises ValueError for bad args,
+    # but open_target's branch/PR paths (spawn_worktree / fetch_pr_into_worktree)
+    # raise arbitrary git/subprocess errors — all become a clean tool error frame.
+    try:
+        descriptor = _open_descriptor(arguments)
+        result = open_ops.open_target(descriptor)
+    except Exception as e:
+        return _tool_result({"ok": False, "error": str(e)})
+    return _tool_result({"ok": True, "tmux_session": result.tmux_session,
+                         "repo": result.repo, "pane_id": result.claude_pane_id})
+
+
+def _do_catalog_tool(pane: str, arguments: dict):
+    """List discoverable repos + their worktrees (dormant + live)."""
+    from periscope import open_ops
+    return _tool_result({"ok": True, **open_ops.build_catalog()})
 
 
 def _do_search_history_tool(pane: str, arguments: dict):
@@ -1372,6 +1424,37 @@ _CHANNEL_TOOLS = [
             "required": ["kind", "text"],
         },
         "handler": _do_captains_log_append_tool,
+    },
+    {
+        "name": "create_workspace",
+        "description": ("Create a periscope workspace — a goal-scoped rail group "
+                        "that spawned tabs can be tagged into (pass the returned "
+                        "workspace_id to spawn_claude). Args: name, optional base_repo."),
+        "inputSchema": {"type": "object", "properties": {
+            "name": {"type": "string"},
+            "base_repo": {"type": "string", "description": "absolute repo path (optional)"},
+        }, "required": ["name"]},
+        "handler": _do_create_workspace_tool,
+    },
+    {
+        "name": "open",
+        "description": ("Materialize a session into the rail. Exactly one of: "
+                        "{path} to open a directory; {repo, branch} to open (and "
+                        "create if absent) a worktree; {repo, pr} to fetch a PR "
+                        "into a worktree. 'create a worktree for X' = open(repo, branch=X)."),
+        "inputSchema": {"type": "object", "properties": {
+            "path": {"type": "string"}, "repo": {"type": "string"},
+            "branch": {"type": "string"}, "pr": {"type": "integer"},
+        }},
+        "handler": _do_open_tool,
+    },
+    {
+        "name": "catalog",
+        "description": ("List discoverable repos and their worktrees (dormant + "
+                        "live) to ground placement decisions. Git-subprocess-heavy "
+                        "— call once per command and reuse; do not poll."),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _do_catalog_tool,
     },
 ]
 

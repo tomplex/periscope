@@ -703,3 +703,38 @@ def test_list_workspaces_tool_excludes_archived(clean_state, fresh_activity_db, 
     mocker.patch("periscope.channels.list_windows", return_value=[])
     r = _body(_do_list_workspaces_tool("%1", {}))
     assert all(w["id"] != ws["id"] for w in r["workspaces"])
+
+
+def test_create_workspace_tool(monkeypatch):
+    from periscope import channels
+    monkeypatch.setattr(channels.workspaces, "create_workspace",
+                        lambda *, name, base_repo=None: {"id": "ws_x", "name": name})
+    res = channels._do_create_workspace_tool("%1", {"name": "x", "base_repo": "/r"})
+    body = _body(res)
+    assert body["ok"] is True and body["workspace_id"] == "ws_x"
+
+
+def test_open_tool_dispatches_path(monkeypatch):
+    from periscope import channels, open_ops
+    seen = {}
+    def fake_open(desc):
+        seen["desc"] = desc
+        class R: tmux_session="s"; repo="/r"; claude_pid="@1"; claude_pane_id="%2"; ui={}
+        return R()
+    monkeypatch.setattr(open_ops, "open_target", fake_open)
+    res = channels._do_open_tool("%1", {"path": "/r"})
+    body = _body(res)
+    assert body["ok"] is True and isinstance(seen["desc"], open_ops.PathTarget)
+
+
+def test_open_tool_bad_args(monkeypatch):
+    from periscope import channels
+    res = channels._do_open_tool("%1", {})   # none of path|repo+branch|repo+pr
+    assert _body(res)["ok"] is False
+
+
+def test_catalog_tool(monkeypatch):
+    from periscope import channels, open_ops
+    monkeypatch.setattr(open_ops, "build_catalog", lambda: {"repos": [], "worktrees": []})
+    res = channels._do_catalog_tool("%1", {})
+    assert _body(res)["ok"] is True
