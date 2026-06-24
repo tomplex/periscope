@@ -25,6 +25,7 @@ const KIND_META = {
   newbranch:{ group: "Branches",     icon: "+" },
   repo:     { group: "Repositories", icon: "◳" },
   workspace:{ group: "Workspaces",   icon: "▧" },
+  command:  { group: "Command",       icon: "⚡" },
 };
 
 export function OpenOmnibox() {
