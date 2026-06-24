@@ -1,58 +1,35 @@
-"""Tests for POST /api/command — deliver a free-text command to the commander."""
+"""Tests for /api/command — dispatch a free-text command as a `claude --bg`
+commander job, list jobs, and fetch a job's transcript. The route is thin —
+monkeypatch bg_commander."""
 
 
-def test_command_sends_to_commander(client, fresh_activity_db, monkeypatch):
-    from periscope import commander, activity
-    from periscope.routes import command as cmd_route
-
-    async def fake_ensure():
-        activity.set_commander(pane_id="%C", session_id=None, at=1)
-        return activity.get_commander()
-    monkeypatch.setattr(commander, "ensure_commander", fake_ensure)
-    monkeypatch.setattr(cmd_route, "list_windows",
-                        lambda: [{"pane_id": "%C", "session": "bridge", "index": 0}])
-    sent = {}
-    monkeypatch.setattr(cmd_route, "_send_to_target",
-                        lambda target, paste, keys: sent.update(target=target, paste=paste, keys=keys) or {})
-    r = client.post("/api/command", json={"text": "do a thing"})
+def test_post_command_dispatches(client, monkeypatch):
+    from periscope import bg_commander
+    monkeypatch.setattr(bg_commander, "dispatch", lambda text, **kw: "job-xyz")
+    r = client.post("/api/command", json={"text": "do it"})
     assert r.status_code == 200
-    assert r.json() == {"session": "bridge", "index": 0}
-    assert sent["paste"] == "do a thing" and sent["keys"] == ["Enter"]
-    assert sent["target"] == "bridge:0"
+    assert r.json() == {"job_id": "job-xyz"}
 
 
-def test_command_503_when_no_commander(client, monkeypatch):
-    from periscope import commander
-
-    async def fake_ensure():
-        return None
-    monkeypatch.setattr(commander, "ensure_commander", fake_ensure)
-    r = client.post("/api/command", json={"text": "x"})
-    assert r.status_code == 503
+def test_post_command_rejects_empty(client):
+    r = client.post("/api/command", json={"text": "   "})
+    assert r.status_code == 400
 
 
-def test_command_status_reports_busy(client, fresh_activity_db, monkeypatch):
-    from periscope import activity
-    from periscope.routes import command as cmd_route
-    activity.set_commander(pane_id="%C", session_id=None, at=1)
-    monkeypatch.setattr(cmd_route, "list_windows",
-                        lambda: [{"pane_id": "%C", "session": "bridge", "index": 0}])
-    monkeypatch.setattr(cmd_route, "capture", lambda target: "<pane>")
-    monkeypatch.setattr(cmd_route, "parse_pane", lambda content: {"state": "working"})
-    r = client.get("/api/command/status")
-    assert r.status_code == 200 and r.json() == {"alive": True, "running": True}
+def test_get_jobs_syncs_then_lists(client, monkeypatch):
+    from periscope import bg_commander
+    calls = {"synced": False}
+    monkeypatch.setattr(bg_commander, "sync_jobs", lambda **kw: calls.__setitem__("synced", True))
+    monkeypatch.setattr(bg_commander, "list_jobs",
+        lambda: [bg_commander.Job(id="j1", text="t", cwd="/tmp", status="done", started_at=5)])
+    r = client.get("/api/command/jobs")
+    assert r.status_code == 200
+    assert calls["synced"] is True
+    assert r.json() == [{"id": "j1", "text": "t", "status": "done", "started_at": 5}]
 
 
-def test_command_status_idle_and_absent(client, fresh_activity_db, monkeypatch):
-    from periscope import activity
-    from periscope.routes import command as cmd_route
-    # No commander marker → alive False.
-    monkeypatch.setattr(cmd_route, "list_windows", lambda: [])
-    assert client.get("/api/command/status").json() == {"alive": False, "running": False}
-    # Marked + idle → alive True, running False.
-    activity.set_commander(pane_id="%C", session_id=None, at=1)
-    monkeypatch.setattr(cmd_route, "list_windows",
-                        lambda: [{"pane_id": "%C", "session": "bridge", "index": 0}])
-    monkeypatch.setattr(cmd_route, "capture", lambda target: "<pane>")
-    monkeypatch.setattr(cmd_route, "parse_pane", lambda content: {"state": "idle"})
-    assert client.get("/api/command/status").json() == {"alive": True, "running": False}
+def test_get_job_turns_404_on_unknown(client, monkeypatch):
+    from periscope import bg_commander
+    monkeypatch.setattr(bg_commander, "get_job", lambda jid: None)
+    r = client.get("/api/command/jobs/nope/turns")
+    assert r.status_code == 404
