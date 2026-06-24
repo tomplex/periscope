@@ -175,10 +175,9 @@ def extract_record(jsonl_path: str, events: list[Event], *,
                 # Notable commands
                 if name == "Bash":
                     cmd = inp.get("command")
-                    if isinstance(cmd, str) and _is_notable_cmd(cmd):
-                        if cmd not in notable_cmds_set:
-                            notable_cmds_set.add(cmd)
-                            notable_cmds.append(cmd)
+                    if isinstance(cmd, str) and _is_notable_cmd(cmd) and cmd not in notable_cmds_set:
+                        notable_cmds_set.add(cmd)
+                        notable_cmds.append(cmd)
 
     started_at = (min(timestamps) // 1000) if timestamps else 0
     ended_at = (max(timestamps) // 1000) if timestamps else 0

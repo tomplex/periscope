@@ -115,7 +115,7 @@ def projects_adopt(body: AdoptBody):
             base_branch=branch or None,
         )
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"ok": True, "pinned_dir": pinned_dir, **row}
 
 
@@ -284,7 +284,7 @@ def projects_promote(body: PromoteBody):
             base_branch=branch or None,
         )
     except ValueError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
 
     return {"ok": True, "pinned_dir": pinned_dir, **row}
 

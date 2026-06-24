@@ -230,16 +230,23 @@ def _evaluate_worktree(
 
     # Signal 2: branch merged into default (fallback when no PR
     # state, or in addition).
-    if branch != "(detached)" and branch != default:
-        if _is_branch_merged(repo, branch, default):
-            if not any(s["kind"].startswith("pr_") for s in signals):
-                signals.append({"kind": "branch_merged", "label": f"branch merged into {default}"})
+    if (
+        branch != "(detached)"
+        and branch != default
+        and _is_branch_merged(repo, branch, default)
+        and not any(s["kind"].startswith("pr_") for s in signals)
+    ):
+        signals.append({"kind": "branch_merged", "label": f"branch merged into {default}"})
 
     # Signal 3: remote branch deleted. Skipped for fork PRs
     # where the local branch was never on origin.
-    if branch != "(detached)" and branch != default and not is_fork:
-        if not _remote_branch_exists(repo, branch):
-            signals.append({"kind": "remote_gone", "label": f"origin/{branch} deleted"})
+    if (
+        branch != "(detached)"
+        and branch != default
+        and not is_fork
+        and not _remote_branch_exists(repo, branch)
+    ):
+        signals.append({"kind": "remote_gone", "label": f"origin/{branch} deleted"})
 
     # Signal 4: idle. Days since last commit on the worktree's
     # HEAD; only flagged when no active tmux session AND

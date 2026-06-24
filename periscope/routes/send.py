@@ -53,7 +53,7 @@ def _send_to_target(target: str, paste: str | None, keys: list[str]) -> dict:
         if keys:
             tmux("send-keys", "-t", target, *keys)
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
     note_focus(target)
     note_action(target)
     return {"target": target, "ok": True}

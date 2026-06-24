@@ -159,7 +159,7 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
         try:
             index = int(msg)
         except ValueError:
-            raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
+            raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
         target = f"{session}:{index}"
         _send_and_stamp(target, f"{CLAUDE_EXEC} --resume {resume_id}")
         _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
@@ -182,7 +182,7 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
     try:
         index = int(msg)
     except ValueError:
-        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
+        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()
@@ -244,7 +244,7 @@ def _window_new_plain(session: str, exec_cmd: str, mode: str) -> dict:
     try:
         index = int(msg)
     except ValueError:
-        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
+        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()
@@ -330,10 +330,8 @@ def window_new_worktree(
     #     The user's unpushed work on the project's branch is included.
     #   - base_branch null (legacy projects): fall back to repo default
     #     branch with fetch=True (defaults are pushed, fetch is safe).
-    if base_branch:
-        spawn_kwargs = {"base_branch": base_branch, "fetch": False}
-    else:
-        spawn_kwargs = {}  # uses detected default + fetch=True
+    # base_branch set → fork from local ref (fetch=False); null → detected default + fetch=True.
+    spawn_kwargs = {"base_branch": base_branch, "fetch": False} if base_branch else {}
 
     try:
         res = spawn_worktree(repo, branch, **spawn_kwargs)
@@ -350,7 +348,7 @@ def window_new_worktree(
         # (network, disk full, etc.) fall through to 400.
         msg = str(e)
         status = 409 if "already exists" in msg else 400
-        raise HTTPException(status, msg)
+        raise HTTPException(status, msg) from e
     wt_path = res["path"]
     warning = res.get("warning")
 
@@ -369,7 +367,7 @@ def window_new_worktree(
     try:
         index = int(msg)
     except ValueError:
-        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
+        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()

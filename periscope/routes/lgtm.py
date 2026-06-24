@@ -41,7 +41,7 @@ async def lgtm_start(body: LgtmStartBody):
             r.raise_for_status()
             payload = r.json()
     except (httpx.HTTPError, OSError) as e:
-        raise HTTPException(500, f"lgtm unreachable: {e}")
+        raise HTTPException(500, f"lgtm unreachable: {e}") from e
 
     # Refresh the cache now so the response carries the freshly-registered
     # session — the caller can use the URL immediately to mount the iframe
@@ -105,7 +105,7 @@ async def lgtm_add_doc(body: LgtmAddDocBody):
             r.raise_for_status()
             payload = r.json()
     except (httpx.HTTPError, OSError) as e:
-        raise HTTPException(500, f"lgtm unreachable: {e}")
+        raise HTTPException(500, f"lgtm unreachable: {e}") from e
 
     await _lgtm_refresh_all()
     item_id = payload.get("id")
@@ -134,7 +134,7 @@ async def lgtm_remove_item(
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.delete(f"{LGTM_BASE_URL}/project/{slug}/items/{item}")
     except (httpx.HTTPError, OSError) as e:
-        raise HTTPException(500, f"lgtm unreachable: {e}")
+        raise HTTPException(500, f"lgtm unreachable: {e}") from e
 
     if r.status_code == 404:
         raise HTTPException(404, "item not found")

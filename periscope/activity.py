@@ -616,8 +616,7 @@ def cached_pane_activity(target, pane_id, path, branch, limit=40):
                 _git_fetching.add(key)
                 _bg("activity-git-fetch", _fetch_git_into_cache, path, branch)
             git_events = cached[1] if cached else []
-        for e in git_events:
-            events.append({**e, "src": "git"})
+        events.extend({**e, "src": "git"} for e in git_events)
     # Persisted events (alerts, resets).
     events.extend(events_for(pane_id, path, branch, limit=limit))
     # Per-target "opened in periscope" anchor.
@@ -718,9 +717,12 @@ def _recent_compact_meta(jsonl_path) -> dict | None:
             d = json.loads(line)
         except Exception:
             continue
-        if d.get("type") == "system" and d.get("subtype") == "compact_boundary":
-            if _compact_is_recent(d.get("timestamp") or ""):
-                return d.get("compactMetadata") or {}
+        if (
+            d.get("type") == "system"
+            and d.get("subtype") == "compact_boundary"
+            and _compact_is_recent(d.get("timestamp") or "")
+        ):
+            return d.get("compactMetadata") or {}
     return None
 
 

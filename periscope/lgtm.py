@@ -172,7 +172,7 @@ async def _lgtm_sse_loop(slug: str) -> None:
     backoff = 1.0
     while True:
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=None) as client:  # noqa: SIM117 — inner stream() needs the bound client
                 async with client.stream("GET", url) as r:
                     if r.status_code != 200:
                         raise httpx.HTTPError(f"sse status {r.status_code}")

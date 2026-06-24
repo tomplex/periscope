@@ -460,9 +460,7 @@ def _rerank(rows: list[dict], query: str) -> list[dict]:
                         reordered.append(row)
                 # Append any candidates the model omitted at the end
                 seen = {r["session_id"] for r in reordered}
-                for r in rows:
-                    if r["session_id"] not in seen:
-                        reordered.append(r)
+                reordered.extend(r for r in rows if r["session_id"] not in seen)
                 return reordered
     except Exception as e:
         log.warning("rerank: model call failed (%s) — preserving FTS order", e)

@@ -261,7 +261,7 @@ def _resolve_pr_metadata(repo: str, pr: int) -> dict:
     try:
         return json.loads(out)
     except json.JSONDecodeError as e:
-        raise HTTPException(500, f"gh pr view returned invalid JSON: {e}")
+        raise HTTPException(500, f"gh pr view returned invalid JSON: {e}") from e
 
 
 def _fetch_pr_branch(repo: str, pr: int, local_branch: str) -> None:

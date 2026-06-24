@@ -66,7 +66,7 @@ def auto_rename_session(session: str):
     try:
         result = claude_complete(prompt)
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
 
     # Claude sometimes wraps JSON in code fences despite instructions; strip.
     cleaned = result.strip()
@@ -75,7 +75,7 @@ def auto_rename_session(session: str):
     try:
         new_names = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        raise HTTPException(500, f"claude returned invalid JSON: {e}")
+        raise HTTPException(500, f"claude returned invalid JSON: {e}") from e
 
     applied = []
     for index_str, new_name in new_names.items():
@@ -111,7 +111,7 @@ def auto_rename_window(session: str, index: int):
     try:
         current_name, cwd = pane_meta(target)
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
 
     # Single-window pid resolution: build a one-element list and reuse the
     # batch helper so `last_seen` stays current for this window too.
@@ -125,7 +125,7 @@ def auto_rename_window(session: str, index: int):
         content = capture(target, lines=80)
         parsed = parse_pane(content)
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
     plain = re.sub(r"\x1b\[[\d;]*m", "", content)
     snippet_lines = [ln for ln in plain.split("\n") if ln.strip()][-20:]
     snippet = "\n    ".join(snippet_lines)[-1200:]
@@ -147,14 +147,14 @@ def auto_rename_window(session: str, index: int):
     try:
         result = claude_complete(prompt)
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
     cleaned = result.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.MULTILINE)
     try:
         new_names = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        raise HTTPException(500, f"claude returned invalid JSON: {e}")
+        raise HTTPException(500, f"claude returned invalid JSON: {e}") from e
     new_name = (new_names.get(str(index)) or "").strip()
     if not new_name:
         raise HTTPException(500, "claude returned empty name")

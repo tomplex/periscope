@@ -39,8 +39,8 @@ def alerts_recent(limit: int = Query(100, ge=1, le=500)):
         if not w:
             continue
         target = f"{w['session']}:{w['index']}"
-        for r in alerts:
-            items.append({
+        items.extend(
+            {
                 "id": r.get("id") or "",
                 "ts": int(r.get("ts") or 0),
                 "kind": r.get("kind") or "info",
@@ -51,7 +51,9 @@ def alerts_recent(limit: int = Query(100, ge=1, le=500)):
                 "session": w["session"],
                 "index": w["index"],
                 "name": w["name"],
-            })
+            }
+            for r in alerts
+        )
 
     items.sort(key=lambda x: x["ts"], reverse=True)
     return {"items": items[:limit]}

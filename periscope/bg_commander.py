@@ -213,7 +213,7 @@ def dispatch(text: str, *, cwd: str | None = None) -> str:
         )
     except (subprocess.SubprocessError, OSError) as e:
         log.warning("bg commander dispatch failed: %s", e)
-        raise RuntimeError(f"bg commander dispatch failed: {e}")
+        raise RuntimeError(f"bg commander dispatch failed: {e}") from e
     session_id = _parse_session_id(proc.stdout or "")
     if not session_id:
         log.warning("bg dispatch: no session id in output (stdout=%r stderr=%r)",
