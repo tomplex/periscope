@@ -180,6 +180,36 @@ def resolve_project_for_window(window: dict) -> Optional[str]:
     return MAIN_KEY
 
 
+def placement_kill_set(project_key: str, windows: list[dict]) -> list[tuple[str, str]]:
+    """The panes whose rail placement is `project_key`'s worktree row, as
+    `[(target, pane_id)]` for kill-pane. A pane is in the group iff it is NOT
+    placed in a live workspace AND it resolves to `project_key` — the SAME rule
+    the rail renders the row by, so close kills exactly what is shown.
+
+    Workspace exclusion uses `resolve_workspace_for_window` (not the raw tag):
+    a pane tagged into an *archived/deleted* workspace folds back to its
+    worktree row, so it must be killed. Membership reuses
+    `resolve_project_for_window` (tag-first + session fallback) so an
+    untagged-but-managed pane (e.g. a `window_new` tab) is still included.
+
+    Refuses MAIN_KEY/dev — an unguarded dev group would mass-kill every
+    unmanaged pane on the machine.
+    """
+    if project_key == MAIN_KEY:
+        raise ValueError("refusing to kill the __main__/dev group")
+    from periscope.workspaces import resolve_workspace_for_window
+    out: list[tuple[str, str]] = []
+    for w in windows:
+        pane_id = w.get("pane_id")
+        if not pane_id:
+            continue
+        if resolve_workspace_for_window(w) is not None:
+            continue  # placed in a live workspace → not in this worktree row
+        if resolve_project_for_window(w) == project_key:
+            out.append((f"{w['session']}:{w['index']}", pane_id))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # PR-fetch helpers (moved from routes/projects.py)
 # ---------------------------------------------------------------------------
