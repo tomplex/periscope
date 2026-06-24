@@ -214,7 +214,7 @@ def _evaluate_worktree(
         # tied to this project's tmux session that has linked_pr
         # set. Tmux session names are unique per project (adopt
         # would 409 on collision) so this correctly scopes.
-        for pid, ann in windows_snapshot.items():
+        for ann in windows_snapshot.values():
             last = ann.get("last_seen") or {}
             if last.get("session") == tmux_session and ann.get("linked_pr"):
                 linked_pr = ann["linked_pr"]

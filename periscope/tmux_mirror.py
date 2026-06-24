@@ -16,6 +16,7 @@ docs/superpowers/specs/2026-06-10-terminal-mirror-reconciliation-design.md
 """
 
 import asyncio
+import contextlib
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -427,10 +428,8 @@ class _SessionMirror:
 
     def _kill(self) -> None:
         if self._proc is not None and self._proc.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 self._proc.terminate()
-            except ProcessLookupError:
-                pass
         # reader sees EOF → _finalize
 
     def _finalize(self) -> None:
@@ -480,8 +479,6 @@ async def shutdown() -> None:
         if mirror._reader is not None:
             mirror._reader.cancel()
         if mirror._proc is not None and mirror._proc.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 mirror._proc.terminate()
-            except ProcessLookupError:
-                pass
     _MIRRORS.clear()

@@ -93,10 +93,7 @@ def safe_read(cwd: str, raw_path: str,
         candidate = candidate.rsplit(":", 1)[0]
 
     expanded = os.path.expanduser(candidate)
-    if os.path.isabs(expanded):
-        target = Path(expanded)
-    else:
-        target = cwd_p / expanded
+    target = Path(expanded) if os.path.isabs(expanded) else cwd_p / expanded
     try:
         resolved = target.resolve()
     except OSError:

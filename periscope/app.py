@@ -8,7 +8,7 @@ documented in the design spec.
 
 import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -143,16 +143,12 @@ async def lifespan(_app: FastAPI):
         for t in list(_LGTM_SSE_TASKS.values()):
             t.cancel()
         if mcp_task is not None:
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await mcp_task
-            except (asyncio.CancelledError, Exception):
-                pass
             # Lifespan owns socket cleanup; periscope.channels never
             # unlinks MCP_SOCKET_PATH (see spec §"MCP_SOCKET_PATH cleanup").
-            try:
+            with suppress(FileNotFoundError):
                 os.unlink(MCP_SOCKET_PATH)
-            except FileNotFoundError:
-                pass
 
 
 app = FastAPI(lifespan=lifespan)

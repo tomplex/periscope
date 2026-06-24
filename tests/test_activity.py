@@ -297,9 +297,9 @@ def test_prune_usage_samples_drops_old_rows():
 # --- pane_status: narrator storage ---------------------------------------
 
 def _status_row(pane_id="%1", **over):
-    base = dict(pane_id=pane_id, session_id="sid-a",
-                status="fixing flaky reconcile test", generated_at=1000,
-                jsonl_size=2048, seen_name="claude", renamed_at=None)
+    base = {"pane_id": pane_id, "session_id": "sid-a",
+                "status": "fixing flaky reconcile test", "generated_at": 1000,
+                "jsonl_size": 2048, "seen_name": "claude", "renamed_at": None}
     base.update(over)
     return activity.PaneStatusRow(**base)
 

@@ -23,6 +23,7 @@ listener here only removes a stale socket file on startup before binding.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import threading
@@ -809,10 +810,8 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
 async def _mcp_listener() -> None:
     """Bind the unix socket and accept connections from channel_shim.py.
     Each connection runs a fresh per-pane MCP Server in _handle_mcp_connection."""
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.unlink(MCP_SOCKET_PATH)
-    except FileNotFoundError:
-        pass
 
     server = await asyncio.start_unix_server(
         _handle_mcp_connection, path=MCP_SOCKET_PATH
@@ -831,10 +830,8 @@ async def _mcp_listener() -> None:
         # the lifespan handler so every dev save hangs the server.
         server.close()
         server.close_clients()
-        try:
+        with contextlib.suppress(TimeoutError, Exception):
             await asyncio.wait_for(server.wait_closed(), timeout=1.0)
-        except (TimeoutError, Exception):
-            pass
 
 
 async def _handle_mcp_connection(
@@ -856,7 +853,7 @@ async def _handle_mcp_connection(
             pane = hello.get("pane", "")
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
-        if not (pane.startswith("%") or pane.startswith("cmdr:")):
+        if not (pane.startswith(("%", "cmdr:"))):
             return
 
         await _run_mcp_for_pane(reader, writer, pane)

@@ -43,9 +43,10 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PIE", "RET", "PERF"]
 ignore = ["E501", "E701", "E702"]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests group imports under section-divider comments on purpose.
-"tests/**" = ["E402"]
-"history/tests/**" = ["E402"]
+# Tests group imports under section-divider comments on purpose (E402) and
+# bind small lambda fixtures to names for readability (E731).
+"tests/**" = ["E402", "E731"]
+"history/tests/**" = ["E402", "E731"]
 
 [tool.ty.environment]
 python-version = "3.11"

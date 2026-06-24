@@ -18,6 +18,7 @@ internals (version-tagged), so every read degrades to None on a shape change.
 
 Imports only stdlib — no periscope.* — so it stays a leaf the resolver layer
 (turns.py / window_view.py) can depend on freely."""
+import contextlib
 import json
 import subprocess
 import time
@@ -86,10 +87,8 @@ def _live_claude_pids() -> set[int]:
                 continue
             pid_s, _, comm = line.partition(" ")
             if "claude" in comm.lower():
-                try:
+                with contextlib.suppress(ValueError):
                     pids.add(int(pid_s))
-                except ValueError:
-                    pass
     except (OSError, subprocess.SubprocessError):
         pass
     _claude_pids_cache = (now, pids)

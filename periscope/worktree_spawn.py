@@ -78,10 +78,7 @@ def _resolve_layout(repo: str) -> str:
             detected.add("sibling")
         elif wt_real.startswith(os.path.join(repo_real, ".worktrees") + "/"):
             detected.add("inline")
-    if len(detected) == 1:
-        layout = next(iter(detected))
-    else:
-        layout = default
+    layout = next(iter(detected)) if len(detected) == 1 else default
 
     # Record + persist.
     new_overrides = {**overrides, repo_real: layout}

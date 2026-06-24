@@ -10,6 +10,7 @@ def _patch(mocker, base_path, name, **kwargs):
             return mocker.patch(prefix, **kwargs)
         except (AttributeError, ModuleNotFoundError):
             continue
+    return None
 
 
 def test_auto_rename_session_applies_new_names(client, mocker):
@@ -51,7 +52,7 @@ def test_auto_rename_session_unknown_session_returns_error(client, mocker):
 
 def test_auto_rename_window_applies(client, mocker):
     # display-message returns "name\tcwd".
-    tmux_mock = _patch(mocker, "server", "tmux", return_value="oldname\t/tmp")
+    _patch(mocker, "server", "tmux", return_value="oldname\t/tmp")
     _patch(mocker, "server", "stamp_pane_rename")
     _patch(mocker, "server", "_attach_git_then_resolve_pids")
     _patch(mocker, "server", "capture", return_value="some output")

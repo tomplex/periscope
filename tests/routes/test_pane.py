@@ -7,6 +7,7 @@ def _patch(mocker, name, **kwargs):
             return mocker.patch(prefix, **kwargs)
         except (AttributeError, ModuleNotFoundError):
             continue
+    return None
 
 
 def test_pane_returns_parsed_payload(client, mocker):

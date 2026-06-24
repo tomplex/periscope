@@ -342,9 +342,7 @@ def _is_chrome_line(line: str) -> bool:
         return True
     if "github.com/" in line and line.count("|") >= 3:
         return True
-    if SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line):
-        return True
-    return False
+    return bool(SPINNER_RE.match(line) or ACTIVE_OP_RE.match(line))
 
 
 def _detect_status(lines: list[str]) -> dict | None:
@@ -412,7 +410,7 @@ def _detect_pending_input(
     Caller invokes this only when no dialog is open — `❯ 1.` would
     otherwise read as the dialog's selection line, not user typing.
     """
-    for raw, plain in zip(reversed(raw_rows), reversed(plain_rows)):
+    for raw, plain in zip(reversed(raw_rows), reversed(plain_rows), strict=False):
         if not plain.strip():
             continue
         m = PROMPT_LINE_RE.match(plain.strip())

@@ -9,6 +9,7 @@ docs/superpowers/specs/2026-06-10-terminal-mirror-reconciliation-design.md
 """
 
 import asyncio
+import contextlib
 import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -117,10 +118,8 @@ async def ws_pane(
         async def forward_out():
             async for chunk in sub:
                 await websocket.send_bytes(chunk)
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.close()
-            except Exception:
-                pass
 
         forward_task = _task("ws-forward", forward_out())
 

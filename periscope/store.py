@@ -175,7 +175,7 @@ def _migrate_v1_to_v2(data: dict) -> tuple[dict, bool]:
     # doesn't count — we always want to walk tmux on a fresh file
     # to populate the regular projects.
     existing = data.get("projects") or {}
-    if any(k != MAIN_KEY_LITERAL for k in existing.keys()):
+    if any(k != MAIN_KEY_LITERAL for k in existing):
         return data, False
 
     # Lazy imports — see docstring.

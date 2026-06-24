@@ -20,6 +20,7 @@ the next keystroke.
 """
 
 import asyncio
+import contextlib
 
 from periscope.config import INPUT_CTL_SESSION
 from periscope.log import _task, log
@@ -126,8 +127,6 @@ async def shutdown() -> None:
         _drain.cancel()
         _drain = None
     if _proc is not None and _proc.returncode is None:
-        try:
+        with contextlib.suppress(Exception):
             _proc.terminate()
-        except Exception:
-            pass
     _proc = None

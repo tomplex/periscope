@@ -7,6 +7,7 @@ def _patch_tmux(mocker):
             return mocker.patch(path, return_value="")
         except (AttributeError, ModuleNotFoundError):
             continue
+    return None
 
 
 def test_send_paste_and_keys(client, mocker):

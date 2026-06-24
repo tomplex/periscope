@@ -111,8 +111,8 @@ def test_decode_split_multibyte_concatenates():
 # --- frame builder ---
 
 def _snap(**kw):
-    base = dict(rows=(b"row1", b"row2"), height=2, cursor_x=3, cursor_y=1,
-                alt_on=False, cursor_visible=True)
+    base = {"rows": (b"row1", b"row2"), "height": 2, "cursor_x": 3, "cursor_y": 1,
+                "alt_on": False, "cursor_visible": True}
     base.update(kw)
     return GridSnapshot(**base)
 

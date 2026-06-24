@@ -24,6 +24,7 @@ failure is swallowed and it always exits 0, so it can never block a prompt.
 
 Installed/removed by `bin/periscope {install-hook,uninstall-hook}`.
 """
+import contextlib
 import json
 import os
 import sqlite3
@@ -65,10 +66,8 @@ def record() -> None:
 
 
 def main() -> None:
-    try:
+    with contextlib.suppress(Exception):
         record()
-    except Exception:
-        pass
     sys.exit(0)
 
 

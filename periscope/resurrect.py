@@ -72,7 +72,7 @@ def _session_map() -> dict[str, str]:
             con.close()
     except sqlite3.Error:
         return {}
-    return {pane_id: sid for pane_id, sid in rows}
+    return dict(rows)
 
 
 def _rewrite_line(line: str, pane_map: dict[str, str], session_map: dict[str, str]) -> tuple[str, bool]:

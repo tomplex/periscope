@@ -6,6 +6,7 @@ periscope restart without /clear.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -48,10 +49,8 @@ class FakeServer:
         close_clients = getattr(self._server, "close_clients", None)
         if close_clients is not None:
             close_clients()
-        try:
+        with contextlib.suppress(TimeoutError, Exception):
             await asyncio.wait_for(self._server.wait_closed(), timeout=1.0)
-        except (TimeoutError, Exception):
-            pass
         self._server = None
 
     async def wait_for_connection(self, timeout: float = 2.0) -> None:
@@ -65,10 +64,8 @@ class FakeServer:
         self.records.append(record)
         try:
             hello = await reader.readline()
-            try:
+            with contextlib.suppress(Exception):
                 record["pane"] = json.loads(hello).get("pane")
-            except Exception:
-                pass
             self._conn_event.set()
             while True:
                 line = await reader.readline()

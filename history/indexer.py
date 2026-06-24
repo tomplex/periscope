@@ -60,9 +60,7 @@ def _row_needs_resummary(row, *, new_hash: str, target_model: str) -> bool:
         return True
     if row["summary"] is None:
         return True
-    if row["summary_input_hash"] != new_hash:
-        return True
-    return False
+    return row["summary_input_hash"] != new_hash
 
 
 def _ensure_archived(jsonl_path: Path) -> Path:
@@ -91,9 +89,7 @@ def _is_live(source_mtime: int, last_event_ts: int) -> bool:
     now = time.time()
     if last_event_ts and now - last_event_ts < LIVE_LAST_EVENT_S:
         return True
-    if source_mtime and now - source_mtime < LIVE_MTIME_S:
-        return True
-    return False
+    return bool(source_mtime and now - source_mtime < LIVE_MTIME_S)
 
 
 def _upsert(conn: sqlite3.Connection, rec: SessionRecord, *,
