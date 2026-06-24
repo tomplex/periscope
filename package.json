@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "./dev.sh",
     "build": "vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "biome lint static/src",
+    "lint:fix": "biome check --write static/src"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

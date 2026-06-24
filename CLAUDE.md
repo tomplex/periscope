@@ -72,6 +72,55 @@ smoke test every time we'd otherwise discover an SDK break only at
 runtime when a pane connects. Add cases here when you find a new
 variation, don't open a parallel framework.
 
+**Known flake:** under CPython 3.14 the pytest suite intermittently hits a
+C-level sqlite segfault in a background thread (`pysqlite_query_execute`
+during `executemany`), and `tests/test_activity.py::test_prune_usage_samples_drops_old_rows`
+can fail in the full run while passing in isolation (shared-db test
+isolation). Both are pre-existing 3.14 fragilities, not your change — re-run
+to confirm green before chasing them.
+
+## Linting & type-checking
+
+One gate, two languages. `bin/check` is the single entrypoint (`--fix`
+applies safe autofixes); `.pre-commit-config.yaml` runs the same checks on
+commit (install once with `uv tool run pre-commit install`). The gate is
+kept at **zero violations** — keep it there.
+
+```sh
+bin/check            # ruff + ty + biome, report-only
+bin/check --fix      # ruff --fix + biome --write, then check
+uv run ruff check .  # Python lint (Astral)
+uv run ty check      # Python types (Astral, pre-1.0)
+npm run lint         # UI lint (Biome); npm run lint:fix to autofix
+```
+
+Rule choices and *why* (config in `pyproject.toml` `[tool.ruff]` /
+`[tool.ty.*]` and `biome.json`):
+
+- **ruff** — deep set (`E,F,W,I,UP,B,SIM,C4,PIE,RET,PERF`). `E501`
+  (line length) and `E701`/`E702` (terse multi-statement lines) are OFF:
+  that terse style is deliberate here. Tests per-file-ignore `E402`
+  (section-divider import grouping) and `E731` (lambda fixtures).
+- **ty** gates **source only**. Tests and `build_icons.py` are excluded
+  (`[tool.ty.src] exclude`): tests are mock-heavy (`MagicMock`), so a
+  structural checker yields ~100 noise diagnostics with no bug-catching
+  value — they're verified by running them; `build_icons.py` is a manual
+  icon script with an undeclared optional dep (Pillow). One inline
+  `# ty: ignore[unresolved-attribute]` exists in `channels.py` for
+  `asyncio.Server.close_clients()` (real since 3.13; ty's typeshed lags).
+- **Biome** is a **linter only — the formatter is OFF**. An opinionated
+  formatter fights the hand-written terse style (same reason E701/E702 are
+  off on the Python side), so we keep lint + `organizeImports` without
+  reformatting. Four interaction/semantic a11y rules are off
+  (`useButtonType`, `useKeyWithClickEvents`, `noStaticElementInteractions`,
+  `useSemanticElements`): this is a personal dev dashboard, not an a11y
+  target — `onClick` lives on divs/cards by design and there is no `<form>`.
+  Scope is `static/src/**` (the Preact app); the legacy `/history` SPA,
+  vendored xterm, and the built bundle are excluded.
+
+`ruff` and `ty` are pinned in the `dev` dependency group; Biome is a
+`devDependency` (`@biomejs/biome`).
+
 ## Architecture
 
 ```
