@@ -19,6 +19,7 @@ from fastapi import HTTPException
 
 from periscope import store as _store
 from periscope.log import log
+from periscope.panes import list_windows
 from periscope.repo_locks import repo_lock
 from periscope.tmux import _run
 from periscope.worktree_spawn import worktree_path
@@ -208,6 +209,28 @@ def placement_kill_set(project_key: str, windows: list[dict]) -> list[tuple[str,
         if resolve_project_for_window(w) == project_key:
             out.append((f"{w['session']}:{w['index']}", pane_id))
     return out
+
+
+def backfill_pane_projects() -> int:
+    """One-shot: tag every live MANAGED pane with its project pinned_dir,
+    seeding `pane_projects` from today's session-derived grouping so the rail
+    is byte-identical at cutover. Unmanaged/dev panes (resolve to MAIN_KEY)
+    stay untagged. Idempotent — skips panes that already have a tag. Returns
+    the number of rows written. MUST run synchronously before serving (see
+    app.py): the collapse follow-on deletes the session-match fallback.
+    """
+    from periscope import activity
+    existing = activity.pane_project_map()
+    written = 0
+    for w in list_windows():
+        pane_id = w.get("pane_id")
+        if not pane_id or pane_id in existing:
+            continue
+        key = resolve_project_for_window(w)   # untagged → session-match
+        if key and key != MAIN_KEY:
+            activity.set_pane_project(pane_id, key)
+            written += 1
+    return written
 
 
 # ---------------------------------------------------------------------------

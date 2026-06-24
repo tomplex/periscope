@@ -98,3 +98,25 @@ def test_placement_kill_set_refuses_main(clean_state, fresh_activity_db):
     from periscope.projects import placement_kill_set, MAIN_KEY as MK
     with pytest.raises(ValueError):
         placement_kill_set(MK, [])
+
+
+def test_backfill_tags_managed_panes_only(clean_state, fresh_activity_db, monkeypatch):
+    from periscope import projects
+    create_project("/repo/a", name="a", tmux_session="sess_a")
+    monkeypatch.setattr(projects, "list_windows", lambda: [
+        {"session": "sess_a", "index": 0, "pane_id": "%m"},
+        {"session": "external", "index": 0, "pane_id": "%x"},
+    ])
+    assert projects.backfill_pane_projects() == 1
+    assert fresh_activity_db.get_pane_project("%m") == "/repo/a"
+    assert fresh_activity_db.get_pane_project("%x") is None
+
+
+def test_backfill_is_idempotent(clean_state, fresh_activity_db, monkeypatch):
+    from periscope import projects
+    create_project("/repo/a", name="a", tmux_session="sess_a")
+    monkeypatch.setattr(projects, "list_windows", lambda: [
+        {"session": "sess_a", "index": 0, "pane_id": "%m"},
+    ])
+    assert projects.backfill_pane_projects() == 1
+    assert projects.backfill_pane_projects() == 0
