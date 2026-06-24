@@ -81,18 +81,24 @@ specific enough that you won't over-call them:
   the user will want to read (spec, design doc, report, HTML output).
   Quiet: the tab appears on this pane without stealing focus.
 
-- spawn_claude(prompt, workspace?, session?, cwd?, name?): launch a fresh
-  Claude session in a new tmux window with the given prompt as its first
-  message. The new window appears on the dashboard. Use when the user
-  asks you to delegate, parallelize, or "spin up another session" — or
-  when the task at hand decomposes into independent sub-tasks that
+- spawn_claude(prompt, workspace?, session?, cwd?, name?, workspace_id?):
+  launch a fresh Claude session in a new tmux window with the given prompt
+  as its first message. The new window appears on the dashboard. Use when
+  the user asks you to delegate, parallelize, or "spin up another session"
+  — or when the task at hand decomposes into independent sub-tasks that
   each deserve their own focused context. `workspace` controls where it
   lands: "same" (default) nests it under YOUR card as fan-out/related
   sub-work (even if `cwd` is a different worktree); "new" makes it its
   own top-level dashboard item anchored to `cwd`'s worktree (new tab if
   that worktree already has a session) — for DISTINCT work tracked on its
-  own. Default `cwd` is your pane's working directory. Keep the returned
+  own. `workspace_id` (distinct from `workspace`) tags the spawned tab
+  into a goal-scoped periscope workspace — get one from list_workspaces.
+  Default `cwd` is your pane's working directory. Keep the returned
   target/pid so you can refer to the spawned pane later.
+
+- list_workspaces(): list periscope workspaces (goal-scoped rail groups)
+  with their ids, names, base repo/worktree, and live tagged-tab counts.
+  Call to discover a workspace_id to pass to spawn_claude.
 
 - search_history(query, project?, since?, limit?): full-text search
   over every past Claude session on this machine. Use it before
@@ -927,6 +933,34 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
     return _tool_result({"ok": True, "claudes": claudes})
 
 
+def _do_list_workspaces_tool(pane: str, arguments: dict):
+    """List periscope workspaces (goal-scoped rail groups) with their ids, so
+    the caller can pass a workspace_id to spawn_claude and fan tabs into a goal.
+    `tagged_tabs` counts the workspace's currently-live tagged tabs (db rows for
+    dead panes are excluded by intersecting with live pane ids)."""
+    from periscope.workspaces import all_workspaces
+    from periscope.activity import pane_workspace_map
+
+    live_panes = {w.get("pane_id") for w in list_windows() if w.get("pane_id")}
+    counts: dict[str, int] = {}
+    for pane_id, wid in pane_workspace_map().items():
+        if pane_id in live_panes:
+            counts[wid] = counts.get(wid, 0) + 1
+
+    out = [
+        {
+            "id": wid,
+            "name": w.get("name"),
+            "base_repo": w.get("base_repo"),
+            "base_worktree": w.get("base_worktree"),
+            "tagged_tabs": counts.get(wid, 0),
+        }
+        for wid, w in all_workspaces().items()
+        if not w.get("archived_at")
+    ]
+    return _tool_result({"ok": True, "workspaces": out})
+
+
 def _do_peek_tool(pane: str, arguments: dict):
     """Read another Claude's recent transcript by handle, without messaging it.
     Reads directly off the pane's recorded session id — refuses when there is
@@ -1305,6 +1339,19 @@ _CHANNEL_TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
         "handler": _do_list_claudes_tool,
+    },
+    {
+        "name": "list_workspaces",
+        "description": (
+            "List periscope workspaces — goal-scoped rail groups that several "
+            "Claude tabs can be tagged into. Returns each workspace's id, name, "
+            "base repo/worktree, and how many live tabs are currently tagged "
+            "into it. Call this to discover a workspace_id to pass to "
+            "spawn_claude (its workspace_id arg) so a spawned tab joins that "
+            "goal — do it first when fanning work out across a workspace."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _do_list_workspaces_tool,
     },
     {
         "name": "peek",

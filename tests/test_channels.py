@@ -735,3 +735,31 @@ def test_fleet_digest_tool_returns_cached_digest(fresh_activity_db):
     assert r["ok"] is True and r["digest"]["budget_pct"] == 55
     assert r["digest"]["panes"][0]["handle"] == "@1"
     first_mate._LAST_SENT = None   # reset module global for other tests
+
+
+def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_activity_db, mocker):
+    from periscope.channels import _do_list_workspaces_tool
+    from periscope.workspaces import create_workspace
+    from periscope import activity
+    ws = create_workspace(name="Auth", base_repo="/d/fdy", base_worktree="/d/fdy-auth")
+    activity.set_pane_workspace("%1", ws["id"])
+    activity.set_pane_workspace("%99", ws["id"])   # dead pane — excluded from count
+    mocker.patch("periscope.channels.list_windows", return_value=[{"pane_id": "%1"}])
+    r = _body(_do_list_workspaces_tool("%1", {}))
+    assert r["ok"] is True
+    rows = {w["id"]: w for w in r["workspaces"]}
+    assert ws["id"] in rows
+    assert rows[ws["id"]]["name"] == "Auth"
+    assert rows[ws["id"]]["base_repo"] == "/d/fdy"
+    assert rows[ws["id"]]["base_worktree"] == "/d/fdy-auth"
+    assert rows[ws["id"]]["tagged_tabs"] == 1   # %99 dead, not counted
+
+
+def test_list_workspaces_tool_excludes_archived(clean_state, fresh_activity_db, mocker):
+    from periscope.channels import _do_list_workspaces_tool
+    from periscope.workspaces import create_workspace, archive_workspace
+    ws = create_workspace(name="Gone")
+    archive_workspace(ws["id"])
+    mocker.patch("periscope.channels.list_windows", return_value=[])
+    r = _body(_do_list_workspaces_tool("%1", {}))
+    assert all(w["id"] != ws["id"] for w in r["workspaces"])
