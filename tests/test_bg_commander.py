@@ -86,3 +86,30 @@ def test_dispatch_inserts_running_row_then_popens(monkeypatch):
     assert spawned["kw"]["cwd"] == "/tmp"
     assert spawned["kw"]["env"]["PERISCOPE_CALLER_ID"] == f"cmdr:{jid}"
     assert spawned["argv"][-1] == "do it"
+
+
+def test_sync_jobs_marks_done_and_stops_present(monkeypatch):
+    bgc.insert_job(id="busy", text="x", cwd="/tmp", at=1000)
+    bgc.insert_job(id="fin",  text="y", cwd="/tmp", at=1000)
+    raw = json.dumps([
+        {"kind": "background", "sessionId": "busy", "state": "blocked"},
+        {"kind": "background", "sessionId": "fin",  "state": "done"},
+    ])
+    stopped = []
+    bgc.sync_jobs(now=1001, agents_raw=raw, stop_fn=stopped.append)
+    assert bgc.get_job("busy").status == "running"
+    assert bgc.get_job("fin").status == "done"
+    assert stopped == ["fin"]                      # proactive claude stop on a still-listed done session
+
+
+def test_sync_jobs_absent_young_stays_running_old_reaped(monkeypatch):
+    bgc.insert_job(id="young", text="x", cwd="/tmp", at=1000)
+    bgc.insert_job(id="old",   text="y", cwd="/tmp", at=1000)
+    stopped = []
+    # young: now-started_at < 60 ; old: >= 60 ; neither present in the (empty) list
+    bgc.sync_jobs(now=1030, agents_raw="[]", stop_fn=stopped.append)  # young still within grace
+    assert bgc.get_job("young").status == "running"
+    bgc.sync_jobs(now=1100, agents_raw="[]", stop_fn=stopped.append)  # both now old
+    assert bgc.get_job("young").status == "done"
+    assert bgc.get_job("old").status == "done"
+    assert stopped == []                           # absent/reaped => no stop call (already gone)

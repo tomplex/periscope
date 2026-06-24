@@ -197,3 +197,67 @@ def dispatch(text: str, *, cwd: str | None = None) -> str:
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return session_id
+
+
+# --- status sync (called from the activity worker tick AND on-open from /jobs) ---
+
+def _read_agents() -> str:
+    try:
+        return subprocess.run(
+            [config.claude_bin(), "agents", "--json", "--all"],
+            capture_output=True, text=True, timeout=15,
+        ).stdout
+    except (subprocess.SubprocessError, OSError) as e:
+        log.warning("claude agents read failed: %s", e)
+        return ""
+
+
+def _stop_session(session_id: str) -> None:
+    try:
+        subprocess.run(
+            [config.claude_bin(), "stop", session_id],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        log.warning("claude stop %s failed: %s", session_id, e)
+
+
+def sync_jobs(*, now: int | None = None, agents_raw: str | None = None, stop_fn=None) -> None:
+    """Reconcile running jobs against `claude agents --json --all`. Idempotent —
+    safe from both the 30s worker tick and GET /api/command/jobs. agents_raw /
+    stop_fn are injectable seams so tests never spawn `claude` (no subprocess
+    mocking — the Q1 mocked-migration trap)."""
+    now = now if now is not None else int(time.time())
+    raw = agents_raw if agents_raw is not None else _read_agents()
+    stop = stop_fn or _stop_session
+    states = parse_agents_json(raw)
+    for job in list_jobs():
+        if job.status != "running":
+            continue
+        present = job.id in states
+        new_status = map_state(states.get(job.id), started_at=job.started_at, now=now, present=present)
+        if new_status == "done":
+            _set_status(job.id, "done")
+            if present:        # still listed => free the supervisor slot now (spec resolution #4)
+                stop(job.id)
+
+
+# --- boot-time generation (prod-only, called from app.py lifespan) ---
+
+def write_mcp_config() -> None:
+    """Generate the static MCP config (channel_shim → socket) and the orchestrator
+    prompt file. The per-command identity is NOT here — it rides on the dispatched
+    process env (PERISCOPE_CALLER_ID). Contingency: if the MCP child doesn't inherit
+    parent env, switch to a per-dispatch config with the caller id in `env`."""
+    import sys
+    cfg = {
+        "mcpServers": {
+            "periscope": {
+                "command": sys.executable,
+                "args": [str(config.CHANNEL_SHIM_PATH)],
+                "env": {"PERISCOPE_MCP_SOCKET_PATH": config.MCP_SOCKET_PATH},
+            }
+        }
+    }
+    config.PERISCOPE_MCP_CONFIG.write_text(json.dumps(cfg))
+    config.ORCHESTRATOR_PROMPT_FILE.write_text(ROLE_PROMPT)
