@@ -158,7 +158,18 @@ def resolve_project_for_window(window: dict) -> Optional[str]:
     to main). Only an empty/missing session returns None. Lookup is by
     `tmux_session` match; archived rows still match — the frontend folds
     them to dev via its no-row fallback.
+
+    Reads the `pane_projects` tag first (explicit per-pane project context);
+    falls back to the session-match for untagged panes. The fallback is the
+    safety net for external/pre-backfill panes; the collapse follow-on removes
+    it once every pane is tagged and sessions are merged.
     """
+    pane_id = window.get("pane_id")
+    if pane_id:
+        from periscope import activity   # function-level: cycle-sensitivity (narrator precedent)
+        tagged = activity.get_pane_project(pane_id)
+        if tagged:
+            return tagged
     session = window.get("session", "")
     if not session:
         return None
