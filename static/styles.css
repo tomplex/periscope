@@ -2170,6 +2170,15 @@ body.modal-open { overflow: hidden; }
 .open-omnibox-console-log { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; padding: 4px 2px; font-family: var(--mono, monospace); font-size: 12px; }
 .open-omnibox-console-line { color: var(--fg-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 1px 8px; }
 .open-omnibox-console-spin { color: var(--fg-3); padding: 3px 8px; font-style: italic; }
+/* Commander job list: same panel rhythm as the palette (head reads like a group
+   label; rows reuse .open-omnibox-row). Dot color carries running vs done. */
+.open-omnibox-jobs { display: flex; flex-direction: column; gap: 6px; }
+.open-omnibox-jobs-head { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-3); padding: 8px 10px 3px; }
+.open-omnibox-jobdot { flex: 0 0 16px; text-align: center; font-size: 11px; color: var(--s-success); line-height: 1; }
+.open-omnibox-jobdot.is-running { color: var(--accent); animation: omnibox-jobdot-pulse 1.4s ease-in-out infinite; }
+@keyframes omnibox-jobdot-pulse { 50% { opacity: .35; } }
+.open-omnibox-jobback { background: transparent; border: 0; color: var(--fg-3); cursor: pointer; font-family: var(--sans); font-size: 12px; padding: 0; }
+.open-omnibox-jobback:hover { color: var(--fg-1); }
 
 /* --- Rail restyle: spacing/typography toward attention-rail mockup --------- */
 
