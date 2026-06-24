@@ -42,6 +42,9 @@ SOCKET_PATH = os.environ.get(
     "PERISCOPE_MCP_SOCKET_PATH", "/tmp/periscope-mcp.sock"
 )
 TMUX_PANE = os.environ.get("TMUX_PANE", "")
+# The caller handle: an explicit commander id (cmdr:<session_id>) when periscope
+# dispatched us via --bg, else the tmux pane id for a normal pane.
+CALLER_ID = os.environ.get("PERISCOPE_CALLER_ID", "") or TMUX_PANE
 RECONNECT_BACKOFF_S = float(
     os.environ.get("PERISCOPE_MCP_RECONNECT_BACKOFF_S", "1.0")
 )
@@ -82,9 +85,9 @@ class Shim:
         self._stdin_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
     async def run(self) -> None:
-        if not TMUX_PANE.startswith("%"):
+        if not (CALLER_ID.startswith("%") or CALLER_ID.startswith("cmdr:")):
             _err(
-                f"TMUX_PANE missing or malformed ({TMUX_PANE!r}); "
+                f"caller id missing or malformed ({CALLER_ID!r}); "
                 "periscope MCP inactive for this session"
             )
             return
@@ -165,8 +168,10 @@ class Shim:
         self, sock_r: asyncio.StreamReader, sock_w: asyncio.StreamWriter
     ) -> None:
         # 1. Hello frame — periscope reads one JSON line on accept() to learn
-        # which pane this connection belongs to.
-        sock_w.write((json.dumps({"pane": TMUX_PANE}) + "\n").encode())
+        # this connection's caller handle (%N for a pane, cmdr:<id> for a
+        # commander). The JSON key stays "pane" (a private 2-file wire
+        # contract); the value is now any handle.
+        sock_w.write((json.dumps({"pane": CALLER_ID}) + "\n").encode())
         await sock_w.drain()
 
         # 2. Replay the captured handshake when reconnecting. Suppress the

@@ -420,14 +420,15 @@ def test_spawn_claude_no_parent_tolerated(mocker):
 
 
 def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
-    from periscope import channels, activity, open_ops
-    activity.set_commander(pane_id="%C", session_id=None, at=1)   # caller IS commander
+    from periscope import channels, bg_commander, open_ops
+    bg_commander.insert_job(id="c1", text="x", cwd="/tmp", at=1)   # caller IS a live commander
+    handle = "cmdr:c1"
     monkeypatch.setattr(open_ops, "resolve_worktree_session",
                         lambda cwd: ("proj-sess", object()))      # git cwd resolves
     # Mirror the full mock set from test_spawn_claude_writes_spawned_by: the
     # spawn handler shells out heavily, so all of these must be stubbed or the
     # test hits real tmux.
-    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    tmux_mock = mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
     mocker.patch("periscope.channels._run", return_value=(0, ""))
     cap = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
     mocker.patch("periscope.channels.os.path.isdir", return_value=True)
@@ -443,29 +444,32 @@ def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
     mocker.patch("periscope.channels.list_windows", return_value=[])
     mocker.patch.object(open_ops, "place_in_rail", return_value=None)
 
-    asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "x", "cwd": "/r"}))
+    asyncio.run(channels._do_spawn_claude_tool(handle, {"prompt": "x", "cwd": "/r"}))
 
+    # A commander handle is not a tmux target — the caller-context derivation
+    # `display-message -t cmdr:c1` must be skipped entirely.
+    assert not any(
+        c.args and c.args[0] == "display-message" and handle in c.args
+        for c in tmux_mock.call_args_list
+    )
     # The session the worker landed in must be the RESOLVED "proj-sess",
-    # never the commander's own caller session ("sess"). Inspect the
-    # new-session/new-window _tmux_mutate call args for "proj-sess".
+    # never a derived caller session. Inspect the new-session/new-window
+    # _tmux_mutate call args for "proj-sess".
     targets = [c.args for c in cap.call_args_list]
     assert any("proj-sess" in a for args in targets for a in args)
-    assert not any("sess:" in a for args in targets for a in args
-                   if isinstance(a, str) and a.startswith("sess:"))
 
 
 def test_spawn_commander_non_git_cwd_errors(fresh_activity_db, monkeypatch):
-    from periscope import channels, activity, open_ops
-    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    from periscope import channels, bg_commander, open_ops
+    bg_commander.insert_job(id="c1", text="x", cwd="/tmp", at=1)
     monkeypatch.setattr(open_ops, "resolve_worktree_session", lambda cwd: None)
     monkeypatch.setattr("os.path.isdir", lambda p: True)
-    res = asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "x", "cwd": "/tmp"}))
+    res = asyncio.run(channels._do_spawn_claude_tool("cmdr:c1", {"prompt": "x", "cwd": "/tmp"}))
     assert _body(res)["ok"] is False and "git" in _body(res)["error"].lower()
 
 
 def test_spawn_with_branch_creates_worktree(fresh_activity_db, monkeypatch, mocker):
-    from periscope import channels, activity, open_ops, worktree_spawn
-    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    from periscope import channels, open_ops, worktree_spawn
     created = {}
     monkeypatch.setattr(worktree_spawn, "spawn_worktree",
                         lambda repo, branch: created.update(repo=repo, branch=branch) or {"path": "/wt/foo"})
@@ -498,8 +502,7 @@ def test_spawn_with_branch_creates_worktree(fresh_activity_db, monkeypatch, mock
 
 
 def test_spawn_branch_without_repo_errors(fresh_activity_db, monkeypatch, mocker):
-    from periscope import channels, activity
-    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    from periscope import channels
     mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
     mocker.patch("periscope.channels.os.path.isdir", return_value=True)
     res = asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "go", "branch": "tc/x"}))
@@ -715,53 +718,16 @@ def test_terminate_mutate_failure(mocker):
     assert body["ok"] is False and body["error"] == "no such window"
 
 
-# --- commander captain's-log tools ---
+# --- commander identity ---
 
-def test_commander_tools_are_registered():
-    from periscope.channels import _CHANNEL_TOOLS
-    names = {t["name"] for t in _CHANNEL_TOOLS}
-    assert {"captains_log_read", "captains_log_append"} <= names
-    for t in _CHANNEL_TOOLS:
-        if t["name"].startswith("captains_log"):
-            assert "inputSchema" in t and callable(t["handler"])
-
-
-def test_captains_log_tools_refuse_non_commander(fresh_activity_db):
-    from periscope.channels import _do_captains_log_read_tool, _do_captains_log_append_tool
-    # no marker set -> every caller is refused
-    r = _body(_do_captains_log_read_tool("%5", {}))
-    assert r["ok"] is False and "commander" in r["error"].lower()
-    a = _body(_do_captains_log_append_tool("%5", {"kind": "watch", "text": "x"}))
-    assert a["ok"] is False
-
-
-def test_captains_log_append_and_read_for_commander(fresh_activity_db):
-    from periscope import activity
-    from periscope.channels import _do_captains_log_read_tool, _do_captains_log_append_tool
-    activity.set_commander(pane_id="%9", session_id=None, at=1)
-
-    ok = _body(_do_captains_log_append_tool("%9", {"kind": "standing_order", "text": "watch propensity"}))
-    assert ok["ok"] is True
-    read = _body(_do_captains_log_read_tool("%9", {}))
-    assert read["ok"] is True
-    assert read["entries"][0]["text"] == "watch propensity"
-    assert read["entries"][0]["kind"] == "standing_order"
-
-
-def test_captains_log_append_rejects_bad_kind(fresh_activity_db):
-    from periscope import activity
-    from periscope.channels import _do_captains_log_append_tool
-    activity.set_commander(pane_id="%9", session_id=None, at=1)
-    bad = _body(_do_captains_log_append_tool("%9", {"kind": "nonsense", "text": "x"}))
-    assert bad["ok"] is False and "kind" in bad["error"].lower()
-
-
-def test_captains_log_append_rejects_empty_text(fresh_activity_db):
-    from periscope import activity
-    from periscope.channels import _do_captains_log_append_tool
-    activity.set_commander(pane_id="%9", session_id=None, at=1)
-    bad = _body(_do_captains_log_append_tool("%9", {"kind": "watch", "text": "  "}))
-    assert bad["ok"] is False
+def test_is_commander_requires_live_job(fresh_activity_db):
+    from periscope import channels, bg_commander
+    assert channels.is_commander("%3") is False
+    assert channels.is_commander("cmdr:unknown") is False
+    bg_commander.insert_job(id="live", text="x", cwd="/tmp", at=1)
+    assert channels.is_commander("cmdr:live") is True
+    bg_commander._set_status("live", "done")
+    assert channels.is_commander("cmdr:live") is False     # only running jobs count
 
 
 def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_activity_db, mocker):

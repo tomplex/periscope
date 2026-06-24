@@ -1,13 +1,12 @@
-"""POST /api/command — deliver a free-text command to the hidden commander pane;
-GET /api/command/status — whether the commander is still working (drives the
-omnibox console's done-detection instead of guessing from transcript timing)."""
+"""POST /api/command — dispatch a free-text command as a fresh `claude --bg`
+commander (a tracked job). GET /api/command/jobs — the job list (newest-first,
+status synced from `claude agents`). GET /api/command/jobs/{id}/turns — a job's
+transcript from its session JSONL."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from periscope import activity, commander
-from periscope.panes import list_windows, parse_pane
-from periscope.routes.send import _send_to_target
-from periscope.tmux import capture
+from periscope import bg_commander, turns
+from history.search import messages_from_jsonl
 
 router = APIRouter()
 
@@ -16,38 +15,28 @@ class CommandBody(BaseModel):
     text: str
 
 
-def _commander_window():
-    """The live tmux window dict for the marked commander pane, or None."""
-    marker = activity.get_commander()
-    if marker is None:
-        return None
-    return next((w for w in list_windows() if w.get("pane_id") == marker.pane_id), None)
-
-
 @router.post("/api/command")
-async def command_endpoint(body: CommandBody):
+def command_endpoint(body: CommandBody):
     text = body.text.strip()
     if not text:
         raise HTTPException(400, "text must be non-empty")
-    marker = await commander.ensure_commander()
-    if marker is None:
-        raise HTTPException(503, "commander unavailable (not prod, or spawn failed)")
-    win = _commander_window()
-    if win is None:
-        raise HTTPException(503, "commander pane not found in tmux")
-    target = f"{win['session']}:{win['index']}"
-    _send_to_target(target, paste=text, keys=["Enter"])
-    return {"session": win["session"], "index": win["index"]}
+    return {"job_id": bg_commander.dispatch(text)}
 
 
-@router.get("/api/command/status")
-def command_status():
-    """`running` = the commander pane is actively generating (parse_pane state
-    'working'). The console polls this and declares the command done once the
-    commander goes idle — robust to the multi-second gaps between its tool calls
-    that a transcript-growth timer mistakes for completion."""
-    win = _commander_window()
-    if win is None:
-        return {"alive": False, "running": False}
-    parsed = parse_pane(capture(f"{win['session']}:{win['index']}"))
-    return {"alive": True, "running": parsed.get("state") == "working"}
+@router.get("/api/command/jobs")
+def command_jobs():
+    bg_commander.sync_jobs()      # on-open fresh read (the worker tick also syncs every 30s)
+    return [
+        {"id": j.id, "text": j.text, "status": j.status, "started_at": j.started_at}
+        for j in bg_commander.list_jobs()
+    ]
+
+
+@router.get("/api/command/jobs/{job_id}/turns")
+def command_job_turns(job_id: str):
+    if bg_commander.get_job(job_id) is None:
+        raise HTTPException(404, "unknown job")
+    jsonl = turns.jsonl_for_session(job_id)     # session id IS the job id
+    if jsonl is None:
+        raise HTTPException(404, "no transcript yet")
+    return {"session_id": job_id, "messages": messages_from_jsonl(str(jsonl))}
