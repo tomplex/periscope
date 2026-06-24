@@ -4,9 +4,9 @@
 // output: markdown-rendered prose, tool calls as `⏺ Name(arg)` rows with
 // collapsible `⎿` output, Edit diffs. No xterm/emulation — JSONL is already
 // structured. See the segmented-transcript design spec.
-import { useEffect, useState, useRef } from "preact/hooks";
-import { transcriptSeen, paneTranscript, openFileTab } from "../store.js";
-import { targetQuery, apiCall } from "../util.js";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { openFileTab, paneTranscript, transcriptSeen } from "../store.js";
+import { apiCall, targetQuery } from "../util.js";
 import { renderMarkdown } from "./markdown.jsx";
 
 const TURNS_POLL_MS = 2000;
@@ -76,7 +76,7 @@ function toolArg(t) {
     default: {
       const s = JSON.stringify(inp);
       if (s === "{}" || s === "null") return "";
-      return s.length > 120 ? s.slice(0, 120) + "…" : s;
+      return s.length > 120 ? `${s.slice(0, 120)}…` : s;
     }
   }
 }
@@ -262,7 +262,7 @@ function Composer({ target, composerRef }) {
     // Collapse to 0 before measuring so the box tracks content both ways
     // (grows and shrinks); cap matches CSS max-height.
     el.style.height = "0px";
-    el.style.height = Math.min(el.scrollHeight, 140) + "px";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }
 
   // Paste a screenshot: upload it (deliver=false so it lands in THIS message,
@@ -339,7 +339,7 @@ export function TranscriptView({ target, pid, selected, state, waitingFor, spinn
     const scroll = scrollRef.current;
     if (!box || !scroll) return;
     const sync = () => {
-      scroll.style.paddingBottom = box.offsetHeight + 14 + "px";
+      scroll.style.paddingBottom = `${box.offsetHeight + 14}px`;
       requestAnimationFrame(pin);
     };
     sync();

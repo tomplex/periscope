@@ -63,7 +63,7 @@ export async function onNotificationClick(cb) {
   if (!inTauri()) return;
   try {
     const handler = window.__TAURI_INTERNALS__.transformCallback((e) => {
-      if (e && e.payload) cb(e.payload);
+      if (e?.payload) cb(e.payload);
     });
     await invoke("plugin:event|listen", {
       event: "periscope:notification-clicked",

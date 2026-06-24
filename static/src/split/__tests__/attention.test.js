@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
-import {
-  buildNeedsYou, buildReady, buildRunning, isAcked, needsYouCount, resolvePinned, buildActivity,
-  isSoftQuestion, prunedStateDismissals,
-} from "../attention.js";
+import { describe, expect, it } from "vitest";
 import { shortestUniqueSuffix } from "../../util.js";
+import {buildActivity,
+  buildNeedsYou, buildReady, buildRunning, 
+  isSoftQuestion, needsYouCount, prunedStateDismissals,resolvePinned, 
+} from "../attention.js";
 
 const win = (over = {}) => ({
   pid: "p1", target: "tc/x:0", state: "idle",

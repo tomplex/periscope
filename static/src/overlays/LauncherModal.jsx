@@ -19,8 +19,8 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
-import { track } from "../track.js";
 import * as prefs from "../prefs.js";
+import { track } from "../track.js";
 import { apiCall } from "../util.js";
 
 // The open worktree key (or null). A signal so the singleton modal reacts.

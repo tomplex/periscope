@@ -15,7 +15,7 @@
 // Rename is inline (double-click the label): the label becomes an uncontrolled
 // <input>; Enter/blur commit, Escape cancels. A `settled` guard reproduces the
 // vanilla Enter-then-blur double-submit protection.
-import { useState, useRef, useEffect } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { prUrl, relTime } from "../util.js";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
@@ -223,7 +223,7 @@ export function PaneRow({
         <button
           class={`rail-pin${pinned ? " pinned" : ""}`}
           title={pinned ? "unpin" : "pin"}
-          onClick={(e) => { e.stopPropagation(); onTogglePin && onTogglePin(); }}
+          onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
         >{pinned ? "★" : "☆"}</button>
         <button
           class="rail-close"
@@ -310,7 +310,7 @@ export function WorktreeMeta({ wtWindows }) {
 // worktree rows, so there's no catch-all variant. `collapsed` hides the
 // children (rendered by the caller). Rename POSTs /api/session/rename.
 export function WorktreeRow({
-  worktreeKey, label, collapsed, childCount, rolledUp, dim,
+  label, collapsed, childCount, rolledUp, dim,
   onToggle, onClose, onRename, dragProps, dropPos,
 }) {
   const chev = collapsed ? "▸" : "▾";

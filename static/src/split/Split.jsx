@@ -1,10 +1,10 @@
 // The split-view surface: the #split-view container holding <Rail> (left) and
 // <Detail> (right). This is the only view (grid retired).
 import { useEffect } from "preact/hooks";
-import { Rail } from "./Rail.jsx";
-import { Detail } from "./Detail.jsx";
 import { startPolling } from "../poll.js";
 import { startAlertFeed } from "./alertFeed.js";
+import { Detail } from "./Detail.jsx";
+import { Rail } from "./Rail.jsx";
 
 export function Split() {
   // Own the single /api/state poll loop that feeds the `windows` signal — the

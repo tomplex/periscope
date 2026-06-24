@@ -12,12 +12,12 @@
 // land with their owning surfaces (Grid → Task 5; secondary modals + alerts →
 // Task 8). They are inert placeholders until then; the vanilla path still owns
 // those surfaces while only chrome is Preact-mounted.
-import { useEffect, useState, useRef, useCallback } from "preact/hooks";
-import { track } from "../track.js";
-import { windows } from "../store.js";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
-import { UsagePill } from "./UsagePill.jsx";
+import { windows } from "../store.js";
+import { track } from "../track.js";
 import { FilterBar } from "./FilterBar.jsx";
+import { UsagePill } from "./UsagePill.jsx";
 
 // One dropdown open at a time among the toggle-style menus (+ new, ⋯). The
 // state-filter dropdown manages itself in <FilterBar>.
@@ -110,7 +110,7 @@ export function Header() {
     const el = headerRef.current;
     if (!el) return;
     const apply = () =>
-      document.documentElement.style.setProperty("--header-h", el.offsetHeight + "px");
+      document.documentElement.style.setProperty("--header-h", `${el.offsetHeight}px`);
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(el);

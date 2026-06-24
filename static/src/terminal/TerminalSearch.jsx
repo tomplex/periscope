@@ -7,9 +7,9 @@
 // position: relative); it floats top-right of the terminal area when
 // open. Esc closes via shared useEscape (LIFO). Only meaningful for
 // terminal-mode Claude panes; the caller gates rendering.
-import { useEffect, useRef, useState, useCallback } from "preact/hooks";
-import { searchNext, searchPrev, clearSearch } from "./terminalCore.js";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
+import { clearSearch, searchNext, searchPrev } from "./terminalCore.js";
 
 export function TerminalSearch() {
   const inputRef = useRef(null);

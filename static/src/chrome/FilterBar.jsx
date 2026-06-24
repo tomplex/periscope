@@ -8,10 +8,10 @@
 // dropdown's open/close + outside-click + Escape mechanics mirror app.js's
 // openDropdown/closeDropdown, but Escape goes through the LIFO useEscape hook
 // instead of the old pushEscape/popEscape registry.
-import { useState, useEffect, useRef, useCallback } from "preact/hooks";
-import { track } from "../track.js";
-import { currentFilter } from "../store.js";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
+import { currentFilter } from "../store.js";
+import { track } from "../track.js";
 
 const FILTERS = [
   { key: "all", label: "all" },

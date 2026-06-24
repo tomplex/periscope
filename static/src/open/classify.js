@@ -41,7 +41,7 @@ export function classify(query, catalog) {
   // Open an existing worktree by path/branch match.
   for (const w of catalog.worktrees || []) {
     if (match(w.path, q) || match(w.branch || "", q)) {
-      const repoLabel = (catalog.repos.find(r => r.repo === w.repo) || {}).label || w.repo;
+      const repoLabel = catalog.repos.find(r => r.repo === w.repo)?.label || w.repo;
       cards.push({ kind: "open", label: `${repoLabel} · ${w.branch || "detached"}`,
                    sub: w.path, descriptor: { path: w.path } });
     }

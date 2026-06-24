@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
 import render from "preact-render-to-string";
+import { describe, expect, it } from "vitest";
 import { highlightCode } from "../highlightCode.jsx";
 
 const out = (code, lang) => render(<pre>{highlightCode(code, lang)}</pre>);

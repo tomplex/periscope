@@ -7,11 +7,11 @@
 // the two imperative inits.
 import { useEffect } from "preact/hooks";
 import { initExternalLinks } from "../tauri.js";
-import { CommandsModal } from "./CommandsModal.jsx";
 import { CleanupModal } from "./CleanupModal.jsx";
-import { SettingsModal } from "./SettingsModal.jsx";
+import { CommandsModal } from "./CommandsModal.jsx";
 import { LauncherModal } from "./LauncherModal.jsx";
 import { OpenOmnibox } from "./OpenOmnibox.jsx";
+import { SettingsModal } from "./SettingsModal.jsx";
 
 export function Overlays() {
   useEffect(() => {

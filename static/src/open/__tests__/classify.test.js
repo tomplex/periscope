@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parsePrRef, classify } from "../classify.js";
+import { describe, expect, it } from "vitest";
+import { classify, parsePrRef } from "../classify.js";
 
 describe("parsePrRef", () => {
   it("parses a github PR url", () => {

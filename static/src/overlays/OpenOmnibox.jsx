@@ -5,12 +5,12 @@
 // (same field) to fill the descriptor. On success: write response.ui into
 // prefsSignal via prefs.setUI (the deferRailAdd replacement) and close.
 import { signal } from "@preact/signals";
-import { useEffect, useState, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
+import { classify } from "../open/classify.js";
+import { setUI } from "../prefs.js";
 import { track } from "../track.js";
 import { apiCall, relTime } from "../util.js";
-import { setUI } from "../prefs.js";
-import { classify } from "../open/classify.js";
 
 const open = signal(false);
 function openOmnibox() { open.value = true; track("overlay.open", { which: "open" }); }
@@ -63,7 +63,7 @@ function useJobTurns(jobId) {
     (async () => {
       const data = await apiCall("job-turns", `/api/command/jobs/${encodeURIComponent(jobId)}/turns`);
       if (!alive) return;
-      setMessages((data && data.messages) || []);
+      setMessages((data?.messages) || []);
     })();
     return () => { alive = false; };
   }, [jobId]);
@@ -225,7 +225,7 @@ export function OpenOmnibox() {
 // open. A selected row drills into that job's read-only transcript. Esc pushes
 // onto the LIFO stack via useEscape: from a transcript it goes back to the list,
 // from the list it leaves the jobs view (onBack carries the right target).
-function JobList({ selectedJob, onSelect, onBack, onClose }) {
+function JobList({ selectedJob, onSelect, onBack }) {
   const jobs = useJobList(!selectedJob);   // pause list polling while a transcript is open
   useEscape(onBack, true);
 
@@ -287,7 +287,7 @@ function JobTranscript({ jobId, onBack }) {
 // footer hints. `items` is a flat ordered list; rows with the same `group`
 // render under one header. `onBack` (drill-ins) makes Esc go back instead of
 // closing; `onClose` (top level) lets the footer label Esc as "close".
-function Palette({ value, onInput, placeholder, items, onPick, onBack, onClose, empty }) {
+function Palette({ value, onInput, placeholder, items, onPick, onBack, empty }) {
   const [sel, setSel] = useState(0);
   const listRef = useRef(null);
   const inputRef = useRef(null);

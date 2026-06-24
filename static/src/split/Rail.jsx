@@ -26,19 +26,19 @@
 // (RailRows), and syncRailPrefs (which persists panes_by_worktree[MAIN_KEY]
 // but keeps MAIN_KEY out of repo_order / worktrees_by_repo).
 import { useRef, useState } from "preact/hooks";
-import { track } from "../track.js";
-import { windows, projects, workspaces, currentFilter, railSelection, dragState } from "../store.js";
-import * as prefs from "../prefs.js";
 import { passesFilter } from "../filter.js";
-import { apiCall, targetQuery, shortestUniqueSuffix } from "../util.js";
 import { confirmDialog, promptDialog } from "../overlays/Dialog.jsx";
-import {
-  mergeLiveAndPrefs, indexWindowsByWorktree, indexProjects, indexWorkspaces,
-  projectLabel, groupLabel, paneChip, maxSeverity, MAIN_KEY,
+import * as prefs from "../prefs.js";
+import { currentFilter, dragState, projects, railSelection, windows, workspaces } from "../store.js";
+import { track } from "../track.js";
+import { apiCall, shortestUniqueSuffix, targetQuery } from "../util.js";
+import { ActivitySection, AttentionTop } from "./AttentionSections.jsx";
+import { NewTabRow, PaneRow, RepoRow, ReviewRow, WorktreeRow } from "./RailRows.jsx";
+import {groupLabel, indexProjects, indexWindowsByWorktree, indexWorkspaces,MAIN_KEY,maxSeverity, 
+  mergeLiveAndPrefs, paneChip, 
+  projectLabel, 
 } from "./railTree.js";
-import { PaneRow, ReviewRow, NewTabRow, WorktreeRow, RepoRow } from "./RailRows.jsx";
 import { SectionHeader } from "./SectionHeader.jsx";
-import { AttentionTop, ActivitySection } from "./AttentionSections.jsx";
 
 // Bridge to the launcher modal. The "+ New tab" row opens it via
 // window.__periscopeOpenLauncher — installed by vanilla app.js while the
@@ -219,7 +219,7 @@ export function Rail() {
   const filter = currentFilter.value;
   const selectedKey = railSelection.value;
   // Subscribe to prefs so collapse/order changes re-render.
-  const prefsBlob = prefs.prefsSignal.value;
+  const _prefsBlob = prefs.prefsSignal.value;
 
   // Reconcile prefs ⇄ live (throttled). Side-effecting read; fine here.
   syncRailPrefs();
@@ -319,12 +319,12 @@ export function Rail() {
     const branch = await promptDialog("New worktree branch for this workspace:", {
       placeholder: "branch name",
     });
-    if (!branch || !branch.trim()) return;
+    if (!branch?.trim()) return;
     const data = await apiCall("spawn", "/api/workspaces/spawn", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspace_id: wid, branch }),
     });
-    if (data && data.ui) prefs.setUI(data.ui);
+    if (data?.ui) prefs.setUI(data.ui);
   }
 
   // --- Drag plumbing -------------------------------------------------------
@@ -566,7 +566,7 @@ export function Rail() {
               const childRows = [];
               for (const child of childOrder) {
                 if (child === "review") {
-                  const lgtmLive = wtWindows.some((w) => w.lgtm && w.lgtm.slug);
+                  const lgtmLive = wtWindows.some((w) => w.lgtm?.slug);
                   childRows.push(
                     <ReviewRow
                       key={`review:${wtKey}`}

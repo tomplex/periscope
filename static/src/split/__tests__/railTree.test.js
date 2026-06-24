@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
-import {
-  MAIN_KEY, groupKeyForWindow, mergeLiveAndPrefs, indexProjects,
-  projectLabel, groupLabel, paneChip,
+import { describe, expect, it } from "vitest";
+import {groupKeyForWindow, groupLabel, indexProjects,
+  MAIN_KEY, mergeLiveAndPrefs, paneChip,
+  projectLabel, 
 } from "../railTree.js";
 
 // Window factory. project_pinned_dir simulates the server-side resolver
@@ -68,7 +68,7 @@ describe("mergeLiveAndPrefs", () => {
     const ws = [win({ pid: "a", repo_key: "/dev/other", cwd: "/dev/other" })];
     const m = mergeLiveAndPrefs(ws, projects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/dev/myproj"]);
-    expect(m.panesByWorktree["myproj"]).toEqual(["a", "review"]);
+    expect(m.panesByWorktree.myproj).toEqual(["a", "review"]);
   });
 
   it("dev windows land in a flat panesByWorktree[MAIN_KEY], no review sentinel, dev last", () => {
@@ -93,7 +93,7 @@ describe("mergeLiveAndPrefs", () => {
     const ws = [win({ pid: "n1", session: "notes", project_pinned_dir: "/notes" })];
     const m = mergeLiveAndPrefs(ws, notesProjects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/notes"]);
-    expect(m.panesByWorktree["notes"]).toEqual(["n1"]);  // no "review"
+    expect(m.panesByWorktree.notes).toEqual(["n1"]);  // no "review"
   });
 
   it("the bridge session renders as its own 'bridge' group, not folded into dev", () => {
@@ -102,7 +102,7 @@ describe("mergeLiveAndPrefs", () => {
     const m = mergeLiveAndPrefs(ws, bridgeProjects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/Users/tom"]);                 // own group, not MAIN_KEY
     expect(m.worktreesByRepo["/Users/tom"]).toEqual(["bridge"]);
-    expect(m.panesByWorktree["bridge"]).toEqual(["fm"]);         // the first-mate pane, no review row
+    expect(m.panesByWorktree.bridge).toEqual(["fm"]);         // the first-mate pane, no review row
     expect(groupLabel("/Users/tom", indexProjects(bridgeProjects))).toBe("bridge");
   });
 
@@ -146,7 +146,7 @@ describe("mergeLiveAndPrefs — workspaces", () => {
     expect(m.worktreesByRepo["ws:ws_a"]).toEqual([]);
     expect(m.panesByWorktree["ws:ws_a"]).toEqual(["a"]);
     // 'a' is NOT under the repo group (exactly one top-level group)
-    expect(m.panesByWorktree["myproj"]).toEqual(["b", "review"]);
+    expect(m.panesByWorktree.myproj).toEqual(["b", "review"]);
   });
 
   it("a workspace with no live tagged tabs still renders (parked)", () => {
@@ -168,7 +168,7 @@ describe("mergeLiveAndPrefs — workspaces", () => {
     const wins = [win({ pid: "a", session: "myproj", workspace_id: "ws_gone" })];
     const m = mergeLiveAndPrefs(wins, projects, [], [], {}, {});
     expect(m.repoOrder).toEqual(["/dev/myproj"]);
-    expect(m.panesByWorktree["myproj"]).toEqual(["a", "review"]);
+    expect(m.panesByWorktree.myproj).toEqual(["a", "review"]);
   });
 });
 
