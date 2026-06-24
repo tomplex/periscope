@@ -73,12 +73,13 @@ def _spawn_commander(*, now: int) -> None:
     import os
     import shlex
     import time as _time
-    from periscope.tmux import tmux, _tmux_mutate
+    from periscope.tmux import _tmux_mutate
     # Function-level imports (keep them here): a test monkeypatches
     # `periscope.config.is_prod`, which only takes effect if is_prod is
     # re-resolved per call rather than bound at module import.
     from periscope.config import claude_exec, is_prod
-    from periscope.channels import dismiss_dev_channels_consent_bg
+    from periscope.channels import (_plain_pane_snapshot, _folder_trust_visible,
+                                    _dev_channels_consent_visible)
     from periscope.pids import stamp_new_window
     from periscope.open_ops import _session_live   # socket-aware has-session
     from periscope.log import log
@@ -88,18 +89,25 @@ def _spawn_commander(*, now: int) -> None:
         return  # defense in depth: never spawn a budget-spender off prod
 
     home = os.path.expanduser("~")
+    # Capture the NEW pane's unique id at creation (-P -F '#{pane_id}') and
+    # target everything below by that %N — NOT the `bridge:commander` window
+    # NAME. The session can hold stale same-named windows (old first-mate panes,
+    # a prior failed spawn); name-targeting then resolves to an ambiguous/wrong
+    # pane, which is what left the marker on a bare shell.
     if not _session_live(COMMANDER_SESSION):
-        ok, msg = _tmux_mutate("new-session", "-d", "-s", COMMANDER_SESSION,
-                               "-c", home, "-n", COMMANDER_WINDOW)
+        ok, pane_id = _tmux_mutate("new-session", "-d", "-s", COMMANDER_SESSION,
+                                   "-c", home, "-n", COMMANDER_WINDOW,
+                                   "-P", "-F", "#{pane_id}")
     else:
-        ok, msg = _tmux_mutate("new-window", "-t", f"{COMMANDER_SESSION}:",
-                               "-c", home, "-n", COMMANDER_WINDOW)
-    if not ok:
-        # Don't stamp a marker for a window that doesn't exist — the caller
-        # retries cleanly. Stamping now would leak a bogus marker.
-        log.warning("commander spawn: tmux window create failed: %s", msg)
+        ok, pane_id = _tmux_mutate("new-window", "-t", f"{COMMANDER_SESSION}:",
+                                   "-c", home, "-n", COMMANDER_WINDOW,
+                                   "-P", "-F", "#{pane_id}")
+    pane_id = (pane_id or "").strip()
+    if not ok or not pane_id:
+        # No window / no pane id → don't stamp a marker; the caller retries.
+        log.warning("commander spawn: tmux window create failed: %s", pane_id)
         return
-    target = f"{COMMANDER_SESSION}:{COMMANDER_WINDOW}"
+
     # Deliver the (multi-line) role prompt via a file, not inline: send-keys
     # strips embedded newlines (CLAUDE.md note 5), which mangles a multi-line
     # --append-system-prompt arg AND the ~1.5k-char command line never lands
@@ -112,14 +120,22 @@ def _spawn_commander(*, now: int) -> None:
                 f"--append-system-prompt "
                 f'"$(cat {shlex.quote(str(prompt_path))})"')
     _time.sleep(0.1)  # let rc finish before the command lands (CLAUDE.md note 5)
-    _tmux_mutate("send-keys", "-t", target, exec_cmd, "Enter")
-    if "--dangerously-load-development-channels" in exec_cmd:
-        dismiss_dev_channels_consent_bg(target)
-    stamp_new_window(target)
-    pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
-    if not pane_id:
-        # A bogus empty marker is never in the live set, so the caller would
-        # respawn — a window/budget leak. Leave the marker unset; retry cleanly.
-        log.warning("commander spawn: could not read pane_id; leaving marker unset")
-        return
+    _tmux_mutate("send-keys", "-t", pane_id, exec_cmd, "Enter")
+
+    # Dismiss the startup dialogs as they appear: folder-trust first (the cwd is
+    # $HOME, usually not an already-trusted Claude folder) then dev-channels
+    # consent. Both default-select the safe option and confirm on Enter, and
+    # both swallow input until cleared — so until the TUI mounts ('auto mode
+    # on') a queued command is silently lost. Inline poll: we're already in a
+    # worker thread (asyncio.to_thread), not on the event loop.
+    deadline = _time.time() + 12
+    while _time.time() < deadline:
+        _time.sleep(0.15)
+        snap = _plain_pane_snapshot(pane_id)
+        if "auto mode on" in snap:
+            break
+        if _folder_trust_visible(pane_id) or _dev_channels_consent_visible(pane_id):
+            _tmux_mutate("send-keys", "-t", pane_id, "Enter")
+
+    stamp_new_window(pane_id)
     activity.set_commander(pane_id=pane_id, session_id=None, at=now)

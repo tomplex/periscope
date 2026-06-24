@@ -409,6 +409,22 @@ def _dev_channels_consent_visible(target: str) -> bool:
     return "Loading development channels" in _plain_pane_snapshot(target)
 
 
+def _folder_trust_visible(target: str) -> bool:
+    """Whether Claude's first-run 'Do you trust the files in this folder?'
+    dialog is up in `target` (it precedes the dev-channels consent when the
+    cwd isn't an already-trusted Claude folder — e.g. the commander's $HOME):
+
+        Do you trust the files in this folder?
+        ...
+        ❯ 1. Yes, I trust this folder
+           2. No, exit
+
+    Default selection is the trust option; bare Enter confirms. Like the
+    consent chooser, it swallows non-digit input until dismissed."""
+    snap = _plain_pane_snapshot(target)
+    return "trust this folder" in snap or "Do you trust" in snap
+
+
 def dismiss_dev_channels_consent_bg(target: str, max_wait_s: float = 5.0) -> None:
     """Fire a background thread that polls `target` for the consent dialog
     and sends Enter to confirm option 1. No-op if the dialog never appears
