@@ -259,5 +259,8 @@ def write_mcp_config() -> None:
             }
         }
     }
+    # config_dir() doesn't mkdir; on a first-ever boot the dir may not exist yet
+    # (the activity-prune thread that normally creates it races this call).
+    config.PERISCOPE_MCP_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     config.PERISCOPE_MCP_CONFIG.write_text(json.dumps(cfg))
     config.ORCHESTRATOR_PROMPT_FILE.write_text(ROLE_PROMPT)
