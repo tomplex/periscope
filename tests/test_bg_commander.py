@@ -1,4 +1,7 @@
 import json
+
+import pytest
+
 from periscope import bg_commander as bgc
 
 
@@ -45,10 +48,6 @@ def test_dispatch_argv_pins_the_security_flags(monkeypatch):
 def test_dispatch_env_sets_caller_id():
     env = bgc._dispatch_env(session_id="sid-1")
     assert env["PERISCOPE_CALLER_ID"] == "cmdr:sid-1"
-
-
-import pytest
-from periscope import bg_commander as bgc
 
 
 @pytest.fixture(autouse=True)
