@@ -140,8 +140,16 @@ def _dispatch_env(*, handle: str) -> dict[str, str]:
     PERISCOPE_CALLER_ID (falling back to TMUX_PANE). The handle is a unique
     cmdr:<token> — its only jobs are to (a) trip is_commander's prefix check and
     (b) key _MCP_SESSIONS uniquely across concurrent commanders. It is NOT the
-    claude session id (which isn't known until claude prints it post-spawn)."""
-    return {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
+    claude session id (which isn't known until claude prints it post-spawn).
+
+    The Anthropic API-key auth vars are STRIPPED: server.py load_dotenv()s
+    ANTHROPIC_API_KEY into os.environ (for the narrator/rename SDK calls), and an
+    inherited key takes precedence over the claude.ai subscription login — the
+    commander must bill on the subscription, not API credits (a spend leak)."""
+    env = {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(k, None)
+    return env
 
 
 def _parse_session_id(stdout: str) -> str | None:
