@@ -469,8 +469,7 @@ def test_spawn_commander_non_git_cwd_errors(fresh_activity_db, monkeypatch):
 
 
 def test_spawn_with_branch_creates_worktree(fresh_activity_db, monkeypatch, mocker):
-    from periscope import channels, activity, open_ops, worktree_spawn
-    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    from periscope import channels, open_ops, worktree_spawn
     created = {}
     monkeypatch.setattr(worktree_spawn, "spawn_worktree",
                         lambda repo, branch: created.update(repo=repo, branch=branch) or {"path": "/wt/foo"})
@@ -503,8 +502,7 @@ def test_spawn_with_branch_creates_worktree(fresh_activity_db, monkeypatch, mock
 
 
 def test_spawn_branch_without_repo_errors(fresh_activity_db, monkeypatch, mocker):
-    from periscope import channels, activity
-    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    from periscope import channels
     mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
     mocker.patch("periscope.channels.os.path.isdir", return_value=True)
     res = asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "go", "branch": "tc/x"}))

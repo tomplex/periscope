@@ -76,19 +76,6 @@ CREATE TABLE IF NOT EXISTS pane_status (
                                    -- manual routes, or detected external)
   rail         TEXT                -- <=28-char rail fragment (nullable)
 );
-CREATE TABLE IF NOT EXISTS captain_log (
-  id    INTEGER PRIMARY KEY AUTOINCREMENT,
-  at    INTEGER NOT NULL,
-  kind  TEXT NOT NULL,         -- 'standing_order' | 'watch' | 'narrative'
-  text  TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_captain_log_at ON captain_log (at);
-CREATE TABLE IF NOT EXISTS commander (
-  id          INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
-  pane_id     TEXT NOT NULL,
-  session_id  TEXT,
-  updated_at  INTEGER NOT NULL
-);
 DROP TABLE IF EXISTS first_mate;
 """
 
@@ -422,86 +409,6 @@ def prune_pane_status(alive_pane_ids: set[str]) -> int:
         return len(dead)
 
 
-# --- captain_log + commander marker: commander substrate ----------------
-#
-# captain_log is the commander's durable scratch — standing orders, a
-# watch-list, narrative notes — appended via the captains_log MCP tools.
-# commander is a singleton (id=1) marker naming which pane currently holds
-# the commander role; the tools self-guard against it (channels.py).
-
-@dataclass(frozen=True)
-class CaptainLogRow:
-    id: int
-    at: int
-    kind: str          # standing_order | watch | narrative
-    text: str
-
-
-@dataclass(frozen=True)
-class CommanderMarker:
-    pane_id: str
-    session_id: str | None
-    updated_at: int
-
-
-def append_captain_log(*, kind: str, text: str, at: int | None = None) -> None:
-    with _LOCK:
-        c = _conn()
-        c.execute(
-            "INSERT INTO captain_log (at, kind, text) VALUES (?,?,?)",
-            (int(at if at is not None else time.time()), kind, text),
-        )
-        c.commit()
-
-
-def recent_captain_log(*, limit: int = 50) -> list[CaptainLogRow]:
-    """Newest-first captain's-log rows."""
-    with _LOCK:
-        c = _conn()
-        rows = c.execute(
-            "SELECT id, at, kind, text FROM captain_log ORDER BY at DESC, id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [CaptainLogRow(*r) for r in rows]
-
-
-def get_commander() -> CommanderMarker | None:
-    with _LOCK:
-        c = _conn()
-        row = c.execute(
-            "SELECT pane_id, session_id, updated_at FROM commander WHERE id=1"
-        ).fetchone()
-    return CommanderMarker(*row) if row else None
-
-
-def set_commander(*, pane_id: str, session_id: str | None, at: int) -> None:
-    """Upsert the singleton (id=1) commander marker."""
-    with _LOCK:
-        c = _conn()
-        c.execute(
-            "INSERT INTO commander (id, pane_id, session_id, updated_at) "
-            "VALUES (1, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET "
-            "  pane_id=excluded.pane_id, session_id=excluded.session_id, "
-            "  updated_at=excluded.updated_at",
-            (pane_id, session_id, at),
-        )
-        c.commit()
-
-
-def clear_commander() -> None:
-    with _LOCK:
-        c = _conn()
-        c.execute("DELETE FROM commander WHERE id=1")
-        c.commit()
-
-
-def is_commander_pane(pane: str) -> bool:
-    """True iff `pane` (a tmux %N id) is the registered commander singleton."""
-    marker = get_commander()
-    return marker is not None and marker.pane_id == pane
-
-
 # --- usage_samples: plan-usage time series ------------------------------
 #
 # One row per meter per successful OAuth usage fetch (~5 min cadence, from
@@ -817,6 +724,12 @@ def _worker_tick(last_ctx: dict) -> None:
         narrator.tick(panes)
     except Exception:
         log.exception("narrator tick failed")
+    # bg commander job status sync (prod-only, same as the narrator above).
+    try:
+        from periscope import bg_commander
+        bg_commander.sync_jobs()
+    except Exception:
+        log.exception("bg_commander sync failed")
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()

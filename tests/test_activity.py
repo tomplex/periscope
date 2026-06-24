@@ -436,53 +436,13 @@ def test_worker_tick_invokes_narrator_with_claude_panes(monkeypatch):
     assert calls[0][0][0]["pane_id"] == "%1"
 
 
-def test_captain_log_append_then_recent_roundtrips(fresh_activity_db):
-    from periscope import activity
-    activity.append_captain_log(kind="standing_order", text="watch propensity", at=100)
-    activity.append_captain_log(kind="narrative", text="chasing flaky test", at=200)
-    rows = activity.recent_captain_log()
-    assert [r.text for r in rows] == ["chasing flaky test", "watch propensity"]  # newest-first
-    assert rows[0].kind == "narrative"
-    assert rows[0].at == 200
-
-
-def test_captain_log_recent_honors_limit(fresh_activity_db):
-    from periscope import activity
-    for i in range(5):
-        activity.append_captain_log(kind="watch", text=f"w{i}", at=i)
-    rows = activity.recent_captain_log(limit=2)
-    assert [r.text for r in rows] == ["w4", "w3"]
-
-
-def test_commander_marker_set_get_roundtrips(fresh_activity_db):
-    from periscope import activity
-    assert activity.get_commander() is None
-    activity.set_commander(pane_id="%9", session_id="abc", at=100)
-    m = activity.get_commander()
-    assert m.pane_id == "%9" and m.session_id == "abc" and m.updated_at == 100
-
-
-def test_commander_marker_is_singleton(fresh_activity_db):
-    from periscope import activity
-    activity.set_commander(pane_id="%9", session_id="abc", at=100)
-    activity.set_commander(pane_id="%12", session_id="def", at=200)
-    m = activity.get_commander()
-    assert m.pane_id == "%12"  # second set replaces, not a second row
-
-
-def test_commander_marker_clear(fresh_activity_db):
-    from periscope import activity
-    activity.set_commander(pane_id="%9", session_id=None, at=100)
-    activity.clear_commander()
-    assert activity.get_commander() is None
-
-
-def test_is_commander_pane(fresh_activity_db):
-    from periscope import activity
-    assert activity.is_commander_pane("%9") is False
-    activity.set_commander(pane_id="%9", session_id=None, at=1)
-    assert activity.is_commander_pane("%9") is True
-    assert activity.is_commander_pane("%8") is False
+def test_worker_tick_syncs_bg_jobs(monkeypatch, fresh_activity_db):
+    from periscope import activity, bg_commander
+    monkeypatch.setattr(activity, "list_windows", lambda: [])     # no panes => skip narrator path
+    called = {"sync": False}
+    monkeypatch.setattr(bg_commander, "sync_jobs", lambda **kw: called.__setitem__("sync", True))
+    activity._worker_tick({})
+    assert called["sync"] is True
 
 
 def test_pane_workspace_set_get(fresh_activity_db):
