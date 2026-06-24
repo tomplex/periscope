@@ -75,8 +75,10 @@ def cleanup_archive(body: ArchiveBody):
             if tmux_session:
                 windows = [w for w in list_windows()
                            if w.get("session") == tmux_session]
-                for target, _pid in placement_kill_set(pinned_dir, windows):
-                    _tmux_mutate("kill-pane", "-t", target)
+                # Kill by stable pane_id, not session:index — `renumber-windows
+                # on` shifts indices mid-loop (see session_delete).
+                for target, pid in placement_kill_set(pinned_dir, windows):
+                    _tmux_mutate("kill-pane", "-t", pid)
                     drop_target_focus(target)
 
             # 3. Determine the repo for worktree removal. Untracked

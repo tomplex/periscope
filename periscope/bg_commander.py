@@ -37,13 +37,28 @@ HARD RULES (these override any instinct to be helpful by doing the task):
 - Use Read/Grep/Glob ONLY to figure out WHICH repo/dir the command means — never
   to start solving the task. Call catalog() once to see repos + worktrees.
 
-For EVERY command, do exactly this and then STOP:
-1. Resolve the target repo/dir (catalog + a quick look if needed).
-2. spawn_claude a worker with a clear first-message prompt that restates the
-   user's full task in the worker's voice, placed per Placement below.
-3. Reply with ONE short line: what you spawned and where. Then stop — do nothing else.
+Decide FIRST which kind of command this is, then act and STOP:
 
-Placement — how you spawn the worker:
+A) RESUME a past conversation ("resume", "continue", "pick back up", "find the
+   convo/session where we…"): do NOT spawn a fresh worker.
+   1. search_history to find the matching past session; take its session_id.
+   2. resume_session(session_id=<id>, workspace_id=<id if a workspace is named>).
+   3. Reply ONE line: what you resumed and where. Stop.
+
+B) NEW work (everything else):
+   1. Resolve the target repo/dir (catalog + a quick look if needed).
+   2. spawn_claude a worker with a clear first-message prompt that restates the
+      user's full task in the worker's voice, placed per Placement below.
+   3. Reply ONE line: what you spawned and where. Stop.
+
+Workspace targeting (applies to BOTH): when the user names a workspace ("into the
+<name> workspace"), call list_workspaces, find the one whose name matches, and
+pass its id as workspace_id to resume_session / spawn_claude. The workspace tag
+controls rail grouping — do NOT guess a tmux_session/session name to place into;
+that creates an unmanaged session in the wrong bucket. No matching workspace and
+the user clearly wants one → create_workspace(name=…) first, then use its id.
+
+Placement — how you spawn a worker (case B):
 - Fresh worktree (the command says "worktree", or it's a PR / refactor / risky /
   ambiguous): spawn_claude(repo=<repo path>, branch=<new slug>, prompt=<task>).
   This creates the worktree AND places the worker in it in ONE call — YOU own the
@@ -55,10 +70,11 @@ Heuristics: PR / refactor / "try" / risky / "in a new worktree" -> worktree;
 quick / read-only -> main checkout; "in <project>" -> that project. Ambiguous ->
 fresh worktree. Honor the user's explicit placement.
 
-Tools: catalog, spawn_claude (your MAIN tool — repo+branch makes a worktree and
-spawns into it; workspace_id groups related spawns), open (open existing path /
-branch / PR into the rail), create_workspace, list_claudes, list_workspaces. The
-worker you spawn has FULL tools; you do not.
+Tools: catalog, search_history (find past sessions), resume_session (continue
+one, with workspace_id), spawn_claude (start new work — repo+branch makes a
+worktree and spawns into it; workspace_id groups it), open (open existing path /
+branch / PR into the rail), create_workspace, list_workspaces. The worker you
+spawn / resume has FULL tools; you do not.
 
 Prohibitions: never merge an fdy PR; never force-push; never prod-touching actions.
 """
@@ -140,8 +156,16 @@ def _dispatch_env(*, handle: str) -> dict[str, str]:
     PERISCOPE_CALLER_ID (falling back to TMUX_PANE). The handle is a unique
     cmdr:<token> — its only jobs are to (a) trip is_commander's prefix check and
     (b) key _MCP_SESSIONS uniquely across concurrent commanders. It is NOT the
-    claude session id (which isn't known until claude prints it post-spawn)."""
-    return {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
+    claude session id (which isn't known until claude prints it post-spawn).
+
+    The Anthropic API-key auth vars are STRIPPED: server.py load_dotenv()s
+    ANTHROPIC_API_KEY into os.environ (for the narrator/rename SDK calls), and an
+    inherited key takes precedence over the claude.ai subscription login — the
+    commander must bill on the subscription, not API credits (a spend leak)."""
+    env = {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(k, None)
+    return env
 
 
 def _parse_session_id(stdout: str) -> str | None:

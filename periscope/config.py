@@ -89,15 +89,17 @@ PERISCOPE_MCP_CONFIG = config_dir() / "bg-mcp-config.json"        # generated at
 ORCHESTRATOR_PROMPT_FILE = config_dir() / "orchestrator-prompt.txt"  # written from bg_commander.ROLE_PROMPT
 CHANNEL_SHIM_PATH = Path(__file__).resolve().parent.parent / "channel_shim.py"
 BG_COMMANDER_MODEL = "sonnet"
-# Pinned to the four pane-INDEPENDENT tools (NOT mcp__periscope__*). The wildcard
-# would grant pane-dependent tools (notify/link_pr/open_document/report/…) that
-# resolve the caller against a real %N window or feed the handle to tmux; a cmdr:
-# handle matches no window, so those error or leak alert state _channel_gc never
-# reaps. These four are exactly the delegator set the role prompt advertises.
+# Pinned to pane-INDEPENDENT tools (NOT mcp__periscope__*). The wildcard would
+# grant pane-dependent tools (notify/link_pr/open_document/report/…) that resolve
+# the caller against a real %N window or feed the handle to tmux; a cmdr: handle
+# matches no window, so those error or leak alert state _channel_gc never reaps.
+# These are exactly the delegator/discovery set the role prompt advertises.
 BG_COMMANDER_ALLOWED_TOOLS = (
     "Read,Grep,Glob,"
     "mcp__periscope__catalog,mcp__periscope__open,"
-    "mcp__periscope__create_workspace,mcp__periscope__spawn_claude"
+    "mcp__periscope__create_workspace,mcp__periscope__list_workspaces,"
+    "mcp__periscope__spawn_claude,"
+    "mcp__periscope__search_history,mcp__periscope__resume_session"
 )
 
 # Activity timeline window: git commits + CI runs newer than this many

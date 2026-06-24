@@ -53,6 +53,14 @@ def test_dispatch_env_sets_caller_id():
     assert env["PERISCOPE_CALLER_ID"] == "cmdr:tok-1"
 
 
+def test_dispatch_env_strips_api_key(monkeypatch):
+    # server.py load_dotenv()s ANTHROPIC_API_KEY into os.environ; it must NOT reach
+    # the commander or claude bills API credits instead of the subscription.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-leak")
+    env = bgc._dispatch_env(handle="tok-1")
+    assert "ANTHROPIC_API_KEY" not in env
+
+
 def test_parse_session_id_from_backgrounded_line():
     assert bgc._parse_session_id("backgrounded · 5bf0d4d5\n  claude agents") == "5bf0d4d5"
     assert bgc._parse_session_id("backgrounded · 5bf0d4d5-4751-4cd7-8c33") == "5bf0d4d5-4751-4cd7-8c33"

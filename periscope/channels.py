@@ -754,6 +754,7 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     if not session_id:
         return _tool_result({"ok": False, "error": "session_id is required"})
     tmux_session = str(arguments.get("tmux_session") or "resumes").strip()
+    ws_id = str(arguments.get("workspace_id") or "").strip()
 
     # Lazy import: routes/sessions.py imports from this module at load time
     # (dismiss_dev_channels_consent_bg) — a top-level import back at it
@@ -769,6 +770,19 @@ def _do_resume_session_tool(pane: str, arguments: dict):
         )
     except HTTPException as e:
         return _tool_result({"ok": False, "error": str(e.detail)})
+
+    # Tag the resumed pane into a periscope workspace (goal-scoped rail group) so
+    # it surfaces under that group instead of the default "dev" bucket — the same
+    # tagging spawn_claude does. The resume result carries session:index; resolve
+    # the pane id from it (the rail tag is keyed on %N).
+    if ws_id:
+        from periscope import activity, workspaces as _workspaces
+        if _workspaces.get_workspace(ws_id):
+            target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
+            pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
+            if pane_id:
+                activity.set_pane_workspace(pane_id, ws_id)
+                result = {**result, "workspace_id": ws_id}
     return _tool_result(result)
 
 
@@ -1340,7 +1354,17 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                     "description": (
                         "tmux session to open the window in; created if "
                         "missing. Defaults to 'resumes' (the dashboard's "
-                        "convention)."
+                        "convention). Prefer setting workspace_id over guessing "
+                        "a session name — the tag controls rail grouping."
+                    ),
+                },
+                "workspace_id": {
+                    "type": "string",
+                    "description": (
+                        "A periscope workspace id (from list_workspaces) to tag "
+                        "the resumed pane into, so it groups under that workspace "
+                        "in the rail instead of the default 'dev' bucket. Use this "
+                        "when the user names a workspace to resume into."
                     ),
                 },
             },

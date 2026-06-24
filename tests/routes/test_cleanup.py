@@ -194,6 +194,7 @@ def test_archive_spares_ws_pane(client, clean_state, fresh_activity_db, mocker):
         "candidates": [{"pinned_dir": "/repo/a", "delete_branch": False}],
     })
     assert r.status_code == 200
-    assert ("kill-pane", "-t", "sess_a:1") in calls
+    assert ("kill-pane", "-t", "%shell") in calls      # killed by pane_id
     assert not any(a[0] == "kill-session" for a in calls)
-    assert all("sess_a:0" not in a for a in calls)
+    assert not any("sess_a:" in a for a in calls)       # never index-targeted
+    assert all("%claude" not in a for a in calls)       # ws pane spared
