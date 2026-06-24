@@ -468,13 +468,27 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # the worktree; resolve_worktree_session registers the project + dedupes a
     # foreign-name clash, and returns None when cwd isn't in a git repo (no
     # worktree to anchor → fall back to the caller's session).
-    from periscope import open_ops
+    from periscope import open_ops, activity
+    is_commander = activity.is_commander_pane(pane)
     workspace = str(arguments.get("workspace") or "same").strip().lower()
-    anchored = open_ops.resolve_worktree_session(cwd) if workspace == "new" else None
-    if anchored:
+    if is_commander:
+        # The commander is ALWAYS cwd-anchored: it's a hidden pane, so deriving
+        # the session from its own caller session would misfile the worker into
+        # the commander's invisible session. Force the cwd-resolution path and
+        # refuse a non-git cwd rather than fall back to the caller session.
+        anchored = open_ops.resolve_worktree_session(cwd)
+        if anchored is None:
+            body = {"ok": False,
+                    "error": "cwd is not in a git repo — the commander's spawns "
+                             "must target a repo/worktree dir"}
+            return _tool_result(body)
         session, project = anchored
     else:
-        session = str(arguments.get("session") or caller_session or "spawned").strip()
+        anchored = open_ops.resolve_worktree_session(cwd) if workspace == "new" else None
+        if anchored:
+            session, project = anchored
+        else:
+            session = str(arguments.get("session") or caller_session or "spawned").strip()
 
     # Create the session if missing, otherwise add a window to it. Both
     # paths use `-P -F #{window_index}` so we know the spawned slot — with

@@ -419,6 +419,50 @@ def test_spawn_claude_no_parent_tolerated(mocker):
     assert json.loads(result[0].text)["ok"] is True
 
 
+def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
+    from periscope import channels, activity, open_ops
+    activity.set_commander(pane_id="%C", session_id=None, at=1)   # caller IS commander
+    monkeypatch.setattr(open_ops, "resolve_worktree_session",
+                        lambda cwd: ("proj-sess", object()))      # git cwd resolves
+    # Mirror the full mock set from test_spawn_claude_writes_spawned_by: the
+    # spawn handler shells out heavily, so all of these must be stubbed or the
+    # test hits real tmux.
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    cap = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    mocker.patch("periscope.channels.set_window_fields")
+    # The commander path makes `anchored` truthy, so place_in_rail fires:
+    # stub list_windows + place_in_rail so it never touches real tmux/state.
+    mocker.patch("periscope.channels.list_windows", return_value=[])
+    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+
+    asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "x", "cwd": "/r"}))
+
+    # The session the worker landed in must be the RESOLVED "proj-sess",
+    # never the commander's own caller session ("sess"). Inspect the
+    # new-session/new-window _tmux_mutate call args for "proj-sess".
+    targets = [c.args for c in cap.call_args_list]
+    assert any("proj-sess" in a for args in targets for a in args)
+    assert not any("sess:" in a for args in targets for a in args
+                   if isinstance(a, str) and a.startswith("sess:"))
+
+
+def test_spawn_commander_non_git_cwd_errors(fresh_activity_db, monkeypatch):
+    from periscope import channels, activity, open_ops
+    activity.set_commander(pane_id="%C", session_id=None, at=1)
+    monkeypatch.setattr(open_ops, "resolve_worktree_session", lambda cwd: None)
+    monkeypatch.setattr("os.path.isdir", lambda p: True)
+    res = asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "x", "cwd": "/tmp"}))
+    assert _body(res)["ok"] is False and "git" in _body(res)["error"].lower()
+
+
 def test_send_to_happy(mocker):
     from periscope import channels
     mocker.patch("periscope.channels._resolve_window_by_pid",
