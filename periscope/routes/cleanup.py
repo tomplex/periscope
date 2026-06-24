@@ -7,7 +7,10 @@ from pydantic import BaseModel
 
 from periscope.cleanup import compute_candidates
 from periscope.log import log
-from periscope.projects import archive_project, all_projects, MAIN_KEY
+from periscope.panes import drop_target_focus, list_windows
+from periscope.projects import (
+    archive_project, all_projects, MAIN_KEY, placement_kill_set,
+)
 from periscope.tmux import _run, _tmux_mutate
 from periscope import worktrees
 
@@ -63,9 +66,16 @@ def cleanup_archive(body: ArchiveBody):
             if row:
                 archive_project(pinned_dir)
 
-            # 2. Kill tmux session.
+            # 2. Kill the worktree's placement set (panes whose rail placement
+            # is this project), sparing any pane dragged into a live workspace.
+            # pinned_dir IS the project key, so placement resolves directly;
+            # the MAIN_KEY guard above means placement_kill_set never refuses.
             if tmux_session:
-                _tmux_mutate("kill-session", "-t", tmux_session)
+                windows = [w for w in list_windows()
+                           if w.get("session") == tmux_session]
+                for target, _pid in placement_kill_set(pinned_dir, windows):
+                    _tmux_mutate("kill-pane", "-t", target)
+                    drop_target_focus(target)
 
             # 3. Determine the repo for worktree removal. Untracked
             # worktrees have no project.repo; derive via git from the
