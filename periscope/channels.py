@@ -776,7 +776,8 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     # tagging spawn_claude does. The resume result carries session:index; resolve
     # the pane id from it (the rail tag is keyed on %N).
     if ws_id:
-        from periscope import activity, workspaces as _workspaces
+        from periscope import activity
+        from periscope import workspaces as _workspaces
         if _workspaces.get_workspace(ws_id):
             target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
             pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()

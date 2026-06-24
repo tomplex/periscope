@@ -19,6 +19,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
+from typing import cast
 
 from periscope import config
 from periscope.log import log
@@ -165,7 +166,7 @@ def _dispatch_env(*, handle: str) -> dict[str, str]:
     env = {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
     for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         env.pop(k, None)
-    return env
+    return cast("dict[str, str]", env)
 
 
 def _parse_session_id(stdout: str) -> str | None:
