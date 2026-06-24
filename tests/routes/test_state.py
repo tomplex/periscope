@@ -195,33 +195,6 @@ def test_state_merges_status_rail_when_present(client, mocker, clean_state,
     assert w["status_rail"] == "comparing hit rates"
 
 
-def test_state_excludes_commander(client, mocker, clean_state, fresh_activity_db):
-    """The hidden commander pane must not appear in the rail payload, but it must
-    survive the raw-windows passes (focus / pid attach / _channel_gc) — so it's
-    dropped from the FINAL list, not the raw list_windows output."""
-    activity = fresh_activity_db
-    activity.set_commander(pane_id="%C", session_id=None, at=1)
-    windows = [
-        {"session": "bridge", "index": 0, "active": True, "activity": 0,
-         "pane_id": "%C", "cwd": ""},
-        {"session": "proj", "index": 0, "active": True, "activity": 0,
-         "pane_id": "%P", "cwd": ""},
-    ]
-    _patch(mocker, "list_windows", return_value=windows)
-    _patch(mocker, "update_focus_from_windows")
-    _patch(mocker, "_attach_git_then_resolve_pids")
-    _patch(mocker, "all_projects", return_value={})
-    _patch(mocker, "cached_claude_usage", return_value={})
-    _patch(mocker, "cached_plan_usage", return_value=None)
-    _patch(mocker, "build_window_view",
-           side_effect=lambda w, now_ts: (
-               {"index": w["index"], "pane_id": w["pane_id"]}, None))
-
-    panes = client.get("/api/state").json()["windows"]
-    assert all(w.get("pane_id") != "%C" for w in panes)
-    assert any(w.get("pane_id") == "%P" for w in panes)
-
-
 def test_state_includes_workspaces(client, mocker, clean_state, fresh_activity_db):
     """The /api/state payload carries non-archived workspaces."""
     from periscope.workspaces import create_workspace

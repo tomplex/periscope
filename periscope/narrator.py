@@ -142,17 +142,6 @@ def rename_decision(suggestion: str | None, *, current_name: str,
     return suggestion
 
 
-def _is_commander(w: dict, pane_id: str) -> bool:
-    """The commander's own tab. Identity is the live marker pane id, with the
-    fixed bridge/commander window as a fallback if the marker is stale."""
-    from periscope.commander import COMMANDER_SESSION, COMMANDER_WINDOW
-    marker = activity.get_commander()
-    if marker is not None and marker.pane_id == pane_id:
-        return True
-    return (w.get("session") == COMMANDER_SESSION
-            and (w.get("name") or "") == COMMANDER_WINDOW)
-
-
 def is_external_rename(row: PaneStatusRow, current_name: str) -> bool:
     """Someone renamed the window since the narrator last looked (human,
     tmux-native, or another route that didn't stamp). seen_name is updated
@@ -259,8 +248,6 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
         pane_id = w.get("pane_id") or ""
         if not pane_id:
             continue
-        if activity.is_commander_pane(pane_id):
-            continue   # hidden orchestrator — no status line, no Haiku spend
         try:
             sid = activity.get_pane_session(pane_id)
             if not sid:
@@ -331,11 +318,6 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     gate_row = replace(row, renamed_at=renamed_at) if row is not None else None
     new_name = rename_decision(suggestion, current_name=current_name,
                                row=gate_row, now=now)
-    if new_name and _is_commander(w, pane_id):
-        # The commander's own tab is never auto-renamed — its identity in the
-        # rail (the fixed 'commander' window) must stay stable. Status still
-        # regenerates; only the rename is suppressed.
-        new_name = None
     if new_name:
         # current_name and row are snapshots from tick start, and a tick can
         # run many seconds (sequential Haiku calls). Re-read the live window
