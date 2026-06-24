@@ -58,6 +58,9 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     # narrator Haiku calls, and real renames of real windows. PORT defaults
     # to 8765 here, so the prod-only guard does not protect tests.
     mocker.patch("periscope.activity.run_worker", side_effect=_noop)
+    # PORT defaults to 8765 (prod), so the lifespan best-effort boot-spawns the
+    # commander — stub it so we don't shell out to a real tmux.
+    mocker.patch("periscope.commander.ensure_commander", side_effect=_noop)
     # Lifespan teardown still calls os.unlink(MCP_SOCKET_PATH) regardless
     # of whether the listener was real; without this patch, running pytest
     # while prod periscope is up deletes its live /tmp/periscope-mcp.sock
@@ -117,8 +120,37 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
     # Teardown unlinks MCP_SOCKET_PATH — no-op so we don't touch /tmp.
     mocker.patch("os.unlink")
 
+    # The prod-gated lifespan best-effort boot-spawns the commander; stub it
+    # so the test doesn't shell out to a real tmux on this machine.
+    async def _noop_commander():
+        return None
+    mocker.patch("periscope.commander.ensure_commander", side_effect=_noop_commander)
+
     from periscope.app import app
     with TestClient(app):
         pass
 
     assert called["count"] == 1
+
+
+def test_archive_stale_bridge_project(clean_state):
+    """The old first-mate registered the bridge session as a rail project. The
+    migration helper archives it (projects has no delete API; the commander is
+    hidden, so the project must not stay rail-visible)."""
+    from periscope import projects, app as app_mod
+
+    projects.create_project("/Users/x", name="bridge", tmux_session="bridge",
+                            repo=None, base_branch=None)
+    app_mod._archive_stale_commander_project()
+    p = projects.get_project("/Users/x")
+    assert p.get("archived_at")  # archived, no longer rail-visible
+
+
+def test_archive_stale_bridge_project_leaves_others(clean_state):
+    """Only projects whose tmux_session is the commander session get archived."""
+    from periscope import projects, app as app_mod
+
+    projects.create_project("/Users/keep", name="keep", tmux_session="keep",
+                            repo=None, base_branch=None)
+    app_mod._archive_stale_commander_project()
+    assert not projects.get_project("/Users/keep").get("archived_at")
