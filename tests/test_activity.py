@@ -522,3 +522,42 @@ def test_prune_pane_workspaces(fresh_activity_db):
     assert dropped == 1
     assert activity.get_pane_workspace("%2") is None
     assert activity.get_pane_workspace("%1") == "ws_a"
+
+
+def test_pane_project_set_get(fresh_activity_db):
+    activity = fresh_activity_db
+    assert activity.get_pane_project("%1") is None
+    activity.set_pane_project("%1", "/repo/wt")
+    assert activity.get_pane_project("%1") == "/repo/wt"
+
+
+def test_pane_project_retag_overwrites(fresh_activity_db):
+    activity = fresh_activity_db
+    activity.set_pane_project("%1", "/a")
+    activity.set_pane_project("%1", "/b")
+    assert activity.get_pane_project("%1") == "/b"
+
+
+def test_pane_project_untag_clears(fresh_activity_db):
+    activity = fresh_activity_db
+    activity.set_pane_project("%1", "/a")
+    activity.set_pane_project("%1", None)
+    assert activity.get_pane_project("%1") is None
+
+
+def test_pane_project_map(fresh_activity_db):
+    activity = fresh_activity_db
+    activity.set_pane_project("%1", "/a")
+    activity.set_pane_project("%2", "/a")
+    activity.set_pane_project("%3", "/b")
+    assert activity.pane_project_map() == {"%1": "/a", "%2": "/a", "%3": "/b"}
+
+
+def test_prune_pane_projects(fresh_activity_db):
+    activity = fresh_activity_db
+    activity.set_pane_project("%1", "/a")
+    activity.set_pane_project("%2", "/a")
+    dropped = activity.prune_pane_projects({"%1"})
+    assert dropped == 1
+    assert activity.get_pane_project("%2") is None
+    assert activity.get_pane_project("%1") == "/a"
