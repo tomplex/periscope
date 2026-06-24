@@ -208,13 +208,11 @@ _CAPTAINS_LOG_KINDS = {"standing_order", "watch", "narrative"}
 
 
 def _require_commander(pane: str) -> bool:
-    """True iff `pane` is the registered commander singleton. The tool
-    registry is flat (every attached pane sees every tool), so commander-only
-    tools self-guard. Lazy-import activity (channels.py never top-imports it)."""
+    """True iff `pane` is the registered commander singleton. Channel tools that
+    are commander-only self-guard with this (the registry is flat)."""
     from periscope import activity
 
-    marker = activity.get_commander()
-    return marker is not None and marker.pane_id == pane
+    return activity.is_commander_pane(pane)
 
 
 def _do_captains_log_read_tool(pane: str, arguments: dict):

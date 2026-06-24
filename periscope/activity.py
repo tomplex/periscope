@@ -496,6 +496,12 @@ def clear_commander() -> None:
         c.commit()
 
 
+def is_commander_pane(pane: str) -> bool:
+    """True iff `pane` (a tmux %N id) is the registered commander singleton."""
+    marker = get_commander()
+    return marker is not None and marker.pane_id == pane
+
+
 # --- usage_samples: plan-usage time series ------------------------------
 #
 # One row per meter per successful OAuth usage fetch (~5 min cadence, from

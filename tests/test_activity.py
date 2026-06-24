@@ -477,6 +477,14 @@ def test_commander_marker_clear(fresh_activity_db):
     assert activity.get_commander() is None
 
 
+def test_is_commander_pane(fresh_activity_db):
+    from periscope import activity
+    assert activity.is_commander_pane("%9") is False
+    activity.set_commander(pane_id="%9", session_id=None, at=1)
+    assert activity.is_commander_pane("%9") is True
+    assert activity.is_commander_pane("%8") is False
+
+
 def test_pane_workspace_set_get(fresh_activity_db):
     activity = fresh_activity_db
     assert activity.get_pane_workspace("%1") is None
