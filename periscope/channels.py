@@ -838,7 +838,10 @@ async def _handle_mcp_connection(
     _run_mcp_for_pane, clean up session registry on close."""
     pane = ""
     try:
-        # Hello frame: a single JSON line {"pane": "%N"}.
+        # Hello frame: a single JSON line {"pane": <handle>}. The "pane" key is a
+        # private wire-contract name — the value is an opaque caller handle, either
+        # a tmux pane id (%N) or a commander id (cmdr:<session_id>). `pane` below
+        # may therefore hold a cmdr: handle, NOT a real tmux target.
         hello_line = await reader.readline()
         if not hello_line:
             return
