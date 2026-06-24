@@ -52,7 +52,12 @@ A pane carries **two independent facts**, both per-`pane_id` metadata:
   tmux sessions, preserving periscope's "watch every pane" purpose).
 
 The two facts stay separate on purpose: a workspace-tagged pane keeps its
-project context, so it still shows its repo/branch chip in the workspace.
+project context, so it still shows its repo/branch chip in the workspace. This
+is load-bearing, not cosmetic: the chip is built from `worktree_affiliation` +
+repo/branch (railTree.js:195-211), and `worktree_affiliation` comes from
+`affiliation(cwd, pinned_for_aff, project.repo)` where `pinned_for_aff` is the
+resolved `project_key` (window_view.py:178-179). Without a project-context tag a
+workspace pane resolves no project, and the chip degrades to a bare cwd.
 
 ## Changes
 
@@ -79,9 +84,15 @@ Accessors mirror the `pane_workspaces` set: `set_pane_project`,
 
 Seed `pane_projects` from today's grouping so the rail is byte-identical at
 cutover: for every live pane with no `pane_projects` row, write the result of
-the *current* session-match `resolve_project_for_window`. Idempotent; runs once
-per startup before serving, alongside the existing
-`migrate_legacy_pane_sessions` step.
+the *current* session-match `resolve_project_for_window`. Idempotent.
+
+It must run **synchronously in the lifespan before `yield`** — not bolted onto
+`_pane_sessions_housekeeping`, which is dispatched via `_bg(...)` (app.py:61-77),
+a fire-and-forget thread the lifespan does not await. A `_bg` backfill races the
+first `/api/state` polls. This phase tolerates the race (untagged panes fall
+back to session-match — same answer), but the collapse follow-on deletes the
+fallback, so the backfill must already be a blocking step by then. Make it
+blocking now.
 
 ### Resolution (`periscope/projects.py`)
 
@@ -105,6 +116,13 @@ collapse there's one session and the fallback is meaningless). `window_view.py`
 is unchanged: it still calls `resolve_project_for_window` (`:172`) and emits
 `project_pinned_dir` + `workspace_id`; both are now metadata-sourced.
 
+Two callers resolve a *session*, not a pane, passing a dict with no `pane_id`:
+`_window_new_plain` (sessions.py:189) and `window_new_worktree` (sessions.py:291).
+They miss the tag-first path and rely on the retained session-match fallback —
+so "resolution is metadata-only" holds for the rail/`window_view` path but NOT
+for these two. The collapse follow-on that deletes the fallback must give them an
+explicit session→project lookup; they are flagged fallback-dependent.
+
 ### Tag on create (`periscope/open_ops.py`)
 
 Every pane periscope creates gets a `pane_projects` row at creation, next to
@@ -121,22 +139,49 @@ matches AND no workspace override — via `kill-pane` by stable `pane_id`:
 - `routes/sessions.py:62` — rail "close worktree". The dragged-into-workspace
   pane has a workspace override → not in the placement set → **survives.**
 - `routes/cleanup.py:68` — cleanup modal stale-worktree teardown. Same rule.
-- `routes/projects.py:267` — project delete/archive. Same rule.
 
-A shared helper (placement → list of `pane_id` to kill) backs all three so the
-rule lives in one place. If killing the placement set empties the underlying
-tmux session, tmux drops it naturally; if a workspace-tagged pane remains, the
-session lingers as its host until the collapse follow-on removes per-worktree
-sessions entirely. That lingering session is the one accepted wart of the
-interim phase.
+Only these **two** sites kill by session. `routes/projects.py:267` is *not* a
+third killer — it's the rollback of a just-created empty session inside
+`projects_promote` (a `move-window` failed) and must keep killing that empty
+session, untouched. Project archive (`/api/projects/archive`, projects.py:190)
+kills no tmux session at all; an archived project folds to dev via the frontend
+no-row fallback, stranding nothing. So "should delete spare dragged panes?" is
+moot — delete already kills nothing.
+
+A shared helper (group → list of `pane_id` to kill) backs both sites so the rule
+lives in one place. The helper **refuses `__main__`/dev**: dev is not a closable
+worktree row, and an unguarded MAIN_KEY group would mass-kill every unmanaged
+pane on the machine (periscope watches *every* pane). It only ever operates on a
+concrete `pinned_dir` group.
+
+**Per-target state cleanup, not per-session.** `session_delete` today pops the
+whole `session:` prefix from `_focused_at`/`_acted_at` and drops
+`_active_per_session[session]` (sessions.py:65-70). Under a subset `kill-pane`
+that is wrong — it would wipe focus/acted state for a surviving workspace-tagged
+pane still living in the session. The helper cleans these dicts **per killed
+window target**; `_active_per_session` is touched only when the session actually
+goes away.
+
+If killing the placement set empties the underlying tmux session, tmux drops it
+naturally; if a workspace-tagged pane remains, the session lingers as its host
+until the collapse follow-on removes per-worktree sessions entirely. That
+lingering session is the one accepted wart of the interim phase — and it stays
+invisible to the cleanup modal, which still computes `session_alive=True`
+(cleanup.py:205,250) until collapse.
 
 ### Frontend
 
-No change to `railTree.js` grouping in this spec — the worktree rows stay keyed
+No change to `railTree.js` *grouping* in this spec — the worktree rows stay keyed
 by session while session and project remain 1:1, and the rail reads the same
 `project_pinned_dir` / `workspace_id` fields (now metadata-sourced). See
 Decision 1: re-keying worktree rows session→project is collapse-prep and its
 placement in this spec vs the follow-on is the one open call.
+
+Two non-grouping frontend touches *are* required: `closeWorktree`'s confirm copy
+("This kills every tmux window in this worktree", Rail.jsx:277) is now false — a
+dragged-away pane survives — so it is reworded; and the `DELETE /api/session`
+endpoint's contract shifts from "kill the session" to "kill this group's
+placement set" under the same call.
 
 ## What the bug becomes (verification scenario)
 
@@ -172,7 +217,7 @@ placement in this spec vs the follow-on is the one open call.
 | backfill | pytest: pre-seeded session→project state produces identical `pane_projects` rows; idempotent on re-run; untagged-only panes covered. |
 | `projects.resolve_project_for_window` | pytest (extend `test_projects.py`): tag wins; untagged falls back to session-match; external session → MAIN_KEY; empty session → None. |
 | placement-kill helper | pytest unit: given a project + workspace-tagged panes, returns exactly the non-overridden panes' `pane_id`s. |
-| 3 route killers | pytest route tests (TestClient + mocked `_tmux_mutate`): assert `kill-pane` issued for placement panes only, workspace-tagged pane spared; assert the `kill-session` calls are gone. |
+| 2 route killers (close, cleanup) | pytest route tests (TestClient + mocked `_tmux_mutate`): `kill-pane` for placement panes only, workspace-tagged pane spared, per-target focus-dict cleanup; `kill-session` gone from these two; a `__main__` group yields no kill set; promote-rollback (projects.py:267) still kills its empty session. |
 | rail behavior | browser-verified (repo norm): drag claude→workspace, close origin worktree, claude survives. |
 
 ## Decisions to sanity-check
@@ -188,9 +233,10 @@ placement in this spec vs the follow-on is the one open call.
    this phase (deleted in the follow-on) vs. require full backfill coverage now.
    Recommendation: retain — it's the robustness net for external panes and any
    pre-backfill race, and removal is naturally the collapse step's job.
-3. **One shared placement-kill helper** vs. inlining the rule in each of the
-   three routes. Recommendation: shared helper — the "placement = project ∧ ¬ws
-   override" rule must not drift between close, cleanup, and delete.
+3. **One shared placement-kill helper** vs. inlining the rule in the two callers.
+   Recommendation: shared helper — the "placement = project ∧ ¬ws override, never
+   `__main__`" rule plus the per-target focus-dict cleanup must not drift between
+   the close and cleanup paths.
 4. **`project` column stores `pinned_dir`** (the project identity) rather than a
    synthetic project id — projects have no id, `pinned_dir` *is* the key
    (`projects.py:3`), and `pane_workspaces` already stores the workspace's
