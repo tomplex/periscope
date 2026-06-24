@@ -2274,10 +2274,13 @@ body.modal-open { overflow: hidden; }
 .pane-time { font-size: 10px; color: var(--fg-4); white-space: nowrap; }
 .pane-pill {
   display: inline-flex; align-items: center; gap: 3px;
-  padding: 0 5px; height: 16px; border-radius: 3px;
-  background: var(--bg-1); color: var(--fg-2);
+  padding: 0 5px; height: 15px; border-radius: 3px;
+  background: var(--bg-2); color: var(--fg-2);
   font-family: var(--mono); font-size: 10px; text-decoration: none; white-space: nowrap;
 }
+/* Expanded cards sit a shade lighter (bg-2), so their pills drop to bg-1 to
+   keep the inset read. Compact rows are on the group card (bg-1) → pills bg-2. */
+.pane-expanded .pane-pill { background: var(--bg-1); }
 .pane-pill:hover { background: var(--bg-3); color: var(--fg-1); }
 .pane-pill-pr { color: var(--fg-1); }
 .pane-pill-linear { color: oklch(0.7 0.13 280); }
@@ -2289,6 +2292,52 @@ body.modal-open { overflow: hidden; }
 .pane-ci-bad { color: var(--s-danger); }
 .pane-ci-running { color: var(--s-working); }
 .pane-ci-neutral { color: var(--fg-3); }
+
+/* Compact line-2 chip cluster: PR/Linear, right-aligned past the status (which
+   truncates first). margin-left:auto right-pins them even when status is
+   absent (shells). */
+.rail-chips { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; margin-left: auto; }
+
+/* At-rest pinned flag on line 1 — gold star, hidden on hover (the toggle lives
+   in the action overlay). Keeps the "pinned" signal without reserving width. */
+.pane-pin-flag { font-size: 10px; color: #d8b33a; flex: 0 0 auto; }
+.pane-row:hover .pane-pin-flag { display: none; }
+
+/* Hover-only action overlay (pin + close). Absolutely positioned with ZERO
+   layout footprint at rest, so the name uses the full row width; it fades in
+   over the top-right on hover, with a gradient so it reads over whatever's
+   beneath (ctx% / name tail). The line-2 chips sit below it and stay clickable. */
+.pane-actions {
+  position: absolute; top: 3px; right: 5px;
+  display: flex; align-items: center; gap: 1px;
+  opacity: 0; pointer-events: none;
+  padding-left: 22px;
+  background: linear-gradient(to right, transparent, var(--bg-1-hi) 42%);
+  transition: opacity .12s;
+}
+.pane-row:hover .pane-actions { opacity: 1; pointer-events: auto; }
+.pane-expanded .pane-actions { background: linear-gradient(to right, transparent, var(--bg-2) 42%); }
+.pane-expanded.selected .pane-actions { background: linear-gradient(to right, transparent, var(--bg-1-hi) 42%); }
+/* The overlay owns visibility; neutralize the rows' own pin/close opacity
+   rules (need #rail to outrank #rail .child-row .rail-pin / :hover .rail-close). */
+#rail .pane-actions .rail-pin,
+#rail .pane-actions .rail-close { opacity: 1; margin: 0; position: static; }
+
+/* Quiet repo/workspace section label — uppercase name + a hairline rule that
+   fills to the rolled-up status dot. Reads as an organizer, not a row. */
+#rail .repo-row { padding-top: 9px; padding-bottom: 4px; gap: 7px; }
+#rail .repo-row .rail-chev { opacity: .35; }
+#rail .repo-row .rail-label {
+  flex: 0 0 auto;
+  font-family: var(--sans);
+  font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--fg-3);
+}
+#rail .repo-row.repo-ws .rail-label { color: oklch(0.72 0.12 330); }
+.repo-rule { flex: 1 1 auto; height: 1px; background: var(--line-soft); min-width: 8px; }
+.icon-workspace { color: oklch(0.72 0.12 330); }
+/* Primary-session card carries no header, so trim its top padding. */
+.rail-group-primary .rail-group-body { padding-top: 0; }
 
 /* ───────────────────────────────────────────────────────────────────────
    Segmented transcript — Claude turns (split-view detail).

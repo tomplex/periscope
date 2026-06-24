@@ -149,8 +149,17 @@ export function PaneRow({
     w.status_at && Math.floor(Date.now() / 1000) - w.status_at > STATUS_STALE_S;
   const model = shortModel(w.model);
   const prHref = w.pr ? prUrl(w.repo_slug, w.pr) : null;
-  const prInner = (
-    <>#{w.pr}{w.ci ? <span class={`pane-ci pane-ci-${ciClass(w.ci)}`}> {w.ci}</span> : null}</>
+
+  // PR + Linear as clickable chips, shared between the compact line-2 strip and
+  // the expanded footer (the link just relocates as the card grows). stop-prop
+  // so clicking the chip opens the link without also selecting the pane (#4).
+  const prChip = w.pr && (
+    prHref
+      ? <a class="pane-pill pane-pill-pr" href={prHref} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`PR #${w.pr}`}>#{w.pr}{w.ci ? <span class={`pane-ci pane-ci-${ciClass(w.ci)}`}> {w.ci}</span> : null}</a>
+      : <span class="pane-pill pane-pill-pr" title={`PR #${w.pr}`}>#{w.pr}{w.ci ? <span class={`pane-ci pane-ci-${ciClass(w.ci)}`}> {w.ci}</span> : null}</span>
+  );
+  const linChip = w.linked_linear && (
+    <a class="pane-pill pane-pill-linear" href={`https://linear.app/issue/${w.linked_linear}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`Linear ${w.linked_linear}${w.linked_linear_status ? ` [${w.linked_linear_status}]` : ""}`}>{w.linked_linear}</a>
   );
 
   return (
@@ -167,24 +176,50 @@ export function PaneRow({
           ? <span class="rail-icon icon-claude">✻</span>
           : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
-        {/* Expanded: model badge. Compact: the pane's one key metric (PR# +
-            context%). PR/Linear/git move to the footer when expanded. */}
+        {/* Line 1 carries only the name + one quiet metric: model when
+            expanded, context% when compact. PR/Linear ride line 2 (compact) or
+            the footer (expanded) so they never crowd the name. */}
         {expanded
           ? (model && <span class="pane-model" title={w.model}>{model}</span>)
-          : (
-            <span class="pane-mini">
-              {w.pr && <span class="pane-mini-pr">#{w.pr}</span>}
-              {w.context_pct != null && (
-                <span class={`pane-mini-ctx${ctxClass(w.context_pct)}`}>{w.context_pct}%</span>
-              )}
-            </span>
-          )}
+          : (w.context_pct != null && (
+              <span class={`pane-mini-ctx${ctxClass(w.context_pct)}`}>{w.context_pct}%</span>
+            ))}
         {w.burn_hot && (
           <span
             class="rail-burn"
             title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
           >🔥</span>
         )}
+        {/* At-rest pinned flag — the hover actions take no width, so this keeps
+            the "this tab is pinned" signal visible without one. Hidden on hover
+            (the real toggle is in the action overlay). */}
+        {pinned && <span class="pane-pin-flag" title="pinned">★</span>}
+      </div>
+      {(chip || statusText || (!expanded && (prChip || linChip))) && (
+        <div class={`rail-meta${statusStale ? " stale" : ""}`}>
+          {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
+          {statusText && (
+            <span class="rail-status" title={w.status_line}>{statusText}</span>
+          )}
+          {!expanded && (prChip || linChip) && (
+            <span class="rail-chips">{prChip}{linChip}</span>
+          )}
+        </div>
+      )}
+      {expanded && (w.pr || w.linked_linear || isDirty(w.git) || w.context_pct != null) && (
+        <div class="pane-foot">
+          {prChip}
+          {linChip}
+          {isDirty(w.git) && <span class="pane-pill pane-pill-git" title="git status">{w.git}</span>}
+          <span class="pane-foot-spacer"></span>
+          {w.context_pct != null && (
+            <span class={`pane-pill pane-pill-ctx${ctxClass(w.context_pct)}`} title="context window used">{w.context_pct}%</span>
+          )}
+          {w.status_at ? <span class="pane-time">{relTime(w.status_at)}</span> : null}
+        </div>
+      )}
+      {/* Hover-only actions, zero footprint at rest (absolute + faded). */}
+      <div class="pane-actions">
         <button
           class={`rail-pin${pinned ? " pinned" : ""}`}
           title={pinned ? "unpin" : "pin"}
@@ -196,32 +231,6 @@ export function PaneRow({
           onClick={(e) => { e.stopPropagation(); onClose(); }}
         >×</button>
       </div>
-      {(chip || statusText) && (
-        <div class={`rail-meta${statusStale ? " stale" : ""}`}>
-          {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
-          {statusText && (
-            <span class="rail-status" title={w.status_line}>{statusText}</span>
-          )}
-        </div>
-      )}
-      {expanded && (w.pr || w.linked_linear || isDirty(w.git) || w.context_pct != null) && (
-        <div class="pane-foot">
-          {w.pr && (
-            prHref
-              ? <a class="pane-pill pane-pill-pr" href={prHref} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`PR #${w.pr}`}>{prInner}</a>
-              : <span class="pane-pill pane-pill-pr" title={`PR #${w.pr}`}>{prInner}</span>
-          )}
-          {w.linked_linear && (
-            <a class="pane-pill pane-pill-linear" href={`https://linear.app/issue/${w.linked_linear}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`Linear ${w.linked_linear}${w.linked_linear_status ? ` [${w.linked_linear_status}]` : ""}`}>{w.linked_linear}</a>
-          )}
-          {isDirty(w.git) && <span class="pane-pill pane-pill-git" title="git status">{w.git}</span>}
-          <span class="pane-foot-spacer"></span>
-          {w.context_pct != null && (
-            <span class={`pane-pill pane-pill-ctx${ctxClass(w.context_pct)}`} title="context window used">{w.context_pct}%</span>
-          )}
-          {w.status_at ? <span class="pane-time">{relTime(w.status_at)}</span> : null}
-        </div>
-      )}
     </div>
   );
 }
@@ -334,11 +343,14 @@ export function RepoRow({ repoKey, label, chip, collapsed, rolledUp, dim, isDev,
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
   const isWs = String(repoKey || "").startsWith("ws:");
+  // Quiet section label: uppercase name + a hairline rule that fills to the
+  // rolled-up status dot, so repos/workspaces read as organizers rather than
+  // rows competing with the cards below them.
   // "dev" is pinned to the bottom — never draggable; omit the drag props.
   // Workspaces ARE reorderable (interleaved among repos), so they keep them.
   return (
     <div
-      class={`rail-row repo-row${dimCls}${drop}`}
+      class={`rail-row repo-row${isWs ? " repo-ws" : ""}${dimCls}${drop}`}
       data-drop-pos={dropPos || undefined}
       draggable={!isDev}
       onClick={onToggle}
@@ -348,10 +360,11 @@ export function RepoRow({ repoKey, label, chip, collapsed, rolledUp, dim, isDev,
       {isDev
         ? <span class="rail-icon icon-other">◇</span>
         : isWs
-        ? <span class="rail-icon icon-workspace">▧</span>
+        ? <span class="rail-icon icon-workspace">⧉</span>
         : <span class="rail-icon icon-repo">◆</span>}
-      <span class="rail-label"><b>{label}</b></span>
+      <span class="rail-label">{label}</span>
       {chip && <span class="rail-chip rail-chip-repo" title={chip}>⟨{chip}⟩</span>}
+      <span class="repo-rule" aria-hidden="true"></span>
       <span class={statusDotClass(rolledUp)}></span>
     </div>
   );
