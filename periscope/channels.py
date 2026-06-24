@@ -205,44 +205,14 @@ def _do_notify_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
-_CAPTAINS_LOG_KINDS = {"standing_order", "watch", "narrative"}
-
-
-def _require_commander(pane: str) -> bool:
-    """True iff `pane` is the registered commander singleton. Channel tools that
-    are commander-only self-guard with this (the registry is flat)."""
-    from periscope import activity
-
-    return activity.is_commander_pane(pane)
-
-
-def _do_captains_log_read_tool(pane: str, arguments: dict):
-    """Return recent captain's-log entries (commander-only)."""
-    if not _require_commander(pane):
-        return _tool_result({"ok": False, "error": "commander-only tool"})
-    from periscope import activity
-
-    limit = int(arguments.get("limit", 50))
-    rows = activity.recent_captain_log(limit=limit)
-    entries = [{"at": r.at, "kind": r.kind, "text": r.text} for r in rows]
-    return _tool_result({"ok": True, "entries": entries})
-
-
-def _do_captains_log_append_tool(pane: str, arguments: dict):
-    """Append a captain's-log entry (commander-only)."""
-    if not _require_commander(pane):
-        return _tool_result({"ok": False, "error": "commander-only tool"})
-    kind = str(arguments.get("kind", "")).strip()
-    text = str(arguments.get("text", "")).strip()
-    if kind not in _CAPTAINS_LOG_KINDS:
-        return _tool_result({"ok": False,
-                             "error": f"kind must be one of {sorted(_CAPTAINS_LOG_KINDS)}"})
-    if not text:
-        return _tool_result({"ok": False, "error": "text is required and must be non-empty"})
-    from periscope import activity
-
-    activity.append_captain_log(kind=kind, text=text)
-    return _tool_result({"ok": True})
+def is_commander(handle: str) -> bool:
+    """True iff `handle` is a live commander: the cmdr: prefix AND a currently
+    running dispatched job (defense-in-depth against a self-asserted prefix; the
+    socket is already owner-only). Replaces the singleton marker check."""
+    if not handle.startswith("cmdr:"):
+        return False
+    from periscope import bg_commander
+    return handle[len("cmdr:"):] in bg_commander.running_job_ids()
 
 
 def _resolve_window(match) -> tuple[str, str]:
@@ -462,13 +432,18 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         body = {"ok": False, "error": "prompt is required and must be non-empty"}
         return _tool_result(body)
 
-    # Caller's pane → its session + cwd. If the pane has vanished (rare —
-    # the connection would normally drop first), tmux returns empty and we
-    # fall through to defaults.
-    info = tmux(
-        "display-message", "-t", pane, "-p", "#{session_name}|#{pane_current_path}",
-    ).strip()
-    caller_session, _, caller_cwd = info.partition("|")
+    # Caller's pane → its session + cwd. Commanders have no pane (cmdr:<id> is
+    # not a tmux target), so skip the derivation — they always pass explicit cwd.
+    # For a real pane: if it has vanished (rare — the connection would normally
+    # drop first), tmux returns empty and we fall through to defaults.
+    commander_caller = is_commander(pane)
+    if commander_caller:
+        caller_session, caller_cwd = "", ""
+    else:
+        info = tmux(
+            "display-message", "-t", pane, "-p", "#{session_name}|#{pane_current_path}",
+        ).strip()
+        caller_session, _, caller_cwd = info.partition("|")
 
     cwd = str(arguments.get("cwd") or caller_cwd or os.path.expanduser("~")).strip()
     if not os.path.isdir(cwd):
@@ -501,14 +476,13 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # the worktree; resolve_worktree_session registers the project + dedupes a
     # foreign-name clash, and returns None when cwd isn't in a git repo (no
     # worktree to anchor → fall back to the caller's session).
-    from periscope import open_ops, activity
-    is_commander = activity.is_commander_pane(pane)
+    from periscope import open_ops
     workspace = str(arguments.get("workspace") or "same").strip().lower()
-    if is_commander:
-        # The commander is ALWAYS cwd-anchored: it's a hidden pane, so deriving
-        # the session from its own caller session would misfile the worker into
-        # the commander's invisible session. Force the cwd-resolution path and
-        # refuse a non-git cwd rather than fall back to the caller session.
+    if commander_caller:
+        # The commander is ALWAYS cwd-anchored: it has no pane (cmdr:<id> is not
+        # a tmux target), so there is no caller session to derive from. Force the
+        # cwd-resolution path and refuse a non-git cwd rather than fall back to a
+        # (nonexistent) caller session.
         anchored = open_ops.resolve_worktree_session(cwd)
         if anchored is None:
             body = {"ok": False,
@@ -873,7 +847,7 @@ async def _handle_mcp_connection(
             pane = hello.get("pane", "")
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
-        if not pane.startswith("%"):
+        if not (pane.startswith("%") or pane.startswith("cmdr:")):
             return
 
         await _run_mcp_for_pane(reader, writer, pane)
@@ -1454,36 +1428,6 @@ _CHANNEL_TOOLS = [
             "required": ["handle"],
         },
         "handler": _do_terminate_tool,
-    },
-    {
-        "name": "captains_log_read",
-        "description": (
-            "Read recent captain's-log entries (standing orders, watch-list, "
-            "narrative). First-mate-only."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer", "description": "Max entries (newest-first)."},
-            },
-        },
-        "handler": _do_captains_log_read_tool,
-    },
-    {
-        "name": "captains_log_append",
-        "description": (
-            "Append a captain's-log entry. `kind` is one of standing_order, "
-            "watch, narrative. First-mate-only."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string", "enum": ["standing_order", "watch", "narrative"]},
-                "text": {"type": "string"},
-            },
-            "required": ["kind", "text"],
-        },
-        "handler": _do_captains_log_append_tool,
     },
     {
         "name": "create_workspace",

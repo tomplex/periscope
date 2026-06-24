@@ -311,7 +311,7 @@ def test_exits_cleanly_on_missing_tmux_pane(short_sock):
         assert proc.returncode == 0
         assert proc.stderr is not None
         stderr = (await proc.stderr.read()).decode()
-        assert "TMUX_PANE" in stderr
+        assert "caller id" in stderr
 
     asyncio.run(run())
 
@@ -338,3 +338,14 @@ def test_stdin_eof_terminates_shim(short_sock):
             await server.stop()
 
     asyncio.run(run())
+
+
+def test_caller_id_prefers_explicit_handle(monkeypatch):
+    import importlib, channel_shim
+    monkeypatch.setenv("PERISCOPE_CALLER_ID", "cmdr:abc")
+    monkeypatch.setenv("TMUX_PANE", "%9")
+    importlib.reload(channel_shim)
+    assert channel_shim.CALLER_ID == "cmdr:abc"
+    monkeypatch.delenv("PERISCOPE_CALLER_ID")
+    importlib.reload(channel_shim)
+    assert channel_shim.CALLER_ID == "%9"
