@@ -274,7 +274,7 @@ export function Rail() {
   }
   async function closeWorktree(session) {
     const ok = await confirmDialog(
-      `Close session "${session}"?\n\nThis kills every tmux window in this worktree.\nThe worktree directory on disk is not removed.`,
+      `Close worktree "${session}"?\n\nTabs that live here are closed. Claude tabs you've moved into a workspace stay open.\nThe worktree directory on disk is not removed.`,
       { okLabel: "Close", danger: true }
     );
     if (!ok) return;
