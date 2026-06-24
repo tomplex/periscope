@@ -74,6 +74,15 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     with TestClient(app) as client:
         r = client.get("/api/state")
         assert r.status_code == 200
+    # Regression for the intermittent 3.14 sqlite segfault + usage-bleed flake:
+    # building /api/state must NOT kick off the real plan-usage refresh. That
+    # background thread does httpx + record_usage_samples and, as a leaked
+    # daemon, writes into whatever per-test ACTIVITY_DB is live when it lands —
+    # corrupting unrelated tests' usage_samples and racing fresh_activity_db's
+    # connection close (use-after-free → segfault). The autouse
+    # _no_plan_usage_refresh fixture seeds the cache so no spawn happens.
+    import threading
+    assert not any(t.name == "plan-usage" for t in threading.enumerate())
 
 
 def test_lifespan_skips_mcp_on_dev_port(mocker, monkeypatch, caplog):
