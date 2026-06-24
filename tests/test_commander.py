@@ -1,3 +1,25 @@
+import asyncio
+
+
+def test_ensure_commander_single_flight(fresh_activity_db, monkeypatch):
+    from periscope import commander, activity
+    calls = {"n": 0}
+
+    def fake_spawn(*, now):
+        calls["n"] += 1
+        activity.set_commander(pane_id="%7", session_id=None, at=now)
+
+    monkeypatch.setattr(commander, "_spawn_commander", fake_spawn)
+    # No live windows -> marker pane never "live" until set; both callers race.
+    monkeypatch.setattr(commander, "list_windows", lambda: [{"pane_id": "%7"}])
+
+    async def go():
+        await asyncio.gather(commander.ensure_commander(), commander.ensure_commander())
+
+    asyncio.run(go())
+    assert calls["n"] == 1   # lock serialized; second caller sees the live marker
+
+
 def test_spawn_leaves_marker_unset_on_empty_pane_id(monkeypatch, fresh_activity_db):
     # If display-message can't read the new window's %N, stamping pane_id="" would
     # be a marker never in the live set -> the caller respawns every tick (a
