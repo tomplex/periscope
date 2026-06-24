@@ -259,6 +259,8 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
         pane_id = w.get("pane_id") or ""
         if not pane_id:
             continue
+        if activity.is_commander_pane(pane_id):
+            continue   # hidden orchestrator — no status line, no Haiku spend
         try:
             sid = activity.get_pane_session(pane_id)
             if not sid:
