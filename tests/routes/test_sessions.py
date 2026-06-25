@@ -170,6 +170,94 @@ def test_window_new_creates_managed_session_when_absent(client, mocker, fresh_ac
     assert fresh_activity_db.get_pane_track("%p1") == "untracked"
 
 
+def test_window_new_existing_branch_cwd_override(client, mocker, fresh_activity_db):
+    # An existing-branch pick: the client passes `cwd` (that branch's worktree
+    # path). It overrides the track's repo and the new pane is tagged into the
+    # track. Use a real dir so the `os.path.isdir` guard passes.
+    import tempfile
+
+    from periscope import config, tracks
+    tid = tracks.repo_default_track("/Users/foo/dev/myproj")
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="4", pane_id="%pb"))
+    _patch(mocker, "_run", return_value=(0, ""))  # MANAGED_SESSION exists
+    mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@4"))
+    with tempfile.TemporaryDirectory() as wt:
+        r = client.post(f"/api/window/new?session={tid}&mode=shell&cwd={wt}")
+        assert r.status_code == 200, r.text
+        call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
+        cwd_idx = list(call.args).index("-c") + 1
+        assert call.args[cwd_idx] == wt
+        assert call.args[2] == f"={config.MANAGED_SESSION}:"
+        assert fresh_activity_db.get_pane_track("%pb") == tid
+
+
+def test_window_new_nonexistent_cwd_falls_back_to_repo(client, mocker, fresh_activity_db):
+    # A `cwd` that isn't a real dir is ignored — fall back to the track's repo.
+    from periscope import tracks
+    tid = tracks.repo_default_track("/Users/foo/dev/myproj")
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="4", pane_id="%pn"))
+    _patch(mocker, "_run", return_value=(0, ""))
+    mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@4"))
+    r = client.post(f"/api/window/new?session={tid}&mode=shell&cwd=/no/such/dir")
+    assert r.status_code == 200, r.text
+    call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
+    cwd_idx = list(call.args).index("-c") + 1
+    assert call.args[cwd_idx] == "/Users/foo/dev/myproj"
+
+
+def test_window_new_new_branch_spawns_worktree(client, mocker, fresh_activity_db):
+    # new_branch set + the track has a repo → spawn_worktree is called with the
+    # repo + branch, and its returned path becomes the new window's cwd.
+    from periscope import config, tracks
+    tid = tracks.repo_default_track("/Users/foo/dev/myproj")
+    spawn = _patch(mocker, "spawn_worktree", return_value={
+        "path": "/Users/foo/dev/worktrees/myproj/tc-feat",
+        "base_branch": "main", "branch": "tc/feat",
+    })
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="6", pane_id="%pw"))
+    _patch(mocker, "_run", return_value=(0, ""))
+    mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@6"))
+    r = client.post(f"/api/window/new?session={tid}&mode=shell&new_branch=tc/feat")
+    assert r.status_code == 200, r.text
+    spawn.assert_called_once_with("/Users/foo/dev/myproj", "tc/feat")
+    call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
+    cwd_idx = list(call.args).index("-c") + 1
+    assert call.args[cwd_idx] == "/Users/foo/dev/worktrees/myproj/tc-feat"
+    assert call.args[2] == f"={config.MANAGED_SESSION}:"
+    assert fresh_activity_db.get_pane_track("%pw") == tid
+
+
+def test_window_new_new_branch_409_on_existing(client, mocker, fresh_activity_db):
+    # spawn_worktree raising "already exists" maps to 409.
+    from periscope import tracks
+    tid = tracks.repo_default_track("/Users/foo/dev/myproj")
+    _patch(mocker, "spawn_worktree",
+           side_effect=ValueError("worktree path already exists: /x"))
+    _patch(mocker, "_run", return_value=(0, ""))
+    _patch(mocker, "_tmux_mutate", return_value=(True, "@6"))
+    r = client.post(f"/api/window/new?session={tid}&mode=shell&new_branch=tc/dup")
+    assert r.status_code == 409
+
+
+def test_window_new_new_branch_ignored_for_loose_track(client, mocker, fresh_activity_db):
+    # new_branch on a repo-less (loose) track has no repo to spawn from → it's
+    # ignored and the tab opens at ~/dev (no spawn_worktree call).
+    import os
+
+    from periscope import tracks
+    tk = tracks.create_track(name="my goal")  # repo=None
+    spawn = _patch(mocker, "spawn_worktree", return_value={})
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="2", pane_id="%pl"))
+    _patch(mocker, "_run", return_value=(0, ""))
+    mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@2"))
+    r = client.post(f"/api/window/new?session={tk['id']}&mode=shell&new_branch=tc/x")
+    assert r.status_code == 200, r.text
+    spawn.assert_not_called()
+    call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
+    cwd_idx = list(call.args).index("-c") + 1
+    assert call.args[cwd_idx] == os.path.expanduser("~/dev")
+
+
 # /api/window/new-worktree — the new endpoint.
 
 def test_new_worktree_success(client, mocker):

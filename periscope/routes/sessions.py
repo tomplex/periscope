@@ -207,16 +207,38 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
     }
 
 
-def _window_new_plain(track_id: str, exec_cmd: str, mode: str) -> dict:
+def _window_new_plain(
+    track_id: str, exec_cmd: str, mode: str,
+    cwd_param: str | None = None, new_branch: str | None = None,
+) -> dict:
     """Non-resume "+ New tab": open a window in the one shared MANAGED_SESSION
     and tag the new pane into `track_id` (the `session` query param now carries
     a track id, not a tmux session name — the rail groups by track).
 
-    cwd comes from the track: a repo-default track (id == repo path) carries
-    its repo; a goal/loose track (repo None) or an unknown id → ~/dev.
+    cwd resolution precedence (the launcher's branch picker drives the first
+    two):
+      1. `new_branch` set AND the track has a repo → spawn a fresh worktree off
+         the repo's default branch and land the tab in it.
+      2. else `cwd_param` set AND it's a real dir → use it (an existing
+         branch's worktree path the client passed).
+      3. else → the track's repo (repo-default track id == repo path), or
+         ~/dev for a goal/loose track (repo None) or an unknown id.
     """
     row = activity.get_track(track_id)
-    cwd = row["repo"] if row and row.get("repo") else os.path.expanduser("~/dev")
+    repo = row["repo"] if row and row.get("repo") else None
+
+    new_branch = (new_branch or "").strip()
+    if new_branch and repo:
+        try:
+            wt = spawn_worktree(repo, new_branch)
+        except ValueError as e:
+            msg = str(e)
+            raise HTTPException(409 if "already exists" in msg else 400, msg) from e
+        cwd = wt["path"]
+    elif cwd_param and os.path.isdir(cwd_param):
+        cwd = cwd_param
+    else:
+        cwd = repo if repo else os.path.expanduser("~/dev")
 
     # Everything lives in one session. Create it lazily, else add a window.
     # Capture the STABLE #{window_id} (-P -F), never the index — with one
@@ -261,13 +283,25 @@ def _window_new_plain(track_id: str, exec_cmd: str, mode: str) -> dict:
 
 
 @router.post("/api/window/new")
-def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str = "shell", resume_id: str | None = None):
+def window_new(
+    session: str,
+    exec_cmd: str = Query("", alias="exec"),
+    mode: str = "shell",
+    resume_id: str | None = None,
+    cwd: str | None = None,
+    new_branch: str | None = None,
+):
     """Spawn a window in `session`. `exec` param sends a command to the new
     window; legacy `mode` maps to `exec` for backwards-compat. `mode=resume`
     runs `claude --resume <resume_id>` in the original session's project
     dir. cwd is inherited from the session's active pane — without `-c`,
     tmux would use the periscope server's cwd, which is never what you
-    want."""
+    want.
+
+    The plain (non-resume) path takes two optional cwd hints from the
+    launcher's branch picker: `cwd` (land the tab in an existing branch's
+    worktree path) and `new_branch` (spawn a fresh worktree off the track's
+    repo first). See `_window_new_plain`."""
     # Legacy `mode` → exec_cmd mapping for callers still on the old
     # contract. `mode=resume` synthesizes the command from resume_id.
     if not exec_cmd:
@@ -278,7 +312,7 @@ def window_new(session: str, exec_cmd: str = Query("", alias="exec"), mode: str 
 
     if mode == "resume":
         return _window_new_resume(session, exec_cmd, resume_id, mode)
-    return _window_new_plain(session, exec_cmd, mode)
+    return _window_new_plain(session, exec_cmd, mode, cwd_param=cwd, new_branch=new_branch)
 
 
 @router.post("/api/window/new-worktree")

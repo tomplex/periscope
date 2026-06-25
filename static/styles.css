@@ -2208,6 +2208,18 @@ body.modal-open { overflow: hidden; }
 .launcher-row { display: block; width: 100%; padding: 8px 10px; text-align: left; background: transparent; border: 0; color: inherit; cursor: pointer; }
 .launcher-row:hover { background: rgba(255,255,255,.05); }
 .launcher-empty { padding: 10px; opacity: .6; font-size: 12px; }
+/* Branch picker + command sections in the per-track launcher. */
+.launcher-section { margin-bottom: 12px; }
+.launcher-section:last-child { margin-bottom: 0; }
+.launcher-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; opacity: .5; margin-bottom: 6px; }
+.launcher-branches { display: flex; flex-wrap: wrap; gap: 6px; }
+.launcher-branch { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border, rgba(255,255,255,.15)); background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
+.launcher-branch:hover { background: rgba(255,255,255,.05); }
+.launcher-branch.is-active { background: var(--accent, #6c8cff); border-color: var(--accent, #6c8cff); color: #fff; }
+.launcher-branch-new { opacity: .7; border-style: dashed; }
+.launcher-branch-input { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--accent, #6c8cff); background: rgba(255,255,255,.04); color: inherit; font-size: 12px; min-width: 160px; }
+.launcher-row.is-default { font-weight: 600; }
+.launcher-row.is-default::before { content: "▸ "; opacity: .6; }
 .newtab-row { opacity: .6; }
 .newtab-row:hover { opacity: .9; }
 

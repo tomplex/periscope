@@ -460,7 +460,6 @@ export function Rail() {
                     const childRows = paneRowsFor(pids, trackId);
                     const childStates = pids.map((pid) => windowsByPid[pid]).filter(Boolean).map((w) => w.state || "shell");
                     const branchDim = pids.map((pid) => windowsByPid[pid]).filter(Boolean).some((w) => passesFilter(w, filter));
-                    childRows.push(<NewTabRow key={`newtab:${branchKey}`} worktreeKey={trackId} onOpen={openLauncher} />);
                     const branchLabel = branch === NO_BRANCH ? "(no branch)" : branch;
                     return (
                       <div class="rail-subgroup" key={`wt:${branchKey}`}>
@@ -484,9 +483,15 @@ export function Rail() {
                   // Single-branch: flat tab list straight inside the card.
                   <div class="rail-group-body">
                     {paneRowsFor(trackPids, trackId)}
-                    <NewTabRow key={`newtab:${trackId}`} worktreeKey={trackId} onOpen={openLauncher} />
                   </div>
                 )}
+                {/* ONE "+ New tab" per track, at the bottom of the card. The
+                    launcher's branch picker chooses which branch (existing or
+                    new) the tab lands in — so a single row covers every branch
+                    subgroup above. */}
+                <div class="rail-group-body rail-track-newtab">
+                  <NewTabRow key={`newtab:${trackId}`} worktreeKey={trackId} onOpen={openLauncher} />
+                </div>
               </div>
             )}
           </RailFragment>
