@@ -323,6 +323,21 @@ def test_pane_status_rail_defaults_to_none():
     assert activity.get_pane_status("%1").rail is None
 
 
+def test_pane_status_goal_and_history_roundtrip():
+    activity.upsert_pane_status(_status_row(
+        goal="redesign the rail into track-based organization",
+        history='[{"t": 100, "s": "sketching tracks"}]'))
+    got = activity.get_pane_status("%1")
+    assert got.goal == "redesign the rail into track-based organization"
+    assert got.history == '[{"t": 100, "s": "sketching tracks"}]'
+
+
+def test_pane_status_goal_and_history_default_to_none():
+    activity.upsert_pane_status(_status_row())
+    got = activity.get_pane_status("%1")
+    assert got.goal is None and got.history is None
+
+
 def test_pane_status_migration_adds_rail_to_old_db():
     # The prod DB has pane_status rows that predate the rail column;
     # CREATE TABLE IF NOT EXISTS won't add it. Fabricate the old shape at
@@ -345,6 +360,7 @@ def test_pane_status_migration_adds_rail_to_old_db():
     got = activity.get_pane_status("%1")   # first _conn() → migration runs
     assert got.status == "old status"      # rows survive
     assert got.rail is None                # column added, backfilled NULL
+    assert got.goal is None and got.history is None   # same for goal/history
     # Idempotent: a reconnect on the now-current shape must not raise.
     activity._CONN.close()
     activity._CONN = None

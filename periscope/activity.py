@@ -80,7 +80,12 @@ CREATE TABLE IF NOT EXISTS pane_status (
   seen_name    TEXT,               -- window name at last generation
   renamed_at   INTEGER,            -- rename-cooldown stamp (narrator,
                                    -- manual routes, or detected external)
-  rail         TEXT                -- <=28-char rail fragment (nullable)
+  rail         TEXT,               -- <=28-char rail fragment (nullable)
+  goal         TEXT,               -- narrator-curated overarching-thread
+                                   -- sentence (the persistent topic memory)
+  history      TEXT                -- JSON arc of recent status lines
+                                   -- [{"t":<unix>,"s":"..."}], divergence
+                                   -- evidence the narrator reasons against
 );
 DROP TABLE IF EXISTS first_mate;
 """
@@ -97,12 +102,13 @@ def _conn() -> sqlite3.Connection:
         c = sqlite3.connect(str(config.ACTIVITY_DB), check_same_thread=False)
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript(_SCHEMA)
-        # pane_status predates the rail column in live DBs, and CREATE TABLE
-        # IF NOT EXISTS won't add it. Guarded ALTER (history/db.py pattern)
-        # is provably idempotent, so dev/prod schema skew is harmless.
+        # pane_status predates the rail/goal/history columns in live DBs, and
+        # CREATE TABLE IF NOT EXISTS won't add them. Guarded ALTER (history/db.py
+        # pattern) is provably idempotent, so dev/prod schema skew is harmless.
         have = {r[1] for r in c.execute("PRAGMA table_info(pane_status)")}
-        if "rail" not in have:
-            c.execute("ALTER TABLE pane_status ADD COLUMN rail TEXT")
+        for col in ("rail", "goal", "history"):
+            if col not in have:
+                c.execute(f"ALTER TABLE pane_status ADD COLUMN {col} TEXT")
         c.commit()
         _CONN = c
     return _CONN
@@ -372,7 +378,7 @@ def migrate_legacy_pane_sessions() -> int:
 # and routes/state.py's bulk merge. Statuses survive restarts by design.
 
 _PANE_STATUS_COLS = ("pane_id, session_id, status, generated_at, "
-                     "jsonl_size, seen_name, renamed_at, rail")
+                     "jsonl_size, seen_name, renamed_at, rail, goal, history")
 
 
 @dataclass(frozen=True)
@@ -385,6 +391,8 @@ class PaneStatusRow:
     seen_name: str | None
     renamed_at: int | None
     rail: str | None = None
+    goal: str | None = None
+    history: str | None = None    # JSON arc; narrator owns the shape
 
 
 def get_pane_status(pane_id: str) -> PaneStatusRow | None:
@@ -410,14 +418,15 @@ def upsert_pane_status(row: PaneStatusRow) -> None:
     with _LOCK:
         c = _conn()
         c.execute(
-            f"INSERT INTO pane_status ({_PANE_STATUS_COLS}) VALUES (?,?,?,?,?,?,?,?) "
+            f"INSERT INTO pane_status ({_PANE_STATUS_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(pane_id) DO UPDATE SET "
             "  session_id=excluded.session_id, status=excluded.status, "
             "  generated_at=excluded.generated_at, jsonl_size=excluded.jsonl_size, "
             "  seen_name=excluded.seen_name, renamed_at=excluded.renamed_at, "
-            "  rail=excluded.rail",
+            "  rail=excluded.rail, goal=excluded.goal, history=excluded.history",
             (row.pane_id, row.session_id, row.status, row.generated_at,
-             row.jsonl_size, row.seen_name, row.renamed_at, row.rail),
+             row.jsonl_size, row.seen_name, row.renamed_at, row.rail,
+             row.goal, row.history),
         )
         c.commit()
 
@@ -432,7 +441,7 @@ def stamp_pane_rename(pane_id: str, *, name: str, at: int) -> None:
         c = _conn()
         c.execute(
             f"INSERT INTO pane_status ({_PANE_STATUS_COLS}) "
-            "VALUES (?, NULL, '', 0, 0, ?, ?, NULL) "
+            "VALUES (?, NULL, '', 0, 0, ?, ?, NULL, NULL, NULL) "
             "ON CONFLICT(pane_id) DO UPDATE SET "
             "  seen_name=excluded.seen_name, renamed_at=excluded.renamed_at",
             (pane_id, name, at),
