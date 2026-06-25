@@ -183,6 +183,10 @@ async def _lgtm_sse_loop(slug: str) -> None:
                         # refreshing on.
                         if line.startswith("data:"):
                             await _lgtm_refresh_all()
+                            # Real review-state delta — push it now instead of
+                            # waiting out the hub's steady tick.
+                            from periscope import state_hub
+                            state_hub.kick()
         except asyncio.CancelledError:
             raise
         except Exception:

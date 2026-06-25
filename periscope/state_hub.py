@@ -13,6 +13,7 @@ surface without raising this rate.
 import asyncio
 import contextlib
 import json
+from collections.abc import Callable
 
 from periscope.log import log
 
@@ -26,9 +27,12 @@ _subscribers: set[asyncio.Queue[str]] = set()
 # Last computed blob (JSON text), handed to new subscribers immediately so a
 # fresh connection paints without waiting up to a full tick.
 _last_blob: str | None = None
-# Set when an event source (Slice 2) wants the loop to recompute now instead of
-# waiting out the rest of its sleep.
+# Set when an event source wants the loop to recompute now instead of waiting
+# out the rest of its sleep.
 _wake = asyncio.Event()
+# Captured when the loop starts, so kick() can schedule _wake.set() onto the
+# loop from any thread (mutation routes run in FastAPI's threadpool).
+_loop: asyncio.AbstractEventLoop | None = None
 
 
 def subscribe() -> asyncio.Queue[str]:
@@ -50,8 +54,17 @@ def unsubscribe(q: asyncio.Queue[str]) -> None:
 
 
 def kick() -> None:
-    """Request an immediate recompute (event-driven, Slice 2)."""
-    _wake.set()
+    """Request an immediate recompute. Thread-safe: callable from a route
+    running in FastAPI's threadpool (e.g. via _tmux_mutate) as well as from
+    the loop. A no-op before the loop starts — the next steady tick covers it.
+    """
+    loop = _loop
+    if loop is None or loop.is_closed():
+        return
+    # Suppress the race where the loop closes between the check and the call —
+    # tests tear loops down while _tmux_mutate may still fire from a thread.
+    with contextlib.suppress(RuntimeError):
+        loop.call_soon_threadsafe(_wake.set)
 
 
 def _broadcast(text: str) -> None:
@@ -68,7 +81,20 @@ async def run() -> None:
     """The broadcast loop. Started once from the lifespan."""
     from periscope.routes.state import build_state
 
+    global _loop
     loop = asyncio.get_running_loop()
+    _loop = loop
+    try:
+        await _run_loop(loop, build_state)
+    finally:
+        # Don't leave a dangling reference to a loop that's shutting down —
+        # a late kick() would otherwise target a closed loop.
+        _loop = None
+
+
+async def _run_loop(
+    loop: asyncio.AbstractEventLoop, build_state: Callable[[], dict]
+) -> None:
     while True:
         if not _subscribers:
             # Nobody watching: compute nothing. Wait for a subscriber (or kick).
