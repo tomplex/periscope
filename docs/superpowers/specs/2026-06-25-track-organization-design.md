@@ -103,14 +103,34 @@ reads the tmux session for grouping — it reads `pane_tracks`.
   is not a concern, so collapsing every window into one session has no usability cost.
 - Window names become free-form labels periscope controls (the narrator already
   renames windows).
-- The control-mode mirror (`tmux_mirror.py`) is per-session — one session is *simpler*
-  for it, not harder.
+- **The terminal bridge re-keys on `pane_id`.** Today `/ws/pane` is addressed by
+  `session:index` (`routes/ws.py:34`, `static/src/util.js`, `terminalCore.js`), and the
+  keystroke/resize paths use that `session:index` target. One session with
+  `renumber-windows on` makes the index drift constantly (every kill/new renumbers),
+  which would stale every open terminal. The bridge moves to addressing the pane by its
+  stable `pane_id` (the mirror already subscribes by `pane_id`, `ws.py:78`, and tmux
+  accepts `-t %id` for `display-message`/`capture-pane`/`send-keys`/`resize`). This kills
+  the index-drift fragility the single session amplifies and matches the stable-id
+  invariant.
+- **Mirror load concentrates on one control client.** `tmux_mirror.py` is one
+  `tmux -C attach` process *per session*; collapsing to one session routes every pane's
+  `%output` through a single reader task + reply-callback queue, and every layout change
+  reconciles all open terminals. This is a real change, **not** a simplification —
+  acceptable for a single-user tool, but the spec does not claim it as a simplification.
 - This deletes the session-per-worktree machinery, the `-2`/`-3` name-dedupe dance,
   the worktree-is-session coupling, and the renumber-windows kill-drift bug class.
 
 **Foreign panes (tmux panes periscope did not create) are ignored entirely.** They do
 not appear in the dashboard. The old `dev` / `MAIN_KEY` unmanaged-sessions catchall is
 **removed**. Everything periscope shows is a tab it created, in its session, in a track.
+
+**No periscope pane ever vanishes for lack of a tag.** `MAIN_KEY` today rescues more than
+foreign panes — it also catches archived-project panes, delete-race panes, and no-row
+pins (`railTree.js:55-58`). Track resolution must replace that rescue: a periscope pane
+with no explicit `pane_tracks` row resolves to its **repo-default track** (derived from
+its repo), or the **`loose`** track if non-git. Archiving a track does not hide its tabs;
+they fall back to repo-default/loose (the *dissolve* semantics). So removing `MAIN_KEY`
+loses only genuinely-foreign panes, never a periscope-created one.
 
 ## Data model
 
@@ -130,43 +150,93 @@ JSON/SQLite split the 2026-06-24 architecture audit flagged):
   `ui` prefs blob (config-shaped, user-action-mutated; leave as JSON).
 
 The session-match fallback in `resolve_project_for_window` (projects.py:174-181) and
-the session-keyed `worktrees_by_repo` rail pref are **deleted**.
+the session-keyed `worktrees_by_repo` rail pref are **deleted** — but deleting the
+fallback has a **blast radius the plan must enumerate, not just the one function**:
+
+- **Bare-session callers.** `resolve_project_for_window` is called with `{"session": …}`
+  and **no `pane_id`** at `routes/sessions.py:80,217,319` and `open_ops.py:212`. With the
+  fallback gone these return `None`, breaking `/api/window/new` cwd resolution, the
+  new-worktree project gating, and close-worktree. Each must be rewritten to resolve by
+  track id (from `pane_tracks`), not by session.
+- **Session-equality liveness/kill logic.** `cleanup.py:204-256` keys liveness on
+  `tmux_session in alive_sessions` / `last.get("session") == tmux_session`, and
+  `routes/cleanup.py:66-80` builds its kill set by `w["session"] == tmux_session`. With
+  one shared session these match **every** window — a correctness bug in the destructive
+  path. Both must move to track-membership (`pane_tracks` / `placement_kill_set`), not
+  session identity.
+- **`spawn_claude` placement modes.** `channels.py:~458-614` has three placement modes
+  (`same`/`new` × `workspace_id`) that all write `pane_workspaces`/`pane_projects` and
+  call `place_in_rail` with session-keyed prefs, including the `branch → worktree →
+  workspace="new"` recursion. Folding these into `pane_tracks` is real work to budget.
 
 ## The migration (one-shot, at deploy)
 
 This is the second half of the work Tom originally asked about — physically
-consolidating every wrapped tab into one session:
+consolidating every wrapped tab into one session. It runs **in the lifespan at boot,
+before serving, and gated on `config.is_prod()`** — this timing is load-bearing:
 
-1. Create the single periscope-owned session.
+- **No live terminals exist at boot.** Mirrors and `/ws/pane` connections attach lazily
+  when a browser opens a pane (`ws.py:78` `subscribe`). Running the window moves before
+  serving means no terminal is mid-stream when windows move sessions — this is what makes
+  `move-window` safe, and is why the bridge re-key (above) is the ongoing safety net, not
+  the migration's.
+- **Prod-gated.** Dev (`PERISCOPE_DEV=1`) shares the same tmux server unless
+  `PERISCOPE_TMUX_SOCKET` is set; an ungated migration would let a dev boot consolidate
+  Tom's real prod sessions. Gate on `config.is_prod()`, same as the worker/MCP.
+
+Steps:
+
+1. Create the single periscope-owned session (idempotent: skip if it already exists).
 2. For each currently-managed pane, `tmux move-window` it into that session, acting on
-   **stable pane/window ids, never indices** (the renumber-windows lesson).
+   **stable `#{window_id}`, never indices** (the renumber-windows lesson; the
+   `routes/projects.py:257-278` adopt flow already does exactly this and is the model).
 3. Seed `tracks` + `pane_tracks` from today's grouping — each project → a track (its
    panes tagged in), each existing workspace → a track, branches collapse into auto
-   sub-clusters. This is the `backfill_pane_projects` pattern that already runs
-   synchronously at boot, so **the rail is byte-identical at cutover**.
+   sub-clusters. This reuses the `backfill_pane_projects` pattern (`projects.py:215`).
 4. Foreign panes are left where they are and simply drop off the dashboard.
 
-The migration must be idempotent and safe to run against the live prod session (it
-runs once, in the lifespan, gated so it does not re-run after cutover).
+**Idempotency gate.** The window-move is a one-way physical mutation with no natural
+idempotency key, so it must not re-run after cutover. Gate it on a persisted flag (a
+`settings`/`state.json` marker, e.g. `migrations.single_session_done`) set after a
+successful pass; the `tracks`/`pane_tracks` seed stays idempotent the same way
+`backfill_pane_projects` is (skip already-tagged panes).
+
+**Cutover fidelity is NOT byte-identical — only projects are.** `backfill_pane_projects`
+reproduces *project* grouping exactly. Workspaces are a different tier today
+(`ws:<id>` keys are interleaved top-level groups, `railTree.js:101-108`) and the
+bottom-pinned `dev` group disappears, so workspace tracks and any dev panes **reorganize
+once, by design**. The verification target is "projects byte-identical; workspaces/dev
+reorganize predictably," not "nothing moves."
 
 ## Affected code (cross-reference for the plan)
 
 - `periscope/projects.py` — `resolve_project_for_window` (154-181, delete the
-  session-match fallback), `backfill_pane_projects` (214), `placement_kill_set`
-  (184-211, already pane_id-based — reuse for "close & tear down").
+  session-match fallback; rewrite bare-session callers to resolve by track),
+  `backfill_pane_projects` (215), `placement_kill_set` (184-211, already pane_id-based —
+  reuse for "close & tear down").
 - `periscope/open_ops.py` — `ensure_session` / `worktree_for_branch` / `place_in_rail`
-  (151+); `_layout_two_window` in `worktree_spawn.py` (208-289) — spawn into the shared
-  session instead of `new-session`.
+  (151+) and the bare-session `resolve_project_for_window` call at `:212`;
+  `_layout_two_window` in `worktree_spawn.py` (208-289) — spawn into the shared session
+  instead of `new-session`.
+- `periscope/routes/sessions.py` — bare-session callers at `:80,217,319` (cwd
+  resolution, new-worktree gating, close-worktree) must resolve by track, not session.
+- `periscope/cleanup.py` (204-256) + `periscope/routes/cleanup.py` (66-80) — session-
+  equality liveness + kill-set logic; move to `pane_tracks` / `placement_kill_set` (one
+  shared session makes `w["session"]==…` match everything — a destructive-path bug).
 - `static/src/split/railTree.js` — `mergeLiveAndPrefs` (72-156); the mid-tier is
   session-keyed at 91-95. **This is the core frontend change**: the worktree tier must
-  key on derived branch, top-level on track.
+  key on derived branch (`w.branch`, already in the payload), top-level on track.
 - `static/src/split/{Rail,RailRows,Detail}.jsx`, `railTree.js` — track rendering,
   branch sub-clusters, filter chips, dissolve vs close & tear-down actions.
+- `periscope/routes/ws.py` + `static/src/util.js` + `static/src/terminal/terminalCore.js`
+  + `periscope/tmux.py` (`deliver_input`/`tmux_input`) — re-key `/ws/pane` and the
+  keystroke/resize paths from `session:index` to stable `pane_id`.
 - `periscope/store.py` / new `periscope/tracks.py` — the `tracks` + `pane_tracks` layer
   (model on `pane_workspaces` / `pane_projects` in `activity.py`).
-- `periscope/channels.py` (`spawn_claude`), `routes/open.py`, `routes/sessions.py`,
-  `routes/cleanup.py` — track tagging on create; dissolve/tear-down endpoints.
-- `periscope/app.py` lifespan — the one-shot migration step.
+- `periscope/channels.py` (`spawn_claude`, ~458-614, three placement modes), `routes/open.py`,
+  `routes/sessions.py`, `routes/cleanup.py` — track tagging on create; dissolve/tear-down
+  endpoints.
+- `periscope/app.py` lifespan — the one-shot, prod-gated, flag-gated migration step.
 
 ## Non-goals (v1)
 
@@ -179,14 +249,21 @@ runs once, in the lifespan, gated so it does not re-run after cutover).
 
 ## Risks & things to verify
 
-- **The migration moving live windows.** `tmux move-window` across sessions on the live
-  prod session, with the mirror attached. Must verify the mirror reconnects and the
-  WS bridge survives the move (real-tmux test, not mocked — the 2026-06-24 lesson).
-- **`tracks` replacing `projects` is a broad change.** `projects.py` is read in many
-  places (window_view, open_ops, channels, routes). The rename/replace must be
-  exhaustive; a missed `tmux_session` read silently reintroduces session coupling.
-- **Branch derivation cost.** Deriving each tab's branch live (per poll) must not add a
-  git call per pane on the hot path — reuse whatever git state `git_pr.py` / parse_pane
-  already surfaces.
-- **Byte-identical cutover.** The backfill must reproduce today's grouping exactly, or
-  Tom's rail visibly reshuffles on deploy. Verify against a snapshot of current state.
+- **The migration moving live windows** *(resolved by design, must still be tested).*
+  Moving windows is safe because it runs at boot before any mirror/WS attaches, and the
+  bridge re-keys on `pane_id`. Still required: a **real-tmux test** (not mocked — the
+  2026-06-24 lesson) that moves a window between sessions and asserts a subsequent
+  subscribe + keystroke + capture all resolve by `pane_id`. `move-window` itself is
+  proven in-tree (`routes/projects.py:257-278` adopt flow).
+- **`tracks` replacing `projects` is a broad change.** The blast radius is enumerated in
+  §Data model (bare-session callers, cleanup session-equality, `spawn_claude` modes). A
+  missed `tmux_session` / `w["session"]==…` read silently reintroduces session coupling
+  or, worse, mass-matches the destructive path. Grep gate before merge:
+  `grep -rn 'tmux_session\|\["session"\]\|get("session")' periscope/`.
+- **Cutover fidelity.** Projects must be byte-identical; workspaces/dev reorganize once
+  (see §migration). Verify against a snapshot of current `/api/state` grouping: assert
+  every *project* pane lands in the same group, and that no periscope pane disappears.
+
+*Resolved during spec review (no longer risks):* branch derivation is fully funded
+(`git_pr.cached_git_state` → `w.branch`, 60s-cached, already in the view); `move-window`
+vs `link-window` (move is correct); `placement_kill_set` reuse for tear-down.
