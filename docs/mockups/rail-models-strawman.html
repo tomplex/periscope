@@ -1,0 +1,235 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>periscope — three organization models</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+:root{
+ --bg-0:oklch(0.235 0.007 250);--bg-1:oklch(0.282 0.008 250);--bg-1-hi:oklch(0.318 0.009 250);
+ --bg-2:oklch(0.335 0.009 250);--bg-3:oklch(0.395 0.010 250);
+ --line-soft:color-mix(in oklch,oklch(0.50 0.008 250) 16%,transparent);
+ --fg-0:oklch(0.970 0.004 250);--fg-1:oklch(0.850 0.006 250);--fg-2:oklch(0.660 0.008 250);
+ --fg-3:oklch(0.520 0.008 250);--fg-4:oklch(0.420 0.008 250);
+ --s-needs:oklch(0.74 0.14 38);--s-working:oklch(0.80 0.14 92);--s-done:oklch(0.76 0.17 152);
+ --s-idle:oklch(0.65 0.01 250);--s-shell:oklch(0.72 0.10 165);--s-danger:oklch(0.70 0.16 25);
+ --accent:oklch(0.74 0.13 232);--repo:oklch(0.74 0.13 232);--effort:oklch(0.72 0.12 330);--linear:oklch(0.70 0.13 280);
+ --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;--sans:'Inter',system-ui,sans-serif;
+ --r-sm:4px;--r-md:6px;--r-lg:10px;}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg-0);color:var(--fg-1);font-family:var(--mono);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.page{padding:26px 26px 80px}
+.intro{font-family:var(--sans);max-width:880px;margin-bottom:8px}
+.intro h1{font-size:20px;color:var(--fg-0);margin:0 0 8px;font-weight:700}
+.intro p{color:var(--fg-2);margin:0 0 8px;line-height:1.55}
+.intro code{font-family:var(--mono);color:var(--fg-1);background:var(--bg-1);padding:1px 5px;border-radius:3px;font-size:12px}
+.cols{display:flex;gap:30px;align-items:flex-start;flex-wrap:wrap;margin-top:18px}
+.col{width:366px}
+.col h2{font-family:var(--sans);font-size:15px;color:var(--fg-0);margin:0 0 3px;font-weight:700}
+.col .tag{font-family:var(--sans);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--effort);font-weight:600}
+.col .phil{font-family:var(--sans);font-size:12.5px;color:var(--fg-2);line-height:1.5;margin:8px 0 4px}
+.col .changes{font-family:var(--sans);font-size:12px;color:var(--fg-3);line-height:1.5;margin:6px 0 14px;padding-left:0;list-style:none}
+.col .changes li{position:relative;padding-left:15px;margin:4px 0}
+.col .changes li::before{content:"→";position:absolute;left:0;color:var(--effort)}
+.col .changes b{color:var(--fg-1);font-weight:600}
+
+.rail{background:var(--bg-0);border:1px solid var(--line-soft);border-radius:12px;padding:8px 8px 14px}
+
+.seclabel{display:flex;align-items:center;gap:7px;padding:13px 6px 5px}
+.seclabel .ic{width:15px;text-align:center}
+.seclabel .txt{font-family:var(--sans);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-3);font-weight:600;white-space:nowrap}
+.seclabel .rule{flex:1;height:1px;background:var(--line-soft)}
+.seclabel .rdot{width:6px;height:6px;border-radius:50%}
+.seclabel.eff .txt{color:var(--effort)}
+.seclabel.attn .txt{color:var(--s-needs)}
+.ic-repo{color:var(--repo)}.ic-eff{color:var(--effort)}
+
+.group{background:var(--bg-1);border:1px solid var(--line-soft);border-radius:var(--r-lg);margin:5px 0 7px;padding:5px}
+.group.eff{border-color:color-mix(in oklch,var(--effort) 34%,transparent)}
+.ghead{display:flex;align-items:center;gap:7px;padding:3px 5px 6px}
+.ghead .chev{color:var(--fg-4);font-size:9px;width:9px}
+.ghead .gic{width:15px;text-align:center}
+.ghead .gic.eff{color:var(--effort)}.ghead .gic.repo{color:var(--repo)}.ghead .gic.wt{color:oklch(0.72 0.13 295)}
+.ghead .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-0);font-weight:600}
+.ghead .gchip{font-family:var(--sans);font-size:9.5px;color:var(--fg-3);background:var(--bg-2);border-radius:3px;padding:1px 5px;font-weight:500}
+.ghead .gdot{width:7px;height:7px;border-radius:50%}
+.gcount{font-size:10px;color:var(--fg-4);background:var(--bg-2);border-radius:3px;padding:0 5px}
+.gbody{display:flex;flex-direction:column;gap:2px;padding-top:2px}
+.subgroup{margin:2px 0 2px 4px;border-left:2px solid color-mix(in oklch,oklch(0.72 0.13 295) 40%,transparent);padding-left:7px}
+.subhead{display:flex;align-items:center;gap:6px;padding:4px 4px 3px}
+.subhead .wt{color:oklch(0.72 0.13 295);width:13px;text-align:center;font-size:12px}
+.subhead .nm{flex:1;color:var(--fg-1);font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.subhead .gdot{width:6px;height:6px;border-radius:50%}
+
+.pane{position:relative;border-radius:var(--r-sm);padding:5px 8px 5px 12px}
+.pane::before{content:"";position:absolute;left:3px;top:6px;bottom:6px;width:2px;border-radius:2px}
+.pane.working::before{background:var(--s-working)}.pane.needs::before{background:var(--s-needs)}
+.pane.done::before{background:var(--s-done)}.pane.idle::before{background:var(--s-idle);opacity:.5}.pane.shell::before{background:var(--s-shell);opacity:.5}
+.ptop{display:flex;align-items:center;gap:7px;min-width:0}
+.ic-claude{color:oklch(0.74 0.12 38)}.ic-shell{color:var(--s-shell)}
+.pnm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-1)}
+.ctx{font-size:10px;color:var(--fg-4);flex:0 0 auto}.ctx.hot{color:var(--s-danger)}
+.model{font-size:10px;color:var(--fg-3);flex:0 0 auto}
+.pmeta{display:flex;align-items:baseline;gap:8px;margin-left:21px;min-width:0}
+.pstat{flex:1;min-width:0;font-size:10px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chips{display:flex;align-items:center;gap:5px;flex:0 0 auto}
+.chip{display:inline-flex;align-items:center;gap:3px;padding:0 5px;height:15px;border-radius:3px;background:var(--bg-2);color:var(--fg-2);font-size:10px;white-space:nowrap;text-decoration:none}
+.chip.pr{color:var(--fg-1)}.chip.lin{color:var(--linear)}
+.chip.repo{color:var(--repo)}.chip.eff{color:var(--effort)}.chip.wt{color:oklch(0.74 0.11 295)}
+.pane.sel{background:var(--bg-1-hi);border-radius:var(--r-md);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--accent) 45%,transparent)}
+.newtab{display:flex;align-items:center;gap:7px;padding:4px 8px 4px 12px;color:var(--fg-4);font-size:12px}
+.inbox{opacity:.85}
+.dot-needs{background:var(--s-needs)}.dot-g{background:var(--s-working)}.dot-d{background:var(--s-done)}.dot-i{background:var(--s-idle)}
+</style></head>
+<body><div class="page">
+
+<div class="intro">
+  <h1>Three ways periscope could organize your work</h1>
+  <p>Same work in all three rails — your real-ish stuff: a big <code>attribute-config</code> effort spanning two fdy branches, the <code>periscope</code> home-base, and a branchless <code>splash</code> research task. What differs is the <b>model</b>, not the styling. The unit is an <b>effort</b> (a container of tabs); a <b>tab</b> is one claude or shell. Repo / branch / PR / ticket are <b>attributes</b> that decorate, they don't decide placement. tmux is just the terminal backend underneath — invisible here.</p>
+  <p>React to what's right and what's wrong. We converge, then I write the spec.</p>
+</div>
+
+<div class="cols">
+
+<!-- ═══════════ MODEL A ═══════════ -->
+<div class="col">
+  <span class="tag">Model A</span>
+  <h2>Flat efforts, named by goal</h2>
+  <p class="phil">One flat list of efforts. <b>You name them by intent</b> ("attribute-config"), never by repo or branch. A branch is just a chip on the tab. The big effort, the home-base, and the one-off are identical in structure — they differ only in how many tabs they hold and how long they live. No nesting, ever.</p>
+  <ul class="changes">
+    <li>You <b>stop splitting work by branch.</b> All attribute-config tabs sit together; the <code>⎇</code> chip tells you which branch each is on.</li>
+    <li>Opening a repo with no effort drops tabs into <b>Inbox</b> until you file them.</li>
+    <li>Repo becomes a chip + color, never a group.</li>
+  </ul>
+  <div class="rail">
+
+    <div class="seclabel eff"><span class="ic ic-eff">⧉</span><span class="txt">attribute-config</span><span class="rule"></span><span class="rdot dot-needs"></span></div>
+    <div class="group eff"><div class="gbody">
+      <div class="pane needs"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">config-migration-skill</span><span class="model">Opus</span></div>
+        <div class="pmeta"><span class="pstat">waiting: overwrite migrations/0042?</span><span class="chips"><a class="chip wt">⎇ refactor</a><a class="chip pr">#7408</a></span></div></div>
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">attr-config-migration</span><span class="ctx">17%</span></div>
+        <div class="pmeta"><span class="pstat">designing consumer library</span><span class="chips"><a class="chip wt">⎇ refactor</a><a class="chip lin">FDY-2637</a></span></div></div>
+      <div class="pane working"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">anthology-type-conv</span><span class="ctx hot">95%</span></div>
+        <div class="pmeta"><span class="pstat">fixing API type mapping</span><span class="chips"><a class="chip wt">⎇ ci-rewrite</a><a class="chip pr">#7481</a></span></div></div>
+      <div class="pane shell"><div class="ptop"><span class="ic-shell">$</span><span class="pnm">shell</span><span class="ctx">⎇ refactor</span></div></div>
+      <div class="newtab"><span>+</span><span>New tab</span></div>
+    </div></div>
+
+    <div class="seclabel eff"><span class="ic ic-eff">⧉</span><span class="txt">periscope</span><span class="rule"></span><span class="rdot dot-g"></span></div>
+    <div class="group eff"><div class="gbody">
+      <div class="pane working sel"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">tmux-metadata</span><span class="model">Opus</span></div>
+        <div class="pmeta"><span class="pstat">redesigning tab grouping</span><span class="chips"><span class="chip ctx">11%</span></span></div></div>
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">omnibox-workspace</span><span class="ctx">48%</span></div>
+        <div class="pmeta"><span class="pstat">investigating API key leak</span><span class="chips"><a class="chip pr">#4</a></span></div></div>
+      <div class="pane done"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">lint-typecheck</span><span class="ctx">27%</span></div>
+        <div class="pmeta"><span class="pstat">quieting specific check</span></div></div>
+      <div class="newtab"><span>+</span><span>New tab</span></div>
+    </div></div>
+
+    <div class="seclabel eff"><span class="ic ic-eff">⧉</span><span class="txt">splash research</span><span class="rule"></span><span class="rdot dot-i"></span></div>
+    <div class="group eff"><div class="gbody">
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">competitor-pricing</span><span class="ctx">22%</span></div>
+        <div class="pmeta"><span class="pstat">comparing pricing tiers</span><span class="chips"><span class="chip" style="color:var(--fg-4)">no repo</span></span></div></div>
+      <div class="newtab"><span>+</span><span>New tab</span></div>
+    </div></div>
+
+  </div>
+</div>
+
+<!-- ═══════════ MODEL B ═══════════ -->
+<div class="col">
+  <span class="tag">Model B</span>
+  <h2>Efforts with optional branch sub-clusters</h2>
+  <p class="phil">An effort is the top unit, but inside a <b>big</b> one, tabs that share a branch tuck into a <b>sub-cluster</b>. Small efforts and the home-base stay flat — the sub-level only appears when an effort spans &gt;1 branch. Closest to how you work today, but the <b>effort</b> is the parent (not the repo), and the branch sub-cluster is a convenience, not a tmux session.</p>
+  <ul class="changes">
+    <li>Branch grouping <b>survives</b>, but only when it earns its keep (2+ branches).</li>
+    <li>Repo is a chip on the effort header, not a tier.</li>
+    <li>One-branch effort = flat. No more single-worktree double-headers.</li>
+  </ul>
+  <div class="rail">
+
+    <div class="seclabel eff"><span class="ic ic-eff">⧉</span><span class="txt">attribute-config</span><span class="rule"></span><span class="rdot dot-needs"></span></div>
+    <div class="group eff"><div class="ghead"><span class="gchip">fdy</span><span class="nm" style="flex:0;"></span><span style="flex:1"></span></div><div class="gbody">
+      <div class="subgroup">
+        <div class="subhead"><span class="wt">⎇</span><span class="nm">attribute-config-refactor</span><span class="gdot dot-needs"></span></div>
+        <div class="pane needs"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">config-migration-skill</span><span class="model">Opus</span></div>
+          <div class="pmeta"><span class="pstat">waiting: overwrite migrations/0042?</span><span class="chips"><a class="chip pr">#7408</a></span></div></div>
+        <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">attr-config-migration</span><span class="ctx">17%</span></div>
+          <div class="pmeta"><span class="pstat">designing consumer library</span><span class="chips"><a class="chip lin">FDY-2637</a></span></div></div>
+        <div class="pane shell"><div class="ptop"><span class="ic-shell">$</span><span class="pnm">shell</span></div></div>
+      </div>
+      <div class="subgroup">
+        <div class="subhead"><span class="wt">⎇</span><span class="nm">ci-python-rewrite</span><span class="gdot dot-g"></span></div>
+        <div class="pane working"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">anthology-type-conv</span><span class="ctx hot">95%</span></div>
+          <div class="pmeta"><span class="pstat">fixing API type mapping</span><span class="chips"><a class="chip pr">#7481</a></span></div></div>
+      </div>
+      <div class="newtab"><span>+</span><span>New tab</span></div>
+    </div></div>
+
+    <div class="seclabel eff"><span class="ic ic-eff">⧉</span><span class="txt">periscope</span><span class="rule"></span><span class="rdot dot-g"></span></div>
+    <div class="group eff"><div class="ghead"><span class="gchip">periscope</span><span style="flex:1"></span></div><div class="gbody">
+      <div class="pane working sel"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">tmux-metadata</span><span class="model">Opus</span></div>
+        <div class="pmeta"><span class="pstat">redesigning tab grouping</span><span class="chips"><span class="chip ctx">11%</span></span></div></div>
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">omnibox-workspace</span><span class="ctx">48%</span></div>
+        <div class="pmeta"><span class="pstat">investigating API key leak</span><span class="chips"><a class="chip pr">#4</a></span></div></div>
+      <div class="pane done"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">lint-typecheck</span><span class="ctx">27%</span></div>
+        <div class="pmeta"><span class="pstat">quieting specific check</span></div></div>
+      <div class="newtab"><span>+</span><span>New tab</span></div>
+    </div></div>
+
+    <div class="seclabel eff"><span class="ic ic-eff">⧉</span><span class="txt">splash research</span><span class="rule"></span><span class="rdot dot-i"></span></div>
+    <div class="group eff"><div class="gbody">
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">competitor-pricing</span><span class="ctx">22%</span></div>
+        <div class="pmeta"><span class="pstat">comparing pricing tiers</span></div></div>
+      <div class="newtab"><span>+</span><span>New tab</span></div>
+    </div></div>
+
+  </div>
+</div>
+
+<!-- ═══════════ MODEL C ═══════════ -->
+<div class="col">
+  <span class="tag">Model C — fences swing</span>
+  <h2>Attention first, effort is a chip</h2>
+  <p class="phil">The rail's <b>primary axis is what needs you</b>, not where work lives. Every tab floats into a band by state — <b>Needs you / Working / Done</b> — across all efforts, each wearing its effort + repo as chips. Effort grouping still exists, but it's a <b>collapsed browse strip</b> at the bottom for jumping to/resuming work. Periscope is a monitor; this makes triage the default and structure the secondary view.</p>
+  <ul class="changes">
+    <li>With 15 claudes running, you see <b>who needs you now</b> without hunting through groups.</li>
+    <li>Effort/repo become <b>chips</b> on every row; you can still filter to one.</li>
+    <li>"Browse by effort" is one click away when you want to start/resume, not monitor.</li>
+  </ul>
+  <div class="rail">
+
+    <div class="seclabel attn"><span class="ic">◉</span><span class="txt">Needs you</span><span class="rule"></span></div>
+    <div class="group"><div class="gbody">
+      <div class="pane needs"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">config-migration-skill</span><span class="model">Opus</span></div>
+        <div class="pmeta"><span class="pstat">waiting: overwrite migrations/0042?</span><span class="chips"><a class="chip eff">⧉ attribute-config</a></span></div></div>
+    </div></div>
+
+    <div class="seclabel attn" style="--s-needs:var(--s-working)"><span class="ic" style="color:var(--s-working)">◐</span><span class="txt" style="color:var(--s-working)">Working</span><span class="rule"></span></div>
+    <div class="group"><div class="gbody">
+      <div class="pane working"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">anthology-type-conv</span><span class="ctx hot">95%</span></div>
+        <div class="pmeta"><span class="pstat">fixing API type mapping</span><span class="chips"><a class="chip eff">⧉ attribute-config</a></span></div></div>
+      <div class="pane working sel"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">tmux-metadata</span><span class="model">Opus</span></div>
+        <div class="pmeta"><span class="pstat">redesigning tab grouping</span><span class="chips"><a class="chip eff">⧉ periscope</a></span></div></div>
+    </div></div>
+
+    <div class="seclabel attn" style="--s-needs:var(--s-done)"><span class="ic" style="color:var(--s-done)">✓</span><span class="txt" style="color:var(--s-done)">Done · idle</span><span class="rule"></span></div>
+    <div class="group"><div class="gbody">
+      <div class="pane done"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">lint-typecheck</span><span class="ctx">27%</span></div>
+        <div class="pmeta"><span class="pstat">quieting specific check</span><span class="chips"><a class="chip eff">⧉ periscope</a></span></div></div>
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">attr-config-migration</span><span class="ctx">17%</span></div>
+        <div class="pmeta"><span class="pstat">designing consumer library</span><span class="chips"><a class="chip eff">⧉ attribute-config</a></span></div></div>
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">omnibox-workspace</span><span class="ctx">48%</span></div>
+        <div class="pmeta"><span class="pstat">investigating API key leak</span><span class="chips"><a class="chip eff">⧉ periscope</a></span></div></div>
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">competitor-pricing</span><span class="ctx">22%</span></div>
+        <div class="pmeta"><span class="pstat">comparing pricing tiers</span><span class="chips"><a class="chip eff">⧉ splash research</a></span></div></div>
+    </div></div>
+
+    <div class="seclabel"><span class="ic ic-eff">⧉</span><span class="txt">Browse by effort</span><span class="rule"></span><span class="chev" style="color:var(--fg-4)">▸</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 6px 2px">
+      <span class="chip eff">attribute-config · 4</span><span class="chip eff">periscope · 3</span><span class="chip eff">splash research · 1</span>
+    </div>
+
+  </div>
+</div>
+
+</div>
+</div></body></html>
