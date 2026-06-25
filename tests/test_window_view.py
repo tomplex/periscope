@@ -232,6 +232,29 @@ def test_view_handles_capture_exception(mocker, clean_state):
     assert view["state"] == "shell"  # error → is_claude=False → shell
 
 
+def test_view_includes_track_id(mocker, clean_state, fresh_activity_db):
+    """The view ships a resolved track_id (explicit pane_tracks tag wins)."""
+    from periscope import activity
+    from periscope.window_view import build_window_view
+
+    activity.insert_track({"id": "tk_x", "name": "X", "repo": None,
+                           "created_at": 1, "archived_at": None})
+    activity.set_pane_track("%42", "tk_x")
+    _stub_subsystems(mocker)
+    view, _ = build_window_view(_window(pane_id="%42"), now_ts=1000)
+    assert view["track_id"] == "tk_x"
+
+
+def test_view_track_id_falls_back_to_loose_for_non_git(mocker, clean_state, fresh_activity_db):
+    """Untagged + non-git window resolves to the loose catchall."""
+    from periscope import tracks
+    from periscope.window_view import build_window_view
+
+    _stub_subsystems(mocker, git={})  # cached_git_state → {} (no repo_key)
+    view, _ = build_window_view(_window(pane_id="%99"), now_ts=1000)
+    assert view["track_id"] == tracks.LOOSE_KEY
+
+
 def test_view_persisted_acked_at_suppresses_done_state(mocker, clean_state):
     """When acked_at >= completed_at, state stays 'idle' (user has
     already engaged since the last completion)."""
