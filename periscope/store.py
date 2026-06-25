@@ -321,6 +321,22 @@ def _channels_migration_v1() -> None:
 _channels_migration_v1()
 
 
+# === Migration flags ======================================================
+# One-shot migrations persist a "done" flag here so they fire exactly once.
+# Same persist idiom as _channels_migration_v1 above.
+
+
+def is_single_session_migration_done() -> bool:
+    with _STATE_LOCK:
+        return bool(_STATE.get("migrations", {}).get("single_session_done"))
+
+
+def mark_single_session_migration_done() -> None:
+    with _STATE_LOCK:
+        _STATE.setdefault("migrations", {})["single_session_done"] = True
+        _write_state(_STATE)
+
+
 # === Typed accessors ======================================================
 # Every accessor holds _STATE_LOCK internally. Mutations call _write_state
 # before releasing the lock. Read accessors return COPIES so callers can't

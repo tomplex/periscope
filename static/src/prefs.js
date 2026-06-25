@@ -250,28 +250,46 @@ async function migrateLocalStorage() {
 // All five fields default to empty / null when the prefs blob hasn't seen
 // them yet. Mutators write through the existing PATCH /api/prefs/ui endpoint.
 
-export function getRepoOrder() {
-  return [...(P().ui?.repo_order || [])];
+// Track-anchored rail prefs (2026-06-25). The top tier is the track order;
+// the mid tier (branch sub-clusters) is DERIVED, not persisted — there is no
+// `worktrees_by_repo` equivalent. Tab order is keyed by track id.
+//
+// Legacy read-side fallback (no destructive rewrite): an existing prod
+// `state.json` ui blob still carries `repo_order` (and the now-ignored
+// `worktrees_by_repo`). Treat a legacy `repo_order` as the INITIAL track
+// order so the rail doesn't blank on first boot — the repo-default track id
+// == the old repo/pinned-dir key (structure doc §9 decision 2), so those keys
+// map straight through. The first reorder writes `track_order` and the legacy
+// key goes stale on its own. `worktrees_by_repo` is intentionally dropped.
+
+export function getTrackOrder() {
+  const ui = P().ui || {};
+  return [...(ui.track_order || ui.repo_order || [])];
 }
 
-export function setRepoOrder(order) {
-  return patchUI({ repo_order: order });
+export function setTrackOrder(order) {
+  return patchUI({ track_order: order });
 }
 
-export function getWorktreesByRepo() {
-  return { ...(P().ui?.worktrees_by_repo || {}) };
+export function getTabsByTrack() {
+  const ui = P().ui || {};
+  // Legacy `panes_by_worktree` was keyed by session; the repo-default track id
+  // equals the old top-level key, but per-session tab order doesn't map
+  // cleanly. Read the new key only — stale tab order is harmless (it re-merges
+  // from live windows), unlike a blanked track ORDER.
+  return { ...(ui.tabs_by_track || {}) };
 }
 
-export function setWorktreesByRepo(map) {
-  return patchUI({ worktrees_by_repo: map });
+export function setTabsByTrack(map) {
+  return patchUI({ tabs_by_track: map });
 }
 
-export function getPanesByWorktree() {
-  return { ...(P().ui?.panes_by_worktree || {}) };
+export function getBranchOrderByTrack() {
+  return { ...(P().ui?.branch_order_by_track || {}) };
 }
 
-export function setPanesByWorktree(map) {
-  return patchUI({ panes_by_worktree: map });
+export function setBranchOrderByTrack(map) {
+  return patchUI({ branch_order_by_track: map });
 }
 
 export function getRailCollapsed() {

@@ -202,19 +202,24 @@ def spawn_worktree(
 
 
 def _layout_two_window(tmux_session: str, pinned_dir: str) -> tuple[str, str]:
-    """Apply the trellis-style 2-window layout: window 1 'claude',
-    window 2 'shell'. tmux session is created from scratch and ends with
-    window 1 active. The user is NOT attached — periscope is a dashboard,
-    not a terminal client.
+    """Add the trellis-style 2-window pair (a 'claude' window + a 'shell'
+    window) into `tmux_session`, creating the session on first use. The
+    session is the single shared `config.MANAGED_SESSION` — many such pairs
+    coexist in it, so every target is a stable `#{window_id}` (e.g. `@7`),
+    NEVER `session:claude` (ambiguous — it resolves to the first match and
+    would send-keys/stamp/select the WRONG window). Ends with the new claude
+    window active. The user is NOT attached — periscope is a dashboard, not a
+    terminal client.
 
-    The 100ms sleep before each send-keys lets the shell finish loading
-    its rc file before the command lands (see CLAUDE.md "Key invariants"
-    note 5). Without it, `claude` can land mid-rc and either get echoed
-    as text or fail silently.
+    The 100ms sleep before send-keys lets the shell finish loading its rc
+    file before `claude` lands (see CLAUDE.md "Key invariants" note 5).
+    Without it, `claude` can land mid-rc and either get echoed as text or
+    fail silently.
 
-    Returns `(claude_pid, shell_pid)` — both windows stamped. Phase 4's
-    PR-review endpoint uses claude_pid to write state.windows[pid].linked_pr
-    synchronously; other callers can ignore the return.
+    Returns `(claude_pid, shell_pid)` — both windows stamped (by window id).
+    Phase 4's PR-review endpoint uses claude_pid to write
+    state.windows[pid].linked_pr synchronously; other callers can ignore the
+    return.
 
     Raises HTTPException(500) on any tmux failure — this layout primitive
     is deliberately coupled to FastAPI so its callers (the project-CRUD
@@ -223,63 +228,64 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> tuple[str, str]:
     from periscope.panes import note_action, note_focus
     from periscope.pids import stamp_new_window
 
-    # new-session creates window 0 (or whatever base-index is) with a bare
-    # shell at cwd = pinned_dir.
-    ok, msg = _tmux_mutate(
-        "new-session", "-d", "-s", tmux_session, "-c", pinned_dir,
-        "-n", "claude",
-    )
-    if not ok:
-        raise HTTPException(500, f"tmux new-session failed: {msg}")
+    # Create the shared session lazily (first pane), or add a claude window to
+    # the existing one. Either way capture the new window's stable id from
+    # `-P -F "#{window_id}"` so subsequent targets can't drift onto a
+    # same-named sibling window.
+    if not _tmux_mutate("has-session", "-t", tmux_session)[0]:
+        ok, claude_win = _tmux_mutate(
+            "new-session", "-d", "-s", tmux_session, "-c", pinned_dir,
+            "-n", "claude", "-P", "-F", "#{window_id}",
+        )
+        if not ok:
+            raise HTTPException(500, f"tmux new-session failed: {claude_win}")
+    else:
+        ok, claude_win = _tmux_mutate(
+            "new-window", "-t", f"{tmux_session}:", "-c", pinned_dir,
+            "-n", "claude", "-P", "-F", "#{window_id}",
+        )
+        if not ok:
+            raise HTTPException(500, f"tmux new-window (claude) failed: {claude_win}")
 
-    # Send `claude` into window 1, with the periscope channels flag so the
-    # spawned Claude connects to periscope's MCP socket.
+    # Send `claude` into the captured claude window, with the periscope
+    # channels flag so the spawned Claude connects to periscope's MCP socket.
     from periscope.channels import dismiss_dev_channels_consent_bg
     from periscope.config import claude_exec
     exec_cmd = claude_exec()
     time.sleep(0.1)
-    claude_target = f"{tmux_session}:claude"
-    _tmux_mutate("send-keys", "-t", claude_target, exec_cmd, "Enter")
+    _tmux_mutate("send-keys", "-t", claude_win, exec_cmd, "Enter")
     if "--dangerously-load-development-channels" in exec_cmd:
-        dismiss_dev_channels_consent_bg(claude_target)
+        dismiss_dev_channels_consent_bg(claude_win)
 
-    # Window 2: shell.
-    ok, msg = _tmux_mutate(
+    # Second window: shell.
+    ok, shell_win = _tmux_mutate(
         "new-window", "-t", f"{tmux_session}:", "-c", pinned_dir,
-        "-n", "shell",
+        "-n", "shell", "-P", "-F", "#{window_id}",
     )
     if not ok:
-        # Worktree + session + window 1 already exist; don't roll back.
-        log.warning("new-project: failed to create shell window: %s", msg)
+        # Session + claude window already exist; don't roll back.
+        log.warning("new-project: failed to create shell window: %s", shell_win)
+        shell_win = ""
 
     # Stamp the shell window too — server-side rail placement needs the
     # complete pane list synchronously (it would otherwise only learn the
-    # shell pid on the next /api/state poll's resolve_pids).
-    shell_idx = tmux("display-message", "-t", f"{tmux_session}:shell",
-                     "-p", "#{window_index}").strip()
-    shell_pid = stamp_new_window(f"{tmux_session}:{shell_idx}") if shell_idx.isdigit() else ""
+    # shell pid on the next /api/state poll's resolve_pids). `set-option -w`
+    # accepts a `@id` target, so the captured window id works directly.
+    shell_pid = stamp_new_window(shell_win) if shell_win else ""
 
-    # Park focus on window 1 (claude).
-    _tmux_mutate("select-window", "-t", f"{tmux_session}:claude")
+    # Park focus on the claude window.
+    _tmux_mutate("select-window", "-t", claude_win)
 
-    # Stamp focus + action so the new project sorts to the top of the
-    # grid + stream views on the next poll. Match the pattern in
-    # routes/sessions.py:46-47 for `+ session`.
-    # The claude window is the first one created; its tmux window index
-    # depends on base-index. Resolve it by looking up the window-id.
-    idx_out = tmux(
-        "display-message", "-t", f"{tmux_session}:claude",
-        "-p", "#{window_index}",
-    ).strip()
-    if not idx_out.isdigit():
-        # If we can't resolve the claude window's index after creating it,
-        # something is very wrong with tmux state. Fail loudly — silently
-        # returning "" would let PR-review skip the linked_pr write and
-        # create a project with no #PR badge, which the user couldn't
-        # detect without inspecting state.json.
-        raise HTTPException(500, "could not resolve claude window index")
-    target = f"{tmux_session}:{idx_out}"
-    note_focus(target)
-    note_action(target)
-    claude_pid = stamp_new_window(target)
+    # Stamp focus + action so the new project sorts to the top on the next
+    # poll. Match the pattern in routes/sessions.py for `+ session`. The
+    # recency map is keyed by session:index (window_view.py), NOT window id —
+    # so these two stamps must resolve the claude window's index, even though
+    # everything else targets the unambiguous window id. The index is stable
+    # between creation and the next poll (no kills in between), so it matches
+    # what update_focus_from_windows / window_view compute.
+    claude_idx = tmux("display-message", "-t", claude_win, "-p", "#{window_index}").strip()
+    claude_si = f"{tmux_session}:{claude_idx}"
+    note_focus(claude_si)
+    note_action(claude_si)
+    claude_pid = stamp_new_window(claude_win)
     return claude_pid, shell_pid

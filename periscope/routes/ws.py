@@ -25,15 +25,19 @@ router = APIRouter()
 @router.websocket("/ws/pane")
 async def ws_pane(
     websocket: WebSocket,
-    session: str,
-    index: int,
+    pane_id: str,
     cols: int = 0,
     rows: int = 0,
 ):
     await websocket.accept()
-    target = f"{session}:{index}"
-    # Modal-open is the canonical "opened in periscope" event.
-    note_action(target)
+    # The terminal address is the stable tmux pane id (%N), not the
+    # session:index composite: under the shared session with
+    # `renumber-windows on`, a window's index drifts on every kill/new
+    # — which would stale an OPEN terminal mid-stream. Pane ids never
+    # drift. tmux accepts %id for pane commands (capture-pane,
+    # display-message, send-keys) and resolves it to its window for
+    # window commands (resize-window, setw).
+    target = pane_id
     loop = asyncio.get_running_loop()
 
     # Periscope owns the pane width. Once we resize a window to the modal's
@@ -59,15 +63,19 @@ async def ws_pane(
 
     # 2) tmux's view of the pane: size, cursor, alt-screen — all three are
     #    needed to render the initial blob into an xterm state matching
-    #    tmux's — plus #{pane_id} for the mirror subscription. If the pane
-    #    is gone, close: the client's reconnect FSM handles it.
+    #    tmux's — plus #{session_name}/#{window_index} for the mirror
+    #    subscription (keyed on session NAME) and the recency stamp (keyed
+    #    on session:index, NOT the %pane_id address — window_view reads
+    #    recency_stamps_for(f"{session}:{index}")). If the pane is gone,
+    #    close: the client's reconnect FSM handles it.
     try:
         meta = await loop.run_in_executor(None, lambda: tmux(
             "display-message", "-t", target, "-p",
             "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}"
-            "|#{alternate_on}|#{pane_id}",
+            "|#{alternate_on}|#{pane_id}|#{session_name}|#{window_index}",
         ))
-        cols_s, rows_s, cx_s, cy_s, alt_s, pane_id = meta.strip().split("|")
+        (cols_s, rows_s, cx_s, cy_s, alt_s,
+         _pane_id, session_name, window_index) = meta.strip().split("|")
         cols, rows = int(cols_s), int(rows_s)
         cx, cy = int(cx_s), int(cy_s)
         alt_on = alt_s == "1"
@@ -75,7 +83,12 @@ async def ws_pane(
         await websocket.close()
         return
 
-    sub = await tmux_mirror.subscribe(session, pane_id)
+    # Opening a terminal is the canonical "opened in periscope" action.
+    # Stamp it on the recency map's session:index key (window_view's read
+    # key), now that we've parsed it — a %pane_id key would be a dead write.
+    note_action(f"{session_name}:{window_index}")
+
+    sub = await tmux_mirror.subscribe(session_name, pane_id)
     async with sub:
         await websocket.send_text(
             json.dumps({"type": "size", "cols": cols, "rows": rows})

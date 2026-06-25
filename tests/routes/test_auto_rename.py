@@ -51,7 +51,11 @@ def test_auto_rename_session_unknown_session_returns_error(client, mocker):
 
 
 def test_auto_rename_window_applies(client, mocker):
-    # display-message returns "name\tcwd".
+    # The route reads the window's name/cwd via pane_meta() (its own tmux call
+    # is internal to periscope.tmux, so patching auto_rename.tmux can't reach
+    # it). Mock pane_meta directly so the test never depends on a real tmux
+    # session existing on the dev machine.
+    _patch(mocker, "server", "pane_meta", return_value=("oldname", "/tmp"))
     _patch(mocker, "server", "tmux", return_value="oldname\t/tmp")
     _patch(mocker, "server", "stamp_pane_rename")
     _patch(mocker, "server", "_attach_git_then_resolve_pids")

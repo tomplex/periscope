@@ -35,6 +35,7 @@ from periscope.routes import (
     send,
     sessions,
     state,
+    tracks,
     ws,
 )
 from periscope.routes import cleanup as cleanup_routes
@@ -74,9 +75,9 @@ async def lifespan(_app: FastAPI):
         dropped_ws = activity.prune_pane_workspaces(alive)
         if dropped_ws:
             log.info("pruned %d dead pane_workspaces row(s)", dropped_ws)
-        dropped_proj = activity.prune_pane_projects(alive)
-        if dropped_proj:
-            log.info("pruned %d dead pane_projects row(s)", dropped_proj)
+        dropped_tracks = activity.prune_pane_tracks(alive)
+        if dropped_tracks:
+            log.info("pruned %d dead pane_tracks row(s)", dropped_tracks)
 
     _bg("pane-sessions-housekeeping", _pane_sessions_housekeeping)
     # Kick off cache prewarms eagerly so the first /api/state poll already
@@ -115,17 +116,32 @@ async def lifespan(_app: FastAPI):
             log.warning("bg_commander.write_mcp_config failed", exc_info=True)
     else:
         activity_task = None
-    # Synchronous (pre-serve) backfill: seed pane_projects from today's
-    # session-derived grouping so the rail is byte-identical at cutover. NOT
-    # _bg — the collapse follow-on deletes the session-match fallback, so this
-    # must already be a blocking step. Failure degrades to the fallback.
-    from periscope import projects as _projects
+    # One-shot single-session consolidation: physically move every managed
+    # window into MANAGED_SESSION, then seed tracks. Self-gated (is_prod +
+    # persisted flag), so call it unconditionally. Synchronous + pre-serve so
+    # windows are consolidated before any /ws/pane connects. A failure here
+    # must never crash boot — degraded just means windows stay where they are,
+    # and the bridge is pane_id-keyed so terminals keep working.
+    from periscope import migrate_single_session
     try:
-        seeded = _projects.backfill_pane_projects()
-        if seeded:
-            log.info("backfilled %d pane_projects row(s)", seeded)
+        migrate_single_session.run_if_needed()
     except Exception:
-        log.warning("pane_projects backfill failed; using session-match fallback",
+        log.warning("single-session migration failed; windows left in place",
+                    exc_info=True)
+    # Synchronous (pre-serve) seed: tag every managed pane with its resolved
+    # track so the rail groups by track_id from the first poll. Idempotent —
+    # skips already-tagged panes. NOT _bg: grouping is now track-only (no
+    # session-match fallback), so this must complete before serving.
+    from periscope import tracks
+    try:
+        folded = tracks.migrate_workspaces_to_tracks()
+        if folded:
+            log.info("folded %d pane(s) from workspaces into goal tracks", folded)
+        seeded = tracks.seed_tracks(list_windows())
+        if seeded:
+            log.info("seeded %d pane_tracks row(s)", seeded)
+    except Exception:
+        log.warning("track seed failed; panes resolve to repo-default lazily",
                     exc_info=True)
     try:
         yield
@@ -159,7 +175,7 @@ app = FastAPI(lifespan=lifespan)
 for r in (
     alerts, auto_rename, channel, command, events, cleanup_routes, fs, healthz, history, lgtm_route,
     open_route, pane, paste_image, prefs, projects_routes, workspaces_routes, send, sessions,
-    settings_routes, state, ws,
+    settings_routes, state, tracks, ws,
 ):
     app.include_router(r.router)
 

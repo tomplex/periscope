@@ -409,7 +409,7 @@ function PaneDetail({ w }) {
             key={w.pid}
             id="detail-xterm"
             class="detail-xterm"
-            target={w.target}
+            target={w.pane_id}
             onPaste={handleDetailPaste}
           />
         </div>

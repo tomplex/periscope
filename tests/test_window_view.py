@@ -232,6 +232,31 @@ def test_view_handles_capture_exception(mocker, clean_state):
     assert view["state"] == "shell"  # error → is_claude=False → shell
 
 
+def test_view_includes_track_id(mocker, clean_state, fresh_activity_db):
+    """The view ships a resolved track_id (explicit pane_tracks tag wins)."""
+    from periscope import activity
+    from periscope.window_view import build_window_view
+
+    activity.insert_track({"id": "tk_x", "name": "X", "repo": None,
+                           "created_at": 1, "archived_at": None})
+    activity.set_pane_track("%42", "tk_x")
+    _stub_subsystems(mocker)
+    view, _ = build_window_view(_window(pane_id="%42"), now_ts=1000)
+    assert view["track_id"] == "tk_x"
+    # The rail labels off track_name (no separate /api/state tracks payload).
+    assert view["track_name"] == "X"
+
+
+def test_view_track_id_falls_back_to_loose_for_non_git(mocker, clean_state, fresh_activity_db):
+    """Untagged + non-git window resolves to the loose catchall."""
+    from periscope import tracks
+    from periscope.window_view import build_window_view
+
+    _stub_subsystems(mocker, git={})  # cached_git_state → {} (no repo_key)
+    view, _ = build_window_view(_window(pane_id="%99"), now_ts=1000)
+    assert view["track_id"] == tracks.LOOSE_KEY
+
+
 def test_view_persisted_acked_at_suppresses_done_state(mocker, clean_state):
     """When acked_at >= completed_at, state stays 'idle' (user has
     already engaged since the last completion)."""
@@ -312,19 +337,15 @@ def test_skipped_pane_still_reflects_fresh_focus(mocker, clean_state):
     assert view["focused_at"] == expected
 
 
-def test_window_view_emits_workspace_id(mocker, clean_state, fresh_activity_db):
-    from periscope import activity
+def test_window_view_drops_dead_project_workspace_fields(mocker, clean_state, fresh_activity_db):
+    """track_id supersedes project_pinned_dir / workspace_id (and the
+    project_name/project_archived fields the frontend never read off windows)
+    — the view no longer ships any of them."""
     from periscope.window_view import build_window_view
-    from periscope.workspaces import create_workspace
     _stub_subsystems(mocker)
-    ws = create_workspace(name="WS")
-    activity.set_pane_workspace("%9", ws["id"])
     view, _ = build_window_view(_window(pane_id="%9"), now_ts=1000)
-    assert view["workspace_id"] == ws["id"]
-
-
-def test_window_view_workspace_id_none_when_untagged(mocker, clean_state, fresh_activity_db):
-    from periscope.window_view import build_window_view
-    _stub_subsystems(mocker)
-    view, _ = build_window_view(_window(pane_id="%8"), now_ts=1000)
-    assert view.get("workspace_id") is None
+    assert "project_pinned_dir" not in view
+    assert "workspace_id" not in view
+    assert "project_name" not in view
+    assert "project_archived" not in view
+    assert "track_id" in view

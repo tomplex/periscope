@@ -45,6 +45,8 @@
   --s-danger:   oklch(0.70 0.16 25);
 
   --accent: oklch(0.74 0.13 232);
+  --effort: oklch(0.72 0.12 330);    /* track / effort accent — pink-magenta */
+  --worktree: oklch(0.72 0.13 295);  /* branch / worktree accent — violet (⎇) */
 
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   --sans: 'Inter', -apple-system, system-ui, sans-serif;
@@ -1955,6 +1957,69 @@ body.modal-open { overflow: hidden; }
 .wt-meta-ci-running { color: var(--s-working); }
 .wt-meta-ci-neutral { color: var(--fg-3); }
 
+/* Track-scope filter chips — a strip above the rail tree that narrows the
+   whole rail (attention sort + tree) to one track. <button>s need an explicit
+   appearance reset or the browser's native chrome shows through (the unstyled
+   grey-box look). Matches the wt-meta-chip pill vocabulary; the active chip
+   carries the accent. */
+.rail-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--bg-2);
+}
+.rail-filter-chip {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid transparent;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 1px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-filter-chip:hover { background: var(--bg-3); color: var(--fg-1); }
+.rail-filter-chip.is-active {
+  background: var(--bg-3);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Track-row action menu (⋯ → Dissolve / Tear down). The trigger + popup +
+   items are plain <button>/<div>, so without an appearance reset the native
+   button chrome shows through (the unstyled grey-box look). */
+.track-menu { position: relative; display: inline-flex; flex: 0 0 auto; }
+.rail-track-menu-btn {
+  appearance: none; -webkit-appearance: none;
+  border: none; background: transparent; color: var(--fg-3); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 2px 6px; border-radius: 4px;
+}
+.rail-track-menu-btn:hover { background: var(--bg-2); color: var(--fg-1); }
+.track-menu-pop {
+  position: absolute; top: 100%; right: 0; z-index: 30; margin-top: 3px;
+  min-width: 170px; display: flex; flex-direction: column;
+  background: var(--bg-2); border: 1px solid var(--bg-3); border-radius: 6px;
+  padding: 4px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.track-menu-item {
+  appearance: none; -webkit-appearance: none; border: none; background: transparent;
+  text-align: left; cursor: pointer; font-family: var(--mono); font-size: 12px;
+  color: var(--fg-1); padding: 5px 8px; border-radius: 4px;
+  display: flex; align-items: baseline; gap: 6px; white-space: nowrap;
+}
+.track-menu-item:hover { background: var(--bg-3); }
+.track-menu-hint { font-size: 10px; color: var(--fg-3); }
+.track-menu-danger { color: var(--s-danger); }
+.track-menu-danger:hover { background: color-mix(in oklch, var(--s-danger) 20%, var(--bg-3)); }
+
 /* Continuous tree lines drawn via CSS so adjacent child rows' connectors
    actually touch. Replaces the per-row ├/└ glyphs, which broke at every
    row boundary because of vertical padding.
@@ -2143,6 +2208,18 @@ body.modal-open { overflow: hidden; }
 .launcher-row { display: block; width: 100%; padding: 8px 10px; text-align: left; background: transparent; border: 0; color: inherit; cursor: pointer; }
 .launcher-row:hover { background: rgba(255,255,255,.05); }
 .launcher-empty { padding: 10px; opacity: .6; font-size: 12px; }
+/* Branch picker + command sections in the per-track launcher. */
+.launcher-section { margin-bottom: 12px; }
+.launcher-section:last-child { margin-bottom: 0; }
+.launcher-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; opacity: .5; margin-bottom: 6px; }
+.launcher-branches { display: flex; flex-wrap: wrap; gap: 6px; }
+.launcher-branch { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border, rgba(255,255,255,.15)); background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
+.launcher-branch:hover { background: rgba(255,255,255,.05); }
+.launcher-branch.is-active { background: var(--accent, #6c8cff); border-color: var(--accent, #6c8cff); color: #fff; }
+.launcher-branch-new { opacity: .7; border-style: dashed; }
+.launcher-branch-input { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--accent, #6c8cff); background: rgba(255,255,255,.04); color: inherit; font-size: 12px; min-width: 160px; }
+.launcher-row.is-default { font-weight: 600; }
+.launcher-row.is-default::before { content: "▸ "; opacity: .6; }
 .newtab-row { opacity: .6; }
 .newtab-row:hover { opacity: .9; }
 
@@ -2200,7 +2277,7 @@ body.modal-open { overflow: hidden; }
 .icon-claude { color: oklch(0.74 0.12 38); font-size: 13px; }     /* ✻ — Claude brand-orange */
 .icon-review { color: var(--s-shell); font-size: 11px; }          /* ◉ — live LGTM */
 .icon-review-empty { color: var(--fg-4); font-size: 11px; }        /* ○ — start CTA */
-.icon-worktree { color: oklch(0.72 0.13 295); }                    /* ⎇ — branch glyph */
+.icon-worktree { color: var(--worktree); }                         /* ⎇ — branch glyph */
 
 .rail-row { position: relative; }
 
@@ -2228,12 +2305,50 @@ body.modal-open { overflow: hidden; }
   padding: 4px;
 }
 #rail .rail-group-body .pane-row:not(.pane-expanded):hover { background: var(--bg-1-hi); }
-.rail-group-ws { border-color: color-mix(in oklch, oklch(0.72 0.12 330) 35%, transparent); }
+.rail-group-ws { border-color: color-mix(in oklch, var(--effort) 35%, transparent); }
 .rail-group-body { display: flex; flex-direction: column; gap: 2px; padding-top: 2px; }
+
+/* ───────────────────────────────────────────────────────────────────────
+   Model B track card. ONE bordered card per track (the seclabel TrackRow
+   sits above it, outside the border). The card's border carries the effort
+   accent so a track reads as a single container; branch sub-clusters and the
+   flat pane list nest inside. Tighter top margin than a bare .rail-group so
+   the card hugs its seclabel header. */
+.rail-track-card {
+  margin-top: 2px;
+  padding: 5px;
+  border-color: color-mix(in oklch, var(--effort) 30%, transparent);
+}
+/* Review row parked at the top of the card body, above branches/panes. */
+.rail-review-head { padding-top: 0; padding-bottom: 2px; }
+
+/* Branch sub-cluster: only appears when a track spans ≥2 branches. A violet
+   left-rail (the ⎇ worktree accent) + indent groups the branch's tabs without
+   a second full card — the convenience tier the mockup calls a "sub-cluster". */
+.rail-subgroup {
+  margin: 2px 0 2px 4px;
+  padding-left: 7px;
+  border-left: 2px solid color-mix(in oklch, var(--worktree) 40%, transparent);
+}
+.rail-subgroup + .rail-subgroup { margin-top: 4px; }
+.rail-subgroup .rail-group-body { padding-top: 0; }
 
 /* Worktree header sits as the card's title row — drop the big tree indent and
    the per-row top/bottom padding override; the card frames the group now. */
 #rail .rail-group > .wt-row { padding-left: 8px; }
+
+/* Branch sub-cluster head (.wt-row inside a .rail-subgroup) reads as a compact
+   subhead, not a card title: the violet left-rail already marks the group, so
+   the row just carries ⎇ + branch name + rolled-up dot at a shallow indent. */
+#rail .rail-subgroup > .wt-row {
+  padding-left: 4px;
+  gap: 6px;
+}
+#rail .rail-subgroup > .wt-row .rail-label b { font-weight: 500; color: var(--fg-1); }
+#rail .rail-subgroup > .wt-row .icon-worktree { color: var(--worktree); }
+/* Tabs inside a subgroup sit at a shallow fixed indent (the violet rail + the
+   card already group them); no need for the deep tree indent. */
+#rail .rail-subgroup .rail-group-body .child-row { padding-left: 8px; }
 
 /* Inside a group the tree-guide connectors are replaced by the card frame, and
    children sit at a shallow fixed indent (the card already groups them). */
@@ -2337,21 +2452,22 @@ body.modal-open { overflow: hidden; }
 #rail .pane-actions .rail-pin,
 #rail .pane-actions .rail-close { opacity: 1; margin: 0; position: static; }
 
-/* Quiet repo/workspace section label — uppercase name + a hairline rule that
-   fills to the rolled-up status dot. Reads as an organizer, not a row. */
-#rail .repo-row { padding-top: 9px; padding-bottom: 4px; gap: 7px; }
+/* Track seclabel (Model B) — the effort header that sits ABOVE its card.
+   Accent ⧉ icon + accent UPPERCASE label + a hairline rule that fills to the
+   rolled-up status dot (+ the ⋯ menu). Reads as an organizer, not a row. */
+#rail .repo-row { padding-top: 11px; padding-bottom: 4px; gap: 7px; }
 #rail .repo-row .rail-chev { opacity: .35; }
+#rail .repo-row .icon-effort { color: var(--effort); }
 #rail .repo-row .rail-label {
   flex: 0 0 auto;
   font-family: var(--sans);
   font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
-  color: var(--fg-3);
+  color: var(--effort);
 }
-#rail .repo-row.repo-ws .rail-label { color: oklch(0.72 0.12 330); }
+#rail .repo-row.repo-ws .rail-label { color: var(--effort); }
 .repo-rule { flex: 1 1 auto; height: 1px; background: var(--line-soft); min-width: 8px; }
-.icon-workspace { color: oklch(0.72 0.12 330); }
-/* Primary-session card carries no header, so trim its top padding. */
-.rail-group-primary .rail-group-body { padding-top: 0; }
+.icon-effort { color: var(--effort); }
+.icon-workspace { color: var(--effort); }
 
 /* ───────────────────────────────────────────────────────────────────────
    Segmented transcript — Claude turns (split-view detail).

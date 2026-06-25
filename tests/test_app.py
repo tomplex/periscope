@@ -47,9 +47,17 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     """
     mocker.patch("periscope.app.prewarm_pr_cache")
     mocker.patch("periscope.app.cached_plan_usage")
-    # Lifespan runs a synchronous pane_projects backfill before yield; mock it
-    # so tests don't shell out to real tmux or write the real periscope.db.
-    mocker.patch("periscope.projects.backfill_pane_projects", return_value=0)
+    # Lifespan runs a synchronous track seed before yield; mock seed_tracks so
+    # tests don't write the real periscope.db. (Its list_windows() arg is a
+    # harmless read; _pane_sessions_housekeeping already reads real tmux.)
+    mocker.patch("periscope.tracks.seed_tracks", return_value=0)
+    # The single-session migration is a prod-gated lifespan side-effect, and
+    # PORT defaults to 8765 here so is_prod() is True — without this mock the
+    # migration runs a LIVE `tmux move-window` against the developer's real
+    # tmux server (no isolated socket in this test), consolidating every real
+    # window into one session. Same hazard as run_worker below. This actually
+    # happened — never unmock it.
+    mocker.patch("periscope.migrate_single_session.run_if_needed")
 
     async def _noop():
         return None
@@ -98,9 +106,10 @@ def test_lifespan_skips_mcp_on_dev_port(mocker, monkeypatch, caplog):
 
     mocker.patch("periscope.app.prewarm_pr_cache")
     mocker.patch("periscope.app.cached_plan_usage")
-    # Lifespan runs a synchronous pane_projects backfill before yield; mock it
-    # so tests don't shell out to real tmux or write the real periscope.db.
-    mocker.patch("periscope.projects.backfill_pane_projects", return_value=0)
+    # Lifespan runs a synchronous track seed before yield; mock seed_tracks so
+    # tests don't write the real periscope.db. (Its list_windows() arg is a
+    # harmless read; _pane_sessions_housekeeping already reads real tmux.)
+    mocker.patch("periscope.tracks.seed_tracks", return_value=0)
     async def _noop():
         return None
     mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)
@@ -125,9 +134,14 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
 
     mocker.patch("periscope.app.prewarm_pr_cache")
     mocker.patch("periscope.app.cached_plan_usage")
-    # Lifespan runs a synchronous pane_projects backfill before yield; mock it
-    # so tests don't shell out to real tmux or write the real periscope.db.
-    mocker.patch("periscope.projects.backfill_pane_projects", return_value=0)
+    # Lifespan runs a synchronous track seed before yield; mock seed_tracks so
+    # tests don't write the real periscope.db. (Its list_windows() arg is a
+    # harmless read; _pane_sessions_housekeeping already reads real tmux.)
+    mocker.patch("periscope.tracks.seed_tracks", return_value=0)
+    # Prod-gated single-session migration: PORT is forced to 8765 here, so
+    # without this mock it runs a LIVE tmux move-window against the dev's real
+    # server. See test_lifespan_starts_and_shuts_down_cleanly. Never unmock.
+    mocker.patch("periscope.migrate_single_session.run_if_needed")
     async def _noop():
         return None
     mocker.patch("periscope.app._lgtm_periodic_refresh", side_effect=_noop)

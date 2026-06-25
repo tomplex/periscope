@@ -27,6 +27,12 @@ export function targetQuery(target) {
   return `session=${encodeURIComponent(session)}&index=${encodeURIComponent(index)}`;
 }
 
+export function paneIdQuery(paneId) {
+  // The /ws/pane terminal bridge keys on the stable tmux pane id (%N) so
+  // the open terminal's address survives window-index drift (renumber).
+  return `pane_id=${encodeURIComponent(paneId)}`;
+}
+
 export function relTime(epochSec) {
   if (!epochSec) return "";
   const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSec);
