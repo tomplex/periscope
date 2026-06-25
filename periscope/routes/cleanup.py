@@ -63,23 +63,29 @@ def cleanup_archive(body: ArchiveBody):
                 raise ValueError("cannot archive __main__")
 
             # 1. Archive project row (if one exists).
-            tmux_session = row.get("tmux_session") if row else None
             repo = row.get("repo") if row else None
             if row:
                 archive_project(pinned_dir)
 
-            # 2. Kill the worktree's placement set (panes whose rail placement
-            # is this project), sparing any pane dragged into a live workspace.
-            # pinned_dir IS the project key, so placement resolves directly;
-            # the MAIN_KEY guard above means placement_kill_set never refuses.
-            if tmux_session:
-                windows = [w for w in list_windows()
-                           if w.get("session") == tmux_session]
-                # Kill by stable pane_id, not session:index — `renumber-windows
-                # on` shifts indices mid-loop (see session_delete).
-                for target, pid in placement_kill_set(pinned_dir, windows):
-                    _tmux_mutate("kill-pane", "-t", pid)
-                    drop_target_focus(target)
+            # 2. Kill the panes sitting IN the worktree being removed, sparing
+            # any pane dragged into a live workspace. Pre-filter by cwd, not
+            # tmux session: panes now collapse into one shared session, so a
+            # session-equality filter mass-matches (or, when a row's
+            # tmux_session is its basename, never matches). A pane "belongs to"
+            # this worktree iff its realpath'd cwd IS this worktree's dir — that
+            # is the unit cleanup removes (and it's track-independent: a track
+            # spans sibling worktrees, so killing by track would co-kill them).
+            # pinned_dir IS the project key, so placement_kill_set's internal
+            # resolve + workspace-spare + MAIN_KEY guard stay intact; an
+            # untracked worktree (no project row) yields an empty kill set.
+            target_dir = os.path.realpath(pinned_dir)
+            windows = [w for w in list_windows()
+                       if os.path.realpath(w.get("cwd") or "") == target_dir]
+            # Kill by stable pane_id, not session:index — `renumber-windows
+            # on` shifts indices mid-loop (see session_delete).
+            for target, pid in placement_kill_set(pinned_dir, windows):
+                _tmux_mutate("kill-pane", "-t", pid)
+                drop_target_focus(target)
 
             # 3. Determine the repo for worktree removal. Untracked
             # worktrees have no project.repo; derive via git from the

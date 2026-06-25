@@ -179,7 +179,7 @@ def _evaluate_worktree(
     default: str,
     project_by_pinned: dict[str, Project],
     windows_snapshot: dict[str, WindowAnnotation],
-    alive_sessions: set[str],
+    alive_worktree_cwds: set[str],
     idle_threshold: int,
 ) -> Candidate | None:
     """Evaluate one worktree of `repo`. Returns a Candidate when any
@@ -209,14 +209,15 @@ def _evaluate_worktree(
     # Signal 1: PR merged/closed (primary).
     linked_pr = None
     is_fork = False
-    if project_row and tmux_session:
-        # Walk the hoisted windows snapshot for the first window
-        # tied to this project's tmux session that has linked_pr
-        # set. Tmux session names are unique per project (adopt
-        # would 409 on collision) so this correctly scopes.
+    if project_row:
+        # Walk the hoisted windows snapshot for the first pane sitting IN
+        # this worktree (cwd == wt_path) that has linked_pr set. Match by
+        # cwd, not tmux session: panes collapse into one shared session, so
+        # session-equality would scope to the wrong (or every) worktree.
+        wt_real = os.path.realpath(wt_path)
         for ann in windows_snapshot.values():
             last = ann.get("last_seen") or {}
-            if last.get("session") == tmux_session and ann.get("linked_pr"):
+            if os.path.realpath(last.get("cwd") or "") == wt_real and ann.get("linked_pr"):
                 linked_pr = ann["linked_pr"]
                 is_fork = bool(ann.get("is_fork"))
                 break
@@ -248,13 +249,15 @@ def _evaluate_worktree(
     ):
         signals.append({"kind": "remote_gone", "label": f"origin/{branch} deleted"})
 
-    # Signal 4: idle. Days since last commit on the worktree's
-    # HEAD; only flagged when no active tmux session AND
-    # > threshold. Session-alive check uses the hoisted
-    # `alive_sessions` set — no per-candidate tmux call.
+    # Signal 4: idle. Days since last commit on the worktree's HEAD;
+    # only flagged when NO live pane sits in the worktree AND
+    # > threshold. "Active" keys on a live pane's cwd, not session
+    # liveness — panes share one session now, so session-alive can't tell
+    # which worktree is in use. Uses the hoisted `alive_worktree_cwds` set
+    # (realpath'd cwds of live panes) — no per-candidate tmux call.
     idle_days = _last_commit_age_days(wt_path)
-    session_alive = bool(tmux_session and tmux_session in alive_sessions)
-    if not session_alive and idle_days > idle_threshold:
+    worktree_active = os.path.realpath(wt_path) in alive_worktree_cwds
+    if not worktree_active and idle_days > idle_threshold:
         signals.append({"kind": "idle", "label": f"idle {idle_days}d"})
 
     if not signals:
@@ -304,19 +307,18 @@ def compute_candidates(repo_filter: str | None = None) -> list[Candidate]:
     if repo_filter:
         repos = {repo_filter} if repo_filter in repos else set()
 
-    # Hoist windows + alive-session lookups out of the per-candidate loop.
+    # Hoist windows + live-pane-cwd lookups out of the per-candidate loop.
     # `all_windows()` holds _STATE_LOCK + deep-copies; calling it N times
-    # is wasteful when the data is identical. Same for `tmux has-session` —
-    # one `list-sessions` call beats N per-candidate invocations.
+    # is wasteful when the data is identical. The "active" check keys on
+    # which worktree DIRS hold a live pane (realpath'd cwds), not session
+    # liveness — panes share one session now, so a session-alive set can't
+    # tell which worktree is in use.
+    from periscope.panes import list_windows
     from periscope.store import all_windows
     windows_snapshot = all_windows()
-    code, sessions_out = _run(
-        ["tmux", "list-sessions", "-F", "#{session_name}"], timeout=3.0
-    )
-    alive_sessions: set[str] = (
-        set(sessions_out.strip().split("\n")) if code == 0 and sessions_out.strip()
-        else set()
-    )
+    alive_worktree_cwds: set[str] = {
+        os.path.realpath(w["cwd"]) for w in list_windows() if w.get("cwd")
+    }
     idle_threshold = int(get_settings().get("cleanup_idle_days") or IDLE_THRESHOLD_DAYS)
 
     candidates: list[Candidate] = []
@@ -327,7 +329,7 @@ def compute_candidates(repo_filter: str | None = None) -> list[Candidate]:
             cand = _evaluate_worktree(
                 wt_path, branch, repo, default,
                 project_by_pinned, windows_snapshot,
-                alive_sessions, idle_threshold,
+                alive_worktree_cwds, idle_threshold,
             )
             if cand is not None:
                 candidates.append(cand)

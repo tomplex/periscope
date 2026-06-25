@@ -182,9 +182,11 @@ def test_archive_spares_ws_pane(client, clean_state, fresh_activity_db, mocker):
     }
     clean_state["workspaces"]["ws_goal"] = {"id": "ws_goal", "archived_at": None}
     fresh_activity_db.set_pane_workspace("%claude", "ws_goal")
+    # Both panes sit at the worktree's cwd (== pinned_dir) so they pass the
+    # cwd pre-filter and reach placement_kill_set (which spares the ws pane).
     mocker.patch("periscope.routes.cleanup.list_windows", return_value=[
-        {"session": "sess_a", "index": 0, "pane_id": "%claude"},
-        {"session": "sess_a", "index": 1, "pane_id": "%shell"},
+        {"session": "sess_a", "index": 0, "pane_id": "%claude", "cwd": "/repo/a"},
+        {"session": "sess_a", "index": 1, "pane_id": "%shell", "cwd": "/repo/a"},
     ])
     calls = []
     mocker.patch("periscope.routes.cleanup._tmux_mutate",
@@ -198,3 +200,33 @@ def test_archive_spares_ws_pane(client, clean_state, fresh_activity_db, mocker):
     assert not any(a[0] == "kill-session" for a in calls)
     assert not any("sess_a:" in a for a in calls)       # never index-targeted
     assert all("%claude" not in a for a in calls)       # ws pane spared
+
+
+def test_archive_kills_only_panes_at_worktree_cwd(client, clean_state, fresh_activity_db, mocker):
+    # Destructive-path guarantee under one SHARED tmux session: archiving
+    # worktree A must kill only the pane whose cwd is A, never the pane whose
+    # cwd is a sibling worktree B. Cleanup is worktree/cwd-scoped, not
+    # track-scoped — two panes sharing one cwd would both die (correct: that
+    # directory is being removed).
+    clean_state["projects"]["/repo/a"] = {
+        "name": "a", "tmux_session": "shared", "repo": "/repo",
+        "archived_at": None, "base_branch": "main",
+    }
+    clean_state["projects"]["/repo/b"] = {
+        "name": "b", "tmux_session": "shared", "repo": "/repo",
+        "archived_at": None, "base_branch": "main",
+    }
+    mocker.patch("periscope.routes.cleanup.list_windows", return_value=[
+        {"session": "shared", "index": 0, "pane_id": "%pane_a", "cwd": "/repo/a"},
+        {"session": "shared", "index": 1, "pane_id": "%pane_b", "cwd": "/repo/b"},
+    ])
+    calls = []
+    mocker.patch("periscope.routes.cleanup._tmux_mutate",
+                 side_effect=lambda *a: calls.append(a))
+    mocker.patch("periscope.routes.cleanup._run", return_value=(0, ""))
+    r = client.post("/api/cleanup/archive", json={
+        "candidates": [{"pinned_dir": "/repo/a", "delete_branch": False}],
+    })
+    assert r.status_code == 200
+    assert ("kill-pane", "-t", "%pane_a") in calls      # pane at worktree A dies
+    assert all("%pane_b" not in a for a in calls)        # sibling worktree B spared
