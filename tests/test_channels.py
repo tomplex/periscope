@@ -339,6 +339,24 @@ def test_resume_session_tool_requires_session_id():
     assert body["ok"] is False
 
 
+def test_resume_session_tool_tags_pane_track(fresh_activity_db, mocker):
+    # workspace_id on resume is a TRACK id: tag the resumed pane in pane_tracks.
+    from periscope import activity, tracks
+    from periscope.channels import _do_resume_session_tool
+    tk = tracks.create_track(name="Auth")
+    mocker.patch(
+        "periscope.routes.sessions._window_new_resume",
+        return_value={"ok": True, "target": "resumes:3", "session": "resumes",
+                      "index": 3, "mode": "resume", "resumed_session_id": "abc"})
+    mocker.patch("periscope.channels.tmux", return_value="%88")  # display-message #{pane_id}
+
+    body = _body(_do_resume_session_tool(
+        "%5", {"session_id": "abc", "workspace_id": tk["id"]}))
+
+    assert body["ok"] is True and body["workspace_id"] == tk["id"]
+    assert activity.get_pane_track("%88") == tk["id"]
+
+
 # --- inter-claude management tools ---
 
 import asyncio
@@ -396,6 +414,10 @@ def test_spawn_claude_writes_spawned_by(mocker):
     stamp = mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     set_fields = mocker.patch("periscope.channels.set_window_fields")
+    # "same" mode now tags the spawned pane into the caller's track — isolate
+    # from the real DB (this test has no fresh_activity_db).
+    mocker.patch("periscope.channels.tracks.resolve_track_for_window", return_value="tk_x")
+    mocker.patch("periscope.channels.tracks.move_pane")
 
     asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
@@ -416,6 +438,8 @@ def test_spawn_claude_no_parent_tolerated(mocker):
     mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="")  # vanished caller
     set_fields = mocker.patch("periscope.channels.set_window_fields")
+    mocker.patch("periscope.channels.tracks.resolve_track_for_window", return_value="tk_x")
+    mocker.patch("periscope.channels.tracks.move_pane")
 
     result = asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
@@ -430,7 +454,7 @@ def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
     bg_commander.insert_job(id="c1", text="x", cwd="/tmp", at=1)   # caller IS a live commander
     handle = "cmdr:c1"
     monkeypatch.setattr(open_ops, "resolve_worktree_session",
-                        lambda cwd: ("proj-sess", object()))      # git cwd resolves
+                        lambda cwd: ("proj-sess", {"repo": "/r"}))  # git cwd resolves
     # Mirror the full mock set from test_spawn_claude_writes_spawned_by: the
     # spawn handler shells out heavily, so all of these must be stubbed or the
     # test hits real tmux.
@@ -482,7 +506,7 @@ def test_spawn_with_branch_creates_worktree(fresh_activity_db, monkeypatch, mock
     seen = {}
     def fake_resolve(cwd):
         seen["cwd"] = cwd
-        return ("wt-sess", object())
+        return ("wt-sess", {"repo": "/r"})
     monkeypatch.setattr(open_ops, "resolve_worktree_session", fake_resolve)
     mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
     mocker.patch("periscope.channels._run", return_value=(0, ""))
@@ -513,6 +537,82 @@ def test_spawn_branch_without_repo_errors(fresh_activity_db, monkeypatch, mocker
     mocker.patch("periscope.channels.os.path.isdir", return_value=True)
     res = asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "go", "branch": "tc/x"}))
     assert _body(res)["ok"] is False and "repo" in _body(res)["error"].lower()
+
+
+def test_spawn_workspace_id_tags_pane_track(fresh_activity_db, mocker):
+    # workspace_id is now a TRACK id: the spawned pane must be tagged in
+    # pane_tracks (not pane_workspaces).
+    from periscope import activity, channels, tracks
+    tk = tracks.create_track(name="Auth")
+    # tmux() returns the spawned pane id from display-message #{pane_id}; mock it
+    # to a stable %N so we can assert the tag landed on it.
+    mocker.patch("periscope.channels.tmux", return_value="%77")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    mocker.patch("periscope.channels.set_window_fields")
+
+    res = _body(asyncio.run(
+        channels._do_spawn_claude_tool("%1", {"prompt": "go", "workspace_id": tk["id"]})))
+
+    assert res["ok"] is True
+    assert res["workspace_id"] == tk["id"]
+    assert activity.get_pane_track("%77") == tk["id"]
+
+
+def test_spawn_workspace_id_unknown_track_skips_tag(fresh_activity_db, mocker):
+    from periscope import activity, channels
+    mocker.patch("periscope.channels.tmux", return_value="%77")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    mocker.patch("periscope.channels.set_window_fields")
+
+    res = _body(asyncio.run(
+        channels._do_spawn_claude_tool("%1", {"prompt": "go", "workspace_id": "tk_nope"})))
+
+    assert res["ok"] is True and res["workspace_id"] is None
+    assert activity.get_pane_track("%77") is None
+
+
+def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, mocker):
+    # workspace="new" anchors the spawn to its cwd's worktree and tags the
+    # spawned pane into the repo-default track for that repo.
+    from periscope import activity, channels, open_ops, tracks
+    monkeypatch.setattr(open_ops, "resolve_worktree_session",
+                        lambda cwd: ("proj-sess", {"repo": "/r"}))
+    mocker.patch("periscope.channels.tmux", return_value="%77")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    mocker.patch("periscope.channels.set_window_fields")
+    mocker.patch("periscope.channels.list_windows", return_value=[])
+    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+
+    res = _body(asyncio.run(channels._do_spawn_claude_tool(
+        "%1", {"prompt": "go", "cwd": "/r", "workspace": "new"})))
+
+    assert res["ok"] is True
+    # repo_default_track keys the track id on the repo path.
+    assert activity.get_pane_track("%77") == tracks.repo_default_track("/r")
 
 
 def test_send_to_happy(mocker):
@@ -737,40 +837,43 @@ def test_is_commander_checks_the_cmdr_prefix():
 
 
 def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_activity_db, mocker):
-    from periscope import activity
+    # list_workspaces lists TRACKS now (response key stays `workspaces`).
+    from periscope import activity, tracks
     from periscope.channels import _do_list_workspaces_tool
-    from periscope.workspaces import create_workspace
-    ws = create_workspace(name="Auth", base_repo="/d/fdy", base_worktree="/d/fdy-auth")
-    activity.set_pane_workspace("%1", ws["id"])
-    activity.set_pane_workspace("%99", ws["id"])   # dead pane — excluded from count
+    tk = tracks.create_track(name="Auth", repo="/d/fdy")
+    activity.set_pane_track("%1", tk["id"])
+    activity.set_pane_track("%99", tk["id"])   # dead pane — excluded from count
+    # LOOSE catchall must never surface in the list.
+    activity.set_pane_track("%1", tk["id"])
     mocker.patch("periscope.channels.list_windows", return_value=[{"pane_id": "%1"}])
     r = _body(_do_list_workspaces_tool("%1", {}))
     assert r["ok"] is True
     rows = {w["id"]: w for w in r["workspaces"]}
-    assert ws["id"] in rows
-    assert rows[ws["id"]]["name"] == "Auth"
-    assert rows[ws["id"]]["base_repo"] == "/d/fdy"
-    assert rows[ws["id"]]["base_worktree"] == "/d/fdy-auth"
-    assert rows[ws["id"]]["tagged_tabs"] == 1   # %99 dead, not counted
+    assert tracks.LOOSE_KEY not in rows
+    assert tk["id"] in rows
+    assert rows[tk["id"]]["name"] == "Auth"
+    assert rows[tk["id"]]["base_repo"] == "/d/fdy"   # track.repo mapped to base_repo
+    assert rows[tk["id"]]["tagged_tabs"] == 1        # %99 dead, not counted
 
 
 def test_list_workspaces_tool_excludes_archived(clean_state, fresh_activity_db, mocker):
+    from periscope import activity, tracks
     from periscope.channels import _do_list_workspaces_tool
-    from periscope.workspaces import archive_workspace, create_workspace
-    ws = create_workspace(name="Gone")
-    archive_workspace(ws["id"])
+    tk = tracks.create_track(name="Gone")
+    activity.archive_track(tk["id"], ts=1)
     mocker.patch("periscope.channels.list_windows", return_value=[])
     r = _body(_do_list_workspaces_tool("%1", {}))
-    assert all(w["id"] != ws["id"] for w in r["workspaces"])
+    assert all(w["id"] != tk["id"] for w in r["workspaces"])
 
 
-def test_create_workspace_tool(monkeypatch):
-    from periscope import channels
-    monkeypatch.setattr(channels.workspaces, "create_workspace",
-                        lambda *, name, base_repo=None: {"id": "ws_x", "name": name})
+def test_create_workspace_tool(fresh_activity_db):
+    # create_workspace now creates a TRACK (response key stays `workspace_id`).
+    from periscope import activity, channels
     res = channels._do_create_workspace_tool("%1", {"name": "x", "base_repo": "/r"})
     body = _body(res)
-    assert body["ok"] is True and body["workspace_id"] == "ws_x"
+    assert body["ok"] is True and body["name"] == "x"
+    row = activity.get_track(body["workspace_id"])
+    assert row is not None and row["name"] == "x" and row["repo"] == "/r"
 
 
 def test_open_tool_dispatches_path(monkeypatch):

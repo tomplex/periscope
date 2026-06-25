@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TypedDict
 
-from periscope import workspaces
+from periscope import tracks
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
 from periscope.panes import list_windows, note_action, note_focus
@@ -593,25 +593,27 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         pane_pids = [w["pid_raw"] for w in list_windows()
                      if w["session"] == session and w.get("pid_raw")]
         open_ops.place_in_rail(session, project, pane_pids or [pid])
-        # Tag the spawned pane with its project context (metadata-anchored
-        # grouping), keyed on the canonical project key for this session.
-        from periscope import projects as _projects
-        proj_key = _projects.resolve_project_for_window({"session": session})
-        if pane_id and proj_key and proj_key != _projects.MAIN_KEY:
-            activity.set_pane_project(pane_id, proj_key)
 
-    # Tag the spawned pane into a periscope workspace (goal-scoped rail group),
-    # if asked. Keyed on the tmux pane_id (%N) — the same id the dashboard's
-    # drag-to-tag uses. Distinct from `workspace` (same/new), which controls
-    # tmux placement. Unknown id → skip silently (the spawn still succeeded).
+    # Tag the spawned pane into a track (the grouping authority). Precedence:
+    # an explicit workspace_id arg (a track id now) wins; else the anchored
+    # ("new") path tags the repo-default track for the worktree's repo; else
+    # ("same") the spawn nests under the CALLER's track so a fan-out from a
+    # promoted tab inherits that tab's track rather than falling back to the
+    # repo-default. Every tag guards on a non-empty spawned pane_id.
     tagged_workspace = None
     ws_id = str(arguments.get("workspace_id") or "").strip()
-    if ws_id and pane_id:
-        from periscope import activity
-        from periscope import workspaces as _workspaces
-        if _workspaces.get_workspace(ws_id):
-            activity.set_pane_workspace(pane_id, ws_id)
+    if pane_id and ws_id:
+        # workspace_id is a track id: validate it exists and isn't archived.
+        row = activity.get_track(ws_id)
+        if row and not row.get("archived_at"):
+            tracks.move_pane(pane_id, ws_id)
             tagged_workspace = ws_id
+    elif pane_id and anchored:
+        tracks.move_pane(pane_id, tracks.repo_default_track(project["repo"]))
+    elif pane_id and not commander_caller:
+        # "same" mode, a real pane: inherit the caller's track.
+        tracks.move_pane(pane_id, tracks.resolve_track_for_window(
+            {"pane_id": pane, "cwd": caller_cwd}))
 
     body = {
         "ok": True,
@@ -626,15 +628,15 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
 
 
 def _do_create_workspace_tool(pane: str, arguments: dict):
-    """Create a periscope workspace (goal-scoped rail group)."""
+    """Create a track (goal-scoped rail group). Response key stays `workspace_id`
+    so the spawn/resume arg stays compatible — a commander creates a track here,
+    then passes its id as `workspace_id`."""
     name = str(arguments.get("name", "")).strip()
     if not name:
         return _tool_result({"ok": False, "error": "name is required"})
     base_repo = (arguments.get("base_repo") or None)
-    # create_workspace returns a DICT (Workspace TypedDict), not an object —
-    # subscript access, NOT ws.id (the structure proposal §7 is wrong on this).
-    ws = workspaces.create_workspace(name=name, base_repo=base_repo)
-    return _tool_result({"ok": True, "workspace_id": ws["id"], "name": ws["name"]})
+    tk = tracks.create_track(name=name, repo=base_repo)
+    return _tool_result({"ok": True, "workspace_id": tk["id"], "name": tk["name"]})
 
 
 def _open_descriptor(arguments: dict):
@@ -771,18 +773,18 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     except HTTPException as e:
         return _tool_result({"ok": False, "error": str(e.detail)})
 
-    # Tag the resumed pane into a periscope workspace (goal-scoped rail group) so
-    # it surfaces under that group instead of the default "dev" bucket — the same
-    # tagging spawn_claude does. The resume result carries session:index; resolve
-    # the pane id from it (the rail tag is keyed on %N).
+    # Tag the resumed pane into a track (the grouping authority) so it surfaces
+    # under that group instead of the default "dev" bucket — the same tagging
+    # spawn_claude does. workspace_id is a track id now. The resume result carries
+    # session:index; resolve the pane id from it (pane_tracks is keyed on %N).
     if ws_id:
         from periscope import activity
-        from periscope import workspaces as _workspaces
-        if _workspaces.get_workspace(ws_id):
+        row = activity.get_track(ws_id)
+        if row and not row.get("archived_at"):
             target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
             pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
             if pane_id:
-                activity.set_pane_workspace(pane_id, ws_id)
+                tracks.move_pane(pane_id, ws_id)
                 result = {**result, "workspace_id": ws_id}
     return _tool_result(result)
 
@@ -985,29 +987,28 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
 
 
 def _do_list_workspaces_tool(pane: str, arguments: dict):
-    """List periscope workspaces (goal-scoped rail groups) with their ids, so
-    the caller can pass a workspace_id to spawn_claude and fan tabs into a goal.
-    `tagged_tabs` counts the workspace's currently-live tagged tabs (db rows for
-    dead panes are excluded by intersecting with live pane ids)."""
-    from periscope.activity import pane_workspace_map
-    from periscope.workspaces import all_workspaces
+    """List tracks (goal-scoped rail groups) with their ids, so the caller can
+    pass a workspace_id to spawn_claude and fan tabs into a goal. `tagged_tabs`
+    counts the track's currently-live tagged tabs (db rows for dead panes are
+    excluded by intersecting with live pane ids). The LOOSE catchall is excluded.
+    Response key stays `workspaces` for arg compatibility."""
+    from periscope.activity import all_tracks, pane_track_map
 
     live_panes = {w.get("pane_id") for w in list_windows() if w.get("pane_id")}
     counts: dict[str, int] = {}
-    for pane_id, wid in pane_workspace_map().items():
+    for pane_id, tid in pane_track_map().items():
         if pane_id in live_panes:
-            counts[wid] = counts.get(wid, 0) + 1
+            counts[tid] = counts.get(tid, 0) + 1
 
     out = [
         {
-            "id": wid,
-            "name": w.get("name"),
-            "base_repo": w.get("base_repo"),
-            "base_worktree": w.get("base_worktree"),
-            "tagged_tabs": counts.get(wid, 0),
+            "id": tk["id"],
+            "name": tk.get("name"),
+            "base_repo": tk.get("repo"),   # tracks have no base_worktree
+            "tagged_tabs": counts.get(tk["id"], 0),
         }
-        for wid, w in all_workspaces().items()
-        if not w.get("archived_at")
+        for tk in all_tracks()
+        if not tk.get("archived_at") and tk["id"] != tracks.LOOSE_KEY
     ]
     return _tool_result({"ok": True, "workspaces": out})
 
