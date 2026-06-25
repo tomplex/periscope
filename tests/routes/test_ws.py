@@ -61,7 +61,7 @@ def _fake_tmux(calls=None):
         if calls is not None:
             calls.append(args)
         if args and args[0] == "display-message":
-            return "80|24|0|0|0|%7"
+            return "80|24|0|0|0|%7|main|0"
         if args and args[0] == "capture-pane":
             return "hello\n"
         return ""
@@ -73,7 +73,7 @@ def test_ws_pane_initial_paint(client, mocker):
     mocker.patch("periscope.routes.ws.tmux", side_effect=_fake_tmux())
     sub = _patch_mirror(mocker)
 
-    with client.websocket_connect("/ws/pane?session=main&index=0") as ws:
+    with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
         payload = json.loads(ws.receive_text())
         assert payload == {"type": "size", "cols": 80, "rows": 24}
         blob = ws.receive_bytes()
@@ -83,6 +83,25 @@ def test_ws_pane_initial_paint(client, mocker):
     assert sub.session == "main"
     assert sub.pane_id == "%7"
     assert sub.exited  # disconnect unsubscribed
+
+
+def test_ws_pane_recency_stamp_keyed_on_session_index(client, mocker):
+    """Connect stamps acted_at on the recency map keyed by session:index
+    (from display-message), NOT on the %pane_id URL param — window_view
+    reads recency_stamps_for(f"{session}:{index}"), so a %N key would be
+    a dead write."""
+    from periscope.panes import recency_stamps_for
+
+    mocker.patch("periscope.routes.ws.tmux", side_effect=_fake_tmux())
+    _patch_mirror(mocker)
+
+    with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
+        _ = ws.receive_text()
+        _ = ws.receive_bytes()
+
+    assert recency_stamps_for("main:0")["acted_at"] > 0
+    # The pane-id key must NOT have been stamped.
+    assert recency_stamps_for("%7")["acted_at"] == 0
 
 
 def test_ws_pane_resizes_tmux_before_capture(client, mocker):
@@ -95,7 +114,7 @@ def test_ws_pane_resizes_tmux_before_capture(client, mocker):
     _patch_mirror(mocker)
 
     with client.websocket_connect(
-        "/ws/pane?session=main&index=0&cols=100&rows=30"
+        "/ws/pane?pane_id=%7&cols=100&rows=30"
     ) as ws:
         _ = ws.receive_text()
         _ = ws.receive_bytes()
@@ -118,7 +137,7 @@ def test_ws_streams_subscription_bytes(client, mocker):
     mocker.patch("periscope.routes.ws.tmux", side_effect=_fake_tmux())
     sub = _patch_mirror(mocker)
 
-    with client.websocket_connect("/ws/pane?session=main&index=0") as ws:
+    with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
         _ = ws.receive_text()
         _ = ws.receive_bytes()
         sub.push(b"live-bytes")
@@ -131,7 +150,7 @@ def test_ws_closes_on_subscription_eof(client, mocker):
     mocker.patch("periscope.routes.ws.tmux", side_effect=_fake_tmux())
     sub = _patch_mirror(mocker)
 
-    with client.websocket_connect("/ws/pane?session=main&index=0") as ws:
+    with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
         _ = ws.receive_text()
         _ = ws.receive_bytes()
         sub.push(None)  # EOF sentinel
@@ -143,7 +162,7 @@ def test_ws_resize_message_triggers_reconcile(client, mocker):
     mocker.patch("periscope.routes.ws.tmux", side_effect=_fake_tmux())
     sub = _patch_mirror(mocker)
 
-    with client.websocket_connect("/ws/pane?session=main&index=0") as ws:
+    with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
         _ = ws.receive_text()
         _ = ws.receive_bytes()
         ws.send_text(json.dumps({"type": "resize", "cols": 90, "rows": 30}))

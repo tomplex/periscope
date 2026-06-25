@@ -18,7 +18,7 @@
 
 import { openExternal } from "../tauri.js";
 import { track } from "../track.js";
-import { targetQuery } from "../util.js";
+import { paneIdQuery } from "../util.js";
 import { terminalTheme } from "./theme.js";
 
 let term = null;
@@ -450,7 +450,7 @@ export function startLiveTerminal(target) {
 
 function connectTerminalWs(target, hintCols = 0, hintRows = 0) {
   const wsProto = location.protocol === "https:" ? "wss" : "ws";
-  let url = `${wsProto}://${location.host}/ws/pane?${targetQuery(target)}`;
+  let url = `${wsProto}://${location.host}/ws/pane?${paneIdQuery(target)}`;
   if (hintCols > 0 && hintRows > 0) {
     url += `&cols=${hintCols}&rows=${hintRows}`;
   }
