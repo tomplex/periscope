@@ -13,7 +13,6 @@ from periscope.projects import (
     MAIN_KEY,
     all_projects,
     archive_project,
-    placement_kill_set,
 )
 from periscope.tmux import _run, _tmux_mutate
 
@@ -67,25 +66,21 @@ def cleanup_archive(body: ArchiveBody):
             if row:
                 archive_project(pinned_dir)
 
-            # 2. Kill the panes sitting IN the worktree being removed, sparing
-            # any pane dragged into a live workspace. Pre-filter by cwd, not
-            # tmux session: panes now collapse into one shared session, so a
-            # session-equality filter mass-matches (or, when a row's
-            # tmux_session is its basename, never matches). A pane "belongs to"
-            # this worktree iff its realpath'd cwd IS this worktree's dir — that
-            # is the unit cleanup removes (and it's track-independent: a track
-            # spans sibling worktrees, so killing by track would co-kill them).
-            # pinned_dir IS the project key, so placement_kill_set's internal
-            # resolve + workspace-spare + MAIN_KEY guard stay intact; an
-            # untracked worktree (no project row) yields an empty kill set.
+            # 2. Kill every pane sitting IN the worktree being removed. A pane
+            # "belongs to" this worktree iff its realpath'd cwd IS this
+            # worktree's dir — that is the unit cleanup removes. No
+            # workspace-sparing: cleanup deletes the worktree dir, so every pane
+            # rooted there must die regardless of its track. Kill by stable
+            # pane_id, not session:index — `renumber-windows on` shifts indices
+            # mid-loop.
             target_dir = os.path.realpath(pinned_dir)
             windows = [w for w in list_windows()
                        if os.path.realpath(w.get("cwd") or "") == target_dir]
-            # Kill by stable pane_id, not session:index — `renumber-windows
-            # on` shifts indices mid-loop (see session_delete).
-            for target, pid in placement_kill_set(pinned_dir, windows):
-                _tmux_mutate("kill-pane", "-t", pid)
-                drop_target_focus(target)
+            for w in windows:
+                pid = w.get("pane_id")
+                if pid:
+                    _tmux_mutate("kill-pane", "-t", pid)
+                    drop_target_focus(f"{w['session']}:{w['index']}")
 
             # 3. Determine the repo for worktree removal. Untracked
             # worktrees have no project.repo; derive via git from the

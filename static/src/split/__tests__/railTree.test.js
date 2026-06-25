@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  groupLabel, indexProjects, mergeLiveAndPrefs, paneChip, projectLabel,
-} from "../railTree.js";
+import { mergeLiveAndPrefs, paneChip } from "../railTree.js";
 
 // Window factory. `track_id` is the backend-resolved grouping authority
 // (always present — repo-default fallback guarantees a value). `branch` is
@@ -14,11 +12,6 @@ const win = (over = {}) => ({
   worktree_affiliation: { kind: "at-pin", label: null },
   ...over,
 });
-const proj = (over = {}) => ({
-  pinned_dir: "/dev/myproj", name: "myproj", tmux_session: "myproj",
-  repo: "/dev/myproj", base_branch: null, ...over,
-});
-
 describe("mergeLiveAndPrefs — track grouping", () => {
   it("groups windows under their track_id", () => {
     const wins = [
@@ -107,20 +100,6 @@ describe("mergeLiveAndPrefs — track grouping", () => {
     // two distinct branch buckets ("master" + the empty fallback) → sub-clusters
     expect(m.branchesByTrack.tk_a.length).toBe(2);
     expect(m.tabsByTrack.tk_a).toEqual(["a", "b"]);
-  });
-});
-
-describe("labels", () => {
-  it("projectLabel: name, then base_branch, then session", () => {
-    expect(projectLabel(proj({ name: "nice" }), "s")).toBe("nice");
-    expect(projectLabel(proj({ name: "", base_branch: "feat-x" }), "s")).toBe("feat-x");
-    expect(projectLabel(undefined, "sess")).toBe("sess");
-  });
-
-  it("groupLabel: name for null-repo own group, basename otherwise", () => {
-    const byPin = indexProjects([proj({ pinned_dir: "/notes", repo: null, name: "Notes" })]);
-    expect(groupLabel("/notes", byPin)).toBe("Notes");
-    expect(groupLabel("/dev/myproj", byPin)).toBe("myproj");
   });
 });
 

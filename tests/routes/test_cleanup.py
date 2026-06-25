@@ -173,17 +173,17 @@ def test_archive_empty_candidates(client, mocker):
     assert r.json() == {"archived": [], "failed": []}
 
 
-def test_archive_spares_ws_pane(client, clean_state, fresh_activity_db, mocker):
-    # Archiving a worktree kills its placement set via kill-pane, sparing a
-    # pane dragged into a live workspace; never kill-session.
+def test_archive_kills_every_pane_at_cwd_no_workspace_sparing(
+        client, clean_state, fresh_activity_db, mocker):
+    # No workspace-sparing: cleanup removes the worktree dir, so EVERY pane
+    # rooted there dies — even one tagged into a live workspace. Kill by stable
+    # pane_id, never kill-session, never index-target.
     clean_state["projects"]["/repo/a"] = {
         "name": "a", "tmux_session": "sess_a", "repo": "/repo",
         "archived_at": None, "base_branch": "main",
     }
     clean_state["workspaces"]["ws_goal"] = {"id": "ws_goal", "archived_at": None}
     fresh_activity_db.set_pane_workspace("%claude", "ws_goal")
-    # Both panes sit at the worktree's cwd (== pinned_dir) so they pass the
-    # cwd pre-filter and reach placement_kill_set (which spares the ws pane).
     mocker.patch("periscope.routes.cleanup.list_windows", return_value=[
         {"session": "sess_a", "index": 0, "pane_id": "%claude", "cwd": "/repo/a"},
         {"session": "sess_a", "index": 1, "pane_id": "%shell", "cwd": "/repo/a"},
@@ -197,9 +197,9 @@ def test_archive_spares_ws_pane(client, clean_state, fresh_activity_db, mocker):
     })
     assert r.status_code == 200
     assert ("kill-pane", "-t", "%shell") in calls      # killed by pane_id
+    assert ("kill-pane", "-t", "%claude") in calls     # ws pane killed too
     assert not any(a[0] == "kill-session" for a in calls)
     assert not any("sess_a:" in a for a in calls)       # never index-targeted
-    assert all("%claude" not in a for a in calls)       # ws pane spared
 
 
 def test_archive_kills_only_panes_at_worktree_cwd(client, clean_state, fresh_activity_db, mocker):

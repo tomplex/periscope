@@ -1,6 +1,5 @@
 """Session and window CRUD endpoints.
 
-DELETE /api/session
 POST /api/session/rename
 POST /api/window/new            (incl. mode=resume)
 POST /api/window/move
@@ -13,7 +12,6 @@ The `resumes` sentinel session is auto-created on first use.
 
 import os
 import time
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -27,15 +25,8 @@ from periscope.panes import (
     _focused_at,
     _resuming,
     drop_target_focus,
-    list_windows,
     note_action,
     note_focus,
-)
-from periscope.projects import (
-    MAIN_KEY,
-    get_project,
-    placement_kill_set,
-    resolve_project_for_window,
 )
 from periscope.tmux import _run, _tmux_mutate, tmux
 from periscope.worktree_spawn import spawn_worktree
@@ -68,36 +59,6 @@ def session_rename(session: str, body: RenameSessionBody):
     if session in _active_per_session:
         _active_per_session[name] = _active_per_session.pop(session)
     return {"ok": True, "session": name}
-
-
-@router.delete("/api/session")
-def session_delete(session: str):
-    # Close the worktree row = kill the panes whose rail placement is this
-    # project, NOT the whole tmux session. A pane dragged into a workspace has
-    # a different placement, so it survives (see the metadata-anchored-rail
-    # spec). Contract narrowed: only managed worktree sessions are closable —
-    # the sole UI caller is closeWorktree on worktree rows; dev/MAIN_KEY rows
-    # use closePane instead.
-    project_key = resolve_project_for_window({"session": session})
-    if not project_key or project_key == MAIN_KEY:
-        raise HTTPException(400, f"session {session!r} is not a closable worktree")
-    windows = [w for w in list_windows() if w.get("session") == session]
-    kill = placement_kill_set(project_key, windows)
-    # Kill by the STABLE pane_id (%N), never the session:index target — with
-    # tmux `renumber-windows on`, killing one window renumbers the rest, so
-    # index targets captured up front go stale mid-loop and land on the wrong
-    # pane (this killed a workspace-tagged pane we'd excluded). pane_id is
-    # renumber-immune. `target` is only for the focus-dict key.
-    for target, pane_id in kill:
-        ok, msg = _tmux_mutate("kill-pane", "-t", pane_id)
-        if not ok:
-            raise HTTPException(500, msg)
-        drop_target_focus(target)
-    # Drop the session's active-tracking only once it is actually empty — a
-    # surviving workspace-tagged pane keeps the session (and its stamp) alive.
-    if not [w for w in list_windows() if w.get("session") == session]:
-        _active_per_session.pop(session, None)
-    return {"ok": True, "session": session, "killed": [t for t, _ in kill]}
 
 
 def _send_and_stamp(target: str, cmd: str) -> None:
@@ -313,122 +274,6 @@ def window_new(
     if mode == "resume":
         return _window_new_resume(session, exec_cmd, resume_id, mode)
     return _window_new_plain(session, exec_cmd, mode, cwd_param=cwd, new_branch=new_branch)
-
-
-@router.post("/api/window/new-worktree")
-def window_new_worktree(
-    session: str,
-    branch: str,
-    exec_cmd: str = Query(CLAUDE_EXEC, alias="exec"),
-):
-    """Spawn a new worktree-tab in `session`'s owning project.
-
-    Forks a sub-worktree off the project's `base_branch` (local ref,
-    no fetch), opens a new tmux window in it, and optionally runs
-    `exec_cmd` (defaults to `claude` — matches trellis's `t` hotkey).
-
-    Body shape mirrors `/api/window/new`: session + exec are query
-    params; `branch` is the new sub-branch name. Slugging for the
-    on-disk worktree path is handled by `spawn_worktree`.
-
-    Errors:
-      400 — session not owned by a project, or branch invalid, or
-            worktree-add failed.
-      404 — session doesn't exist in tmux.
-      409 — sub-worktree path or branch already exists.
-    """
-    branch = branch.strip()
-    if not branch:
-        raise HTTPException(400, "branch is required")
-    if branch.startswith("-"):
-        raise HTTPException(400, f"branch name cannot start with '-': {branch!r}")
-
-    # Confirm the tmux session exists. The `has-session` invariant
-    # mirrors the phase-2 create endpoint's pre-check.
-    code, _ = _run(["tmux", "has-session", "-t", session])
-    if code != 0:
-        raise HTTPException(404, f"tmux session {session!r} not found")
-
-    # Resolve project. The session must be owned by a non-main project
-    # (the worktree-tab verb doesn't apply to __main__ — there's no
-    # base_branch to fork from).
-    project_key = resolve_project_for_window({"session": session})
-    if not project_key or project_key == MAIN_KEY:
-        raise HTTPException(
-            400,
-            f"worktree-tab requires a session owned by a pinned project; "
-            f"{session!r} is unmanaged or main",
-        )
-    project = get_project(project_key)
-    if not project.get("repo"):
-        raise HTTPException(
-            400, f"project at {project_key!r} has no repo recorded"
-        )
-
-    repo = project["repo"]
-    assert repo is not None  # guarded by the `not project.get("repo")` 400 above
-    base_branch = project.get("base_branch")
-    # Two paths based on base_branch presence:
-    #   - base_branch set (typical): fork from LOCAL ref (no fetch).
-    #     The user's unpushed work on the project's branch is included.
-    #   - base_branch null (legacy projects): fall back to repo default
-    #     branch with fetch=True (defaults are pushed, fetch is safe).
-    # base_branch set → fork from local ref (fetch=False); null → detected default + fetch=True.
-    spawn_kwargs: dict[str, Any] = {"base_branch": base_branch, "fetch": False} if base_branch else {}
-
-    try:
-        res = spawn_worktree(repo, branch, **spawn_kwargs)
-    except ValueError as e:
-        # spawn_worktree raises ValueError in these cases (see
-        # periscope/worktree_spawn.py):
-        #   - "branch name cannot start with '-'"        → 400 (caught above too)
-        #   - "not a git repo: <path>"                    → 400
-        #   - "worktree path already exists: <path>"      → 409
-        #   - "git worktree add failed: <git stderr>"     → 409 if stderr
-        #     contains "already exists" (branch collision from git), else 400
-        # The "already exists" substring catches both the path-collision
-        # path AND the branch-collision-from-git path. Other failures
-        # (network, disk full, etc.) fall through to 400.
-        msg = str(e)
-        status = 409 if "already exists" in msg else 400
-        raise HTTPException(status, msg) from e
-    wt_path = res["path"]
-    warning = res.get("warning")
-
-    # Spawn the new window in the project's tmux session, rooted at the
-    # new worktree's path. -P -F captures the freshly-created window's
-    # index so we know the target for note_focus / send-keys.
-    ok, msg = _tmux_mutate(
-        "new-window", "-t", f"{session}:",
-        "-c", wt_path,
-        "-P", "-F", "#{window_index}",
-    )
-    if not ok:
-        # The worktree is on disk but the window failed. Leave the
-        # worktree — the user can try again or `tmux new-window` manually.
-        raise HTTPException(500, f"tmux new-window failed: {msg}")
-    try:
-        index = int(msg)
-    except ValueError:
-        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
-    target = f"{session}:{index}"
-
-    cmd = exec_cmd.strip()
-    _send_and_stamp(target, cmd)
-
-    result = {
-        "ok": True,
-        "session": session,
-        "index": index,
-        "target": target,
-        "worktree_path": wt_path,
-        "branch": branch,
-        "base_branch": res["base_branch"],
-        "exec": cmd,
-    }
-    if warning:
-        result["warning"] = warning
-    return result
 
 
 @router.post("/api/window/move")

@@ -15,11 +15,6 @@
 // workspace tier — the no-tag case is handled backend-side (the resolution
 // ladder always returns a home track).
 
-// Retained only for `groupLabel`'s "dev" label and Rail.jsx's still-present
-// imports (both rewritten in Task 13 when the catchall group is fully removed).
-// No longer a grouping key — track_id is the sole authority.
-export const MAIN_KEY = "__main__";
-
 // Severity ranking for status rollup: higher index = higher priority.
 const SEVERITY = ["shell", "idle", "done", "working", "needs-input"];
 
@@ -30,20 +25,6 @@ export function maxSeverity(states) {
     if (i > best) best = i;
   }
   return best >= 0 ? SEVERITY[best] : "shell";
-}
-
-// { pinned_dir: projectRow } from the /api/state projects payload.
-export function indexProjects(projects) {
-  const out = {};
-  for (const p of (projects || [])) out[p.pinned_dir] = p;
-  return out;
-}
-
-// { id: workspaceRow } from the /api/state workspaces payload.
-export function indexWorkspaces(workspaces) {
-  const out = {};
-  for (const w of (workspaces || [])) out[w.id] = w;
-  return out;
 }
 
 // Empty-string fallback bucket for a window that arrives without a `branch`
@@ -147,33 +128,6 @@ export function trackLabel(trackId, windows) {
   if (trackId === "loose") return "loose";
   const parts = String(trackId || "").split("/").filter(Boolean);
   return parts[parts.length - 1] || trackId;
-}
-
-// Build a quick { worktreeKey: [windowObj, ...] } map from /api/state windows.
-export function indexWindowsByWorktree(windows) {
-  const out = {};
-  for (const w of (windows || [])) {
-    const key = w.session;  // worktree_key = session name
-    out[key] = out[key] || [];
-    out[key].push(w);
-  }
-  return out;
-}
-
-// Project-row label: stable (never cwd-derived — the first-pane branch
-// churned on cd, the exact instability this design kills).
-export function projectLabel(project, session) {
-  return (project && (project.name || project.base_branch)) || session;
-}
-
-// Top-level group label: "dev" for MAIN_KEY; a null-repo project's own group
-// uses its name; repo groups use the path basename.
-export function groupLabel(groupKey, projectsByPin) {
-  if (groupKey === MAIN_KEY) return "dev";
-  const own = projectsByPin[groupKey];
-  if (own && !own.repo && own.name) return own.name;
-  const parts = String(groupKey || "").split("/").filter(Boolean);
-  return parts[parts.length - 1] || groupKey;
 }
 
 // ~-relative path for chips. Pure string transform (the frontend doesn't

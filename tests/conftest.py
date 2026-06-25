@@ -70,7 +70,7 @@ def _isolate_activity_db(tmp_path, monkeypatch):
     `activity._conn()` lazily caches a connection to it — so ANY test that runs
     activity-DB code without redirecting writes to the user's real database.
     This actually caused data loss: `test_app.py`'s lifespan tests run the
-    housekeeping pruners (`prune_pane_workspaces`/`prune_pane_projects`) against
+    housekeeping pruners (`prune_pane_workspaces`/`prune_pane_tracks`) against
     the real DB, and with an `alive` set that didn't cover the live panes they
     deleted every row — real workspace/project membership gone. The opt-in
     `fresh_activity_db` fixture only protected tests that remembered to request

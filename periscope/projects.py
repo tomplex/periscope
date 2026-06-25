@@ -19,7 +19,6 @@ from fastapi import HTTPException
 
 from periscope import store as _store
 from periscope.log import log
-from periscope.panes import list_windows
 from periscope.repo_locks import repo_lock
 from periscope.tmux import _run
 from periscope.worktree_spawn import worktree_path
@@ -148,90 +147,6 @@ def archive_project(pinned_dir: str) -> bool:
         projects[key]["archived_at"] = int(time.time())
         _store._write_state(_store._STATE)
         return True
-
-
-def resolve_project_for_window(window: dict) -> str | None:
-    """Map a tmux window (with `session` field) to its owning project key.
-
-    Returns the pinned_dir key for a session owned by a project, MAIN_KEY
-    for everything else (the fold-to-dev rule: unmanaged sessions belong
-    to main). Only an empty/missing session returns None. Lookup is by
-    `tmux_session` match; archived rows still match — the frontend folds
-    them to dev via its no-row fallback.
-
-    Reads the `pane_projects` tag first (explicit per-pane project context);
-    falls back to the session-match for untagged panes. The fallback is the
-    safety net for external/pre-backfill panes; the collapse follow-on removes
-    it once every pane is tagged and sessions are merged.
-    """
-    pane_id = window.get("pane_id")
-    if pane_id:
-        from periscope import (
-            activity,  # function-level: cycle-sensitivity (narrator precedent)
-        )
-        tagged = activity.get_pane_project(pane_id)
-        if tagged:
-            return tagged
-    session = window.get("session", "")
-    if not session:
-        return None
-    with _store._STATE_LOCK:
-        for key, row in _store._STATE.get("projects", {}).items():
-            if row.get("tmux_session") == session:
-                return key
-    return MAIN_KEY
-
-
-def placement_kill_set(project_key: str, windows: list[dict]) -> list[tuple[str, str]]:
-    """The panes whose rail placement is `project_key`'s worktree row, as
-    `[(target, pane_id)]` for kill-pane. A pane is in the group iff it is NOT
-    placed in a live workspace AND it resolves to `project_key` — the SAME rule
-    the rail renders the row by, so close kills exactly what is shown.
-
-    Workspace exclusion uses `resolve_workspace_for_window` (not the raw tag):
-    a pane tagged into an *archived/deleted* workspace folds back to its
-    worktree row, so it must be killed. Membership reuses
-    `resolve_project_for_window` (tag-first + session fallback) so an
-    untagged-but-managed pane (e.g. a `window_new` tab) is still included.
-
-    Refuses MAIN_KEY/dev — an unguarded dev group would mass-kill every
-    unmanaged pane on the machine.
-    """
-    if project_key == MAIN_KEY:
-        raise ValueError("refusing to kill the __main__/dev group")
-    from periscope.workspaces import resolve_workspace_for_window
-    out: list[tuple[str, str]] = []
-    for w in windows:
-        pane_id = w.get("pane_id")
-        if not pane_id:
-            continue
-        if resolve_workspace_for_window(w) is not None:
-            continue  # placed in a live workspace → not in this worktree row
-        if resolve_project_for_window(w) == project_key:
-            out.append((f"{w['session']}:{w['index']}", pane_id))
-    return out
-
-
-def backfill_pane_projects() -> int:
-    """One-shot: tag every live MANAGED pane with its project pinned_dir,
-    seeding `pane_projects` from today's session-derived grouping so the rail
-    is byte-identical at cutover. Unmanaged/dev panes (resolve to MAIN_KEY)
-    stay untagged. Idempotent — skips panes that already have a tag. Returns
-    the number of rows written. MUST run synchronously before serving (see
-    app.py): the collapse follow-on deletes the session-match fallback.
-    """
-    from periscope import activity
-    existing = activity.pane_project_map()
-    written = 0
-    for w in list_windows():
-        pane_id = w.get("pane_id")
-        if not pane_id or pane_id in existing:
-            continue
-        key = resolve_project_for_window(w)   # untagged → session-match
-        if key and key != MAIN_KEY:
-            activity.set_pane_project(pane_id, key)
-            written += 1
-    return written
 
 
 # ---------------------------------------------------------------------------

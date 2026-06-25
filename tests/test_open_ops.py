@@ -284,37 +284,3 @@ def test_open_target_pr_rolls_back_worktree_on_open_failure(tmp_git_repo, clean_
         open_ops.open_target(open_ops.PRTarget(repo=repo, pr=13))
     assert discarded == {"repo": repo, "path": repo, "branch": "pr-13"}
 
-
-@needs_tmux
-def test_session_delete_renumber_windows_spares_workspace_pane(
-    clean_state, fresh_activity_db, tmux_test_server
-):
-    """Regression (prod incident): with tmux `renumber-windows on`, killing a
-    window shifts the others' indices. Killing by session:index drifts onto the
-    wrong pane mid-loop and killed a workspace-tagged pane we'd EXCLUDED. Kill
-    by the stable pane_id instead — renumber-immune."""
-    from periscope.routes import sessions as sroute
-    from periscope.tmux import _tmux_mutate, tmux
-    sess = "wt"
-    _tmux_mutate("new-session", "-d", "-s", sess, "-c", "/tmp")
-    _tmux_mutate("set-option", "-g", "renumber-windows", "on")
-    _tmux_mutate("new-window", "-t", f"{sess}:", "-c", "/tmp")
-    _tmux_mutate("new-window", "-t", f"{sess}:", "-c", "/tmp")
-    rows = [r.split() for r in tmux(
-        "list-windows", "-t", sess, "-F", "#{window_index} #{pane_id}"
-    ).split("\n") if r.strip()]
-    rows.sort(key=lambda r: int(r[0]))
-    pane_ids = [r[1] for r in rows]
-    assert len(pane_ids) == 3
-    keep = pane_ids[-1]   # LAST window's pane → the one dragged into a workspace
-
-    clean_state["projects"]["/p"] = {
-        "tmux_session": sess, "repo": "/r", "archived_at": None}
-    clean_state["workspaces"]["ws_x"] = {"id": "ws_x", "archived_at": None}
-    fresh_activity_db.set_pane_workspace(keep, "ws_x")
-
-    sroute.session_delete(sess)
-
-    alive = tmux("list-panes", "-s", "-t", sess, "-F", "#{pane_id}").split()
-    assert keep in alive       # the workspace-tagged pane SURVIVED
-    assert len(alive) == 1     # both worktree panes were killed (by pane_id)

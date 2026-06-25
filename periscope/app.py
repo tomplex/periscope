@@ -75,9 +75,6 @@ async def lifespan(_app: FastAPI):
         dropped_ws = activity.prune_pane_workspaces(alive)
         if dropped_ws:
             log.info("pruned %d dead pane_workspaces row(s)", dropped_ws)
-        dropped_proj = activity.prune_pane_projects(alive)
-        if dropped_proj:
-            log.info("pruned %d dead pane_projects row(s)", dropped_proj)
         dropped_tracks = activity.prune_pane_tracks(alive)
         if dropped_tracks:
             log.info("pruned %d dead pane_tracks row(s)", dropped_tracks)
