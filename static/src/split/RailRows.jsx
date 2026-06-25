@@ -371,7 +371,7 @@ export function TrackRow({
       {...dragProps}
     >
       <span class="rail-chev">{chev}</span>
-      <span class="rail-icon icon-repo">◆</span>
+      <span class="rail-icon icon-effort">⧉</span>
       <RailLabel label={label} kind="track" renameable={!isLoose} onCommit={onRename} />
       <span class="repo-rule" aria-hidden="true"></span>
       <span class={statusDotClass(rolledUp)}></span>

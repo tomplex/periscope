@@ -441,55 +441,53 @@ export function Rail() {
               dragProps={makeDragProps({ kind: "track", key: trackKeyStr })}
               dropPos={dropPosFor(trackKeyStr)}
             />
+            {/* ONE card per track (Model B). The track header (TrackRow) is a
+                seclabel sitting ABOVE the card; everything below — optional
+                branch sub-clusters, then the flat pane list, then "+ New tab"
+                — lives inside this single bordered container. */}
             {!trackCollapsed && (
-              multiBranch ? (
-                // Multi-branch: one BranchRow per branch (derived mid-tier).
-                branches.map((branch) => {
-                  const branchKey = `${trackId}::${branch}`;   // track+branch collapse key
-                  const branchCollapsed = collapsed[`wt:${branchKey}`] === true;
-                  const pids = tabsByBranch[trackId]?.[branch] || [];
-                  const childRows = paneRowsFor(pids, trackId);
-                  const childStates = pids.map((pid) => windowsByPid[pid]).filter(Boolean).map((w) => w.state || "shell");
-                  const branchDim = pids.map((pid) => windowsByPid[pid]).filter(Boolean).some((w) => passesFilter(w, filter));
-                  childRows.push(<NewTabRow key={`newtab:${branchKey}`} worktreeKey={trackId} onOpen={openLauncher} />);
-                  const branchLabel = branch === NO_BRANCH ? "(no branch)" : branch;
-                  return (
-                    <div class="rail-group" key={`wt:${branchKey}`}>
-                      <BranchRow
-                        label={branchLabel}
-                        collapsed={branchCollapsed}
-                        childCount={pids.length}
-                        rolledUp={maxSeverity(childStates)}
-                        dim={branchDim}
-                        onToggle={() => toggleCollapse(`wt:${branchKey}`)}
-                        dragProps={{}}
-                        dropPos={undefined}
-                      />
-                      {!branchCollapsed && (
-                        <div class="rail-group-body">{childRows}</div>
-                      )}
-                    </div>
-                  );
-                })
-              ) : (
-                // Single-branch: flat tab list straight under the track.
-                (() => {
-                  const childRows = [];
-                  if (review) childRows.push(review);
-                  childRows.push(...paneRowsFor(trackPids, trackId));
-                  childRows.push(<NewTabRow key={`newtab:${trackId}`} worktreeKey={trackId} onOpen={openLauncher} />);
-                  return (
-                    <div class="rail-group rail-group-primary">
-                      <div class="rail-group-body">{childRows}</div>
-                    </div>
-                  );
-                })()
-              )
-            )}
-            {/* Multi-branch tracks still surface their review row (above the
-                first branch sub-cluster) when an LGTM session is live. */}
-            {!trackCollapsed && multiBranch && review && (
-              <div class="rail-group"><div class="rail-group-body">{review}</div></div>
+              <div class="rail-group rail-track-card">
+                {/* Review row (if any LGTM session is live) sits at the top of
+                    the card body, above the branches / panes. */}
+                {review && <div class="rail-group-body rail-review-head">{review}</div>}
+                {multiBranch ? (
+                  // Multi-branch: branch sub-clusters INSIDE the card (purple
+                  // left-rail subgroups), not separate top-level cards.
+                  branches.map((branch) => {
+                    const branchKey = `${trackId}::${branch}`;   // track+branch collapse key
+                    const branchCollapsed = collapsed[`wt:${branchKey}`] === true;
+                    const pids = tabsByBranch[trackId]?.[branch] || [];
+                    const childRows = paneRowsFor(pids, trackId);
+                    const childStates = pids.map((pid) => windowsByPid[pid]).filter(Boolean).map((w) => w.state || "shell");
+                    const branchDim = pids.map((pid) => windowsByPid[pid]).filter(Boolean).some((w) => passesFilter(w, filter));
+                    childRows.push(<NewTabRow key={`newtab:${branchKey}`} worktreeKey={trackId} onOpen={openLauncher} />);
+                    const branchLabel = branch === NO_BRANCH ? "(no branch)" : branch;
+                    return (
+                      <div class="rail-subgroup" key={`wt:${branchKey}`}>
+                        <BranchRow
+                          label={branchLabel}
+                          collapsed={branchCollapsed}
+                          childCount={pids.length}
+                          rolledUp={maxSeverity(childStates)}
+                          dim={branchDim}
+                          onToggle={() => toggleCollapse(`wt:${branchKey}`)}
+                          dragProps={{}}
+                          dropPos={undefined}
+                        />
+                        {!branchCollapsed && (
+                          <div class="rail-group-body">{childRows}</div>
+                        )}
+                      </div>
+                    );
+                  })
+                ) : (
+                  // Single-branch: flat tab list straight inside the card.
+                  <div class="rail-group-body">
+                    {paneRowsFor(trackPids, trackId)}
+                    <NewTabRow key={`newtab:${trackId}`} worktreeKey={trackId} onOpen={openLauncher} />
+                  </div>
+                )}
+              </div>
             )}
           </RailFragment>
         );
