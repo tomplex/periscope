@@ -522,3 +522,29 @@ def test_prune_pane_projects(fresh_activity_db):
     assert dropped == 1
     assert activity.get_pane_project("%2") is None
     assert activity.get_pane_project("%1") == "/a"
+
+
+def test_pane_tracks_set_get_map_prune():
+    activity.set_pane_track("%1", "tk_foo")
+    activity.set_pane_track("%2", "loose")
+    assert activity.get_pane_track("%1") == "tk_foo"
+    assert activity.pane_track_map() == {"%1": "tk_foo", "%2": "loose"}
+    activity.set_pane_track("%1", None)            # clear
+    assert activity.get_pane_track("%1") is None
+    removed = activity.prune_pane_tracks({"%2"})    # %1 already gone
+    assert removed == 0
+    activity.set_pane_track("%3", "tk_foo")
+    assert activity.prune_pane_tracks({"%2"}) == 1  # %3 dead
+
+
+def test_tracks_row_crud():
+    activity.insert_track({"id": "tk_a", "name": "Alpha", "repo": "/r/a",
+                           "created_at": 100, "archived_at": None})
+    assert activity.get_track("tk_a")["name"] == "Alpha"
+    assert [t["id"] for t in activity.all_tracks()] == ["tk_a"]
+    activity.update_track("tk_a", name="Alpha2")
+    assert activity.get_track("tk_a")["name"] == "Alpha2"
+    activity.archive_track("tk_a", ts=200)
+    assert activity.get_track("tk_a")["archived_at"] == 200
+    activity.delete_track("tk_a")
+    assert activity.get_track("tk_a") is None

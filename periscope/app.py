@@ -77,6 +77,9 @@ async def lifespan(_app: FastAPI):
         dropped_proj = activity.prune_pane_projects(alive)
         if dropped_proj:
             log.info("pruned %d dead pane_projects row(s)", dropped_proj)
+        dropped_tracks = activity.prune_pane_tracks(alive)
+        if dropped_tracks:
+            log.info("pruned %d dead pane_tracks row(s)", dropped_tracks)
 
     _bg("pane-sessions-housekeeping", _pane_sessions_housekeeping)
     # Kick off cache prewarms eagerly so the first /api/state poll already

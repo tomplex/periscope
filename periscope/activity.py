@@ -56,6 +56,18 @@ CREATE TABLE IF NOT EXISTS pane_projects (
   project    TEXT NOT NULL,      -- project pinned_dir (projects[] key)
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tracks (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  repo        TEXT,
+  created_at  INTEGER NOT NULL,
+  archived_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS pane_tracks (
+  pane_id    TEXT PRIMARY KEY,
+  track_id   TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS usage_samples (
   at        INTEGER NOT NULL,
   meter     TEXT NOT NULL,           -- 'session' | 'week_all' | 'week_opus' | 'week_sonnet'
@@ -319,6 +331,103 @@ def prune_pane_projects(alive_pane_ids: set[str]) -> int:
                       [(p,) for p in dead])
         c.commit()
         return len(dead)
+
+
+# --- pane_tracks: tmux pane id -> track id tag (sibling of pane_projects) ---
+def set_pane_track(pane_id: str, track_id: str | None) -> None:
+    with _LOCK:
+        c = _conn()
+        if track_id is None:
+            c.execute("DELETE FROM pane_tracks WHERE pane_id=?", (pane_id,))
+        else:
+            c.execute(
+                "INSERT INTO pane_tracks (pane_id, track_id, updated_at) "
+                "VALUES (?,?,?) ON CONFLICT(pane_id) DO UPDATE SET "
+                "track_id=excluded.track_id, updated_at=excluded.updated_at",
+                (pane_id, track_id, int(time.time())),
+            )
+        c.commit()
+
+
+def get_pane_track(pane_id: str) -> str | None:
+    if not pane_id:
+        return None
+    with _LOCK:
+        row = _conn().execute(
+            "SELECT track_id FROM pane_tracks WHERE pane_id=?", (pane_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+
+def pane_track_map() -> dict[str, str]:
+    with _LOCK:
+        return dict(_conn().execute("SELECT pane_id, track_id FROM pane_tracks"))
+
+
+def prune_pane_tracks(alive_pane_ids: set[str]) -> int:
+    with _LOCK:
+        c = _conn()
+        existing = {r[0] for r in c.execute("SELECT pane_id FROM pane_tracks")}
+        dead = existing - alive_pane_ids
+        if not dead:
+            return 0
+        c.executemany("DELETE FROM pane_tracks WHERE pane_id=?", [(p,) for p in dead])
+        c.commit()
+        return len(dead)
+
+
+# --- tracks: entity rows (the registry, replacing projects/workspaces) ---
+_TRACK_COLS = ("id", "name", "repo", "created_at", "archived_at")
+
+
+def insert_track(row: dict) -> None:
+    with _LOCK:
+        c = _conn()
+        c.execute(
+            "INSERT OR REPLACE INTO tracks (id,name,repo,created_at,archived_at) "
+            "VALUES (?,?,?,?,?)",
+            (row["id"], row["name"], row.get("repo"),
+             row["created_at"], row.get("archived_at")),
+        )
+        c.commit()
+
+
+def get_track(track_id: str) -> dict | None:
+    with _LOCK:
+        r = _conn().execute(
+            "SELECT id,name,repo,created_at,archived_at FROM tracks WHERE id=?",
+            (track_id,),
+        ).fetchone()
+        return dict(zip(_TRACK_COLS, r, strict=True)) if r else None
+
+
+def all_tracks() -> list[dict]:
+    with _LOCK:
+        rows = _conn().execute(
+            "SELECT id,name,repo,created_at,archived_at FROM tracks ORDER BY created_at"
+        ).fetchall()
+        return [dict(zip(_TRACK_COLS, r, strict=True)) for r in rows]
+
+
+def update_track(track_id: str, **fields) -> None:
+    if not fields:
+        return
+    cols = ", ".join(f"{k}=?" for k in fields)
+    with _LOCK:
+        c = _conn()
+        c.execute(f"UPDATE tracks SET {cols} WHERE id=?", (*fields.values(), track_id))
+        c.commit()
+
+
+def archive_track(track_id: str, ts: int) -> None:
+    update_track(track_id, archived_at=ts)
+
+
+def delete_track(track_id: str) -> None:
+    with _LOCK:
+        c = _conn()
+        c.execute("DELETE FROM tracks WHERE id=?", (track_id,))
+        c.commit()
 
 
 def migrate_legacy_pane_sessions() -> int:
