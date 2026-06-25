@@ -112,7 +112,7 @@ def dissolve_track(track_id: str) -> None:
 def teardown_targets(track_id: str, windows: list[dict]) -> list[tuple[str, str]]:
     """[(window_target, pane_id)] for kill — panes whose resolved track is
     track_id. Refuses LOOSE and repo-default tracks (catchalls — never mass-kill).
-    Moved + retargeted from projects.placement_kill_set (pane_id-based)."""
+    Kills by stable pane_id (renumber-immune)."""
     if track_id == LOOSE_KEY:
         raise ValueError("refusing to tear down the loose catchall")
     row = activity.get_track(track_id)
@@ -134,7 +134,7 @@ def teardown_targets(track_id: str, windows: list[dict]) -> list[tuple[str, str]
 
 def seed_tracks(windows: list[dict]) -> int:
     """Migration seed: tag every managed pane with its resolved track. Idempotent
-    — skips already-tagged panes (the backfill_pane_projects pattern)."""
+    — skips already-tagged panes."""
     existing = activity.pane_track_map()
     written = 0
     for w in windows:

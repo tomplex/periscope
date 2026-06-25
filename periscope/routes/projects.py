@@ -165,8 +165,8 @@ def projects_patch(body: PatchBody):
 
     # If tmux_session changes, run `tmux rename-session` FIRST. If tmux
     # fails, abort without touching state — drift between state and tmux
-    # would break addressing on the next poll (resolve_project_for_window
-    # matches on `tmux_session` literal). If tmux succeeds, state is then
+    # would break addressing on the next poll (project lookup matches on
+    # the `tmux_session` literal). If tmux succeeds, state is then
     # updated; a state-write failure after that leaves us with a renamed
     # tmux session and stale state — recoverable via the user re-issuing
     # the rename, while the inverse drift is not.
