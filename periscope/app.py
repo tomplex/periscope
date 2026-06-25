@@ -35,6 +35,7 @@ from periscope.routes import (
     send,
     sessions,
     state,
+    tracks,
     ws,
 )
 from periscope.routes import cleanup as cleanup_routes
@@ -162,7 +163,7 @@ app = FastAPI(lifespan=lifespan)
 for r in (
     alerts, auto_rename, channel, command, events, cleanup_routes, fs, healthz, history, lgtm_route,
     open_route, pane, paste_image, prefs, projects_routes, workspaces_routes, send, sessions,
-    settings_routes, state, ws,
+    settings_routes, state, tracks, ws,
 ):
     app.include_router(r.router)
 
