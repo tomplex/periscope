@@ -28,7 +28,7 @@ from periscope import worktrees
 from periscope.gitutil import detect_default_branch
 from periscope.log import log
 from periscope.repo_locks import repo_lock
-from periscope.tmux import _run, _tmux_mutate
+from periscope.tmux import _run, _tmux_mutate, tmux
 
 WORKTREES_DIR = Path.home() / "dev" / "worktrees"
 
@@ -277,8 +277,15 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> tuple[str, str]:
     _tmux_mutate("select-window", "-t", claude_win)
 
     # Stamp focus + action so the new project sorts to the top on the next
-    # poll. Match the pattern in routes/sessions.py for `+ session`.
-    note_focus(claude_win)
-    note_action(claude_win)
+    # poll. Match the pattern in routes/sessions.py for `+ session`. The
+    # recency map is keyed by session:index (window_view.py), NOT window id —
+    # so these two stamps must resolve the claude window's index, even though
+    # everything else targets the unambiguous window id. The index is stable
+    # between creation and the next poll (no kills in between), so it matches
+    # what update_focus_from_windows / window_view compute.
+    claude_idx = tmux("display-message", "-t", claude_win, "-p", "#{window_index}").strip()
+    claude_si = f"{tmux_session}:{claude_idx}"
+    note_focus(claude_si)
+    note_action(claude_si)
     claude_pid = stamp_new_window(claude_win)
     return claude_pid, shell_pid
