@@ -41,6 +41,56 @@ def _no_plan_usage_refresh(monkeypatch):
     monkeypatch.setattr(usage, "_plan_in_flight", True, raising=False)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _session_activity_db_guard(tmp_path_factory):
+    """Session-wide floor that the real periscope.db is NEVER the active
+    ACTIVITY_DB — not even for a `_bg` daemon thread that leaks past a test.
+
+    The lifespan spawns daemon housekeeping threads (e.g. pane-sessions
+    housekeeping → prune_pane_workspaces/projects) that can run AFTER a test's
+    function-scoped `monkeypatch` has reverted ACTIVITY_DB. A per-test redirect
+    therefore can't protect the real DB from a late-firing leaked thread — the
+    revert target must itself be a temp path. Pinning ACTIVITY_DB to a session
+    temp here makes every revert land on a throwaway DB. Function-scoped
+    redirects (below / fresh_activity_db) layer per-test isolation on top; their
+    revert target is this session DB, never the user's real file."""
+    from periscope import config
+    mp = pytest.MonkeyPatch()
+    db = tmp_path_factory.mktemp("activity-session") / "session.db"
+    mp.setattr(config, "ACTIVITY_DB", db)
+    yield
+    mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_activity_db(tmp_path, monkeypatch):
+    """Backstop: NO test may ever touch the real ~/.config/periscope/periscope.db.
+
+    `config.ACTIVITY_DB` is frozen to the real path at import, and
+    `activity._conn()` lazily caches a connection to it — so ANY test that runs
+    activity-DB code without redirecting writes to the user's real database.
+    This actually caused data loss: `test_app.py`'s lifespan tests run the
+    housekeeping pruners (`prune_pane_workspaces`/`prune_pane_projects`) against
+    the real DB, and with an `alive` set that didn't cover the live panes they
+    deleted every row — real workspace/project membership gone. The opt-in
+    `fresh_activity_db` fixture only protected tests that remembered to request
+    it. This autouse guard redirects every test to a per-test temp DB and resets
+    the cached connection unconditionally. `fresh_activity_db` still layers its
+    own redirect on top for tests that want the module handle."""
+    from periscope import activity, config
+    monkeypatch.setattr(config, "ACTIVITY_DB", tmp_path / "autouse-activity.db")
+    activity._CONN = None
+    activity._git_cache.clear()
+    activity._git_fetching.clear()
+    yield
+    # Close under _LOCK so a leaked in-flight write doesn't use-after-free the
+    # connection mid-close (the documented CPython 3.14 sqlite segfault).
+    with activity._LOCK:
+        if activity._CONN is not None:
+            activity._CONN.close()
+            activity._CONN = None
+
+
 @pytest.fixture
 def tmp_xdg_home(monkeypatch, tmp_path: Path) -> Path:
     """Redirect XDG_CONFIG_HOME so state.json, pidfile, and the log
