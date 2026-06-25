@@ -3,19 +3,21 @@
 // `currentMergedOrder()`'s seed for the drag-reorder splices (so a drag
 // operates on the order the user actually sees, not raw prefs).
 //
-// Membership is SESSION-ANCHORED (2026-06-12 spec): a window belongs to its
-// tmux session's project (`project_pinned_dir`, resolved server-side), and
-// the project's `repo` field keys the top-level group. cd never moves a row;
-// the cwd-derived repo_key/branch fields are display-only (chips).
+// Membership is TRACK-ANCHORED (2026-06-25 spec): a window belongs to its
+// track (`w.track_id`, resolved server-side — always present, the repo-default
+// fallback guarantees a value). track_id is the SOLE grouping authority; the
+// old repo/workspace/MAIN_KEY trichotomy collapsed into it. cd never moves a
+// row; the cwd-derived repo_key/branch fields are display-only (chips).
 //
-// MAIN_KEY ("dev") is the catch-all group: __main__'s own session, folded
-// unmanaged sessions, and no-row pins (archived projects / delete races).
-// Dev renders as a FLAT pane list — worktreesByRepo[MAIN_KEY] is always []
-// and panesByWorktree[MAIN_KEY] holds the unified pid order (a persisted
-// pref key). Pinned to the bottom at five enforcement points: merge (here),
-// isValidDropTarget, reorderRepos, the RepoRow drag-attr gate, and
-// syncRailPrefs (Rail.jsx).
+// Mid-tier is DERIVED, not a pref: within a track, tabs group by `w.branch`.
+// A track spanning ≥2 distinct branches emits branch sub-clusters; at ≤1
+// branch it renders flat. There is no catchall group and no separate
+// workspace tier — the no-tag case is handled backend-side (the resolution
+// ladder always returns a home track).
 
+// Retained only for `groupLabel`'s "dev" label and Rail.jsx's still-present
+// imports (both rewritten in Task 13 when the catchall group is fully removed).
+// No longer a grouping key — track_id is the sole authority.
 export const MAIN_KEY = "__main__";
 
 // Severity ranking for status rollup: higher index = higher priority.
@@ -44,116 +46,94 @@ export function indexWorkspaces(workspaces) {
   return out;
 }
 
-// Window → top-level group key. Folds to MAIN_KEY when the window has no
-// project pin, is pinned to main, or its pin has no row in the payload
-// (archived project or just-deleted race — projects_view filters archived).
-// Null-repo projects key their own group by pinned_dir.
-export function groupKeyForWindow(w, projectsByPin, workspacesById) {
-  const wid = w.workspace_id;
-  if (wid && workspacesById?.[wid]) return `ws:${wid}`;
-  const pin = w.project_pinned_dir;
-  if (!pin || pin === MAIN_KEY) return MAIN_KEY;
-  const row = projectsByPin[pin];
-  if (!row) return MAIN_KEY;
-  return row.repo || pin;
-}
+// Empty-string fallback bucket for a window that arrives without a `branch`
+// (non-git cwd, pre-resolution race). Kept a distinct key so it counts as its
+// own branch in the distinct-count rather than colliding with a real branch.
+const NO_BRANCH = "";
 
-// Merge live /api/state windows + projects with persisted ordering prefs to
-// produce the rail tree. Live windows ARE the membership; prefs are ordering
-// hints — pref entries come first (in pref position), then new live entries
-// append. Pref entries no longer live are silently dropped.
+// Merge live /api/state windows with persisted ordering prefs to produce the
+// rail tree. Live windows ARE the membership; prefs are ordering hints — pref
+// entries come first (in pref position), then new live entries append; pref
+// entries no longer live are silently dropped.
 //
-// Return shape (unchanged from the cwd-keyed era, so drag descriptors,
-// reorder splices, and syncRailPrefs keep working on key substitution):
-//   repoOrder        — group keys, MAIN_KEY last iff dev has windows
-//   worktreesByRepo  — group key → ordered session list ([] for MAIN_KEY)
-//   panesByWorktree  — session → ordered child keys (pids + "review");
-//                      panesByWorktree[MAIN_KEY] = flat dev pid order
-export function mergeLiveAndPrefs(windows, projects, workspaces, prefRepoOrder, prefWtByRepo, prefPanesByWt) {
-  const projectsByPin = indexProjects(projects);
-  const workspacesById = indexWorkspaces(workspaces);
-  const allWsKeys = (workspaces || []).map(w => `ws:${w.id}`);
-  const liveByRepo = {};       // group key → ordered session list (first-seen)
-  const livePanesByWt = {};    // session → ordered pane pids (first-seen)
-  const liveDevPids = [];      // flat dev membership (cross-session)
-  const livePanesByWs = {};    // ws:<id> → flat tagged pid order (cross-session)
+// `projects`/`workspaces` are accepted (and ignored for grouping) purely so
+// existing callers don't break on the signature; labels still index projects.
+//
+// `prefs` is `{ trackOrder?, tabsByTrack?, branchOrderByTrack? }`:
+//   trackOrder          — ordered track ids (replaces the old repo_order)
+//   tabsByTrack         — { trackId: [pid, ...] } tab order within a track
+//                         (replaces panes_by_worktree, now keyed by track id)
+//   branchOrderByTrack  — { trackId: [branch, ...] } branch sub-cluster order
+//
+// Return shape:
+//   trackOrder       — ordered live track ids (pref-first, live-new appended)
+//   tabsByTrack      — { trackId: [pid, ...] } the FLAT all-tabs order for a
+//                      track; always present, used directly when a track is
+//                      single-branch (flat render)
+//   branchesByTrack  — { trackId: [branch, ...] } the ordered distinct
+//                      branches; [] (empty) means "single-branch → render
+//                      flat from tabsByTrack"
+//   tabsByBranch     — { trackId: { branch: [pid, ...] } } per-branch tab
+//                      order; only populated for MULTI-branch tracks
+export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}) {
+  const prefTrackOrder = prefs.trackOrder || [];
+  const prefTabsByTrack = prefs.tabsByTrack || {};
+  const prefBranchOrder = prefs.branchOrderByTrack || {};
+
+  const liveTracks = [];                 // ordered track ids (first-seen)
+  const liveTabsByTrack = {};            // trackId → [pid] (first-seen)
+  const liveBranchesByTrack = {};        // trackId → [branch] (first-seen)
+  const liveTabsByBranch = {};           // trackId → { branch: [pid] }
   for (const w of (windows || [])) {
-    const g = groupKeyForWindow(w, projectsByPin, workspacesById);
-    if (g.startsWith("ws:")) {
-      if (!livePanesByWs[g]) livePanesByWs[g] = [];
-      if (!livePanesByWs[g].includes(w.pid)) livePanesByWs[g].push(w.pid);
-      continue;
+    const t = w.track_id;
+    if (!t) continue;  // backend guarantees a track_id; skip defensively
+    const branch = w.branch || NO_BRANCH;
+    if (!liveTabsByTrack[t]) {
+      liveTracks.push(t);
+      liveTabsByTrack[t] = [];
+      liveBranchesByTrack[t] = [];
+      liveTabsByBranch[t] = {};
     }
-    if (g === MAIN_KEY) {
-      if (!liveDevPids.includes(w.pid)) liveDevPids.push(w.pid);
-      continue;
-    }
-    const s = w.session;
-    if (!liveByRepo[g]) liveByRepo[g] = [];
-    if (!liveByRepo[g].includes(s)) liveByRepo[g].push(s);
-    if (!livePanesByWt[s]) livePanesByWt[s] = [];
-    if (!livePanesByWt[s].includes(w.pid)) livePanesByWt[s].push(w.pid);
+    if (!liveTabsByTrack[t].includes(w.pid)) liveTabsByTrack[t].push(w.pid);
+    if (!liveBranchesByTrack[t].includes(branch)) liveBranchesByTrack[t].push(branch);
+    if (!liveTabsByBranch[t][branch]) liveTabsByBranch[t][branch] = [];
+    if (!liveTabsByBranch[t][branch].includes(w.pid)) liveTabsByBranch[t][branch].push(w.pid);
   }
 
-  // Top-level order: pref-first (kept iff a live repo OR a current ws key),
-  // then live-new repos, then ws keys not yet in pref (parked / new). ws keys
-  // are interleaved (NOT bottom-pinned). Dev (MAIN_KEY) is always last.
-  const liveRepoSet = new Set(Object.keys(liveByRepo));
-  const wsKeySet = new Set(allWsKeys);
-  const keep = (k) => k !== MAIN_KEY && (liveRepoSet.has(k) || wsKeySet.has(k));
-  const fromPref = prefRepoOrder.filter(keep);
+  // Top-level order: pref-first (kept iff still live), then live-new appended.
+  const liveTrackSet = new Set(liveTracks);
+  const fromPref = prefTrackOrder.filter(t => liveTrackSet.has(t));
   const fromPrefSet = new Set(fromPref);
-  const newRepos = Object.keys(liveByRepo).filter(r => !fromPrefSet.has(r) && r !== MAIN_KEY);
-  const newWs = allWsKeys.filter(k => !fromPrefSet.has(k));
-  const realTop = [...fromPref, ...newRepos, ...newWs];
-  const repoOrder = liveDevPids.length ? [...realTop, MAIN_KEY] : realTop;
+  const trackOrder = [...fromPref, ...liveTracks.filter(t => !fromPrefSet.has(t))];
 
-  // Worktree (session) lists: ws:/dev are flat → [].
-  const worktreesByRepo = {};
-  for (const r of repoOrder) {
-    if (r === MAIN_KEY || r.startsWith("ws:")) { worktreesByRepo[r] = []; continue; }
-    const live = liveByRepo[r] || [];
-    const liveSet = new Set(live);
-    const pref = (prefWtByRepo[r] || []).filter(w => liveSet.has(w));
-    const prefSet = new Set(pref);
-    worktreesByRepo[r] = [...pref, ...live.filter(w => !prefSet.has(w))];
-  }
+  const tabsByTrack = {};
+  const branchesByTrack = {};
+  const tabsByBranch = {};
+  for (const t of trackOrder) {
+    // Flat tab order: pref-first (kept iff live), then new live pids.
+    const liveTabs = liveTabsByTrack[t] || [];
+    const liveTabSet = new Set(liveTabs);
+    const prefTabs = (prefTabsByTrack[t] || []).filter(p => liveTabSet.has(p));
+    const prefTabSet = new Set(prefTabs);
+    tabsByTrack[t] = [...prefTabs, ...liveTabs.filter(p => !prefTabSet.has(p))];
 
-  // Pane children per repo session (unchanged); ws:/dev handled flat below.
-  const panesByWorktree = {};
-  for (const r of repoOrder) {
-    if (r === MAIN_KEY || r.startsWith("ws:")) continue;
-    const own = projectsByPin[r];
-    const hasReview = !(own && !own.repo);
-    for (const w of worktreesByRepo[r]) {
-      const live = livePanesByWt[w] || [];
-      const liveSet = new Set(live);
-      const pref = prefPanesByWt[w] || [];
-      const prefKept = pref.filter(c => (c === "review" && hasReview) || liveSet.has(c));
-      const prefSet = new Set(prefKept);
-      const merged = [...prefKept, ...live.filter(p => !prefSet.has(p))];
-      if (hasReview && !merged.includes("review")) merged.push("review");
-      panesByWorktree[w] = merged;
+    // Distinct branches: pref-first (kept iff live), then live-new branches.
+    const liveBranches = liveBranchesByTrack[t] || [];
+    const liveBranchSet = new Set(liveBranches);
+    const prefBranches = (prefBranchOrder[t] || []).filter(b => liveBranchSet.has(b));
+    const prefBranchSet = new Set(prefBranches);
+    const branches = [...prefBranches, ...liveBranches.filter(b => !prefBranchSet.has(b))];
+
+    if (branches.length >= 2) {
+      branchesByTrack[t] = branches;
+      tabsByBranch[t] = {};
+      for (const b of branches) tabsByBranch[t][b] = liveTabsByBranch[t][b] || [];
+    } else {
+      branchesByTrack[t] = [];  // single-branch → flat render from tabsByTrack
     }
   }
-  // Dev flat (unchanged).
-  if (liveDevPids.length) {
-    const liveSet = new Set(liveDevPids);
-    const pref = (prefPanesByWt[MAIN_KEY] || []).filter(p => liveSet.has(p));
-    const prefSet = new Set(pref);
-    panesByWorktree[MAIN_KEY] = [...pref, ...liveDevPids.filter(p => !prefSet.has(p))];
-  }
-  // Workspace flat: ALWAYS build (parked → []), so every non-archived
-  // workspace renders. pref-first pid order, then new live tagged pids.
-  for (const k of allWsKeys) {
-    const live = livePanesByWs[k] || [];
-    const liveSet = new Set(live);
-    const pref = (prefPanesByWt[k] || []).filter(p => liveSet.has(p));
-    const prefSet = new Set(pref);
-    panesByWorktree[k] = [...pref, ...live.filter(p => !prefSet.has(p))];
-  }
 
-  return { repoOrder, worktreesByRepo, panesByWorktree };
+  return { trackOrder, tabsByTrack, branchesByTrack, tabsByBranch };
 }
 
 // Build a quick { worktreeKey: [windowObj, ...] } map from /api/state windows.
