@@ -14,12 +14,42 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from periscope import tmux_input, tmux_mirror
+from periscope import state_hub, tmux_input, tmux_mirror
 from periscope.log import _task
 from periscope.panes import note_action
 from periscope.tmux import tmux
 
 router = APIRouter()
+
+
+@router.websocket("/ws/state")
+async def ws_state(websocket: WebSocket):
+    """Push the dashboard state blob (the /api/state payload) on the hub's
+    clock. Replaces the browser's 3s poll; the REST endpoint stays as fallback.
+    """
+    await websocket.accept()
+    q = state_hub.subscribe()
+
+    # A reader task so a client disconnect is noticed promptly even between
+    # ticks (the send loop alone would only see it on the next blob).
+    async def drain_in():
+        with contextlib.suppress(Exception):
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+
+    reader = _task("ws-state-reader", drain_in())
+    try:
+        while True:
+            blob = await q.get()
+            await websocket.send_text(blob)
+    except (WebSocketDisconnect, RuntimeError):
+        # RuntimeError: send after the socket closed (reader saw disconnect).
+        pass
+    finally:
+        reader.cancel()
+        state_hub.unsubscribe(q)
 
 
 @router.websocket("/ws/pane")
