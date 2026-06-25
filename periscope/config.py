@@ -21,6 +21,10 @@ MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
 # killed. panes.list_windows filters it out.
 INPUT_CTL_SESSION = "periscope-input"
 
+# The single tmux session periscope owns once tracks land. Every managed
+# pane is a window here; grouping is metadata (pane_tracks), never the session.
+MANAGED_SESSION = "periscope"
+
 # Command line periscope sends into tmux when spawning a Claude window.
 # The dev-channels flag is what makes Claude connect to periscope's MCP
 # socket via channel_shim.py — without it, `link_pr` / `notify` / `+ link
