@@ -1955,6 +1955,42 @@ body.modal-open { overflow: hidden; }
 .wt-meta-ci-running { color: var(--s-working); }
 .wt-meta-ci-neutral { color: var(--fg-3); }
 
+/* Track-scope filter chips — a strip above the rail tree that narrows the
+   whole rail (attention sort + tree) to one track. <button>s need an explicit
+   appearance reset or the browser's native chrome shows through (the unstyled
+   grey-box look). Matches the wt-meta-chip pill vocabulary; the active chip
+   carries the accent. */
+.rail-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--bg-2);
+}
+.rail-filter-chip {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid transparent;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 1px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-filter-chip:hover { background: var(--bg-3); color: var(--fg-1); }
+.rail-filter-chip.is-active {
+  background: var(--bg-3);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* Continuous tree lines drawn via CSS so adjacent child rows' connectors
    actually touch. Replaces the per-row ├/└ glyphs, which broke at every
    row boundary because of vertical padding.
