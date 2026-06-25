@@ -590,6 +590,62 @@ def test_tick_session_switch_resets_cooldown(tick_env):
     assert row.renamed_at is None                 # recycled-pane cooldown gone
 
 
+def test_tick_persists_goal_and_arc(tick_env):
+    tick_env["response"] = ('{"status": "wiring the filter", '
+                            '"goal": "redesign the rail", "rename": null}')
+    narrator.tick([_pane()])
+    row = activity.get_pane_status("%1")
+    assert row.goal == "redesign the rail"
+    assert narrator.load_arc(row.history) == [
+        {"t": _arc_t(row), "s": "wiring the filter"}]
+
+
+def _arc_t(row):
+    return narrator.load_arc(row.history)[0]["t"]
+
+
+def test_tick_carries_goal_forward_when_response_omits_it(tick_env):
+    size = tick_env["jsonl"].stat().st_size
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%1", session_id="sid-a", status="old", generated_at=1,
+        jsonl_size=size - 1, seen_name="claude", renamed_at=None,
+        goal="redesign the rail", history='[{"t": 1, "s": "sketching"}]'))
+    # default response has no goal field → previous goal must survive
+    narrator.tick([_pane()])
+    row = activity.get_pane_status("%1")
+    assert row.goal == "redesign the rail"            # carried, not wiped
+    arc = narrator.load_arc(row.history)
+    assert [e["s"] for e in arc] == ["sketching", "fixing flaky reconcile test"]
+
+
+def test_tick_feeds_prev_goal_and_arc_into_prompt(tick_env):
+    size = tick_env["jsonl"].stat().st_size
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%1", session_id="sid-a", status="old", generated_at=1,
+        jsonl_size=size - 1, seen_name="claude", renamed_at=None,
+        goal="redesign the rail", history='[{"t": 1, "s": "sketching tracks"}]'))
+    narrator.tick([_pane()])
+    prompt = tick_env["haiku_calls"][0]
+    assert "goal so far: redesign the rail" in prompt
+    assert "sketching tracks" in prompt
+
+
+def test_tick_session_switch_resets_goal_and_arc(tick_env):
+    size = tick_env["jsonl"].stat().st_size
+    activity.upsert_pane_status(activity.PaneStatusRow(
+        pane_id="%1", session_id="sid-OLD", status="old", generated_at=1,
+        jsonl_size=size, seen_name="claude", renamed_at=None,
+        goal="old thread goal", history='[{"t": 1, "s": "old phase"}]'))
+    narrator.tick([_pane()])                          # mapped session is sid-a
+    prompt = tick_env["haiku_calls"][0]
+    assert "old thread goal" not in prompt            # prior thread not fed in
+    assert "old phase" not in prompt
+    row = activity.get_pane_status("%1")
+    assert row.goal is None                           # default response: no goal
+    assert [e["s"] for e in narrator.load_arc(row.history)] == [
+        "fixing flaky reconcile test"]                # arc starts fresh
+
+
 def test_tick_caps_regenerations_per_tick(tick_env):
     panes = []
     for i in range(2, 9):                         # %2..%8: 7 candidates
