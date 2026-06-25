@@ -21,10 +21,10 @@ export function classify(query, catalog) {
   const cards = [];
   if (!q) return cards;
 
-  // Create actions lead — a new worktree or workspace is almost always the
-  // target, so they sit above "open existing". Grouped by kind (all new-worktree
-  // cards, then all new-workspace cards) so each section header appears once
-  // even when several repos match.
+  // Create actions lead — a new worktree or track is almost always the target,
+  // so they sit above "open existing". Grouped by kind (all new-worktree cards,
+  // then all new-track cards) so each section header appears once even when
+  // several repos match.
   for (const r of catalog.repos || []) {
     if (match(r.label, q) || match(r.repo, q)) {
       cards.push({ kind: "worktree", label: `${r.label} · new worktree…`,
@@ -34,7 +34,7 @@ export function classify(query, catalog) {
   }
   for (const r of catalog.repos || []) {
     if (match(r.label, q) || match(r.repo, q)) {
-      cards.push({ kind: "workspace", label: `${r.label} · new workspace…`,
+      cards.push({ kind: "track", label: `${r.label} · new track…`,
                    sub: "goal-scoped group", repo: r.repo, descriptor: null });
     }
   }

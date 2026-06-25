@@ -40,6 +40,19 @@ def test_resolve_non_git_is_loose(monkeypatch):
     assert tracks.resolve_track_for_window({"pane_id": "%5"}) == tracks.LOOSE_KEY
 
 
+def test_track_label_prefers_row_name_then_basename():
+    activity.insert_track({"id": "tk_goal", "name": "Ship It", "repo": None,
+                           "created_at": 1, "archived_at": None})
+    assert tracks.track_label("tk_goal") == "Ship It"
+    # repo-default row: name is basename(repo)
+    tid = tracks.repo_default_track("/repos/fdy")
+    assert tracks.track_label(tid) == "fdy"
+    # loose catchall
+    assert tracks.track_label(tracks.LOOSE_KEY) == "loose"
+    # no row yet → fall back to the id's path basename
+    assert tracks.track_label("/repos/unseen") == "unseen"
+
+
 def test_teardown_targets_refuses_loose_and_repo_default(monkeypatch):
     monkeypatch.setattr(tracks, "_repo_for_window", lambda w: "/repos/fdy")
     tid = tracks.repo_default_track("/repos/fdy")

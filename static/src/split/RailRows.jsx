@@ -59,7 +59,8 @@ function isDirty(git) {
   return git && git !== "clean" && git !== "clean *";
 }
 
-// Inline-rename label. `kind` is "pane" or "worktree" (only those rename).
+// Inline-rename label. `kind` is "pane" or "track" (pane renders plain, track
+// renders bold; both rename when `renameable`).
 // `onCommit(next)` does the network write; `label` is the bold/plain display
 // node. Non-renameable rows just render the label.
 function RailLabel({ label, kind, renameable, onCommit }) {
@@ -306,12 +307,14 @@ export function WorktreeMeta({ wtWindows }) {
   return <div class="wt-meta">{parts.map((p) => <>{p}</>)}</div>;
 }
 
-// Worktree header row (a project's session under its repo group). Dev has no
-// worktree rows, so there's no catch-all variant. `collapsed` hides the
-// children (rendered by the caller). Rename POSTs /api/session/rename.
-export function WorktreeRow({
-  label, collapsed, childCount, rolledUp, dim,
-  onToggle, onClose, onRename, dragProps, dropPos,
+// Branch sub-cluster header (the DERIVED mid-tier). A track that spans ≥2
+// distinct branches renders one BranchRow per branch; the label IS the branch
+// name. There is NO close button — a branch sub-cluster is derived from live
+// `w.branch`, not an entity you can kill. Tear down the whole TRACK, or
+// move/close individual tabs. `collapsed` hides the children (rendered by the
+// caller). No rename (the branch name is the git branch).
+export function BranchRow({
+  label, collapsed, childCount, rolledUp, dim, onToggle, dragProps, dropPos,
 }) {
   const chev = collapsed ? "▸" : "▾";
   const dimCls = dim ? "" : " rail-dim";
@@ -326,46 +329,73 @@ export function WorktreeRow({
     >
       <span class="rail-chev">{chev}</span>
       <span class="rail-icon icon-worktree">⎇</span>
-      <RailLabel label={label} kind="worktree" renameable onCommit={onRename} />
+      <span class="rail-label"><b>{label}</b></span>
       {collapsed && childCount > 0 ? <span class="rail-count">{childCount}</span> : null}
       <span class={statusDotClass(rolledUp)}></span>
-      <button
-        class="rail-close"
-        title="kill this session"
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
-      >×</button>
     </div>
   );
 }
 
-export function RepoRow({ repoKey, label, chip, collapsed, rolledUp, dim, isDev, onToggle, dragProps, dropPos }) {
+// Top-level track row (the SOLE grouping primitive — replaces RepoRow). Carries
+// an action menu (▾ toggles a small popover): dissolve [safe default — POSTs
+// /dissolve, tabs survive] and tear down [destructive — the caller confirms
+// against the kill list from /teardown]. Rename POSTs PATCH /api/tracks/{id}.
+export function TrackRow({
+  trackId, label, collapsed, rolledUp, dim, onToggle, onRename, onDissolve, onTeardown, dragProps, dropPos,
+}) {
   const chev = collapsed ? "▸" : "▾";
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
-  const isWs = String(repoKey || "").startsWith("ws:");
-  // Quiet section label: uppercase name + a hairline rule that fills to the
-  // rolled-up status dot, so repos/workspaces read as organizers rather than
-  // rows competing with the cards below them.
-  // "dev" is pinned to the bottom — never draggable; omit the drag props.
-  // Workspaces ARE reorderable (interleaved among repos), so they keep them.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const isLoose = trackId === "loose";
+
+  // Close the menu on any outside click / Escape while it's open.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDoc = (e) => { if (!e.target.closest(".track-menu")) setMenuOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setMenuOpen(false); };
+    document.addEventListener("click", onDoc, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onDoc, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
   return (
     <div
-      class={`rail-row repo-row${isWs ? " repo-ws" : ""}${dimCls}${drop}`}
+      class={`rail-row repo-row${dimCls}${drop}`}
       data-drop-pos={dropPos || undefined}
-      draggable={!isDev}
-      onClick={onToggle}
-      {...(isDev ? {} : dragProps)}
+      draggable
+      onClick={(e) => { if (e.target.closest("button") || e.target.closest("input")) return; onToggle(); }}
+      {...dragProps}
     >
       <span class="rail-chev">{chev}</span>
-      {isDev
-        ? <span class="rail-icon icon-other">◇</span>
-        : isWs
-        ? <span class="rail-icon icon-workspace">⧉</span>
-        : <span class="rail-icon icon-repo">◆</span>}
-      <span class="rail-label">{label}</span>
-      {chip && <span class="rail-chip rail-chip-repo" title={chip}>⟨{chip}⟩</span>}
+      <span class="rail-icon icon-repo">◆</span>
+      <RailLabel label={label} kind="track" renameable={!isLoose} onCommit={onRename} />
       <span class="repo-rule" aria-hidden="true"></span>
       <span class={statusDotClass(rolledUp)}></span>
+      {/* Loose is a backend catchall — no lifecycle actions (dissolve/teardown
+          both refuse it server-side), so omit the menu entirely. */}
+      {!isLoose && (
+        <span class="track-menu">
+          <button
+            class="rail-track-menu-btn"
+            title="track actions"
+            onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
+          >⋯</button>
+          {menuOpen && (
+            <div class="track-menu-pop" onClick={(e) => e.stopPropagation()}>
+              <button class="track-menu-item" onClick={() => { setMenuOpen(false); onDissolve(); }}>
+                Dissolve <span class="track-menu-hint">tabs survive</span>
+              </button>
+              <button class="track-menu-item track-menu-danger" onClick={() => { setMenuOpen(false); onTeardown(); }}>
+                Tear down <span class="track-menu-hint">kills tabs</span>
+              </button>
+            </div>
+          )}
+        </span>
+      )}
     </div>
   );
 }

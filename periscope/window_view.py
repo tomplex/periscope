@@ -28,7 +28,7 @@ from periscope.projects import get_project, resolve_project_for_window
 from periscope.session_status import session_state_for
 from periscope.store import get_window
 from periscope.tmux import capture
-from periscope.tracks import resolve_track_for_window
+from periscope.tracks import resolve_track_for_window, track_label
 from periscope.turns import session_id_for_pane
 from periscope.worktrees import affiliation
 
@@ -206,7 +206,8 @@ def build_window_view(
         # The track this tab belongs to (the new organizational primitive).
         # workspace_id / project_pinned_dir are kept until the frontend stops
         # reading them (Task 12/13); track_id supersedes both.
-        "track_id": resolve_track_for_window(w),
+        "track_id": (_tid := resolve_track_for_window(w)),
+        "track_name": track_label(_tid),
         "workspace_id": workspace_id,
         "project_pinned_dir": project_key,
         "project_name": project.get("name"),

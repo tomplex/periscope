@@ -136,6 +136,19 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}) {
   return { trackOrder, tabsByTrack, branchesByTrack, tabsByBranch };
 }
 
+// Top-level track row label. The backend ships `track_name` on every window
+// (track_label() — goal tracks carry the user name, repo-default tracks carry
+// basename(repo)); the rail reads it off any window in the track. Falls back to
+// the track id's path basename when no window carries a name (defensive).
+export function trackLabel(trackId, windows) {
+  for (const w of (windows || [])) {
+    if (w.track_id === trackId && w.track_name) return w.track_name;
+  }
+  if (trackId === "loose") return "loose";
+  const parts = String(trackId || "").split("/").filter(Boolean);
+  return parts[parts.length - 1] || trackId;
+}
+
 // Build a quick { worktreeKey: [windowObj, ...] } map from /api/state windows.
 export function indexWindowsByWorktree(windows) {
   const out = {};

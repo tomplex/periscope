@@ -65,6 +65,19 @@ def resolve_track_for_window(window: dict) -> str:
     return repo_default_track(_repo_for_window(window))
 
 
+def track_label(track_id: str) -> str:
+    """Human display name for a track id — the rail's top-level row label.
+    The track row's `name` (goal tracks carry the user-chosen name; repo-default
+    tracks carry basename(repo)); falls back to the id's path basename so a
+    just-resolved repo-default that hasn't been row-read yet still labels."""
+    if track_id == LOOSE_KEY:
+        return "loose"
+    row = activity.get_track(track_id)
+    if row and row.get("name"):
+        return row["name"]
+    return os.path.basename(track_id.rstrip("/")) or track_id
+
+
 def create_track(*, name: str, repo: str | None = None) -> Track:
     tid = f"tk_{_slug(name)}"
     base, n = tid, 2

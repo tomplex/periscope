@@ -24,7 +24,7 @@ const KIND_META = {
   branch:   { group: "Branches",     icon: "⎇" },
   newbranch:{ group: "Branches",     icon: "+" },
   repo:     { group: "Repositories", icon: "◳" },
-  workspace:{ group: "Workspaces",   icon: "▧" },
+  track:    { group: "New track",    icon: "▧" },
   command:  { group: "Command",       icon: "⚡" },
 };
 
@@ -138,19 +138,19 @@ export function OpenOmnibox() {
     close();
   }
 
-  // Create a parked workspace (no rail-placement ui payload — it appears as a
-  // new top-level group on the next /api/state poll), then close. Name comes
-  // from the inline NameDrill, NOT window.prompt — prompt() is a silent no-op
-  // in the Tauri WKWebView shell.
-  async function post_workspace(repo, name) {
+  // Create an empty track (no rail-placement ui payload — it appears as a new
+  // top-level group once a tab is tagged into it; an empty track has no live
+  // window so it won't render until then). Name comes from the inline NameDrill,
+  // NOT window.prompt — prompt() is a silent no-op in the Tauri WKWebView shell.
+  async function post_track(repo, name) {
     if (!name) return;
     setBusy(true); setError("");
-    const data = await apiCall("create workspace", "/api/workspaces", {
+    const data = await apiCall("create track", "/api/tracks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ base_repo: repo || null, name }),
+      body: JSON.stringify({ repo: repo || null, name }),
     });
     setBusy(false);
-    if (!data) { setError("create workspace failed"); return; }
+    if (!data) { setError("create track failed"); return; }
     close();
   }
 
@@ -173,7 +173,7 @@ export function OpenOmnibox() {
     if (card.kind === "open") return post(card.descriptor);
     if (card.kind === "command") return runCommand(card.text);
     if (card.kind === "pr" && !card.needsRepo) return post({ repo: card.pr.repo, pr: card.pr.pr });
-    setDrill({ card });   // worktree → branch entry; workspace → name entry; pr w/o repo → repo picker
+    setDrill({ card });   // worktree → branch entry; track → name entry; pr w/o repo → repo picker
   }
 
   // Main palette items = ranked cards, decorated with section + glyph.
@@ -204,9 +204,9 @@ export function OpenOmnibox() {
             onPick={(branch) => post({ repo: drill.card.repo, branch })}
             onBack={() => setDrill(null)} />
         )}
-        {drill && drill.card.kind === "workspace" && (
+        {drill && drill.card.kind === "track" && (
           <NameDrill card={drill.card}
-            onPick={(name) => post_workspace(drill.card.repo, name)}
+            onPick={(name) => post_track(drill.card.repo, name)}
             onBack={() => setDrill(null)} />
         )}
         {drill && drill.card.kind === "pr" && (
@@ -366,20 +366,20 @@ function BranchDrill({ card, onPick, onBack }) {
   );
 }
 
-// Name entry for a new workspace. Typing a name surfaces a single "create"
-// card; Enter (or click) creates it. Inline so it works in the Tauri shell,
-// where window.prompt is a silent no-op.
+// Name entry for a new track. Typing a name surfaces a single "create" card;
+// Enter (or click) creates it. Inline so it works in the Tauri shell, where
+// window.prompt is a silent no-op.
 function NameDrill({ card, onPick, onBack }) {
   const [val, setVal] = useState("");
   const name = val.trim();
   const items = name
-    ? [{ key: `__ws:${name}`, group: "New workspace", icon: "▧",
-         label: `create workspace "${name}"`, sub: card.repo, value: name }]
+    ? [{ key: `__tk:${name}`, group: "New track", icon: "▧",
+         label: `create track "${name}"`, sub: card.repo, value: name }]
     : [];
   return (
-    <Palette value={val} onInput={setVal} placeholder={`name this workspace (base: ${card.repo})…`}
+    <Palette value={val} onInput={setVal} placeholder={`name this track (repo: ${card.repo})…`}
              items={items} onPick={(it) => onPick(it.value)} onBack={onBack}
-             empty="type a workspace name…" />
+             empty="type a track name…" />
   );
 }
 

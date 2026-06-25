@@ -243,6 +243,8 @@ def test_view_includes_track_id(mocker, clean_state, fresh_activity_db):
     _stub_subsystems(mocker)
     view, _ = build_window_view(_window(pane_id="%42"), now_ts=1000)
     assert view["track_id"] == "tk_x"
+    # The rail labels off track_name (no separate /api/state tracks payload).
+    assert view["track_name"] == "X"
 
 
 def test_view_track_id_falls_back_to_loose_for_non_git(mocker, clean_state, fresh_activity_db):
