@@ -20,8 +20,10 @@ import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
 import * as prefs from "../prefs.js";
+import { windows } from "../store.js";
 import { track } from "../track.js";
 import { apiCall } from "../util.js";
+import { trackLabel } from "../split/railTree.js";
 
 // The open worktree key (or null). A signal so the singleton modal reacts.
 const target = signal(null);
@@ -69,7 +71,7 @@ export function LauncherModal() {
           <h2>+ New tab</h2>
           <button id="launcher-close" title="close" onClick={close}>×</button>
         </header>
-        <p class="launcher-modal-sub" id="launcher-session-name">Add to session: {worktreeKey}</p>
+        <p class="launcher-modal-sub" id="launcher-session-name">Add to track: {trackLabel(worktreeKey, windows.value)}</p>
         <div id="launcher-list">
           {commands.length === 0 ? (
             <div class="launcher-empty">No commands configured. Use Commands settings to add some.</div>
