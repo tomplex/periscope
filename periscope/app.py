@@ -119,6 +119,18 @@ async def lifespan(_app: FastAPI):
             log.warning("bg_commander.write_mcp_config failed", exc_info=True)
     else:
         activity_task = None
+    # One-shot single-session consolidation: physically move every managed
+    # window into MANAGED_SESSION, then seed tracks. Self-gated (is_prod +
+    # persisted flag), so call it unconditionally. Synchronous + pre-serve so
+    # windows are consolidated before any /ws/pane connects. A failure here
+    # must never crash boot — degraded just means windows stay where they are,
+    # and the bridge is pane_id-keyed so terminals keep working.
+    from periscope import migrate_single_session
+    try:
+        migrate_single_session.run_if_needed()
+    except Exception:
+        log.warning("single-session migration failed; windows left in place",
+                    exc_info=True)
     # Synchronous (pre-serve) backfill: seed pane_projects from today's
     # session-derived grouping so the rail is byte-identical at cutover. NOT
     # _bg — the collapse follow-on deletes the session-match fallback, so this

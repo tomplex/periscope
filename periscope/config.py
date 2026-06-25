@@ -21,6 +21,13 @@ MCP_SOCKET_PATH = "/tmp/periscope-mcp.sock"
 # killed. panes.list_windows filters it out.
 INPUT_CTL_SESSION = "periscope-input"
 
+# Prefix of the historical /usage scraper's tmux session. The scraper itself
+# is gone (5bb7224 replaced it with the OAuth usage endpoint — no hidden tmux
+# sessions), so nothing matches this today, but the single-session migration
+# still refuses to move a session named like it: a defensive skip so the
+# consolidation never sweeps up a scraper session if one ever returns.
+USAGE_SESSION_PREFIX = "periscope-usage-"
+
 # The single tmux session periscope owns once tracks land. Every managed
 # pane is a window here; grouping is metadata (pane_tracks), never the session.
 MANAGED_SESSION = "periscope"
