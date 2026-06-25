@@ -5,11 +5,16 @@ These fixtures sandbox side-effecting helpers so tests don't write to
 """
 
 import os
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
 
 import pytest
+
+# Shared across the real-tmux integration tests (test_open_ops,
+# test_worktree_spawn). Imported as `from tests.conftest import needs_tmux`.
+needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")
 
 
 @pytest.fixture(autouse=True)

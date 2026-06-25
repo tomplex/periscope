@@ -1,20 +1,24 @@
 """Tests for periscope.worktree_spawn."""
 
-import shutil
-
-import pytest
-
-needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")
+from tests.conftest import needs_tmux
 
 
 @needs_tmux
 def test_layout_two_window_stamps_both_windows(tmp_git_repo, tmux_test_server):
+    from periscope import config
     from periscope.tmux import tmux
     from periscope.worktree_spawn import _layout_two_window
-    session = "open-test-both-stamp"
+    session = config.MANAGED_SESSION
     claude_pid, shell_pid = _layout_two_window(session, str(tmp_git_repo))
     assert claude_pid and shell_pid and claude_pid != shell_pid
-    for win in ("claude", "shell"):
-        out = tmux("display-message", "-t", f"{session}:{win}",
-                   "-p", "#{@periscope_id}").strip()
-        assert out, f"{win} window not stamped"
+    # Under one shared session there can be many windows named "claude"/"shell",
+    # so look up the stamped ids by window id, not by session:name (ambiguous).
+    stamped = {}
+    for row in tmux("list-windows", "-t", session, "-F",
+                    "#{window_id} #{@periscope_id}").split("\n"):
+        if not row.strip():
+            continue
+        wid, _, pid = row.partition(" ")
+        stamped[wid] = pid.strip()
+    pids = [p for p in stamped.values() if p]
+    assert claude_pid in pids and shell_pid in pids

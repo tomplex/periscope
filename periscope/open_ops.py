@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from periscope import projects, store, worktrees
+from periscope import config, projects, store, worktrees
 from periscope.gitutil import (
     detect_default_branch,
     resolve_repo,
@@ -89,11 +89,14 @@ def _session_owns_dir(name: str, pinned_dir: str) -> bool:
                for w in list_windows())
 
 
-def _claude_pid_for_session(name: str) -> str:
-    """The @periscope_id (pid_raw) of the session's claude window — matched by
-    window NAME ('claude'), since list_windows() carries no is_claude flag.
-    Falls back to the first window. '' if none."""
-    wins = [w for w in list_windows() if w["session"] == name]
+def _claude_pid_for_dir(session: str, pinned_dir: str) -> str:
+    """The @periscope_id (pid_raw) of the claude window in `session` whose cwd
+    is `pinned_dir`. Under one shared session many claude windows coexist, so
+    a session-wide "first claude" match is wrong here — filter by realpath'd
+    cwd. Falls back to the first window at `pinned_dir`. '' if none."""
+    wins = [w for w in list_windows()
+            if w["session"] == session
+            and os.path.realpath(w.get("cwd") or "") == pinned_dir]
     if not wins:
         return ""
     claude = next((w for w in wins if w["name"] == "claude"), wins[0])
@@ -153,17 +156,18 @@ def resolve_worktree_session(path: str) -> tuple[str, projects.Project] | None:
 
 
 def ensure_session(project: projects.Project, pinned_dir: str) -> tuple[str, str]:
-    """Idempotent create-or-focus. `pinned_dir` is the project's key (taken
-    explicitly — Project is a TypedDict with no self-key). Returns
-    (tmux_session, claude_pid)."""
-    name = project["tmux_session"]
-    if _session_live(name):
-        if _session_owns_dir(name, pinned_dir):
-            return name, _claude_pid_for_session(name)
-        name = _dedupe_name(name)                      # live but foreign
-        projects.update_project(pinned_dir, tmux_session=name)
-    claude_pid, _ = _layout_two_window(name, pinned_dir)
-    return name, claude_pid
+    """Idempotent create-or-focus into the single shared MANAGED_SESSION.
+    `pinned_dir` is the project's key (taken explicitly — Project is a
+    TypedDict with no self-key). Returns (tmux_session, claude_pid).
+
+    "Already open?" is answered by cwd ownership WITHIN the shared session
+    (every project's panes live there now) — not by a session named after the
+    project, which no longer exists. So there's no foreign-name dedupe here."""
+    session = config.MANAGED_SESSION
+    if _session_live(session) and _session_owns_dir(session, pinned_dir):
+        return session, _claude_pid_for_dir(session, pinned_dir)
+    claude_pid, _ = _layout_two_window(session, pinned_dir)
+    return session, claude_pid
 
 
 def _discover_repos() -> set[str]:

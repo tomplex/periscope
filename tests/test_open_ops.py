@@ -1,13 +1,11 @@
 import os
-import shutil
 import subprocess
 
 import pytest
 
-from periscope import open_ops, projects
+from periscope import config, open_ops, projects
 from periscope.tmux import _tmux_mutate
-
-needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")
+from tests.conftest import needs_tmux
 
 
 def test_fetch_pr_into_worktree_rejects_non_positive_pr(tmp_git_repo):
@@ -116,7 +114,7 @@ def test_ensure_session_spawns_when_dead(tmp_git_repo, clean_state, tmux_test_se
     repo = str(tmp_git_repo)
     proj = open_ops.ensure_project(repo, repo)
     session, claude_pid = open_ops.ensure_session(proj, repo)
-    assert session == proj["tmux_session"] and claude_pid
+    assert session == config.MANAGED_SESSION and claude_pid
     assert _tmux_mutate("has-session", "-t", session)[0] is True
 
 
@@ -125,19 +123,43 @@ def test_ensure_session_focuses_when_live_and_ours(tmp_git_repo, clean_state, tm
     repo = str(tmp_git_repo)
     proj = open_ops.ensure_project(repo, repo)
     s1, pid1 = open_ops.ensure_session(proj, repo)
-    s2, pid2 = open_ops.ensure_session(proj, repo)   # must NOT spawn a 2nd session
+    s2, pid2 = open_ops.ensure_session(proj, repo)   # must NOT spawn a 2nd window pair
     assert s1 == s2 and pid1 == pid2
 
 
 @needs_tmux
-def test_ensure_session_dedupes_foreign_name(tmp_git_repo, clean_state, tmux_test_server):
-    repo = str(tmp_git_repo)
-    proj = open_ops.ensure_project(repo, repo)
-    # Occupy the recorded name with an unrelated session in a different cwd.
-    _tmux_mutate("new-session", "-d", "-s", proj["tmux_session"], "-c", "/tmp")
-    session, claude_pid = open_ops.ensure_session(proj, repo)
-    assert session != proj["tmux_session"]      # deduped
-    assert projects.get_project(repo)["tmux_session"] == session  # row updated
+def test_ensure_session_two_repos_share_session_distinct_panes(
+    tmp_path, clean_state, tmux_test_server
+):
+    """Core name-collision regression: two DIFFERENT repos both spawn into the
+    one shared MANAGED_SESSION, yet each gets its OWN claude window — proving
+    send-keys/stamp/select target by window id, not the ambiguous "claude"
+    name (which would collapse onto the first match)."""
+    def _repo(name: str) -> str:
+        d = tmp_path / name
+        d.mkdir()
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "init", "-q"], cwd=d, check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-qm", "i"],
+                       cwd=d, env=env, check=True)
+        return os.path.realpath(d)
+
+    repo_a, repo_b = _repo("a"), _repo("b")
+    proj_a = open_ops.ensure_project(repo_a, repo_a)
+    proj_b = open_ops.ensure_project(repo_b, repo_b)
+    sess_a, pid_a = open_ops.ensure_session(proj_a, repo_a)
+    sess_b, pid_b = open_ops.ensure_session(proj_b, repo_b)
+
+    assert sess_a == sess_b == config.MANAGED_SESSION
+    assert pid_a and pid_b and pid_a != pid_b
+    from periscope.tmux import tmux
+    claude_count = sum(
+        1 for r in tmux("list-windows", "-t", config.MANAGED_SESSION,
+                        "-F", "#{window_name}").split("\n")
+        if r.strip() == "claude"
+    )
+    assert claude_count >= 2
 
 
 def test_resolve_worktree_session_non_git_returns_none(tmp_path, clean_state):
@@ -198,7 +220,8 @@ from periscope import store
 def test_open_target_path_spawns_dormant_then_focuses(tmp_git_repo, clean_state, tmux_test_server):
     repo = str(tmp_git_repo)
     r1 = open_ops.open_target(open_ops.PathTarget(path=repo))
-    assert r1.repo == repo and r1.claude_pid and r1.tmux_session
+    assert r1.repo == repo and r1.claude_pid
+    assert r1.tmux_session == config.MANAGED_SESSION
     assert r1.tmux_session in r1.ui["worktrees_by_repo"][repo]
     r2 = open_ops.open_target(open_ops.PathTarget(path=repo))   # idempotent focus
     assert r2.tmux_session == r1.tmux_session

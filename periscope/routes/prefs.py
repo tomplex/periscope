@@ -46,6 +46,14 @@ class UIPatch(BaseModel):
     repo_order: list[str] | None = None
     worktrees_by_repo: dict[str, list[str]] | None = None
     panes_by_worktree: dict[str, list[str]] | None = None
+    # Track-based rail ordering (supersedes the repo_order/worktrees_by_repo
+    # keys above; those stay for the repo_order→track-order fallback during
+    # migration). Without these declarations Pydantic silently DROPS the
+    # client's setTrackOrder/setTabsByTrack/setBranchOrderByTrack writes, so
+    # reorders never persist.
+    track_order: list[str] | None = None
+    tabs_by_track: dict[str, list[str]] | None = None
+    branch_order_by_track: dict[str, list[str]] | None = None
     rail_collapsed: dict[str, bool] | None = None
     last_selected: dict | None = None
     # Per-pane detail-mode toggle (split view): "terminal" | "transcript".
