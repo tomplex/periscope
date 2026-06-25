@@ -423,6 +423,12 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
         log.info("narrator: renamed %s %r → %r", pane_id, current_name, new_name)
         renamed_at = now
         seen_name = new_name
+    # Append-only thread log: one 'status' event when the status or goal
+    # actually changes (an unchanged regeneration writes nothing). Kept out of
+    # the live timeline by events_for; status_log_for() reads the history.
+    if result.status != (row.status if row else None) or goal != prev_goal:
+        activity.record("pane", pane_id, "status", result.status,
+                        at=now, detail=goal)
     activity.upsert_pane_status(PaneStatusRow(
         pane_id=pane_id, session_id=sid, status=result.status,
         generated_at=now, jsonl_size=size, seen_name=seen_name,

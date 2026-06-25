@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>periscope — rail member card explorations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  /* ── periscope design tokens (verbatim from static/styles.css) ───────── */
+  :root {
+    --bg-0: oklch(0.235 0.007 250);
+    --bg-1: oklch(0.282 0.008 250);
+    --bg-1-hi: oklch(0.318 0.009 250);
+    --bg-2: oklch(0.335 0.009 250);
+    --bg-3: oklch(0.395 0.010 250);
+
+    --line:        color-mix(in oklch, oklch(0.50 0.008 250) 30%, transparent);
+    --line-soft:   color-mix(in oklch, oklch(0.50 0.008 250) 16%, transparent);
+    --line-strong: color-mix(in oklch, oklch(0.60 0.008 250) 45%, transparent);
+
+    --fg-0: oklch(0.970 0.004 250);
+    --fg-1: oklch(0.850 0.006 250);
+    --fg-2: oklch(0.660 0.008 250);
+    --fg-3: oklch(0.520 0.008 250);
+    --fg-4: oklch(0.420 0.008 250);
+
+    --s-needs:    oklch(0.74 0.14 38);
+    --s-needs-bg: color-mix(in oklch, oklch(0.74 0.14 38) 16%, transparent);
+    --s-working:  oklch(0.80 0.14 92);
+    --s-working-bg: color-mix(in oklch, oklch(0.80 0.14 92) 14%, transparent);
+    --s-done:     oklch(0.76 0.17 152);
+    --s-done-bg:  color-mix(in oklch, oklch(0.76 0.17 152) 16%, transparent);
+    --s-idle:     oklch(0.65 0.01 250);
+    --s-idle-bg:  color-mix(in oklch, oklch(0.65 0.01 250) 14%, transparent);
+    --s-shell:    oklch(0.72 0.10 165);
+    --s-success:  oklch(0.74 0.13 150);
+    --s-danger:   oklch(0.70 0.16 25);
+
+    --accent: oklch(0.74 0.13 232);
+    --linear: oklch(0.70 0.13 280);
+
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+
+    --r-sm: 4px;
+    --r-md: 6px;
+    --r-lg: 10px;
+  }
+
+  * , *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg-0);
+    color: var(--fg-1);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    letter-spacing: 0.005em;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page { max-width: 1320px; margin: 0 auto; padding: 32px 28px 80px; }
+  h1 {
+    font-family: var(--sans); font-weight: 600; font-size: 20px;
+    color: var(--fg-0); letter-spacing: -0.01em; margin: 0 0 4px;
+  }
+  .sub { font-family: var(--sans); color: var(--fg-3); font-size: 13px; margin: 0 0 28px; }
+
+  .cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 26px;
+    align-items: start;
+  }
+
+  /* A rail-width column so cards read at their true size (the real rail is
+     ~300px). */
+  .col { }
+  .col h2 {
+    font-family: var(--sans); font-weight: 600; font-size: 13px;
+    color: var(--fg-0); margin: 0 0 2px; letter-spacing: 0.01em;
+  }
+  .col .note {
+    font-family: var(--sans); font-size: 12px; color: var(--fg-3);
+    margin: 0 0 14px; line-height: 1.45; min-height: 50px;
+  }
+  .rail {
+    background: var(--bg-0);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-lg);
+    padding: 10px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  /* a faint group header to anchor the cards in a worktree, like the real rail */
+  .group-head {
+    display: flex; align-items: center; gap: 7px;
+    padding: 4px 6px 6px; color: var(--fg-2); font-size: 12px;
+  }
+  .group-head .ic { color: oklch(0.72 0.13 295); }
+  .group-head b { color: var(--fg-1); font-weight: 600; }
+  .group-head .gh-meta { margin-left: auto; display: flex; gap: 6px; }
+
+  /* shared atoms ------------------------------------------------------- */
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+  .dot-working { background: var(--s-working); }
+  .dot-needs   { background: var(--s-needs); animation: pulse 1.6s ease-in-out infinite; }
+  .dot-done    { background: var(--s-done); animation: pulseDone 1.6s ease-in-out infinite; }
+  .dot-idle    { background: var(--s-idle); }
+  @keyframes pulse     { 50% { box-shadow: 0 0 0 4px var(--s-needs-bg); } }
+  @keyframes pulseDone { 50% { box-shadow: 0 0 0 4px var(--s-done-bg); } }
+
+  .ic-claude { color: oklch(0.74 0.12 38); }
+  .ic-shell  { color: var(--s-shell); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 0 5px; height: 16px;
+    border-radius: 3px; background: var(--bg-2); color: var(--fg-2);
+    font-size: 10px; white-space: nowrap;
+  }
+  .pill.pr   { color: var(--fg-1); }
+  .pill.lin  { color: var(--linear); }
+  .pill.git  { color: var(--s-needs); }
+  .pill.model{ color: var(--fg-2); }
+  .pill.ctx  { color: var(--fg-2); }
+  .ci-ok  { color: var(--s-success); }
+  .ci-bad { color: var(--s-danger); }
+  .ci-run { color: var(--s-working); }
+  .chip-cwd { color: var(--fg-3); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* =====================================================================
+     VARIATION A — "minimal lift": today's two-line row, but each pane is a
+     real card (surface + border + radius) with a touch more padding. Status
+     stays a dot. Smallest visual + code delta from what ships now.
+     ===================================================================== */
+  .a-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    border-left: 2px solid transparent;
+    padding: 8px 10px;
+    cursor: pointer;
+  }
+  .a-card:hover { background: var(--bg-1-hi); }
+  .a-card.sel { border-left-color: var(--accent); background: var(--bg-1-hi); }
+  .a-row1 { display: flex; align-items: center; gap: 8px; }
+  .a-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); }
+  .a-meta { display: flex; align-items: baseline; gap: 6px; margin-left: 24px; margin-top: 3px; }
+  .a-status { flex: 1; min-width: 0; font-size: 11px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* =====================================================================
+     VARIATION B — "accent stripe": state becomes a colored left edge (4px)
+     so you read status peripherally without hunting for the dot. Name + model
+     on the header line; narrator line below; a footer chip row pulls
+     context%/PR/CI up to glance level.
+     ===================================================================== */
+  .b-card {
+    position: relative;
+    background: var(--bg-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    padding: 9px 11px 9px 13px;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .b-card::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  }
+  .b-card.s-working::before { background: var(--s-working); }
+  .b-card.s-needs::before   { background: var(--s-needs); }
+  .b-card.s-done::before    { background: var(--s-done); }
+  .b-card.s-idle::before    { background: var(--s-idle); opacity: .5; }
+  .b-card:hover { background: var(--bg-1-hi); }
+  .b-card.sel { background: var(--bg-1-hi); box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .b-head { display: flex; align-items: center; gap: 7px; }
+  .b-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-0); font-weight: 500; }
+  .b-status { font-size: 11px; color: var(--fg-2); margin: 4px 0 0; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .b-foot { display: flex; align-items: center; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+  .b-foot .spacer { flex: 1; }
+  .b-time { font-size: 10px; color: var(--fg-4); white-space: nowrap; }
+
+  /* =====================================================================
+     VARIATION C — "three-zone": header / body / footer with clear bands. The
+     narrator line is the hero (bigger, two lines allowed), framed by a thin
+     header (name + status) and a quiet footer of metadata pills. Most "room
+     for context"; tallest card.
+     ===================================================================== */
+  .c-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    overflow: hidden;
+  }
+  .c-card:hover { background: var(--bg-1-hi); }
+  .c-card.sel { border-color: color-mix(in oklch, var(--accent) 50%, transparent); }
+  .c-head {
+    display: flex; align-items: center; gap: 7px;
+    padding: 7px 10px 6px;
+  }
+  .c-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-0); font-weight: 500; }
+  .c-body {
+    padding: 0 10px 8px;
+    font-size: 12px; color: var(--fg-2); line-height: 1.45;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .c-body.empty { color: var(--fg-4); font-style: italic; }
+  .c-foot {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; border-top: 1px solid var(--line-soft);
+    background: color-mix(in oklch, var(--bg-0) 40%, transparent);
+  }
+  .c-foot .spacer { flex: 1; }
+
+  /* =====================================================================
+     VARIATION D — "dense inline": stays compact (single tall-ish line) but
+     trades the second text line for an inline chip stream. Status dot leads;
+     name; then a tight run of pills. Narrator line tucked as a third micro-row
+     only when present. Closest to the current footprint while adding chips.
+     ===================================================================== */
+  .d-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    border-left: 2px solid transparent;
+    padding: 7px 9px;
+    cursor: pointer;
+  }
+  .d-card:hover { background: var(--bg-1-hi); }
+  .d-card.sel { border-left-color: var(--accent); background: var(--bg-1-hi); }
+  .d-row { display: flex; align-items: center; gap: 7px; }
+  .d-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); }
+  .d-chips { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+  .d-status { font-size: 10px; color: var(--fg-3); margin: 4px 0 0 23px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .legend { font-family: var(--sans); font-size: 12px; color: var(--fg-3); margin-top: 40px; border-top: 1px solid var(--line-soft); padding-top: 16px; }
+  .legend code { font-family: var(--mono); color: var(--fg-1); background: var(--bg-1); padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Rail member cards — explorations</h1>
+  <p class="sub">Same four panes in each column, same realistic states. Only the card treatment changes. Real periscope tokens, type, and status colors. Rail width ≈ 300px.</p>
+
+  <div class="cols">
+
+    <!-- ============ VARIATION A ============ -->
+    <div class="col">
+      <h2>A · Minimal lift</h2>
+      <p class="note">Today's two-line row, promoted to a bordered card with a hair more padding. Status stays a dot. Smallest change — basically a skin.</p>
+      <div class="rail">
+        <div class="group-head"><span class="ic">⎇</span> <b>auth-refactor</b> <span class="gh-meta"><span class="pill pr">#1242 <span class="ci-ok">✓</span></span></span></div>
+
+        <div class="a-card sel">
+          <div class="a-row1">
+            <span class="ic-claude">✻</span>
+            <span class="a-name">claude</span>
+            <span class="dot dot-working"></span>
+          </div>
+          <div class="a-meta"><span class="a-status">Refactoring the token-exchange handler</span></div>
+        </div>
+
+        <div class="a-card">
+          <div class="a-row1">
+            <span class="ic-claude">✻</span>
+            <span class="a-name">test-runner</span>
+            <span class="dot dot-needs"></span>
+          </div>
+          <div class="a-meta"><span class="a-status">Waiting: overwrite migrations/0042?</span></div>
+        </div>
+
+        <div class="a-card">
+          <div class="a-row1">
+            <span class="ic-shell">$</span>
+            <span class="a-name">shell</span>
+            <span class="chip-cwd">⧉ packages/api</span>
+            <span class="dot dot-idle"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ VARIATION B ============ -->
+    <div class="col">
+      <h2>B · Accent stripe</h2>
+      <p class="note">State reads as a colored left edge — peripheral, no dot-hunting. Model badge on the header; footer pulls context% + PR/CI up to glance level.</p>
+      <div class="rail">
+        <div class="group-head"><span class="ic">⎇</span> <b>auth-refactor</b></div>
+
+        <div class="b-card s-working sel">
+          <div class="b-head">
+            <span class="ic-claude">✻</span>
+            <span class="b-name">claude</span>
+            <span class="pill model">Opus 4.7</span>
+          </div>
+          <p class="b-status">Refactoring the token-exchange handler</p>
+          <div class="b-foot">
+            <span class="pill pr">#1242 <span class="ci-ok">✓</span></span>
+            <span class="pill lin">FAR-318</span>
+            <span class="spacer"></span>
+            <span class="pill ctx">24%</span>
+            <span class="b-time">2m</span>
+          </div>
+        </div>
+
+        <div class="b-card s-needs">
+          <div class="b-head">
+            <span class="ic-claude">✻</span>
+            <span class="b-name">test-runner</span>
+            <span class="pill model">Sonnet</span>
+          </div>
+          <p class="b-status">Waiting: overwrite migrations/0042?</p>
+          <div class="b-foot">
+            <span class="pill git">3 dirty</span>
+            <span class="spacer"></span>
+            <span class="pill ctx">61%</span>
+            <span class="b-time">now</span>
+          </div>
+        </div>
+
+        <div class="b-card s-idle">
+          <div class="b-head">
+            <span class="ic-shell">$</span>
+            <span class="b-name">shell</span>
+          </div>
+          <div class="b-foot">
+            <span class="chip-cwd">⧉ packages/api</span>
+            <span class="spacer"></span>
+            <span class="b-time">18m</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ VARIATION C ============ -->
+    <div class="col">
+      <h2>C · Three-zone</h2>
+      <p class="note">Header / body / footer bands. The narrator line is the hero — bigger, up to two lines. Most context room; tallest card.</p>
+      <div class="rail">
+        <div class="group-head"><span class="ic">⎇</span> <b>auth-refactor</b></div>
+
+        <div class="c-card sel">
+          <div class="c-head">
+            <span class="ic-claude">✻</span>
+            <span class="c-name">claude</span>
+            <span class="dot dot-working"></span>
+          </div>
+          <div class="c-body">Refactoring the token-exchange handler to drop the legacy cookie path</div>
+          <div class="c-foot">
+            <span class="pill model">Opus 4.7</span>
+            <span class="pill ctx">24%</span>
+            <span class="spacer"></span>
+            <span class="pill pr">#1242 <span class="ci-ok">✓</span></span>
+          </div>
+        </div>
+
+        <div class="c-card">
+          <div class="c-head">
+            <span class="ic-claude">✻</span>
+            <span class="c-name">test-runner</span>
+            <span class="dot dot-needs"></span>
+          </div>
+          <div class="c-body">Waiting on you: overwrite migrations/0042_add_sessions.py?</div>
+          <div class="c-foot">
+            <span class="pill model">Sonnet</span>
+            <span class="pill ctx">61%</span>
+            <span class="spacer"></span>
+            <span class="pill git">3 dirty</span>
+          </div>
+        </div>
+
+        <div class="c-card">
+          <div class="c-head">
+            <span class="ic-shell">$</span>
+            <span class="c-name">shell</span>
+            <span class="dot dot-idle"></span>
+          </div>
+          <div class="c-body empty">idle · packages/api</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ VARIATION D ============ -->
+    <div class="col">
+      <h2>D · Dense inline</h2>
+      <p class="note">Stays compact. Status dot leads, name, then a tight chip stream right-aligned. Narrator drops to a micro-line only when present.</p>
+      <div class="rail">
+        <div class="group-head"><span class="ic">⎇</span> <b>auth-refactor</b></div>
+
+        <div class="d-card sel">
+          <div class="d-row">
+            <span class="dot dot-working"></span>
+            <span class="ic-claude">✻</span>
+            <span class="d-name">claude</span>
+            <span class="d-chips">
+              <span class="pill ctx">24%</span>
+              <span class="pill pr">#1242 <span class="ci-ok">✓</span></span>
+            </span>
+          </div>
+          <div class="d-status">Refactoring the token-exchange handler</div>
+        </div>
+
+        <div class="d-card">
+          <div class="d-row">
+            <span class="dot dot-needs"></span>
+            <span class="ic-claude">✻</span>
+            <span class="d-name">test-runner</span>
+            <span class="d-chips">
+              <span class="pill git">3</span>
+              <span class="pill ctx">61%</span>
+            </span>
+          </div>
+          <div class="d-status">Waiting: overwrite migrations/0042?</div>
+        </div>
+
+        <div class="d-card">
+          <div class="d-row">
+            <span class="dot dot-idle"></span>
+            <span class="ic-shell">$</span>
+            <span class="d-name">shell</span>
+            <span class="d-chips">
+              <span class="chip-cwd">⧉ packages/api</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="legend">
+    Context atoms available per pane today: <code>state</code> (dot), <code>status_rail</code> (narrator line),
+    <code>cwd</code> chip, <code>burn_hot</code> 🔥, <code>model</code>, <code>context_pct</code>, and worktree-level
+    <code>pr</code>/<code>ci</code>/<code>linked_linear</code>/<code>git</code>. The cards above surface
+    <code>model</code> and <code>context_pct</code>, which the current row drops.
+  </p>
+</div>
+</body>
+</html>

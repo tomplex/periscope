@@ -1,0 +1,198 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>periscope — holistic rail</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+:root{
+ --bg-0:oklch(0.235 0.007 250);--bg-1:oklch(0.282 0.008 250);--bg-1-hi:oklch(0.318 0.009 250);
+ --bg-2:oklch(0.335 0.009 250);--bg-3:oklch(0.395 0.010 250);
+ --line-soft:color-mix(in oklch,oklch(0.50 0.008 250) 16%,transparent);
+ --line-strong:color-mix(in oklch,oklch(0.60 0.008 250) 45%,transparent);
+ --fg-0:oklch(0.970 0.004 250);--fg-1:oklch(0.850 0.006 250);--fg-2:oklch(0.660 0.008 250);
+ --fg-3:oklch(0.520 0.008 250);--fg-4:oklch(0.420 0.008 250);
+ --s-needs:oklch(0.74 0.14 38);--s-needs-bg:color-mix(in oklch,oklch(0.74 0.14 38) 16%,transparent);
+ --s-working:oklch(0.80 0.14 92);--s-done:oklch(0.76 0.17 152);--s-done-bg:color-mix(in oklch,oklch(0.76 0.17 152) 16%,transparent);
+ --s-idle:oklch(0.65 0.01 250);--s-shell:oklch(0.72 0.10 165);--s-success:oklch(0.74 0.13 150);--s-danger:oklch(0.70 0.16 25);
+ --accent:oklch(0.74 0.13 232);--repo:oklch(0.74 0.13 232);--workspace:oklch(0.72 0.12 330);--linear:oklch(0.70 0.13 280);
+ --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;--sans:'Inter',system-ui,sans-serif;
+ --r-sm:4px;--r-md:6px;--r-lg:10px;}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg-0);color:var(--fg-1);font-family:var(--mono);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{display:flex;gap:34px;align-items:flex-start;padding:26px 26px 70px;flex-wrap:wrap}
+.col{width:330px}
+.col>h2{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--fg-0);margin:0 0 2px}
+.col>.cap{font-family:var(--sans);font-size:12px;color:var(--fg-3);margin:0 0 14px;min-height:34px;line-height:1.45}
+.rail{background:var(--bg-0);border:1px solid var(--line-soft);border-radius:12px;padding:8px 8px 14px}
+
+/* shared card atoms */
+.group{background:var(--bg-1);border:1px solid var(--line-soft);border-radius:var(--r-lg);margin:5px 0 7px;padding:5px}
+.group.ws{border-color:color-mix(in oklch,var(--workspace) 38%,transparent)}
+.ghead{display:flex;align-items:center;gap:7px;padding:3px 5px 6px}
+.ghead .chev{color:var(--fg-4);font-size:9px;width:9px}
+.ghead .ic{width:15px;text-align:center}
+.ghead .ic-wt{color:oklch(0.72 0.13 295)}
+.ghead .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-0);font-weight:600}
+.ghead .gdot{width:7px;height:7px;border-radius:50%}
+.gbody{display:flex;flex-direction:column;gap:2px;padding-top:2px}
+.collapsed .gbody{display:none}
+.gcount{font-size:10px;color:var(--fg-4);background:var(--bg-2);border-radius:3px;padding:0 5px}
+
+.pane{position:relative;border-radius:var(--r-sm);padding:5px 8px 5px 12px;cursor:pointer}
+.pane::before{content:"";position:absolute;left:3px;top:6px;bottom:6px;width:2px;border-radius:2px}
+.pane.working::before{background:var(--s-working)}.pane.needs::before{background:var(--s-needs)}
+.pane.done::before{background:var(--s-done)}.pane.idle::before{background:var(--s-idle);opacity:.5}.pane.shell::before{background:var(--s-shell);opacity:.5}
+.pane:hover{background:var(--bg-1-hi)}
+.ptop{display:flex;align-items:center;gap:7px;min-width:0}
+.ic-claude{color:oklch(0.74 0.12 38)}.ic-shell{color:var(--s-shell)}
+.pnm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-1)}
+.mini{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.mini a.pr{font-size:10px;color:var(--accent);text-decoration:none;border-bottom:1px dotted color-mix(in oklch,var(--accent) 55%,transparent)}
+.mini a.pr:hover{color:var(--fg-0);border-bottom-color:var(--fg-0)}
+.mini .ctx{font-size:10px;color:var(--fg-4)}.mini .ctx.warn{color:var(--s-working)}.mini .ctx.hot{color:var(--s-danger)}
+.pstat{margin-left:21px;font-size:10px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pane.expanded{background:var(--bg-2);border-radius:var(--r-md);margin:3px 0;padding-top:7px;padding-bottom:7px;box-shadow:0 1px 6px oklch(0 0 0/.25)}
+.pane.expanded.sel{background:var(--bg-1-hi);box-shadow:0 1px 8px oklch(0 0 0/.3),inset 0 0 0 1px color-mix(in oklch,var(--accent) 45%,transparent)}
+.model{font-size:10px;color:var(--fg-3)}
+.foot{display:flex;align-items:center;gap:5px;margin:7px 0 1px 21px;flex-wrap:wrap}
+.foot .sp{flex:1}.foot .t{font-size:10px;color:var(--fg-4)}
+.pill{display:inline-flex;align-items:center;gap:3px;padding:0 5px;height:16px;border-radius:3px;background:var(--bg-1);color:var(--fg-2);font-size:10px;text-decoration:none}
+.pill.pr{color:var(--fg-1)}.pill.lin{color:var(--linear)}.pill.ctx{color:var(--fg-3)} .pill.ctx.hot{color:var(--s-danger)}
+.newtab{display:flex;align-items:center;gap:7px;padding:4px 8px 4px 12px;color:var(--fg-4);font-size:12px}
+.review{display:flex;align-items:center;gap:7px;padding:4px 8px 4px 12px;color:var(--fg-3);font-size:12px}
+.review em{font-style:italic;opacity:.6;font-size:11px}
+
+/* ===== Direction A: quiet section labels ===== */
+.seclabel{display:flex;align-items:center;gap:7px;padding:14px 6px 5px;margin-top:2px}
+.seclabel .ic{width:15px;text-align:center}
+.seclabel .txt{font-family:var(--sans);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-3);font-weight:600}
+.seclabel.ws .txt{color:var(--workspace)}
+.seclabel .rule{flex:1;height:1px;background:var(--line-soft)}
+.seclabel .rdot{width:6px;height:6px;border-radius:50%}
+.ic-repo{color:var(--repo)}.ic-ws{color:var(--workspace)}.ic-dev{color:var(--fg-3)}
+
+/* collapsed worktree as a thin card */
+.group.collapsed{padding:5px}
+.group.collapsed .ghead{padding-bottom:3px}
+
+/* ===== Direction B: repo spine ===== */
+.repoblock{margin:8px 0}
+.repohead{display:flex;align-items:center;gap:7px;padding:4px 6px 5px 10px;position:relative}
+.repohead .ic{width:15px;text-align:center}
+.repohead .nm{font-family:var(--sans);font-weight:600;font-size:13px;color:var(--fg-1)}
+.repohead .slug{color:var(--fg-4);font-size:11px;font-weight:400}
+.repohead .rdot{margin-left:auto;width:7px;height:7px;border-radius:50%}
+.spine{padding-left:12px;border-left:2px solid color-mix(in oklch,var(--repo) 45%,transparent);margin-left:8px}
+.spine.ws-spine{border-left-color:color-mix(in oklch,var(--workspace) 50%,transparent)}
+.spine .group{margin-left:0}
+
+.legend{width:330px;font-family:var(--sans);font-size:12px;color:var(--fg-2);line-height:1.5}
+.legend h2{font-size:13px;color:var(--fg-0);margin:0 0 10px}
+.iconrow{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line-soft)}
+.iconrow .big{font-size:18px;width:30px;text-align:center;font-family:var(--mono)}
+.iconrow .lab{flex:1}.iconrow .lab b{color:var(--fg-0);font-weight:600}
+.iconrow .alt{color:var(--fg-3);font-size:18px;font-family:var(--mono)}
+.note{font-family:var(--sans);font-size:12px;color:var(--fg-3);margin-top:14px;line-height:1.5}
+.dot-g{background:var(--s-working)}.dot-d{background:var(--s-done)}.dot-i{background:var(--s-idle)}
+</style></head>
+<body><div class="wrap">
+
+<!-- ───────── Direction A ───────── -->
+<div class="col">
+ <h2>A · Quiet section labels</h2>
+ <p class="cap">Repo/workspace recede to uppercase category labels with a hairline. Cards do the visual work. Collapsed worktrees become thin cards. Single-eponymous-worktree repos flatten to one card.</p>
+ <div class="rail">
+
+  <!-- workspace -->
+  <div class="seclabel ws"><span class="ic ic-ws">⧉</span><span class="txt">attribute-config</span><span class="rule"></span></div>
+  <div class="group ws"><div class="gbody">
+    <div class="pane needs expanded"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">config-migration-skill</span><span class="model">Opus 4.8</span></div>
+      <div class="pstat">waiting: overwrite migrations/0042?</div>
+      <div class="foot"><a class="pill pr">#7408</a><a class="pill lin">FDY-2878</a><span class="sp"></span><span class="pill ctx">50%</span><span class="t">2m</span></div></div>
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">attr-config-migration</span><span class="mini"><a class="pr">#7491</a><span class="ctx">17%</span></span></div><div class="pstat">designing consumer library</div></div>
+    <div class="newtab"><span>+</span><span>New tab</span></div>
+  </div></div>
+
+  <!-- repo fdy: multi-worktree -->
+  <div class="seclabel"><span class="ic ic-repo">◆</span><span class="txt">fdy</span><span class="rule"></span><span class="rdot dot-g"></span></div>
+  <div class="group"><div class="ghead"><span class="chev">▾</span><span class="ic ic-wt">⎇</span><span class="nm">attribute-config-refactor</span><span class="gdot dot-i"></span></div><div class="gbody">
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">anthology-type-conversion</span><span class="mini"><a class="pr">#7481</a><span class="ctx hot">95%</span></span></div><div class="pstat">fixing API type mapping</div></div>
+    <div class="pane shell"><div class="ptop"><span class="ic-shell">$</span><span class="pnm">shell</span></div></div>
+    <div class="newtab"><span>+</span><span>New tab</span></div>
+  </div></div>
+  <!-- collapsed worktree = thin card -->
+  <div class="group collapsed"><div class="ghead"><span class="chev">▸</span><span class="ic ic-wt">⎇</span><span class="nm">ci-python-rewrite</span><span class="gcount">3</span><span class="gdot dot-d"></span></div></div>
+  <div class="group collapsed"><div class="ghead"><span class="chev">▸</span><span class="ic ic-wt">⎇</span><span class="nm">everyone-dataset-refactor</span><span class="gcount">2</span><span class="gdot dot-i"></span></div></div>
+
+  <!-- repo periscope: single eponymous worktree → FLATTENED (no double header) -->
+  <div class="seclabel"><span class="ic ic-repo">◆</span><span class="txt">periscope</span><span class="rule"></span><span class="rdot dot-g"></span></div>
+  <div class="group"><div class="gbody">
+    <div class="pane working expanded sel"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">rail-member-cards</span><span class="model">Opus 4.8</span></div>
+      <div class="pstat">designing card layouts</div>
+      <div class="foot"><span class="sp"></span><span class="pill ctx">9%</span><span class="t">now</span></div></div>
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">omnibox-pin-create</span><span class="mini"><span class="ctx">46%</span></span></div><div class="pstat">fixing tab drag persistence</div></div>
+    <div class="pane shell"><div class="ptop"><span class="ic-shell">$</span><span class="pnm">zsh</span></div></div>
+    <div class="newtab"><span>+</span><span>New tab</span></div>
+  </div></div>
+
+ </div>
+</div>
+
+<!-- ───────── Direction B ───────── -->
+<div class="col">
+ <h2>B · Repo spine</h2>
+ <p class="cap">Repo stays a header but its worktree cards tuck under a colored left spine that brackets them as one repo. Stronger “these belong together” read; workspace gets a magenta spine.</p>
+ <div class="rail">
+
+  <!-- workspace -->
+  <div class="repoblock">
+   <div class="repohead"><span class="ic ic-ws">⧉</span><span class="nm">attribute-config</span><span class="slug">workspace</span><span class="rdot dot-i"></span></div>
+   <div class="spine ws-spine">
+    <div class="group ws"><div class="gbody">
+      <div class="pane needs expanded"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">config-migration-skill</span><span class="model">Opus 4.8</span></div>
+        <div class="pstat">waiting: overwrite migrations/0042?</div>
+        <div class="foot"><a class="pill pr">#7408</a><a class="pill lin">FDY-2878</a><span class="sp"></span><span class="pill ctx">50%</span><span class="t">2m</span></div></div>
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">attr-config-migration</span><span class="mini"><a class="pr">#7491</a><span class="ctx">17%</span></span></div><div class="pstat">designing consumer library</div></div>
+    </div></div>
+   </div>
+  </div>
+
+  <!-- repo fdy -->
+  <div class="repoblock">
+   <div class="repohead"><span class="ic ic-repo">◆</span><span class="nm">fdy</span><span class="rdot dot-g"></span></div>
+   <div class="spine">
+    <div class="group"><div class="ghead"><span class="chev">▾</span><span class="ic ic-wt">⎇</span><span class="nm">attribute-config-refactor</span><span class="gdot dot-i"></span></div><div class="gbody">
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">anthology-type-conversion</span><span class="mini"><a class="pr">#7481</a><span class="ctx hot">95%</span></span></div><div class="pstat">fixing API type mapping</div></div>
+      <div class="pane shell"><div class="ptop"><span class="ic-shell">$</span><span class="pnm">shell</span></div></div>
+    </div></div>
+    <div class="group collapsed"><div class="ghead"><span class="chev">▸</span><span class="ic ic-wt">⎇</span><span class="nm">ci-python-rewrite</span><span class="gcount">3</span><span class="gdot dot-d"></span></div></div>
+   </div>
+  </div>
+
+  <!-- repo periscope flattened: single worktree, header carries the panes -->
+  <div class="repoblock">
+   <div class="repohead"><span class="ic ic-repo">◆</span><span class="nm">periscope</span><span class="rdot dot-g"></span></div>
+   <div class="spine">
+    <div class="group"><div class="gbody">
+      <div class="pane working expanded sel"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">rail-member-cards</span><span class="model">Opus 4.8</span></div>
+        <div class="pstat">designing card layouts</div>
+        <div class="foot"><span class="sp"></span><span class="pill ctx">9%</span><span class="t">now</span></div></div>
+      <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">omnibox-pin-create</span><span class="mini"><span class="ctx">46%</span></span></div><div class="pstat">fixing tab drag persistence</div></div>
+    </div></div>
+   </div>
+  </div>
+
+ </div>
+</div>
+
+<!-- ───────── Iconography ───────── -->
+<div class="legend">
+ <h2>Iconography</h2>
+ <div class="iconrow"><span class="big ic-repo">◆</span><span class="lab"><b>Project / repo</b><br>solid diamond — a concrete codebase</span><span class="alt" title="alternatives">⬢ ▣</span></div>
+ <div class="iconrow"><span class="big ic-ws">⧉</span><span class="lab"><b>Workspace</b><br>stacked planes — a hand-curated set pulled from <i>across</i> repos</span><span class="alt">✦ ◳ ⊞</span></div>
+ <div class="iconrow"><span class="big ic-wt">⎇</span><span class="lab"><b>Worktree / session</b><br>branch glyph — keep, it’s exactly right</span><span class="alt">⑂ ⌥</span></div>
+ <div class="iconrow"><span class="big ic-dev">◇</span><span class="lab"><b>dev (unmanaged)</b><br>hollow diamond — the catch-all scratch group</span><span class="alt">⌂ ~</span></div>
+ <p class="note"><b>Why ⧉ for workspace:</b> a repo is one place; a workspace is layers gathered from many places. The stacked-planes glyph + magenta reads “collection,” distinct from the repo diamond. Big alternatives shown on the right if you'd rather.</p>
+ <p class="note"><b>Both directions also fix:</b> the floating repo rows (now labels/headers tied to their cards), collapsed worktrees (now consistent thin cards, not bare rows), and the periscope→periscope double header (flattened to one card when a repo has a single same-named worktree). PR# in compact rows becomes a dotted-underline link.</p>
+</div>
+
+</div></body></html>

@@ -1,0 +1,139 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>periscope — holistic rail A (refined)</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+:root{
+ --bg-0:oklch(0.235 0.007 250);--bg-1:oklch(0.282 0.008 250);--bg-1-hi:oklch(0.318 0.009 250);
+ --bg-2:oklch(0.335 0.009 250);--bg-3:oklch(0.395 0.010 250);
+ --line-soft:color-mix(in oklch,oklch(0.50 0.008 250) 16%,transparent);
+ --fg-0:oklch(0.970 0.004 250);--fg-1:oklch(0.850 0.006 250);--fg-2:oklch(0.660 0.008 250);
+ --fg-3:oklch(0.520 0.008 250);--fg-4:oklch(0.420 0.008 250);
+ --s-needs:oklch(0.74 0.14 38);--s-working:oklch(0.80 0.14 92);--s-done:oklch(0.76 0.17 152);
+ --s-idle:oklch(0.65 0.01 250);--s-shell:oklch(0.72 0.10 165);--s-success:oklch(0.74 0.13 150);--s-danger:oklch(0.70 0.16 25);
+ --accent:oklch(0.74 0.13 232);--repo:oklch(0.74 0.13 232);--workspace:oklch(0.72 0.12 330);--linear:oklch(0.70 0.13 280);
+ --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;--sans:'Inter',system-ui,sans-serif;
+ --r-sm:4px;--r-md:6px;--r-lg:10px;}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg-0);color:var(--fg-1);font-family:var(--mono);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{display:flex;gap:40px;align-items:flex-start;padding:26px}
+.rail{width:340px;background:var(--bg-0);border:1px solid var(--line-soft);border-radius:12px;padding:8px 8px 14px}
+
+/* quiet section label */
+.seclabel{display:flex;align-items:center;gap:7px;padding:14px 6px 5px}
+.seclabel .ic{width:15px;text-align:center}
+.seclabel .txt{font-family:var(--sans);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-3);font-weight:600;white-space:nowrap}
+.seclabel.ws .txt{color:var(--workspace)}
+.seclabel .rule{flex:1;height:1px;background:var(--line-soft)}
+.seclabel .rdot{width:6px;height:6px;border-radius:50%}
+.ic-repo{color:var(--repo)}.ic-ws{color:var(--workspace)}.ic-dev{color:var(--fg-3)}
+
+.group{background:var(--bg-1);border:1px solid var(--line-soft);border-radius:var(--r-lg);margin:5px 0 7px;padding:5px}
+.group.ws{border-color:color-mix(in oklch,var(--workspace) 38%,transparent)}
+.ghead{display:flex;align-items:center;gap:7px;padding:3px 5px 6px}
+.ghead .chev{color:var(--fg-4);font-size:9px;width:9px}
+.ghead .ic-wt{color:oklch(0.72 0.13 295);width:15px;text-align:center}
+.ghead .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-0);font-weight:600}
+.ghead .gdot{width:7px;height:7px;border-radius:50%}
+.gcount{font-size:10px;color:var(--fg-4);background:var(--bg-2);border-radius:3px;padding:0 5px}
+.gbody{display:flex;flex-direction:column;gap:2px;padding-top:2px}
+.collapsed .ghead{padding-bottom:3px}
+
+.pane{position:relative;border-radius:var(--r-sm);padding:5px 8px 5px 12px;cursor:pointer}
+.pane::before{content:"";position:absolute;left:3px;top:6px;bottom:6px;width:2px;border-radius:2px}
+.pane.working::before{background:var(--s-working)}.pane.needs::before{background:var(--s-needs)}
+.pane.done::before{background:var(--s-done)}.pane.idle::before{background:var(--s-idle);opacity:.5}.pane.shell::before{background:var(--s-shell);opacity:.5}
+.pane:hover{background:var(--bg-1-hi)}
+.ptop{display:flex;align-items:center;gap:7px;min-width:0}
+.ic-claude{color:oklch(0.74 0.12 38)}.ic-shell{color:var(--s-shell)}
+.pnm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-1)}
+.cluster{display:flex;align-items:center;gap:5px;flex:0 0 auto}
+.pstat{margin-left:21px;margin-top:1px;font-size:10px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pane.expanded{background:var(--bg-2);border-radius:var(--r-md);margin:3px 0;padding-top:7px;padding-bottom:7px;box-shadow:0 1px 6px oklch(0 0 0/.25)}
+.pane.expanded.sel{background:var(--bg-1-hi);box-shadow:0 1px 8px oklch(0 0 0/.3),inset 0 0 0 1px color-mix(in oklch,var(--accent) 45%,transparent)}
+.model{font-size:10px;color:var(--fg-3);flex:0 0 auto}
+.foot{display:flex;align-items:center;gap:5px;margin:7px 0 1px 21px;flex-wrap:wrap}
+.foot .sp{flex:1}.foot .t{font-size:10px;color:var(--fg-4)}
+
+/* link chips — same on compact line-1 and expanded footer */
+.chip{display:inline-flex;align-items:center;gap:3px;padding:0 5px;height:15px;border-radius:3px;background:var(--bg-2);color:var(--fg-2);font-size:10px;text-decoration:none;white-space:nowrap}
+.group .pane .chip{background:var(--bg-2)}
+.pane.expanded .chip{background:var(--bg-1)}
+.chip.pr{color:var(--fg-1)}.chip.pr:hover{background:var(--bg-3);color:var(--fg-0)}
+.chip.lin{color:var(--linear)}.chip.lin:hover{background:var(--bg-3)}
+.chip.git{color:var(--s-needs)}
+.ci-ok{color:var(--s-success)}
+.ctx{font-size:10px;color:var(--fg-4)}.ctx.warn{color:var(--s-working)}.ctx.hot{color:var(--s-danger)}
+.chip.ctxp{color:var(--fg-3)}.chip.ctxp.hot{color:var(--s-danger)}
+.newtab{display:flex;align-items:center;gap:7px;padding:4px 8px 4px 12px;color:var(--fg-4);font-size:12px}
+.dot-g{background:var(--s-working)}.dot-d{background:var(--s-done)}.dot-i{background:var(--s-idle)}
+
+.notes{width:330px;font-family:var(--sans);font-size:13px;color:var(--fg-2);line-height:1.55}
+.notes h1{font-size:17px;color:var(--fg-0);margin:2px 0 12px;font-weight:600}
+.notes h2{font-size:13px;color:var(--fg-1);margin:18px 0 5px;font-weight:600}
+.notes p{margin:0 0 9px}
+.notes code{font-family:var(--mono);color:var(--fg-1);background:var(--bg-1);padding:1px 5px;border-radius:3px;font-size:12px}
+</style></head>
+<body><div class="wrap">
+
+<div class="rail">
+
+  <!-- WORKSPACE -->
+  <div class="seclabel ws"><span class="ic ic-ws">⧉</span><span class="txt">attribute-config</span><span class="rule"></span><span class="rdot dot-i"></span></div>
+  <div class="group ws"><div class="gbody">
+    <div class="pane needs expanded"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">config-migration-skill</span><span class="model">Opus 4.8</span></div>
+      <div class="pstat">waiting: overwrite migrations/0042?</div>
+      <div class="foot"><a class="chip pr">#7408</a><a class="chip lin">FDY-2878</a><span class="sp"></span><span class="chip ctxp">50%</span><span class="t">2m</span></div></div>
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">attr-config-migration</span><span class="cluster"><a class="chip pr">#7491</a><a class="chip lin">FDY-2637</a><span class="ctx">17%</span></span></div><div class="pstat">designing consumer library</div></div>
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">tc-collision-demotions</span><span class="cluster"><a class="chip pr">#7481</a><span class="ctx">30%</span></span></div><div class="pstat">finalizing PR review</div></div>
+    <div class="newtab"><span>+</span><span>New tab</span></div>
+  </div></div>
+
+  <!-- REPO fdy -->
+  <div class="seclabel"><span class="ic ic-repo">◆</span><span class="txt">fdy</span><span class="rule"></span><span class="rdot dot-g"></span></div>
+  <div class="group"><div class="ghead"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="nm">attribute-config-refactor</span><span class="gdot dot-i"></span></div><div class="gbody">
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">anthology-type-conversion</span><span class="cluster"><a class="chip pr">#7481</a><span class="ctx hot">95%</span></span></div><div class="pstat">fixing API type mapping</div></div>
+    <div class="pane shell"><div class="ptop"><span class="ic-shell">$</span><span class="pnm">shell</span></div></div>
+    <div class="newtab"><span>+</span><span>New tab</span></div>
+  </div></div>
+  <div class="group collapsed"><div class="ghead"><span class="chev">▸</span><span class="ic-wt">⎇</span><span class="nm">ci-python-rewrite</span><span class="gcount">3</span><span class="gdot dot-d"></span></div></div>
+  <div class="group collapsed"><div class="ghead"><span class="chev">▸</span><span class="ic-wt">⎇</span><span class="nm">everyone-dataset-refactor</span><span class="gcount">2</span><span class="gdot dot-i"></span></div></div>
+
+  <!-- REPO periscope: PRIMARY SESSION (general tabs, no ⎇ sub-header) -->
+  <div class="seclabel"><span class="ic ic-repo">◆</span><span class="txt">periscope</span><span class="rule"></span><span class="rdot dot-g"></span></div>
+  <div class="group"><div class="gbody">
+    <div class="pane working expanded sel"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">rail-member-cards</span><span class="model">Opus 4.8</span></div>
+      <div class="pstat">designing card layouts</div>
+      <div class="foot"><span class="sp"></span><span class="chip ctxp">9%</span><span class="t">now</span></div></div>
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">omnibox-pin-create</span><span class="cluster"><span class="ctx">46%</span></span></div><div class="pstat">fixing tab drag persistence</div></div>
+    <div class="pane done"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">omnibox-local-agent</span><span class="cluster"><span class="ctx">14%</span></span></div><div class="pstat">local code instance option</div></div>
+    <div class="pane shell"><div class="ptop"><span class="ic-shell">$</span><span class="pnm">zsh</span></div></div>
+    <div class="newtab"><span>+</span><span>New tab</span></div>
+  </div></div>
+
+  <!-- DEV -->
+  <div class="seclabel"><span class="ic ic-dev">◇</span><span class="txt">dev</span><span class="rule"></span><span class="rdot dot-i"></span></div>
+  <div class="group"><div class="gbody">
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">census-config</span><span class="cluster"><a class="chip pr">#7481</a><a class="chip lin">FDY-2641</a><span class="ctx">10%</span></span></div><div class="pstat">shipping transcribed config</div></div>
+    <div class="pane idle"><div class="ptop"><span class="ic-claude">✻</span><span class="pnm">user-places-cleanup</span><span class="cluster"><a class="chip lin">FDY-2795</a><span class="ctx">18%</span></span></div><div class="pstat">tracing resource deps</div></div>
+    <div class="pane shell"><div class="ptop"><span class="ic-shell">$</span><span class="pnm">psql</span></div></div>
+    <div class="newtab"><span>+</span><span>New tab</span></div>
+  </div></div>
+
+</div>
+
+<div class="notes">
+  <h1>Direction A — refined</h1>
+  <h2>Link chips on every card</h2>
+  <p>PR <code>#</code> and Linear chips are clickable on <i>all</i> cards — compact rows show them on line 1 (right of the name), expanded cards in the footer. Same chip, same hover, just relocated as the card grows. Context% stays a quiet number (not a link).</p>
+  <h2>Repo = quiet label</h2>
+  <p>Repos/workspaces are uppercase hairline labels, not rows — they organize without competing with the cards.</p>
+  <h2>Primary session, not a worktree</h2>
+  <p>A repo's same-name session is its <b>general-purpose tabs</b> (working on the repo directly, no dedicated worktree). It renders straight under the repo label with no <code>⎇</code> header — see <b>periscope</b>. Real branch worktrees (<b>attribute-config-refactor</b>, <b>ci-python-rewrite</b>) keep the <code>⎇</code> card. So <code>⎇</code> now reliably means "dedicated worktree."</p>
+  <h2>Consistent collapse</h2>
+  <p>Collapsed worktrees are thin cards (title bar + count + rolled-up dot), not bare floating rows.</p>
+  <h2>Workspace = <code>⧉</code></h2>
+  <p>Stacked planes in magenta — a curated set gathered across repos, distinct from the single-place <code>◆</code> repo.</p>
+</div>
+
+</div></body></html>

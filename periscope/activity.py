@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   scope_kind  TEXT NOT NULL,         -- 'pane' | 'branch'
   scope_key   TEXT NOT NULL,         -- pane_id (%N)  |  repo_path\\x1fbranch
-  event_kind  TEXT NOT NULL,         -- 'alert' | 'reset' | 'rename' | 'channel'
+  event_kind  TEXT NOT NULL,         -- 'alert'|'reset'|'rename'|'channel'|'status'
   at          INTEGER NOT NULL,
   text        TEXT NOT NULL,
   detail      TEXT,
@@ -145,12 +145,31 @@ def events_for(pane_id, repo_path, branch, limit=40):
         c = _conn()
         rows = c.execute(
             "SELECT event_kind,at,text,detail,url FROM events "
-            "WHERE (scope_kind='pane' AND scope_key=?) "
-            "   OR (scope_kind='branch' AND scope_key=?) "
+            # 'status' is the narrator's append-only thread log (every
+            # regeneration) — excluded here so it never floods the live
+            # timeline; status_log_for() is its dedicated reader.
+            "WHERE event_kind != 'status' AND ("
+            "       (scope_kind='pane' AND scope_key=?) "
+            "    OR (scope_kind='branch' AND scope_key=?)) "
             "ORDER BY at DESC LIMIT ?",
             (pane_id or "\x00", branch_key, limit),
         ).fetchall()
     return [_row_to_event(*r) for r in rows]
+
+
+def status_log_for(pane_id: str, limit: int = 200) -> list[dict]:
+    """Append-only narrator status/goal history for a pane (event_kind=
+    'status'), newest-first. Kept out of the live activity timeline
+    (events_for) to avoid flooding it; this is the history reader."""
+    with _LOCK:
+        c = _conn()
+        rows = c.execute(
+            "SELECT at, text, detail FROM events "
+            "WHERE scope_kind='pane' AND scope_key=? AND event_kind='status' "
+            "ORDER BY at DESC LIMIT ?",
+            (pane_id, limit),
+        ).fetchall()
+    return [{"at": int(a), "status": t, "goal": d} for a, t, d in rows]
 
 
 def prune(max_age_days=30):

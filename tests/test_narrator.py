@@ -646,6 +646,31 @@ def test_tick_session_switch_resets_goal_and_arc(tick_env):
         "fixing flaky reconcile test"]                # arc starts fresh
 
 
+def test_tick_records_status_event_with_goal(tick_env):
+    tick_env["response"] = ('{"status": "wiring the filter", '
+                            '"goal": "redesign the rail", "rename": null}')
+    narrator.tick([_pane()])
+    log = activity.status_log_for("%1")
+    assert len(log) == 1
+    assert log[0]["status"] == "wiring the filter"
+    assert log[0]["goal"] == "redesign the rail"
+    # and it stays OUT of the live activity timeline
+    assert "status" not in {e["kind"] for e in activity.events_for("%1", None, None)}
+
+
+def test_tick_status_event_deduped_when_unchanged(tick_env):
+    narrator.tick([_pane()])                       # first status recorded
+    assert len(activity.status_log_for("%1")) == 1
+    before = activity.get_pane_status("%1")
+    # Make it a candidate again (bigger file, interval past) with an IDENTICAL
+    # model response → no status/goal change → no new log row.
+    tick_env["jsonl"].write_text(tick_env["jsonl"].read_text() + "x" * 50)
+    activity.upsert_pane_status(
+        activity.PaneStatusRow(**{**before.__dict__, "generated_at": 1}))
+    narrator.tick([_pane()])
+    assert len(activity.status_log_for("%1")) == 1   # unchanged → not re-logged
+
+
 def test_tick_caps_regenerations_per_tick(tick_env):
     panes = []
     for i in range(2, 9):                         # %2..%8: 7 candidates

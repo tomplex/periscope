@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>periscope — adaptive rail + workspaces</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-0: oklch(0.235 0.007 250);
+    --bg-1: oklch(0.282 0.008 250);
+    --bg-1-hi: oklch(0.318 0.009 250);
+    --bg-2: oklch(0.335 0.009 250);
+    --bg-3: oklch(0.395 0.010 250);
+    --line-soft:   color-mix(in oklch, oklch(0.50 0.008 250) 16%, transparent);
+    --line-strong: color-mix(in oklch, oklch(0.60 0.008 250) 45%, transparent);
+    --fg-0: oklch(0.970 0.004 250);
+    --fg-1: oklch(0.850 0.006 250);
+    --fg-2: oklch(0.660 0.008 250);
+    --fg-3: oklch(0.520 0.008 250);
+    --fg-4: oklch(0.420 0.008 250);
+    --s-needs:    oklch(0.74 0.14 38);
+    --s-needs-bg: color-mix(in oklch, oklch(0.74 0.14 38) 16%, transparent);
+    --s-working:  oklch(0.80 0.14 92);
+    --s-done:     oklch(0.76 0.17 152);
+    --s-done-bg:  color-mix(in oklch, oklch(0.76 0.17 152) 16%, transparent);
+    --s-idle:     oklch(0.65 0.01 250);
+    --s-shell:    oklch(0.72 0.10 165);
+    --s-success:  oklch(0.74 0.13 150);
+    --s-danger:   oklch(0.70 0.16 25);
+    --accent: oklch(0.74 0.13 232);
+    --workspace: oklch(0.72 0.12 330);
+    --linear: oklch(0.70 0.13 280);
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+    --r-sm: 4px; --r-md: 6px; --r-lg: 10px;
+  }
+  *,*::before,*::after { box-sizing: border-box; }
+  body { margin:0; background:var(--bg-0); color:var(--fg-1); font-family:var(--mono); font-size:13px; line-height:1.5; letter-spacing:.005em; -webkit-font-smoothing:antialiased; }
+  .wrap { display:flex; gap:40px; align-items:flex-start; padding:28px; }
+
+  .rail { width:340px; flex:0 0 340px; background:var(--bg-0); border:1px solid var(--line-soft); border-radius:12px; padding:10px 10px 16px; }
+  .rail-title { font-family:var(--sans); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--fg-4); padding:4px 6px 10px; }
+
+  /* top-level label: repo, workspace, or dev */
+  .top {
+    display:flex; align-items:center; gap:7px;
+    padding:14px 6px 7px; margin-top:4px;
+    color:var(--fg-1); font-weight:600; font-size:12px;
+    border-top:1px solid var(--line-soft);
+  }
+  .top:first-of-type { border-top:0; margin-top:0; padding-top:4px; }
+  .top .ic-repo { color:var(--accent); }
+  .top .ic-ws   { color:var(--workspace); }
+  .top .ic-dev  { color:var(--fg-3); }
+  .top .slug { color:var(--fg-4); font-weight:400; font-size:11px; margin-left:4px; }
+  .top .count { margin-left:auto; font-size:10px; color:var(--fg-4); }
+  .top.ws { color:var(--fg-0); }
+
+  /* group "body card" */
+  .group { background:var(--bg-1); border:1px solid var(--line-soft); border-radius:var(--r-lg); padding:6px; margin:7px 0; }
+  .group.ws { border-color: color-mix(in oklch, var(--workspace) 35%, transparent); }
+  .group-head { display:flex; align-items:center; gap:7px; padding:3px 5px 6px; }
+  .group-head .chev { color:var(--fg-4); font-size:9px; width:9px; }
+  .group-head .ic-wt { color:oklch(0.72 0.13 295); }
+  .group-head .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-0); font-weight:600; }
+  .group-head .gdot { width:7px; height:7px; border-radius:50%; }
+  .group-body { display:flex; flex-direction:column; gap:2px; }
+
+  /* ── COMPACT row: lives flat on the group card. Keeps the always-visible
+     narrator summary (line 2) — expansion adds metadata, not the summary. ── */
+  .row { position:relative; display:flex; flex-direction:column; gap:1px; padding:5px 8px 5px 12px; border-radius:var(--r-sm); cursor:pointer; }
+  .row::before { content:""; position:absolute; left:2px; top:6px; bottom:6px; width:2px; border-radius:2px; }
+  .row.working::before { background:var(--s-working); }
+  .row.done::before    { background:var(--s-done); }
+  .row.idle::before    { background:var(--s-idle); opacity:.5; }
+  .row.shell::before   { background:var(--s-shell); opacity:.55; }
+  .row:hover { background:var(--bg-2); }
+  .r-top { display:flex; align-items:center; gap:7px; min-width:0; }
+  .row .ic-claude { color:oklch(0.74 0.12 38); }
+  .row .ic-shell  { color:var(--s-shell); }
+  .row .r-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-1); }
+  .row .r-mini { display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+  .row .r-pr  { font-size:10px; color:var(--fg-3); }
+  .row .r-ctx { font-size:10px; color:var(--fg-4); }
+  .row .r-ctx.warn { color:var(--s-working); }
+  .row .r-ctx.hot  { color:var(--s-danger); }
+  .row .r-status { margin-left:21px; font-size:10px; color:var(--fg-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .chip-cwd { font-size:10px; color:var(--fg-4); max-width:9em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ── EXPANDED card: lifts off the list (selected OR needs-input) ───── */
+  .card { position:relative; background:var(--bg-2); border-radius:var(--r-md); padding:8px 10px 8px 12px; margin:3px 0; cursor:pointer; overflow:hidden; box-shadow:0 2px 8px oklch(0 0 0 / .25); }
+  .card::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; }
+  .card.working::before { background:var(--s-working); }
+  .card.needs::before   { background:var(--s-needs); animation:pulse 1.6s ease-in-out infinite; }
+  .card.done::before    { background:var(--s-done); animation:pulseDone 1.6s ease-in-out infinite; }
+  .card.idle::before    { background:var(--s-idle); }
+  .card.sel { background:var(--bg-1-hi); box-shadow:0 2px 10px oklch(0 0 0 / .3), inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent); }
+  .card.needs { background: color-mix(in oklch, var(--s-needs) 10%, var(--bg-2)); }
+  @keyframes pulse     { 50% { box-shadow:0 0 9px 0 var(--s-needs); } }
+  @keyframes pulseDone { 50% { box-shadow:0 0 9px 0 var(--s-done); } }
+  .c-head { display:flex; align-items:center; gap:7px; }
+  .c-head .ic-claude { color:oklch(0.74 0.12 38); }
+  .c-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-0); font-weight:500; }
+  .c-status { font-size:11px; color:var(--fg-2); margin:5px 0 0; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .c-foot { display:flex; align-items:center; gap:5px; margin-top:7px; flex-wrap:wrap; }
+  .c-foot .spacer { flex:1; }
+  .c-time { font-size:10px; color:var(--fg-4); white-space:nowrap; }
+
+  .pill { display:inline-flex; align-items:center; gap:3px; padding:0 5px; height:16px; border-radius:3px; background:var(--bg-1); color:var(--fg-2); font-size:10px; white-space:nowrap; }
+  .pill.model { color:var(--fg-3); background:transparent; padding:0; }
+  .pill.pr { color:var(--fg-1); } .pill.lin { color:var(--linear); }
+  .pill.ctx { color:var(--fg-3); } .pill.ctx.warn { color:var(--s-working); } .pill.ctx.hot { color:var(--s-danger); }
+  .ci-ok { color:var(--s-success); }
+  .ws-tag { font-size:9px; color:var(--workspace); }
+
+  /* parked / empty workspace drop zone */
+  .ws-park { font-style:italic; color:var(--fg-4); padding:7px 10px; text-align:center; border:1px dashed color-mix(in oklch, var(--workspace) 40%, transparent); border-radius:var(--r-sm); margin:2px; font-size:11px; }
+
+  .notes { max-width:380px; font-family:var(--sans); font-size:13px; color:var(--fg-2); line-height:1.55; }
+  .notes h1 { font-size:18px; color:var(--fg-0); font-weight:600; margin:4px 0 14px; letter-spacing:-0.01em; }
+  .notes h2 { font-size:13px; color:var(--fg-1); font-weight:600; margin:20px 0 6px; }
+  .notes p { margin:0 0 10px; }
+  .notes code { font-family:var(--mono); color:var(--fg-1); background:var(--bg-1); padding:1px 5px; border-radius:3px; font-size:12px; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="rail">
+    <div class="rail-title">Rail · adaptive · workspaces</div>
+
+    <!-- ════ WORKSPACE: attribute-config (cross-worktree, tagged tabs) ════ -->
+    <div class="top ws"><span class="ic-ws">▧</span> attribute-config <span class="slug">workspace · FDY-2637</span> <span class="count">3</span></div>
+    <div class="group ws">
+      <div class="group-body">
+        <!-- expanded: needs-input (illustrative) → auto-expands -->
+        <div class="card needs">
+          <div class="c-head"><span class="ic-claude">✻</span><span class="c-name">config-migration-skill</span><span class="pill model">Opus 4.8</span></div>
+          <p class="c-status">Waiting: overwrite migrations/0042_add_sessions?</p>
+          <div class="c-foot"><span class="pill pr">#7408</span><span class="pill lin">FAR-2878</span><span class="ws-tag">⎇ tc/attribute-config-refactor</span><span class="spacer"></span><span class="pill ctx">50%</span></div>
+        </div>
+        <!-- collapsed rows: tagged from across worktrees -->
+        <div class="row idle">
+          <div class="r-top"><span class="ic-claude">✻</span><span class="r-name">attr-config-migration</span><span class="r-mini"><span class="r-pr">#7491</span><span class="r-ctx">17%</span></span></div>
+          <div class="r-status">designing consumer library</div>
+        </div>
+        <div class="row idle">
+          <div class="r-top"><span class="ic-claude">✻</span><span class="r-name">tc-collision-demotions</span><span class="r-mini"><span class="r-pr">#7481</span><span class="r-ctx">30%</span></span></div>
+          <div class="r-status">finalizing PR review</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ repo: fdy ════ -->
+    <div class="top"><span class="ic-repo">◆</span> fdy <span class="slug">faradayio/fdy</span> <span class="count">7</span></div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">attribute-update-worker-config</span><span class="gdot" style="background:var(--s-idle)"></span></div>
+      <div class="group-body">
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">attribute-worker-config</span><span class="r-mini"><span class="r-ctx">16%</span></span></div><div class="r-status">switching to new config path</div></div>
+        <div class="row shell"><div class="r-top"><span class="ic-shell">$</span><span class="r-name">shell</span></div></div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">tc/attribute-config-refactor</span><span class="gdot" style="background:var(--s-idle)"></span></div>
+      <div class="group-body">
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">anthology-type-conversion</span><span class="r-mini"><span class="r-pr">#7481</span><span class="r-ctx hot">95%</span></span></div><div class="r-status">fixing API type mapping</div></div>
+        <div class="row shell"><div class="r-top"><span class="ic-shell">$</span><span class="r-name">shell</span><span class="r-mini"><span class="chip-cwd">⧉ workers/model_train</span></span></div></div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">tc/ci-python-rewrite</span><span class="gdot" style="background:var(--s-done)"></span></div>
+      <div class="group-body">
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">ci-run-audit</span><span class="r-mini"><span class="r-pr">#7224 <span class="ci-ok">✓</span></span><span class="r-ctx">28%</span></span></div><div class="r-status">drafting execution plan</div></div>
+        <!-- expanded: done (illustrative attention state) -->
+        <div class="card done">
+          <div class="c-head"><span class="ic-claude">✻</span><span class="c-name">ci-python-rewrite</span><span class="pill model">Opus 4.8</span></div>
+          <p class="c-status">measuring branch impact</p>
+          <div class="c-foot"><span class="pill pr">#7224</span><span class="spacer"></span><span class="pill ctx">8%</span><span class="c-time">done · 4m</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">tc/everyone-dataset-refactor</span><span class="gdot" style="background:var(--s-shell)"></span></div>
+      <div class="group-body">
+        <div class="row shell"><div class="r-top"><span class="ic-shell">$</span><span class="r-name">shell</span><span class="r-mini"><span class="chip-cwd">⧉ workers/model_train</span></span></div></div>
+      </div>
+    </div>
+
+    <!-- ════ repo: periscope (selected card lives here) ════ -->
+    <div class="top"><span class="ic-repo">◆</span> periscope <span class="slug">tomplex/periscope</span> <span class="count">4</span></div>
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">periscope</span><span class="gdot" style="background:var(--s-working)"></span></div>
+      <div class="group-body">
+        <!-- expanded: SELECTED -->
+        <div class="card working sel">
+          <div class="c-head"><span class="ic-claude">✻</span><span class="c-name">rail-member-cards</span><span class="pill model">Opus 4.8</span></div>
+          <p class="c-status">designing card layouts</p>
+          <div class="c-foot"><span class="spacer"></span><span class="pill ctx">9%</span><span class="c-time">now</span></div>
+        </div>
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">omnibox-pin-create</span><span class="r-mini"><span class="r-ctx">46%</span></span></div><div class="r-status">fixing tab drag persistence</div></div>
+        <div class="row done"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">omnibox-local-agent</span><span class="r-mini"><span class="r-ctx">14%</span></span></div><div class="r-status">local code instance option</div></div>
+        <div class="row shell"><div class="r-top"><span class="ic-shell">$</span><span class="r-name">zsh</span></div></div>
+      </div>
+    </div>
+
+    <!-- ════ repo: splash ════ -->
+    <div class="top"><span class="ic-repo">◆</span> splash <span class="slug">tomplex/splash</span> <span class="count">6</span></div>
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">splash</span><span class="gdot" style="background:var(--s-idle)"></span></div>
+      <div class="group-body">
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">draw-decimation</span><span class="r-mini"><span class="r-pr">#13</span><span class="r-ctx warn">70%</span></span></div><div class="r-status">staging backup</div></div>
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">build-config</span><span class="r-mini"><span class="r-ctx">11%</span></span></div><div class="r-status">monitoring staging deploy</div></div>
+        <div class="row shell"><div class="r-top"><span class="ic-shell">$</span><span class="r-name">shell</span></div></div>
+      </div>
+    </div>
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">ultra-arch-review</span><span class="gdot" style="background:var(--s-idle)"></span></div>
+      <div class="group-body">
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">deploy-config</span><span class="r-mini"><span class="r-pr">#14</span><span class="r-ctx hot">82%</span></span></div><div class="r-status">fixing element-drawing sync</div></div>
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">drawings-first-class</span><span class="r-mini"><span class="r-ctx">13%</span></span></div><div class="r-status">designing object model</div></div>
+        <div class="row shell"><div class="r-top"><span class="ic-shell">$</span><span class="r-name">shell</span></div></div>
+      </div>
+    </div>
+
+    <!-- ════ dev (bottom-pinned flat) ════ -->
+    <div class="top"><span class="ic-dev">◇</span> dev <span class="count">7</span></div>
+    <div class="group">
+      <div class="group-body">
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">census-config</span><span class="r-mini"><span class="r-pr">#7481</span><span class="r-ctx">10%</span></span></div><div class="r-status">shipping transcribed config</div></div>
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">claude-db</span><span class="r-mini"><span class="r-pr">#7454</span><span class="r-ctx">39%</span></span></div><div class="r-status">opening PR for dev db</div></div>
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">spec-viewer-proposer</span><span class="r-mini"><span class="r-ctx">31%</span></span></div><div class="r-status">building collapsible TOC</div></div>
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">user-places-cleanup</span><span class="r-mini"><span class="r-ctx">18%</span></span></div><div class="r-status">tracing resource deps</div></div>
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">anthology-gc</span><span class="r-mini"><span class="r-pr">#7447</span><span class="r-ctx">12%</span></span></div><div class="r-status">refactoring GC interface</div></div>
+        <div class="row idle"><div class="r-top"><span class="ic-claude">✻</span><span class="r-name">brainstorm-skill</span><span class="r-mini"><span class="r-ctx">6%</span></span></div><div class="r-status">creating spec-to-ship skill</div></div>
+        <div class="row shell"><div class="r-top"><span class="ic-shell">$</span><span class="r-name">psql</span><span class="r-mini"><span class="chip-cwd">⧉ fdy</span></span></div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="notes">
+    <h1>Adaptive rail + workspaces</h1>
+
+    <h2>The summary is always visible</h2>
+    <p>Every pane keeps its <b>narrator line</b> — that's the whole point. A compact row is stripe + name + key metric (ctx%, PR#) <i>plus the always-on summary line</i>. Expansion does <b>not</b> reveal the summary; it adds <b>metadata</b> — model badge + the PR / Linear / git / time footer.</p>
+    <p>A pane <b>lifts into a full B card</b> only when <b>selected</b> or <b>needs-input</b>. So 29 panes stay scannable (~40px two-line rows), the focused/blocking one gets the full chip footer, and you never lose what a pane is doing. State rides the left stripe at both sizes.</p>
+
+    <h2>Workspaces</h2>
+    <p><span class="swatch" style="background:var(--workspace)"></span>A <b>workspace</b> (<code>▧</code>) is a named, top-level group interleaved among repos. Tabs are <b>tagged</b> into it (drag, or <code>/api/workspaces/tag</code>) — so it pulls panes from <i>across</i> repos/worktrees into one effort.</p>
+    <p>Here <b>attribute-config</b> gathers the FDY-2637 work that physically lives in three different fdy worktrees. Each card keeps a faint <span style="color:var(--workspace)">⎇ origin-worktree</span> tag so you don't lose where it actually is. An empty workspace shows a dashed drop target.</p>
+
+    <h2>Two illustrative states</h2>
+    <p>Your live rail had no needs-input pane, so I flipped <b>config-migration-skill</b> to needs-input and expanded <b>ci-python-rewrite</b> (done) to show both auto-expand triggers. Everything else is your real data.</p>
+
+    <h2>Open question</h2>
+    <p>Should <b>working</b> panes (actively burning tokens) also auto-expand, or only selected + needs-input? Auto-expanding working would surface live progress but re-inflates the rail when you've got many going at once.</p>
+  </div>
+
+</div>
+</body>
+</html>

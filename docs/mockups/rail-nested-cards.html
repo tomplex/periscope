@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>periscope — nested rail cards (live rail)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-0: oklch(0.235 0.007 250);
+    --bg-1: oklch(0.282 0.008 250);
+    --bg-1-hi: oklch(0.318 0.009 250);
+    --bg-2: oklch(0.335 0.009 250);
+    --bg-3: oklch(0.395 0.010 250);
+
+    --line:        color-mix(in oklch, oklch(0.50 0.008 250) 30%, transparent);
+    --line-soft:   color-mix(in oklch, oklch(0.50 0.008 250) 16%, transparent);
+    --line-strong: color-mix(in oklch, oklch(0.60 0.008 250) 45%, transparent);
+
+    --fg-0: oklch(0.970 0.004 250);
+    --fg-1: oklch(0.850 0.006 250);
+    --fg-2: oklch(0.660 0.008 250);
+    --fg-3: oklch(0.520 0.008 250);
+    --fg-4: oklch(0.420 0.008 250);
+
+    --s-needs:    oklch(0.74 0.14 38);
+    --s-needs-bg: color-mix(in oklch, oklch(0.74 0.14 38) 16%, transparent);
+    --s-working:  oklch(0.80 0.14 92);
+    --s-working-bg: color-mix(in oklch, oklch(0.80 0.14 92) 14%, transparent);
+    --s-done:     oklch(0.76 0.17 152);
+    --s-done-bg:  color-mix(in oklch, oklch(0.76 0.17 152) 16%, transparent);
+    --s-idle:     oklch(0.65 0.01 250);
+    --s-shell:    oklch(0.72 0.10 165);
+    --s-success:  oklch(0.74 0.13 150);
+    --s-danger:   oklch(0.70 0.16 25);
+
+    --accent: oklch(0.74 0.13 232);
+    --linear: oklch(0.70 0.13 280);
+
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+    --r-sm: 4px; --r-md: 6px; --r-lg: 10px;
+  }
+  *,*::before,*::after { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg-0); color: var(--fg-1);
+    font-family: var(--mono); font-size: 13px; line-height: 1.5; letter-spacing: 0.005em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { display: flex; gap: 40px; align-items: flex-start; padding: 28px; }
+
+  /* ── the rail ──────────────────────────────────────────────────────── */
+  .rail {
+    width: 340px; flex: 0 0 340px;
+    background: var(--bg-0);
+    border: 1px solid var(--line-soft);
+    border-radius: 12px;
+    padding: 10px 10px 16px;
+  }
+  .rail-title {
+    font-family: var(--sans); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--fg-4); padding: 4px 6px 10px;
+  }
+
+  /* repo: a section label, not a card (avoids triple nesting) */
+  .repo {
+    display: flex; align-items: center; gap: 7px;
+    padding: 14px 6px 7px; margin-top: 4px;
+    color: var(--fg-1); font-weight: 600; font-size: 12px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .repo:first-of-type { border-top: 0; margin-top: 0; padding-top: 4px; }
+  .repo .ic-repo { color: var(--accent); }
+  .repo .ic-dev  { color: var(--fg-3); }
+  .repo .repo-slug { color: var(--fg-4); font-weight: 400; font-size: 11px; margin-left: 4px; }
+  .repo .count { margin-left: auto; font-size: 10px; color: var(--fg-4); }
+
+  /* group "body card" — a worktree/session container the pane cards live in */
+  .group {
+    background: var(--bg-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-lg);
+    padding: 8px;
+    margin: 7px 0;
+  }
+  .group-head {
+    display: flex; align-items: center; gap: 7px;
+    padding: 2px 4px 8px;
+  }
+  .group-head .chev { color: var(--fg-4); font-size: 9px; width: 9px; }
+  .group-head .ic-wt { color: oklch(0.72 0.13 295); }
+  .group-head .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-0); font-weight: 600; }
+  .group-head .gdot { width: 7px; height: 7px; border-radius: 50%; }
+  .group-body { display: flex; flex-direction: column; gap: 6px; }
+
+  /* ── B pane card (accent-stripe), nested ──────────────────────────── */
+  .pane {
+    position: relative;
+    background: var(--bg-2);
+    border-radius: var(--r-md);
+    padding: 8px 10px 8px 12px;
+    overflow: hidden; cursor: pointer;
+    transition: background .12s;
+  }
+  .pane::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; }
+  .pane:hover { background: var(--bg-3); }
+  .pane.sel { background: var(--bg-1-hi); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent); }
+
+  .pane.working::before { background: var(--s-working); }
+  .pane.needs::before   { background: var(--s-needs); animation: stripePulse 1.6s ease-in-out infinite; }
+  .pane.done::before    { background: var(--s-done); animation: stripePulseDone 1.6s ease-in-out infinite; }
+  .pane.idle::before    { background: var(--s-idle); opacity: .45; }
+  .pane.shell::before   { background: var(--s-shell); opacity: .55; }
+  .pane.needs { background: color-mix(in oklch, var(--s-needs) 8%, var(--bg-2)); }
+  .pane.done  { background: color-mix(in oklch, var(--s-done) 8%, var(--bg-2)); }
+  @keyframes stripePulse     { 50% { box-shadow: 0 0 8px 0 var(--s-needs); } }
+  @keyframes stripePulseDone { 50% { box-shadow: 0 0 8px 0 var(--s-done); } }
+
+  .p-head { display: flex; align-items: center; gap: 7px; }
+  .ic-claude { color: oklch(0.74 0.12 38); }
+  .ic-shell  { color: var(--s-shell); }
+  .p-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-0); font-weight: 500; }
+  .p-status { font-size: 11px; color: var(--fg-2); margin: 5px 0 0; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .p-foot { display: flex; align-items: center; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
+  .p-foot .spacer { flex: 1; }
+  .p-time { font-size: 10px; color: var(--fg-4); white-space: nowrap; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 0 5px; height: 16px; border-radius: 3px;
+    background: var(--bg-1); color: var(--fg-2); font-size: 10px; white-space: nowrap;
+  }
+  .pill.model { color: var(--fg-3); background: transparent; padding: 0; }
+  .pill.pr   { color: var(--fg-1); }
+  .pill.lin  { color: var(--linear); }
+  .pill.git  { color: var(--s-needs); }
+  .pill.ctx  { color: var(--fg-3); }
+  .pill.ctx.warn { color: var(--s-working); }
+  .pill.ctx.hot  { color: var(--s-danger); }
+  .ci-ok { color: var(--s-success); } .ci-run { color: var(--s-working); }
+  .chip-cwd { color: var(--fg-3); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* annotation panel */
+  .notes { max-width: 380px; font-family: var(--sans); font-size: 13px; color: var(--fg-2); line-height: 1.55; }
+  .notes h1 { font-size: 18px; color: var(--fg-0); font-weight: 600; margin: 4px 0 14px; letter-spacing: -0.01em; }
+  .notes h2 { font-size: 13px; color: var(--fg-1); font-weight: 600; margin: 20px 0 6px; }
+  .notes p { margin: 0 0 10px; }
+  .notes code { font-family: var(--mono); color: var(--fg-1); background: var(--bg-1); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ════════════ THE RAIL (live data) ════════════ -->
+  <div class="rail">
+    <div class="rail-title">Rail · nested cards · comfortable</div>
+
+    <!-- ───── repo: fdy ───── -->
+    <div class="repo"><span class="ic-repo">◆</span> fdy <span class="repo-slug">faradayio/fdy</span> <span class="count">10</span></div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">attribute-update-worker-config</span><span class="gdot" style="background:var(--s-idle)"></span></div>
+      <div class="group-body">
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">attribute-worker-config</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">switching to new config path</p>
+          <div class="p-foot"><span class="spacer"></span><span class="pill ctx">16%</span><span class="p-time">31m</span></div>
+        </div>
+        <div class="pane shell">
+          <div class="p-head"><span class="ic-shell">$</span><span class="p-name">shell</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">tc/attribute-config-refactor</span><span class="gdot" style="background:var(--s-idle)"></span></div>
+      <div class="group-body">
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">attr-config-migration</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">designing consumer library</p>
+          <div class="p-foot"><span class="pill pr">#7491</span><span class="pill lin">FAR-2637</span><span class="spacer"></span><span class="pill ctx">17%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">config-migration-skill</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">creating migration skill</p>
+          <div class="p-foot"><span class="pill pr">#7408</span><span class="pill lin">FAR-2878</span><span class="spacer"></span><span class="pill ctx">50%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">anthology-type-conversion</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">fixing API type mapping</p>
+          <div class="p-foot"><span class="pill pr">#7481</span><span class="spacer"></span><span class="pill ctx hot">95%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">tc-collision-demotions</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">finalizing PR review</p>
+          <div class="p-foot"><span class="pill pr">#7481</span><span class="pill lin">FAR-2637</span><span class="spacer"></span><span class="pill ctx">30%</span></div>
+        </div>
+        <div class="pane shell">
+          <div class="p-head"><span class="ic-shell">$</span><span class="p-name">shell</span><span class="chip-cwd">⧉ workers/model_train</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">tc/ci-python-rewrite</span><span class="gdot" style="background:var(--s-done)"></span></div>
+      <div class="group-body">
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">ci-run-audit</span><span class="pill model">Fable 5</span></div>
+          <p class="p-status">drafting execution plan</p>
+          <div class="p-foot"><span class="pill pr">#7224 <span class="ci-ok">✓</span></span><span class="spacer"></span><span class="pill ctx">28%</span></div>
+        </div>
+        <div class="pane done">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">ci-python-rewrite</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">measuring branch impact</p>
+          <div class="p-foot"><span class="pill pr">#7224</span><span class="spacer"></span><span class="pill ctx">8%</span><span class="p-time">done</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">tc/everyone-dataset-refactor</span><span class="gdot" style="background:var(--s-shell)"></span></div>
+      <div class="group-body">
+        <div class="pane shell">
+          <div class="p-head"><span class="ic-shell">$</span><span class="p-name">shell</span><span class="chip-cwd">⧉ workers/model_train</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───── repo: periscope ───── -->
+    <div class="repo"><span class="ic-repo">◆</span> periscope <span class="repo-slug">tomplex/periscope</span> <span class="count">4</span></div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">periscope</span><span class="gdot" style="background:var(--s-working)"></span></div>
+      <div class="group-body">
+        <div class="pane working sel">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">rail-member-cards</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">designing card layouts</p>
+          <div class="p-foot"><span class="spacer"></span><span class="pill ctx">9%</span><span class="p-time">now</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">omnibox-pin-create</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">fixing tab drag persistence</p>
+          <div class="p-foot"><span class="spacer"></span><span class="pill ctx">46%</span></div>
+        </div>
+        <div class="pane done">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">omnibox-local-agent</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">local code instance option</p>
+          <div class="p-foot"><span class="spacer"></span><span class="pill ctx">14%</span><span class="p-time">done</span></div>
+        </div>
+        <div class="pane shell">
+          <div class="p-head"><span class="ic-shell">$</span><span class="p-name">zsh</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───── repo: splash ───── -->
+    <div class="repo"><span class="ic-repo">◆</span> splash <span class="repo-slug">tomplex/splash</span> <span class="count">6</span></div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">splash</span><span class="gdot" style="background:var(--s-idle)"></span></div>
+      <div class="group-body">
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">draw-decimation</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">staging backup</p>
+          <div class="p-foot"><span class="pill pr">#13</span><span class="spacer"></span><span class="pill ctx warn">70%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">build-config</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">monitoring staging deploy</p>
+          <div class="p-foot"><span class="spacer"></span><span class="pill ctx">11%</span></div>
+        </div>
+        <div class="pane shell">
+          <div class="p-head"><span class="ic-shell">$</span><span class="p-name">shell</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><span class="chev">▾</span><span class="ic-wt">⎇</span><span class="name">ultra-arch-review</span><span class="gdot" style="background:var(--s-idle)"></span></div>
+      <div class="group-body">
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">deploy-config</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">fixing element-drawing sync</p>
+          <div class="p-foot"><span class="pill pr">#14</span><span class="spacer"></span><span class="pill ctx hot">82%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">drawings-first-class</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">designing object model</p>
+          <div class="p-foot"><span class="spacer"></span><span class="pill ctx">13%</span></div>
+        </div>
+        <div class="pane shell">
+          <div class="p-head"><span class="ic-shell">$</span><span class="p-name">shell</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───── dev (bottom-pinned flat group) ───── -->
+    <div class="repo"><span class="ic-dev">◇</span> dev <span class="count">9</span></div>
+
+    <div class="group">
+      <div class="group-body">
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">census-config</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">shipping transcribed config</p>
+          <div class="p-foot"><span class="pill pr">#7481</span><span class="pill lin">FAR-2641</span><span class="pill git">+149 −118</span><span class="spacer"></span><span class="pill ctx">10%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">claude-db</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">opening PR for dev db</p>
+          <div class="p-foot"><span class="pill pr">#7454</span><span class="spacer"></span><span class="pill ctx">39%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">spec-viewer-proposer</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">building collapsible TOC</p>
+          <div class="p-foot"><span class="pill lin">FAR-2292</span><span class="spacer"></span><span class="pill ctx">31%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">user-places-cleanup</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">tracing resource deps</p>
+          <div class="p-foot"><span class="pill lin">FAR-2795</span><span class="spacer"></span><span class="pill ctx">18%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">vendor-population-sync</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">bumping table suffix</p>
+          <div class="p-foot"><span class="pill pr">#7456</span><span class="spacer"></span><span class="pill ctx">14%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">anthology-gc</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">refactoring GC interface</p>
+          <div class="p-foot"><span class="pill pr">#7447</span><span class="spacer"></span><span class="pill ctx">12%</span></div>
+        </div>
+        <div class="pane idle">
+          <div class="p-head"><span class="ic-claude">✻</span><span class="p-name">brainstorm-skill</span><span class="pill model">Opus 4.8</span></div>
+          <p class="p-status">creating spec-to-ship skill</p>
+          <div class="p-foot"><span class="spacer"></span><span class="pill ctx">6%</span></div>
+        </div>
+        <div class="pane shell">
+          <div class="p-head"><span class="ic-shell">$</span><span class="p-name">vault-token-pr</span></div>
+        </div>
+        <div class="pane shell">
+          <div class="p-head"><span class="ic-shell">$</span><span class="p-name">psql</span><span class="chip-cwd">⧉ fdy</span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ════════════ annotations ════════════ -->
+  <div class="notes">
+    <h1>Nested cards — your live rail</h1>
+    <p>Variation B (accent stripe) pane cards nested inside a per-worktree <b>body card</b>. Repo is a section label, not a third card — triple nesting would be too much.</p>
+
+    <h2>Three surface levels</h2>
+    <p><span class="swatch" style="background:var(--bg-0)"></span><code>bg-0</code> rail tray · <span class="swatch" style="background:var(--bg-1)"></span><code>bg-1</code> group body card · <span class="swatch" style="background:var(--bg-2)"></span><code>bg-2</code> pane card. Each step lighter = each level reads as "on top of" the last.</p>
+
+    <h2>State = left stripe</h2>
+    <p><span class="swatch" style="background:var(--s-working)"></span>working · <span class="swatch" style="background:var(--s-needs)"></span>needs-input (pulses) · <span class="swatch" style="background:var(--s-done)"></span>done (pulses + faint tint) · <span class="swatch" style="background:var(--s-idle)"></span>idle (dim). Read peripherally — no dot to hunt for.</p>
+
+    <h2>New at-a-glance context</h2>
+    <p>Model badge + <code>context_pct</code> now surface on every Claude card; <code>ctx</code> goes amber &gt;60%, red &gt;80% (see <b>anthology-type-conversion</b> at 95%, <b>deploy-config</b> at 82%). PR / Linear / git-dirty ride the footer.</p>
+
+    <h2>The density honesty</h2>
+    <p>Your rail is 29 panes. Comfortable cards make each ~3× taller than today's row — this whole rail is a long scroll. Worth weighing: <b>collapse idle worktrees by default</b>, or an <b>adaptive mode</b> where only the selected card expands to full B and the rest stay one-line. Happy to mock either.</p>
+  </div>
+
+</div>
+</body>
+</html>

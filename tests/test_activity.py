@@ -52,6 +52,26 @@ def test_events_for_newest_first():
     assert [e["text"] for e in out] == ["new", "old"]
 
 
+def test_events_for_excludes_status_kind():
+    # 'status' is the narrator's high-frequency thread log — it must never
+    # surface in the live activity timeline.
+    activity.record("pane", "%1", "status", "wiring the filter", detail="g", at=10)
+    activity.record("pane", "%1", "rename", "renamed: a → b", at=20)
+    out = activity.events_for("%1", "/repo", "main")
+    kinds = {e["kind"] for e in out}
+    assert "status" not in kinds
+    assert "rename" in kinds
+
+
+def test_status_log_for_returns_status_events_newest_first():
+    activity.record("pane", "%1", "status", "first", detail="g1", at=100)
+    activity.record("pane", "%1", "status", "second", detail="g2", at=200)
+    activity.record("pane", "%1", "alert", "noise", detail="info", at=150)
+    assert activity.status_log_for("%1") == [
+        {"at": 200, "status": "second", "goal": "g2"},
+        {"at": 100, "status": "first", "goal": "g1"}]
+
+
 def test_dedup_key_makes_record_idempotent():
     activity.record("branch", "/r\x1fmain", "note", "x", at=1, dedup_key="m:abc")
     activity.record("branch", "/r\x1fmain", "note", "x again", at=2, dedup_key="m:abc")
