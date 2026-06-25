@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from periscope import projects, store, worktrees
-from periscope.gitutil import detect_default_branch, resolve_repo, resolve_repo_and_branch
+from periscope.gitutil import (
+    detect_default_branch,
+    resolve_repo,
+    resolve_repo_and_branch,
+)
 from periscope.panes import list_windows
 from periscope.tmux import _run, _tmux_mutate
 from periscope.worktree_spawn import _layout_two_window, spawn_worktree
@@ -168,7 +172,7 @@ def _discover_repos() -> set[str]:
     repos: set[str] = set()
     for p in projects.all_projects().values():
         if p.get("repo"):
-            repos.add(os.path.realpath(p["repo"]))
+            repos.add(os.path.realpath(p["repo"] or ""))
     dev = Path.home() / "dev"
     if dev.is_dir():
         for child in dev.iterdir():

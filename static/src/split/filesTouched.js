@@ -39,8 +39,8 @@ export function filesTouched(messages) {
   const seen = new Map();
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    const tus = m && m.tool_uses;
-    if (!tus || !tus.length) continue;
+    const tus = m?.tool_uses;
+    if (!tus?.length) continue;
     // Within a single assistant turn, walk tool_uses in reverse for the
     // same reason — last op in the turn wins for that path.
     for (let j = tus.length - 1; j >= 0; j--) {

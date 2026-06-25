@@ -5,19 +5,20 @@
 //
 // Lives in the lazy preview chunk (see manualChunks in vite.config.js) so the
 // eager bundle gains nothing.
-import { highlightTree, classHighlighter } from "@lezer/highlight";
+
+import { cssLanguage } from "@codemirror/lang-css";
+import { htmlLanguage } from "@codemirror/lang-html";
 import {
   javascriptLanguage,
   jsxLanguage,
-  typescriptLanguage,
   tsxLanguage,
+  typescriptLanguage,
 } from "@codemirror/lang-javascript";
+import { jsonLanguage } from "@codemirror/lang-json";
+import { markdownLanguage } from "@codemirror/lang-markdown";
 import { pythonLanguage } from "@codemirror/lang-python";
 import { rustLanguage } from "@codemirror/lang-rust";
-import { jsonLanguage } from "@codemirror/lang-json";
-import { cssLanguage } from "@codemirror/lang-css";
-import { htmlLanguage } from "@codemirror/lang-html";
-import { markdownLanguage } from "@codemirror/lang-markdown";
+import { classHighlighter, highlightTree } from "@lezer/highlight";
 
 const LANGS = {
   js: javascriptLanguage,

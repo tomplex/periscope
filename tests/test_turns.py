@@ -115,6 +115,7 @@ def _hook_row(db_path, pane_id):
 
 def test_hook_records_pane_session(tmp_path, monkeypatch):
     import io
+
     import pane_session_hook as hook
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("TMUX_PANE", "%56")
@@ -129,6 +130,7 @@ def test_hook_upserts_on_repeat(tmp_path, monkeypatch):
     """Second call for the same pane overwrites the recorded session id —
     important on /clear, which mints a fresh session id for an existing pane."""
     import io
+
     import pane_session_hook as hook
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("TMUX_PANE", "%56")
@@ -142,6 +144,7 @@ def test_hook_upserts_on_repeat(tmp_path, monkeypatch):
 
 def test_hook_noop_without_tmux_pane(tmp_path, monkeypatch):
     import io
+
     import pane_session_hook as hook
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.delenv("TMUX_PANE", raising=False)

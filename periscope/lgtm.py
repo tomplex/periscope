@@ -17,8 +17,7 @@ from typing import Any
 
 import httpx
 
-from periscope.log import log, _task
-
+from periscope.log import _task, log
 
 LGTM_BASE_URL = os.environ.get("PERISCOPE_LGTM_URL", "http://127.0.0.1:9900")
 LGTM_REFRESH_S = 30.0  # full /projects refresh interval; SSE handles in-between deltas
@@ -121,8 +120,8 @@ async def _lgtm_refresh_all() -> None:
                 asyncio.gather(*[_lgtm_fetch_items(client, s) for s in slugs]),
                 asyncio.gather(*[_lgtm_fetch_walkthrough(client, s) for s in slugs]),
             )
-            items_by_slug = dict(zip(slugs, items_lists))
-            walkthrough_by_slug = dict(zip(slugs, walkthroughs))
+            items_by_slug = dict(zip(slugs, items_lists, strict=False))
+            walkthrough_by_slug = dict(zip(slugs, walkthroughs, strict=False))
     except (httpx.HTTPError, OSError):
         # LGTM not running, port closed, etc. Keep the existing cache; the
         # next refresh will fix it. No log — silence on the common path.
@@ -173,7 +172,7 @@ async def _lgtm_sse_loop(slug: str) -> None:
     backoff = 1.0
     while True:
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=None) as client:  # noqa: SIM117 — inner stream() needs the bound client
                 async with client.stream("GET", url) as r:
                     if r.status_code != 200:
                         raise httpx.HTTPError(f"sse status {r.status_code}")

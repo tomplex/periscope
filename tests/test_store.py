@@ -78,7 +78,7 @@ def test_load_state_renames_corrupt_file(tmp_xdg_home: Path, mocker):
 
 
 def test_write_state_writes_atomically(tmp_xdg_home: Path):
-    from periscope.store import _write_state, _state_path
+    from periscope.store import _state_path, _write_state
     payload = {"version": 1, "ui": {"x": 1}, "windows": {}, "commands": []}
     _write_state(payload)
     assert json.loads(_state_path().read_text()) == payload
@@ -86,7 +86,7 @@ def test_write_state_writes_atomically(tmp_xdg_home: Path):
 
 
 def test_write_state_creates_parent_dir(tmp_xdg_home: Path):
-    from periscope.store import _write_state, _state_path
+    from periscope.store import _state_path, _write_state
     assert not _state_path().parent.exists()
     _write_state({"version": 1, "ui": {}, "windows": {}, "commands": []})
     assert _state_path().parent.is_dir()
@@ -147,14 +147,14 @@ def test_channels_migration_v1_is_idempotent(tmp_xdg_home: Path, monkeypatch):
 
 
 def test_set_window_fields_creates_entry_and_persists(clean_state):
-    from periscope.store import set_window_fields, get_window
+    from periscope.store import get_window, set_window_fields
     set_window_fields("abc", linked_pr=1234, alias="my-pane")
     assert get_window("abc") == {"linked_pr": 1234, "alias": "my-pane"}
     assert clean_state["windows"]["abc"] == {"linked_pr": 1234, "alias": "my-pane"}
 
 
 def test_set_window_fields_merges_existing(clean_state):
-    from periscope.store import set_window_fields, get_window
+    from periscope.store import get_window, set_window_fields
     set_window_fields("abc", linked_pr=1234)
     set_window_fields("abc", alias="renamed")
     out = get_window("abc")
@@ -162,7 +162,7 @@ def test_set_window_fields_merges_existing(clean_state):
 
 
 def test_get_window_returns_copy_not_reference(clean_state):
-    from periscope.store import set_window_fields, get_window
+    from periscope.store import get_window, set_window_fields
     set_window_fields("abc", alias="x")
     snapshot = get_window("abc")
     snapshot["alias"] = "MUTATED"
@@ -203,14 +203,14 @@ def test_delete_window_returns_false_when_absent(clean_state):
 
 
 def test_delete_window_removes_and_persists(clean_state):
-    from periscope.store import set_window_fields, delete_window, get_window
+    from periscope.store import delete_window, get_window, set_window_fields
     set_window_fields("abc", alias="x")
     assert delete_window("abc") is True
     assert get_window("abc") == {}
 
 
 def test_all_windows_returns_copy(clean_state):
-    from periscope.store import set_window_fields, all_windows
+    from periscope.store import all_windows, set_window_fields
     set_window_fields("abc", linked_pr=1)
     set_window_fields("xyz", linked_pr=2)
     out = all_windows()
@@ -219,7 +219,7 @@ def test_all_windows_returns_copy(clean_state):
 
 
 def test_update_ui_merges_and_deletes_none(clean_state):
-    from periscope.store import update_ui, get_ui
+    from periscope.store import get_ui, update_ui
     update_ui({"theme": "dark", "view": "grid"})
     assert get_ui() == {"theme": "dark", "view": "grid"}
     update_ui({"theme": None})  # deletes
@@ -241,7 +241,7 @@ def test_update_command_returns_false_when_label_absent(clean_state):
 
 
 def test_update_command_changes_exec_and_label(clean_state):
-    from periscope.store import add_command, update_command, get_commands
+    from periscope.store import add_command, get_commands, update_command
     add_command("a", "x")
     assert update_command("a", exec_cmd="y", new_label="b") is True
     out = get_commands()
@@ -261,7 +261,7 @@ def test_delete_command_returns_false_when_absent(clean_state):
 
 
 def test_reorder_commands_uses_given_sequence_then_leftover(clean_state):
-    from periscope.store import add_command, reorder_commands, get_commands
+    from periscope.store import add_command, get_commands, reorder_commands
     add_command("a", "1")
     add_command("b", "2")
     add_command("c", "3")
@@ -272,19 +272,19 @@ def test_reorder_commands_uses_given_sequence_then_leftover(clean_state):
 
 
 def test_snapshot_returns_deep_copy(clean_state):
-    from periscope.store import set_window_fields, update_ui, snapshot
+    from periscope.store import set_window_fields, snapshot, update_ui
     set_window_fields("abc", linked_pr=1)
     update_ui({"theme": "dark"})
     snap = snapshot()
     snap["windows"]["abc"]["linked_pr"] = 999
     snap["ui"]["theme"] = "light"
-    from periscope.store import get_window, get_ui
+    from periscope.store import get_ui, get_window
     assert get_window("abc")["linked_pr"] == 1
     assert get_ui()["theme"] == "dark"
 
 
 def test_set_window_fields_none_deletes_key(clean_state):
-    from periscope.store import set_window_fields, get_window
+    from periscope.store import get_window, set_window_fields
     set_window_fields("abc", notes="hello", tags=["a", "b"])
     assert get_window("abc") == {"notes": "hello", "tags": ["a", "b"]}
     set_window_fields("abc", notes=None)

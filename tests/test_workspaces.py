@@ -1,10 +1,12 @@
 import time
 
-import periscope.store as store
 from periscope.pids import _gc_workspaces
 from periscope.workspaces import (
-    create_workspace, get_workspace, all_workspaces,
-    update_workspace, archive_workspace, resolve_workspace_for_window,
+    all_workspaces,
+    archive_workspace,
+    create_workspace,
+    get_workspace,
+    update_workspace,
 )
 
 

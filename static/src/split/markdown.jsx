@@ -4,8 +4,8 @@
 // document mode (real heading scale, CommonMark soft breaks, highlighted
 // fences, doc-relative URL resolution).
 import { fromMarkdown } from "mdast-util-from-markdown";
-import { gfm } from "micromark-extension-gfm";
 import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 
 // Scheme-qualified, root-absolute, and fragment URLs pass through untouched;
 // everything else is doc-relative and goes through ctx.resolveUrl.

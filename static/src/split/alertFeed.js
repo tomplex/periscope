@@ -5,9 +5,9 @@
 // from Split.jsx. Lifted from the former overlays/Alerts.jsx.
 import { signal } from "@preact/signals";
 import { showToast } from "../overlays/Toast.jsx";
-import { setBadgeCount, notify, onNotificationClick, inTauri } from "../tauri.js";
-import { windows, railSelection } from "../store.js";
 import * as prefs from "../prefs.js";
+import { railSelection, windows } from "../store.js";
+import { inTauri, notify, onNotificationClick, setBadgeCount } from "../tauri.js";
 
 const POLL_MS = 3000;
 

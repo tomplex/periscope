@@ -1,9 +1,5 @@
-import json
 import shutil
-import sys
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from history.cli import main
 

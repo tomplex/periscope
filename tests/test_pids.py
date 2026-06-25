@@ -2,11 +2,13 @@
 
 import time
 
-import pytest
-
 from periscope.pids import (
-    _mint_pid, _stamp_pid, _rebind_pid, resolve_pids, _PID_TTL_S,
+    _PID_TTL_S,
     _gc_windows,
+    _mint_pid,
+    _rebind_pid,
+    _stamp_pid,
+    resolve_pids,
 )
 
 

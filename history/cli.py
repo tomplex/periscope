@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+from typing import Any
 
 from .db import connect, get_meta, set_meta
 
@@ -18,8 +19,9 @@ def main(argv: list[str] | None = None) -> int:
     # Mirror server.py: load ANTHROPIC_API_KEY from the periscope repo's .env.
     # The CLI is normally invoked from the repo root via `uv run` so this works.
     try:
-        from dotenv import load_dotenv
         from pathlib import Path as _Path
+
+        from dotenv import load_dotenv
         # Walk up from this file: history/cli.py → history/ → repo root
         load_dotenv(_Path(__file__).parent.parent / ".env")
     except ImportError:
@@ -68,8 +70,9 @@ def _cmd_backfill(argv: list[str]) -> int:
     parser.add_argument("--model", default=None,
                         help="override the summarizer model for this run")
     args = parser.parse_args(argv)
-    from .backfill import backfill, find_jsonl_files
     from pathlib import Path
+
+    from .backfill import backfill, find_jsonl_files
     projects = Path(args.projects_dir) if args.projects_dir else None
     since_ts = None
     if args.since:
@@ -82,7 +85,7 @@ def _cmd_backfill(argv: list[str]) -> int:
         paths = find_jsonl_files(projects) if projects is not None else find_jsonl_files()
         print(f"would scan {len(paths)} jsonl files")
         return 0
-    kwargs = {"workers": args.workers, "db_path": args.db_path,
+    kwargs: dict[str, Any] = {"workers": args.workers, "db_path": args.db_path,
               "since": since_ts, "model": args.model}
     if projects is not None:
         kwargs["projects_dir"] = projects
@@ -203,10 +206,11 @@ def _cmd_reindex(argv: list[str]) -> int:
     # this verb forces re-extraction in case rows were inserted under an older
     # version. It walks every JSONL again — Haiku is reused via hash if the
     # underlying content is stable, so this is a free pass in the common case.
-    from .backfill import backfill
     from pathlib import Path
+
+    from .backfill import backfill
     projects = Path(args.projects_dir) if args.projects_dir else None
-    kwargs = {"workers": args.workers, "db_path": args.db_path}
+    kwargs: dict[str, Any] = {"workers": args.workers, "db_path": args.db_path}
     if projects is not None:
         kwargs["projects_dir"] = projects
     result = backfill(**kwargs)
@@ -245,6 +249,7 @@ def _cmd_resummarize(argv: list[str]) -> int:
         print("nothing to do")
         return 0
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from .indexer import index_one
     statuses: dict[str, int] = {}
     with ThreadPoolExecutor(max_workers=args.workers) as pool:

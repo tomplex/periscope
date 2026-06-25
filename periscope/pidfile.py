@@ -5,6 +5,7 @@ Called from server.py's __main__ block BEFORE uvicorn binds the port so
 previous instance.
 """
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -85,10 +86,8 @@ def _reclaim_existing_instance() -> None:
             return
         time.sleep(0.1)
     log.warning("pid=%d ignored SIGTERM; sending SIGKILL", prev)
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.kill(prev, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
 
 
 def _write_pidfile() -> None:

@@ -15,8 +15,8 @@
 import { signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
-import { track } from "../track.js";
 import * as prefs from "../prefs.js";
+import { track } from "../track.js";
 
 const open = signal(false);
 
@@ -31,7 +31,7 @@ function close() {
 function Row({ c, i, onDragState }) {
   const rootRef = useRef(null);
 
-  async function update(e) {
+  async function update(_e) {
     const row = rootRef.current;
     if (!row) return;
     const newLabel = row.querySelector(".commands-label").value.trim();

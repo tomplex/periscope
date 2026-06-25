@@ -235,8 +235,7 @@ def build_rename_prompt(windows: list[dict]) -> str:
         tool_calls = w.get("recent_tool_calls") or []
         if tool_calls:
             lines.append("  recent tool calls (oldest→newest):")
-            for tc in tool_calls:
-                lines.append(f"    - {tc}")
+            lines.extend(f"    - {tc}" for tc in tool_calls)
         files = w.get("files_touched") or []
         if files:
             lines.append(f"  files touched: {', '.join(files)}")

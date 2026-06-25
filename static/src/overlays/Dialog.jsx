@@ -16,7 +16,7 @@
 // goes through the shared LIFO useEscape hook rather than <dialog>'s native
 // close, so a dialog opened over another overlay closes in LIFO order.
 import { signal } from "@preact/signals";
-import { useRef, useEffect } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
 
 // Queue of active dialog requests. Each carries its config + a resolve fn.

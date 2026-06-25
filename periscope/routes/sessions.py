@@ -13,6 +13,7 @@ The `resumes` sentinel session is auto-created on first use.
 
 import os
 import time
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -20,11 +21,20 @@ from pydantic import BaseModel
 from periscope.channels import dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC
 from periscope.panes import (
-    _acted_at, _active_per_session, _focused_at, _resuming,
-    drop_target_focus, list_windows, note_action, note_focus,
+    _acted_at,
+    _active_per_session,
+    _focused_at,
+    _resuming,
+    drop_target_focus,
+    list_windows,
+    note_action,
+    note_focus,
 )
 from periscope.projects import (
-    MAIN_KEY, get_project, placement_kill_set, resolve_project_for_window,
+    MAIN_KEY,
+    get_project,
+    placement_kill_set,
+    resolve_project_for_window,
 )
 from periscope.tmux import _run, _tmux_mutate, tmux
 from periscope.worktree_spawn import spawn_worktree
@@ -155,7 +165,7 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
         try:
             index = int(msg)
         except ValueError:
-            raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
+            raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
         target = f"{session}:{index}"
         _send_and_stamp(target, f"{CLAUDE_EXEC} --resume {resume_id}")
         _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
@@ -178,7 +188,7 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
     try:
         index = int(msg)
     except ValueError:
-        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
+        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()
@@ -240,7 +250,7 @@ def _window_new_plain(session: str, exec_cmd: str, mode: str) -> dict:
     try:
         index = int(msg)
     except ValueError:
-        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
+        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()
@@ -320,16 +330,15 @@ def window_new_worktree(
         )
 
     repo = project["repo"]
+    assert repo is not None  # guarded by the `not project.get("repo")` 400 above
     base_branch = project.get("base_branch")
     # Two paths based on base_branch presence:
     #   - base_branch set (typical): fork from LOCAL ref (no fetch).
     #     The user's unpushed work on the project's branch is included.
     #   - base_branch null (legacy projects): fall back to repo default
     #     branch with fetch=True (defaults are pushed, fetch is safe).
-    if base_branch:
-        spawn_kwargs = {"base_branch": base_branch, "fetch": False}
-    else:
-        spawn_kwargs = {}  # uses detected default + fetch=True
+    # base_branch set → fork from local ref (fetch=False); null → detected default + fetch=True.
+    spawn_kwargs: dict[str, Any] = {"base_branch": base_branch, "fetch": False} if base_branch else {}
 
     try:
         res = spawn_worktree(repo, branch, **spawn_kwargs)
@@ -346,7 +355,7 @@ def window_new_worktree(
         # (network, disk full, etc.) fall through to 400.
         msg = str(e)
         status = 409 if "already exists" in msg else 400
-        raise HTTPException(status, msg)
+        raise HTTPException(status, msg) from e
     wt_path = res["path"]
     warning = res.get("warning")
 
@@ -365,7 +374,7 @@ def window_new_worktree(
     try:
         index = int(msg)
     except ValueError:
-        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}")
+        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
     target = f"{session}:{index}"
 
     cmd = exec_cmd.strip()

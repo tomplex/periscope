@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from periscope.channels import (
-    _CHANNELS_LOCK,
     _CHANNEL_UNREAD,
+    _CHANNELS_LOCK,
     emit_channel_event,
 )
 

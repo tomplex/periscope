@@ -22,15 +22,14 @@ routes/cleanup.py is what actually mutates.
 import os
 import threading
 import time
-from typing import TypedDict, Optional
+from typing import TypedDict
 
+from periscope import worktrees
 from periscope.gitutil import detect_default_branch
 from periscope.log import log
-from periscope.projects import all_projects, MAIN_KEY
-from periscope.store import get_settings
+from periscope.projects import MAIN_KEY, Project, all_projects
+from periscope.store import WindowAnnotation, get_settings
 from periscope.tmux import _run
-from periscope import worktrees
-
 
 # === Caches ================================================================
 
@@ -38,7 +37,7 @@ _PR_STATE_TTL = 300.0  # 5 minutes
 _BRANCH_TTL = 60.0
 
 _lock = threading.Lock()
-_pr_state_cache: dict[tuple[str, int], tuple[float, Optional[str]]] = {}
+_pr_state_cache: dict[tuple[str, int], tuple[float, str | None]] = {}
 _branch_merged_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 _remote_branch_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 _default_branch_cache: dict[str, tuple[float, str]] = {}
@@ -63,7 +62,7 @@ def _detect_default_branch(repo: str) -> str:
     return branch
 
 
-def _pr_state(repo: str, pr_number: int) -> Optional[str]:
+def _pr_state(repo: str, pr_number: int) -> str | None:
     """Return 'OPEN' / 'CLOSED' / 'MERGED' / None. Cached 5min."""
     key = (repo, pr_number)
     with _lock:
@@ -75,7 +74,7 @@ def _pr_state(repo: str, pr_number: int) -> Optional[str]:
         cwd=repo,
         timeout=10.0,
     )
-    state: Optional[str] = None
+    state: str | None = None
     if code == 0 and out:
         try:
             import json
@@ -157,8 +156,8 @@ class Signal(TypedDict):
 
 class Candidate(TypedDict):
     pinned_dir: str  # the worktree's absolute realpath
-    project_name: Optional[str]  # null if untracked
-    tmux_session: Optional[str]  # null if untracked
+    project_name: str | None  # null if untracked
+    tmux_session: str | None  # null if untracked
     repo: str  # the repo's main-checkout path
     branch: str  # the worktree's current branch (or "(detached)")
     is_fork: bool  # from state.windows[pid].is_fork on the project's claude window
@@ -175,14 +174,14 @@ IDLE_THRESHOLD_DAYS = 14
 
 def _evaluate_worktree(
     wt_path: str,
-    branch: Optional[str],
+    branch: str | None,
     repo: str,
     default: str,
-    project_by_pinned: dict[str, dict],
-    windows_snapshot: dict[str, dict],
+    project_by_pinned: dict[str, Project],
+    windows_snapshot: dict[str, WindowAnnotation],
     alive_sessions: set[str],
     idle_threshold: int,
-) -> Optional[Candidate]:
+) -> Candidate | None:
     """Evaluate one worktree of `repo`. Returns a Candidate when any
     staleness signal fires, or None — for the repo's own main checkout, or
     a worktree that is healthy from cleanup's perspective.
@@ -215,7 +214,7 @@ def _evaluate_worktree(
         # tied to this project's tmux session that has linked_pr
         # set. Tmux session names are unique per project (adopt
         # would 409 on collision) so this correctly scopes.
-        for pid, ann in windows_snapshot.items():
+        for ann in windows_snapshot.values():
             last = ann.get("last_seen") or {}
             if last.get("session") == tmux_session and ann.get("linked_pr"):
                 linked_pr = ann["linked_pr"]
@@ -231,16 +230,23 @@ def _evaluate_worktree(
 
     # Signal 2: branch merged into default (fallback when no PR
     # state, or in addition).
-    if branch != "(detached)" and branch != default:
-        if _is_branch_merged(repo, branch, default):
-            if not any(s["kind"].startswith("pr_") for s in signals):
-                signals.append({"kind": "branch_merged", "label": f"branch merged into {default}"})
+    if (
+        branch != "(detached)"
+        and branch != default
+        and _is_branch_merged(repo, branch, default)
+        and not any(s["kind"].startswith("pr_") for s in signals)
+    ):
+        signals.append({"kind": "branch_merged", "label": f"branch merged into {default}"})
 
     # Signal 3: remote branch deleted. Skipped for fork PRs
     # where the local branch was never on origin.
-    if branch != "(detached)" and branch != default and not is_fork:
-        if not _remote_branch_exists(repo, branch):
-            signals.append({"kind": "remote_gone", "label": f"origin/{branch} deleted"})
+    if (
+        branch != "(detached)"
+        and branch != default
+        and not is_fork
+        and not _remote_branch_exists(repo, branch)
+    ):
+        signals.append({"kind": "remote_gone", "label": f"origin/{branch} deleted"})
 
     # Signal 4: idle. Days since last commit on the worktree's
     # HEAD; only flagged when no active tmux session AND
@@ -271,7 +277,7 @@ def _evaluate_worktree(
     }
 
 
-def compute_candidates(repo_filter: Optional[str] = None) -> list[Candidate]:
+def compute_candidates(repo_filter: str | None = None) -> list[Candidate]:
     """Walk every repo periscope knows about and return the cleanup
     candidate list. A worktree appears as a candidate if ANY signal
     fires.
@@ -283,10 +289,10 @@ def compute_candidates(repo_filter: Optional[str] = None) -> list[Candidate]:
     # Build (repo → project_rows) so we can correlate worktrees with
     # their owning project rows. We also need to surface UNTRACKED
     # worktrees: ones on disk via `git worktree list` with no matching project row.
-    project_by_pinned: dict[str, dict] = {
+    project_by_pinned: dict[str, Project] = {
         k: v for k, v in projects.items() if k != MAIN_KEY
     }
-    project_by_repo: dict[str, list[tuple[str, dict]]] = {}
+    project_by_repo: dict[str, list[tuple[str, Project]]] = {}
     repos: set[str] = set()
     for pinned, row in project_by_pinned.items():
         repo = row.get("repo")

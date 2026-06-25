@@ -5,13 +5,13 @@
 // All CodeMirror packages (state, view, language) and every lang pack are
 // statically imported here — they end up in one rolled-up chunk that's
 // fetched on the first preview-tab open and then cached.
+
+import { bracketMatching, HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
+import { drawSelection, EditorView, highlightActiveLineGutter, lineNumbers } from "@codemirror/view";
+import { tags as t } from "@lezer/highlight";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { activeTarget } from "../store.js";
-
-import { EditorState } from "@codemirror/state";
-import { EditorView, lineNumbers, highlightActiveLineGutter, drawSelection } from "@codemirror/view";
-import { syntaxHighlighting, HighlightStyle, bracketMatching } from "@codemirror/language";
-import { tags as t } from "@lezer/highlight";
 
 // Encode "session:index" as base64url for the /api/fs/render path token.
 // btoa() is bytes-from-string, so the input must be ASCII-safe; tmux
@@ -51,12 +51,12 @@ function makeResolveUrl(target, resolvedPath) {
   };
 }
 
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { markdown } from "@codemirror/lang-markdown";
-import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
+import { html } from "@codemirror/lang-html";
+import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
+import { markdown } from "@codemirror/lang-markdown";
+import { python } from "@codemirror/lang-python";
 import { rust } from "@codemirror/lang-rust";
 
 import { renderMarkdown } from "../split/markdown.jsx";

@@ -16,7 +16,6 @@ import contextlib
 import os
 import threading
 
-
 _REGISTRY_LOCK = threading.Lock()
 _LOCKS: dict[str, threading.Lock] = {}
 

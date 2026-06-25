@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
 import render from "preact-render-to-string";
+import { describe, expect, it } from "vitest";
 import { renderMarkdown } from "../markdown.jsx";
 
 const html = (text, opts) => render(<div>{renderMarkdown(text, opts)}</div>);

@@ -13,22 +13,23 @@ batches stamp_updates across all panes and writes them under one
 _STATE_LOCK acquisition for efficiency.
 """
 
-from typing import Optional
 
 from periscope.channels import channel_state_for
 from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.lgtm import cached_lgtm_state
 from periscope.panes import (
-    parse_pane, record_state_transition, recency_stamps_for,
-    smooth_is_claude, smooth_spinner,
+    parse_pane,
+    recency_stamps_for,
+    record_state_transition,
+    smooth_is_claude,
+    smooth_spinner,
 )
-from periscope.projects import resolve_project_for_window, get_project
+from periscope.projects import get_project, resolve_project_for_window
 from periscope.session_status import session_state_for
 from periscope.store import get_window
 from periscope.tmux import capture
 from periscope.turns import session_id_for_pane
 from periscope.worktrees import affiliation
-
 
 # Cache of the parsed-pane dict, keyed by (target, pane_id). Skips
 # capture()+parse_pane()+smoothing on a poll when tmux reports no new output
@@ -52,7 +53,7 @@ _QUIET_STATES = ("idle", "shell")
 
 def build_window_view(
     w: dict, now_ts: int,
-) -> tuple[dict, Optional[tuple[str, int, int]]]:
+) -> tuple[dict, tuple[str, int, int] | None]:
     """Build the per-window dict the dashboard renders, plus an optional
     (pid, completed_at, acked_at) tuple if state.json needs persisting.
 
@@ -137,7 +138,7 @@ def build_window_view(
     if cur == "idle" and parsed.get("is_claude") and completed > acked:
         parsed["state"] = "done"
 
-    stamp_update: Optional[tuple[str, int, int]] = None
+    stamp_update: tuple[str, int, int] | None = None
     if pid and (
         completed > int(persisted.get("completed_at") or 0)
         or acked > int(persisted.get("acked_at") or 0)

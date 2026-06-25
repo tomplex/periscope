@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from history.indexer import index_one, _row_needs_resummary
-from history.db import connect, get_meta
+from history.db import connect
+from history.indexer import _row_needs_resummary, index_one
 
 
 @pytest.fixture

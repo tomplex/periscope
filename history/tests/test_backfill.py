@@ -1,5 +1,4 @@
 import shutil
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from history.backfill import backfill, find_jsonl_files

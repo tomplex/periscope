@@ -18,7 +18,7 @@ def test_spawn_into_workspace_tags_pane(clean_state, fresh_activity_db,
     monkeypatch.setattr(worktree_spawn, "worktree_path", lambda repo, slug: wt_dest)
 
     ws = create_workspace(name="WS", base_repo=str(tmp_git_repo))
-    from periscope.routes.workspaces import workspaces_spawn, SpawnBody
+    from periscope.routes.workspaces import SpawnBody, workspaces_spawn
     result = workspaces_spawn(SpawnBody(workspace_id=ws["id"], branch="ws-feature"))
     pane_id = result["pane_id"]
     assert activity.get_pane_workspace(pane_id) == ws["id"]

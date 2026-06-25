@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 from periscope.store import get_settings, update_settings
 
-
 router = APIRouter()
 
 

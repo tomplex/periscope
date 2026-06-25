@@ -50,7 +50,7 @@ export function indexWorkspaces(workspaces) {
 // Null-repo projects key their own group by pinned_dir.
 export function groupKeyForWindow(w, projectsByPin, workspacesById) {
   const wid = w.workspace_id;
-  if (wid && workspacesById && workspacesById[wid]) return `ws:${wid}`;
+  if (wid && workspacesById?.[wid]) return `ws:${wid}`;
   const pin = w.project_pinned_dir;
   if (!pin || pin === MAIN_KEY) return MAIN_KEY;
   const row = projectsByPin[pin];
@@ -161,7 +161,8 @@ export function indexWindowsByWorktree(windows) {
   const out = {};
   for (const w of (windows || [])) {
     const key = w.session;  // worktree_key = session name
-    (out[key] = out[key] || []).push(w);
+    out[key] = out[key] || [];
+    out[key].push(w);
   }
   return out;
 }

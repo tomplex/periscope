@@ -1,5 +1,6 @@
 import sqlite3
-from history.db import apply_schema, SCHEMA_VERSION, MECHANICAL_VERSION
+
+from history.db import MECHANICAL_VERSION, SCHEMA_VERSION, apply_schema
 
 
 def test_apply_schema_creates_expected_tables():
@@ -16,7 +17,7 @@ def test_apply_schema_creates_expected_tables():
 def test_apply_schema_seeds_versions():
     conn = sqlite3.connect(":memory:")
     apply_schema(conn)
-    rows = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
+    rows = dict(conn.execute("SELECT key, value FROM meta"))
     assert rows["schema_version"] == str(SCHEMA_VERSION)
     assert rows["mechanical_version"] == str(MECHANICAL_VERSION)
     assert "haiku_model" in rows
@@ -26,7 +27,7 @@ def test_apply_schema_idempotent():
     conn = sqlite3.connect(":memory:")
     apply_schema(conn)
     apply_schema(conn)  # second call must not error or change meta
-    rows = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
+    rows = dict(conn.execute("SELECT key, value FROM meta"))
     assert rows["schema_version"] == str(SCHEMA_VERSION)
 
 

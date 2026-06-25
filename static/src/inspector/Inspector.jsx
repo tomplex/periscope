@@ -15,11 +15,11 @@
 //  - When data.channel_unread > 0 and we're rendering data.pane_id, fire a
 //    /api/channel/clear-unread POST (the badge clears as soon as the user
 //    looks at the pane in either modal or split-view).
-import { useRef, useEffect } from "preact/hooks";
-import { relTime, prUrl, shortestUniqueSuffix } from "../util.js";
+import { useEffect, useRef } from "preact/hooks";
 import * as prefs from "../prefs.js";
-import { paneTranscript, transcriptSeen, openFileTab } from "../store.js";
 import { filesTouched, partitionFilesByPriority } from "../split/filesTouched.js";
+import { openFileTab, paneTranscript, transcriptSeen } from "../store.js";
+import { prUrl, relTime, shortestUniqueSuffix } from "../util.js";
 
 function alertDotColor(kind) {
   if (kind === "need_human") return "var(--s-danger)";
@@ -348,7 +348,7 @@ function FilesSection({ pid }) {
   // independently — render the section if EITHER side has anything.
   const seen = transcriptSeen.value[pid];
   const entry = seen ? paneTranscript.value[pid] : null;
-  const touched = (entry && entry.messages) ? filesTouched(entry.messages) : [];
+  const touched = (entry?.messages) ? filesTouched(entry.messages) : [];
   const pinnedPaths = prefs.getPinnedFiles(pid);
   if (!touched.length && !pinnedPaths.length) return null;
 

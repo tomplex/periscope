@@ -15,15 +15,23 @@ import textwrap
 import pytest
 
 from periscope.panes import (
-    SPINNER_RE, ACTIVE_OP_RE, parse_pane,
-    smooth_spinner, smooth_is_claude,
-    note_focus, note_action, update_focus_from_windows,
-    _focused_at, _acted_at, _spinner_last_seen, _claude_last_seen,
+    ACTIVE_OP_RE,
+    CLAUDE_STICKY_S,
+    SPINNER_GRACE_S,
+    SPINNER_RE,
+    _acted_at,
     _active_per_session,
-    SPINNER_GRACE_S, CLAUDE_STICKY_S,
+    _claude_last_seen,
+    _focused_at,
+    _spinner_last_seen,
     list_windows,
+    note_action,
+    note_focus,
+    parse_pane,
+    smooth_is_claude,
+    smooth_spinner,
+    update_focus_from_windows,
 )
-
 
 # ── Regex-level cases ───────────────────────────────────────────────────
 # Each row: (tag, line, should_match_either_regex).

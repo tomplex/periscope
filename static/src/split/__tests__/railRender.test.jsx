@@ -5,11 +5,12 @@
 // build alone can't, since this repo browser-verifies instead of mounting
 // components elsewhere. prefs stays at its unloaded default, so the
 // syncRailPrefs side effect is guarded off (loaded:false write guard).
-import { describe, it, expect } from "vitest";
+
 import render from "preact-render-to-string";
-import { windows, projects } from "../../store.js";
-import { MAIN_KEY } from "../railTree.js";
+import { describe, expect, it } from "vitest";
+import { projects, windows } from "../../store.js";
 import { Rail } from "../Rail.jsx";
+import { MAIN_KEY } from "../railTree.js";
 
 const aff = (kind, label = null) => ({ kind, label });
 

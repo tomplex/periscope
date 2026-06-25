@@ -1,0 +1,28 @@
+# Lint + type-check gate, run on commit. Mirrors `bin/check`.
+# Install once:  uv tool run pre-commit install   (pre-commit is a uv tool)
+# Local hooks use the project's own pinned tools + config — no version drift
+# from a separately-pinned hook repo. ty and biome check whole scopes, so they
+# don't take staged filenames; they only fire when a relevant file changes.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check
+        language: system
+        types: [python]
+        require_serial: true
+
+      - id: ty
+        name: ty
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+        files: \.py$
+
+      - id: biome
+        name: biome
+        entry: npx --no-install biome lint static/src
+        language: system
+        pass_filenames: false
+        files: ^static/src/.*\.(js|jsx)$

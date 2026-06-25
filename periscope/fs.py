@@ -17,7 +17,6 @@ from fastapi import HTTPException
 
 from periscope.tmux import tmux
 
-
 _MAX_BYTES_DEFAULT = 1_000_000
 
 
@@ -94,14 +93,11 @@ def safe_read(cwd: str, raw_path: str,
         candidate = candidate.rsplit(":", 1)[0]
 
     expanded = os.path.expanduser(candidate)
-    if os.path.isabs(expanded):
-        target = Path(expanded)
-    else:
-        target = cwd_p / expanded
+    target = Path(expanded) if os.path.isabs(expanded) else cwd_p / expanded
     try:
         resolved = target.resolve()
     except OSError:
-        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}")
+        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}") from None
 
     roots = _safe_roots(cwd_p)
     if not _inside_any(resolved, roots):
@@ -123,7 +119,7 @@ def safe_read(cwd: str, raw_path: str,
     try:
         text = blob.decode("utf-8")
     except UnicodeDecodeError:
-        raise HTTPException(status_code=415, detail="binary file")
+        raise HTTPException(status_code=415, detail="binary file") from None
 
     return (str(resolved), text)
 
@@ -150,7 +146,7 @@ def safe_resolve(cwd: str, raw_path: str) -> Path:
     try:
         resolved = target.resolve()
     except OSError:
-        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}")
+        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}") from None
     if not _inside_any(resolved, _safe_roots(cwd_p)):
         raise HTTPException(status_code=403, detail="path outside safe roots")
     if not resolved.exists():
@@ -176,7 +172,7 @@ def safe_reveal(cwd: str, raw_path: str) -> None:
     try:
         resolved = target.resolve()
     except OSError:
-        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}")
+        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}") from None
     if not _inside_any(resolved, _safe_roots(cwd_p)):
         raise HTTPException(status_code=403, detail="path outside safe roots")
     if not resolved.exists():
@@ -195,7 +191,7 @@ def _cwd_for_target(target: str) -> str:
             "display-message", "-t", target, "-p", "#{pane_current_path}"
         ).strip()
     except Exception:
-        raise HTTPException(status_code=404, detail=f"unknown pane: {target}")
+        raise HTTPException(status_code=404, detail=f"unknown pane: {target}") from None
     if not out:
         raise HTTPException(status_code=404, detail=f"pane has no cwd: {target}")
     return out

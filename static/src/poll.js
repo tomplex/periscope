@@ -6,13 +6,13 @@
 // `dragState`) — that preserves the user's in-flight input. Connection-
 // banner / disconnected handling is preserved (threshold of 2 ≈ 6s).
 import {
-  windows,
-  projects,
-  workspaces,
-  usage,
-  editingTarget,
   dragState,
+  editingTarget,
+  projects,
   syncTabsFromWindows,
+  usage,
+  windows,
+  workspaces,
 } from "./store.js";
 
 const POLL_MS = 3000;

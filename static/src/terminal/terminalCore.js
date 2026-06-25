@@ -16,10 +16,10 @@
 // All terminal state stays private to this module — the rest of the app talks
 // to it through the exported functions.
 
-import { targetQuery } from "../util.js";
-import { track } from "../track.js";
-import { terminalTheme } from "./theme.js";
 import { openExternal } from "../tauri.js";
+import { track } from "../track.js";
+import { targetQuery } from "../util.js";
+import { terminalTheme } from "./theme.js";
 
 let term = null;
 let termWs = null;
@@ -34,7 +34,7 @@ let searchAddon = null;
 let termResizeObserver = null;
 let fitDebounce = null;
 let lastSentCols = 0;            // dims of the most recent resize message sent to the server
-let lastSentRows = 0;            //   — used to suppress redundant resizes during initial mount
+let _lastSentRows = 0;            //   — used to suppress redundant resizes during initial mount
 // Width is pinned for the session. Navigating panes re-runs startLiveTerminal
 // with a FRESH xterm + a fresh fit(); a mount-time measurement that differs by
 // a column or two (scrollbar appearing, layout rounding) would otherwise resize
@@ -138,9 +138,7 @@ function urlAtClick(e, t) {
   const line = buf.getLine(buf.viewportY + cy);
   if (!line) return null;
   const text = line.translateToString(true);
-  URL_RE.lastIndex = 0;
-  let m;
-  while ((m = URL_RE.exec(text)) !== null) {
+  for (const m of text.matchAll(URL_RE)) {
     const s = m.index;
     const e2 = s + m[0].length;
     if (cx >= s && cx < e2) return m[0];
@@ -194,9 +192,7 @@ function registerRoutingLinkProvider(t) {
       const links = [];
 
       function pushMatch(re, kind) {
-        re.lastIndex = 0;
-        let m;
-        while ((m = re.exec(line)) !== null) {
+        for (const m of line.matchAll(re)) {
           const text = m[0];
           const start = m.index + 1;       // xterm columns are 1-indexed
           const end = start + text.length - 1;
@@ -448,7 +444,7 @@ export function startLiveTerminal(target) {
   // via the WS query params. Without this, the first ResizeObserver fire
   // would send a redundant resize message.
   lastSentCols = initialCols;
-  lastSentRows = initialRows;
+  _lastSentRows = initialRows;
   connectTerminalWs(target, initialCols, initialRows);
 }
 
@@ -494,7 +490,7 @@ function connectTerminalWs(target, hintCols = 0, hintRows = 0) {
   // don't double-schedule.
   ws.onerror = () => {};
 
-  ws.onclose = (e) => {
+  ws.onclose = (_e) => {
     // Ignore stale closes from a socket we've already replaced or torn down.
     if (ws !== termWs) return;
     if (termIntentionalClose) return;
@@ -561,7 +557,7 @@ function scheduleFit() {
     if (term.cols === lastSentCols) return;
     if (termWs && termWs.readyState === WebSocket.OPEN) {
       lastSentCols = term.cols;
-      lastSentRows = term.rows;
+      _lastSentRows = term.rows;
       termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     }
   }, 80);
@@ -578,7 +574,7 @@ export function stopLiveTerminal() {
     termReconnectTimer = null;
   }
   lastSentCols = 0;
-  lastSentRows = 0;
+  _lastSentRows = 0;
   if (fitDebounce) {
     clearTimeout(fitDebounce);
     fitDebounce = null;

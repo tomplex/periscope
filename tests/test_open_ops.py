@@ -3,6 +3,7 @@ import shutil
 import subprocess
 
 import pytest
+
 from periscope import open_ops, projects
 from periscope.tmux import _tmux_mutate
 
@@ -263,7 +264,7 @@ def test_session_delete_renumber_windows_spares_workspace_pane(
     wrong pane mid-loop and killed a workspace-tagged pane we'd EXCLUDED. Kill
     by the stable pane_id instead — renumber-immune."""
     from periscope.routes import sessions as sroute
-    from periscope.tmux import tmux, _tmux_mutate
+    from periscope.tmux import _tmux_mutate, tmux
     sess = "wt"
     _tmux_mutate("new-session", "-d", "-s", sess, "-c", "/tmp")
     _tmux_mutate("set-option", "-g", "renumber-windows", "on")

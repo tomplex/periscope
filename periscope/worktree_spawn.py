@@ -30,7 +30,6 @@ from periscope.log import log
 from periscope.repo_locks import repo_lock
 from periscope.tmux import _run, _tmux_mutate, tmux
 
-
 WORKTREES_DIR = Path.home() / "dev" / "worktrees"
 
 
@@ -79,10 +78,7 @@ def _resolve_layout(repo: str) -> str:
             detected.add("sibling")
         elif wt_real.startswith(os.path.join(repo_real, ".worktrees") + "/"):
             detected.add("inline")
-    if len(detected) == 1:
-        layout = next(iter(detected))
-    else:
-        layout = default
+    layout = next(iter(detected)) if len(detected) == 1 else default
 
     # Record + persist.
     new_overrides = {**overrides, repo_real: layout}
@@ -224,7 +220,7 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> tuple[str, str]:
     is deliberately coupled to FastAPI so its callers (the project-CRUD
     route handlers) can let the exception propagate as an HTTP error.
     """
-    from periscope.panes import note_focus, note_action
+    from periscope.panes import note_action, note_focus
     from periscope.pids import stamp_new_window
 
     # new-session creates window 0 (or whatever base-index is) with a bare

@@ -1,6 +1,6 @@
 """Claude usage tracking: JSONL parsing + OAuth plan-usage endpoint."""
 
-from periscope.usage import parse_plan_usage, compute_claude_usage
+from periscope.usage import compute_claude_usage, parse_plan_usage
 
 
 def test_parse_plan_usage_empty_input_returns_unavailable():
@@ -183,7 +183,9 @@ def test_projected_recent_and_hot_default_none_false():
 # --- per-pane burn attribution -------------------------------------------
 
 import json as _json
-from periscope.usage import _weighted_burn_from_jsonl, annotate_hot_panes
+from datetime import UTC
+
+from periscope.usage import _weighted_burn_from_jsonl
 
 
 def _jsonl_line(ts_iso, usage):
@@ -193,9 +195,9 @@ def _jsonl_line(ts_iso, usage):
 def test_weighted_burn_from_jsonl_sums_recent_weighted(tmp_path):
     """Recent records weighted (out x5, cache_w x1.25, cache_r x0.1);
     records older than the cutoff and junk lines are skipped."""
-    from datetime import datetime, timezone
-    recent = datetime.fromtimestamp(NOW, tz=timezone.utc).isoformat()
-    old = datetime.fromtimestamp(NOW - 7200, tz=timezone.utc).isoformat()
+    from datetime import datetime
+    recent = datetime.fromtimestamp(NOW, tz=UTC).isoformat()
+    old = datetime.fromtimestamp(NOW - 7200, tz=UTC).isoformat()
     f = tmp_path / "s.jsonl"
     f.write_text("\n".join([
         _jsonl_line(recent, {"input_tokens": 100, "output_tokens": 10,
@@ -290,6 +292,7 @@ def test_parse_plan_usage_warns_once_on_live_unknown_meter(caplog):
     """A codename field going non-null logs a warning (once) instead of
     being silently dropped; null codename fields stay quiet."""
     import logging
+
     import periscope.usage as usage
     usage._warned_unknown_fields.clear()
     sample = {
@@ -312,6 +315,7 @@ def test_fetch_plan_usage_warns_when_token_missing(caplog, monkeypatch):
     """A missing/expired keychain token logs a warning instead of silently
     serving stale meters forever."""
     import logging
+
     import periscope.usage as usage
     monkeypatch.setattr(usage, "_read_oauth_token", lambda: None)
     with caplog.at_level(logging.WARNING):
@@ -323,6 +327,7 @@ def test_fetch_plan_usage_warns_on_http_failure(caplog, monkeypatch):
     """Network/HTTP failures warn — httpx only logs requests that get a
     response, so this is the only evidence a fetch was even attempted."""
     import logging
+
     import periscope.usage as usage
 
     def boom(*a, **kw):
@@ -339,6 +344,7 @@ def test_refresh_success_stamps_fetched_at_and_full_backoff(monkeypatch):
     """A successful refresh attaches fetched_at and schedules the next
     attempt PLAN_USAGE_REFRESH_S out."""
     import time
+
     import periscope.usage as usage
     monkeypatch.setattr(usage, "fetch_plan_usage",
                         lambda: {"available": True, "meters": {}})
@@ -359,6 +365,7 @@ def test_refresh_failure_keeps_data_and_retries_sooner(monkeypatch):
     fetched_at) and retries at PLAN_USAGE_RETRY_S, not the full interval —
     the post-wake first attempt often fails before the network is up."""
     import time
+
     import periscope.usage as usage
     old = {"available": True, "meters": {}, "fetched_at": 123}
     monkeypatch.setattr(usage, "fetch_plan_usage", lambda: None)
@@ -375,6 +382,7 @@ def test_refresh_failure_keeps_data_and_retries_sooner(monkeypatch):
 def test_cached_plan_usage_no_spawn_before_next_attempt(monkeypatch):
     """Inside the backoff window the cache is served with no refresh spawn."""
     import time
+
     import periscope.usage as usage
     data = {"available": True, "meters": {}}
     monkeypatch.setattr(usage, "_plan_cache", (time.time() + 100, data))
@@ -387,6 +395,7 @@ def test_cached_plan_usage_spawns_once_when_due(monkeypatch):
     """Past the next-attempt time: serves stale data immediately and spawns
     exactly one refresh (in-flight flag dedupes concurrent polls)."""
     import time
+
     import periscope.usage as usage
     data = {"available": True, "meters": {}}
     spawned = []

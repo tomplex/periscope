@@ -15,13 +15,20 @@ import pytest
 
 import periscope.tmux_mirror as tmux_mirror
 from periscope.tmux_mirror import (
-    ControlParser, Output, Reply, ReplyError, LayoutChange, Exit,
+    QUIESCE_S,
+    ControlParser,
+    Exit,
+    GridSnapshot,
+    LayoutChange,
+    Output,
+    ReconcileTimer,
+    Reply,
+    ReplyError,
+    _SessionMirror,
+    build_reconcile_frame,
     decode_octal,
-    GridSnapshot, build_reconcile_frame, snapshot_from_replies,
-    ReconcileTimer, QUIESCE_S, MAX_INTERVAL_S,
-    _SessionMirror, Subscription,
+    snapshot_from_replies,
 )
-
 
 # --- ControlParser ---
 
@@ -104,8 +111,8 @@ def test_decode_split_multibyte_concatenates():
 # --- frame builder ---
 
 def _snap(**kw):
-    base = dict(rows=(b"row1", b"row2"), height=2, cursor_x=3, cursor_y=1,
-                alt_on=False, cursor_visible=True)
+    base = {"rows": (b"row1", b"row2"), "height": 2, "cursor_x": 3, "cursor_y": 1,
+                "alt_on": False, "cursor_visible": True}
     base.update(kw)
     return GridSnapshot(**base)
 
@@ -362,7 +369,7 @@ async def _drain(sub, seconds):
             return chunks
         try:
             chunks.append(await asyncio.wait_for(sub.__anext__(), timeout))
-        except (asyncio.TimeoutError, StopAsyncIteration):
+        except (TimeoutError, StopAsyncIteration):
             return chunks
 
 

@@ -8,7 +8,7 @@ documented in the design spec.
 
 import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -17,20 +17,33 @@ from periscope.channels import _mcp_listener
 from periscope.config import MCP_SOCKET_PATH, STATIC
 from periscope.git_pr import prewarm_pr_cache
 from periscope.lgtm import _LGTM_SSE_TASKS, _lgtm_periodic_refresh
-from periscope.log import log, _bg, _task
-from periscope.usage import cached_plan_usage
+from periscope.log import _bg, _task, log
 
 # Routes — each module owns an APIRouter that we mount into `app` below.
 from periscope.routes import (
-    alerts, auto_rename, channel, command, events, fs, healthz, history, pane, paste_image,
-    prefs, send, sessions, state, ws,
+    alerts,
+    auto_rename,
+    channel,
+    command,
+    events,
+    fs,
+    healthz,
+    history,
+    pane,
+    paste_image,
+    prefs,
+    send,
+    sessions,
+    state,
+    ws,
 )
+from periscope.routes import cleanup as cleanup_routes
 from periscope.routes import lgtm as lgtm_route
 from periscope.routes import open as open_route
 from periscope.routes import projects as projects_routes
-from periscope.routes import workspaces as workspaces_routes
-from periscope.routes import cleanup as cleanup_routes
 from periscope.routes import settings as settings_routes
+from periscope.routes import workspaces as workspaces_routes
+from periscope.usage import cached_plan_usage
 
 
 @asynccontextmanager
@@ -130,16 +143,12 @@ async def lifespan(_app: FastAPI):
         for t in list(_LGTM_SSE_TASKS.values()):
             t.cancel()
         if mcp_task is not None:
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await mcp_task
-            except (asyncio.CancelledError, Exception):
-                pass
             # Lifespan owns socket cleanup; periscope.channels never
             # unlinks MCP_SOCKET_PATH (see spec §"MCP_SOCKET_PATH cleanup").
-            try:
+            with suppress(FileNotFoundError):
                 os.unlink(MCP_SOCKET_PATH)
-            except FileNotFoundError:
-                pass
 
 
 app = FastAPI(lifespan=lifespan)

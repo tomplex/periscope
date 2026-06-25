@@ -18,7 +18,7 @@
 // terminal host in extra flex/relative layers shifts FitAddon's
 // measurements and causes mid-mount tmux reflow (scrollback at one width,
 // new output at another). Keep this wrapper a pure pass-through.
-import { useRef, useEffect } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 import { mountTerminal, unmountTerminal } from "./terminalCore.js";
 
 export function Terminal({ target, onPaste, class: className = "modal-xterm", id }) {

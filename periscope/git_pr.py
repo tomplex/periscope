@@ -28,7 +28,6 @@ from periscope.log import _bg
 from periscope.panes import list_windows
 from periscope.tmux import _run
 
-
 _GIT_TTL = 15.0
 _PR_TTL = 60.0
 _git_cache: dict[str, tuple[float, dict | None]] = {}

@@ -12,6 +12,7 @@
 The dashboard prefers (2) when available, falls back to (1).
 """
 
+import contextlib
 import json
 import re
 import subprocess
@@ -24,7 +25,6 @@ import httpx
 
 from periscope import activity
 from periscope.log import _bg, log
-
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
 #
@@ -209,10 +209,8 @@ def parse_plan_usage(data: dict) -> dict:
         resets_at = None
         rs = entry.get("resets_at")
         if isinstance(rs, str):
-            try:
+            with contextlib.suppress(ValueError):
                 resets_at = int(datetime.fromisoformat(rs).timestamp())
-            except ValueError:
-                pass
         meters[key] = {
             "label": label,
             "percent": round(float(entry["utilization"])),

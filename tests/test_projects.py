@@ -95,7 +95,8 @@ def test_placement_kill_set_includes_untagged_managed_pane(clean_state, fresh_ac
 
 
 def test_placement_kill_set_refuses_main(clean_state, fresh_activity_db):
-    from periscope.projects import placement_kill_set, MAIN_KEY as MK
+    from periscope.projects import MAIN_KEY as MK
+    from periscope.projects import placement_kill_set
     with pytest.raises(ValueError):
         placement_kill_set(MK, [])
 

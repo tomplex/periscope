@@ -13,7 +13,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict, Optional
+from typing import TypedDict, cast
 
 from fastapi import HTTPException
 
@@ -25,7 +25,6 @@ from periscope.tmux import _run
 from periscope.worktree_spawn import worktree_path
 from periscope.worktrees import invalidate as worktrees_invalidate
 
-
 MAIN_KEY = "__main__"
 
 
@@ -33,11 +32,11 @@ class Project(TypedDict, total=False):
     """A row in state['projects']."""
     name: str
     tmux_session: str
-    repo: Optional[str]
-    pinned_repo: Optional[str]
+    repo: str | None
+    pinned_repo: str | None
     created_at: int
-    archived_at: Optional[int]
-    base_branch: Optional[str]
+    archived_at: int | None
+    base_branch: str | None
 
 
 def _canonical_key(pinned_dir: str) -> str:
@@ -78,14 +77,14 @@ def get_project(pinned_dir: str) -> Project:
     with _store._STATE_LOCK:
         projects = _store._STATE.get("projects", {})
         key = _lookup_key(pinned_dir, projects)
-        return dict(projects.get(key, {}))  # type: ignore[return-value]
+        return cast(Project, dict(projects.get(key, {})))
 
 
 def all_projects() -> dict[str, Project]:
     """Snapshot of all projects (copies)."""
     with _store._STATE_LOCK:
         return {
-            k: dict(v)
+            k: cast(Project, dict(v))
             for k, v in _store._STATE.get("projects", {}).items()
         }
 
@@ -113,7 +112,7 @@ def create_project(pinned_dir: str, **fields) -> Project:
         }
         projects[key] = dict(row)
         _store._write_state(_store._STATE)
-        return dict(row)
+        return cast(Project, dict(row))
 
 
 def update_project(pinned_dir: str, **fields) -> bool:
@@ -151,7 +150,7 @@ def archive_project(pinned_dir: str) -> bool:
         return True
 
 
-def resolve_project_for_window(window: dict) -> Optional[str]:
+def resolve_project_for_window(window: dict) -> str | None:
     """Map a tmux window (with `session` field) to its owning project key.
 
     Returns the pinned_dir key for a session owned by a project, MAIN_KEY
@@ -167,7 +166,9 @@ def resolve_project_for_window(window: dict) -> Optional[str]:
     """
     pane_id = window.get("pane_id")
     if pane_id:
-        from periscope import activity   # function-level: cycle-sensitivity (narrator precedent)
+        from periscope import (
+            activity,  # function-level: cycle-sensitivity (narrator precedent)
+        )
         tagged = activity.get_pane_project(pane_id)
         if tagged:
             return tagged
@@ -260,7 +261,7 @@ def _resolve_pr_metadata(repo: str, pr: int) -> dict:
     try:
         return json.loads(out)
     except json.JSONDecodeError as e:
-        raise HTTPException(500, f"gh pr view returned invalid JSON: {e}")
+        raise HTTPException(500, f"gh pr view returned invalid JSON: {e}") from e
 
 
 def _fetch_pr_branch(repo: str, pr: int, local_branch: str) -> None:
@@ -333,7 +334,9 @@ def fetch_pr_into_worktree(repo: str, pr: int, name_override: str | None = None)
 
     is_fork = bool(meta.get("isCrossRepository"))
     pr_state = (meta.get("state") or "").upper()  # OPEN / CLOSED / MERGED
-    base_branch = meta.get("baseRefName") or None
+    # A real GitHub PR always carries a base ref; coerce to "" only as a
+    # type-floor so PRWorktree.base_branch stays a concrete str.
+    base_branch = str(meta.get("baseRefName") or "")
 
     head_ref = (meta.get("headRefName") or "").strip()
     name = ((name_override or "").strip() or head_ref or local_branch).strip()

@@ -12,6 +12,30 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_plan_usage_refresh(monkeypatch):
+    """Stop cached_plan_usage() from spawning its real network+DB refresh thread
+    during tests.
+
+    On a cache miss cached_plan_usage() fires _bg("plan-usage", ...), which does
+    a live httpx fetch then record_usage_samples(...). As a leaked daemon that
+    thread writes into whichever per-test ACTIVITY_DB happens to be live when it
+    finishes — bleeding real usage_samples rows into unrelated tests AND racing
+    fresh_activity_db's connection close (use-after-free → the intermittent
+    CPython 3.14 sqlite segfault). It is reachable from any path that builds
+    /api/state, so patching one call site (e.g. periscope.app.cached_plan_usage)
+    isn't enough — routes.state holds its own binding. Seeding the cache with a
+    far-future next-attempt time makes cached_plan_usage serve the cache without
+    ever spawning. Tests that exercise the refresh set their own _plan_cache via
+    monkeypatch, which overrides this."""
+    try:
+        from periscope import usage
+    except ImportError:
+        return
+    monkeypatch.setattr(usage, "_plan_cache", (float("inf"), None), raising=False)
+    monkeypatch.setattr(usage, "_plan_in_flight", True, raising=False)
+
+
 @pytest.fixture
 def tmp_xdg_home(monkeypatch, tmp_path: Path) -> Path:
     """Redirect XDG_CONFIG_HOME so state.json, pidfile, and the log
@@ -49,9 +73,14 @@ def fresh_activity_db(tmp_path, monkeypatch):
     activity._git_cache.clear()
     activity._git_fetching.clear()
     yield activity
-    if activity._CONN is not None:
-        activity._CONN.close()
-        activity._CONN = None
+    # Acquire _LOCK before closing: a leaked background thread (e.g. the lifespan
+    # prewarms) may be mid-executemany on this connection, and closing it from
+    # under the C layer is a use-after-free → segfault under CPython 3.14. The
+    # lock serializes us behind any in-flight write; every DB accessor holds it.
+    with activity._LOCK:
+        if activity._CONN is not None:
+            activity._CONN.close()
+            activity._CONN = None
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import {
-  filesTouched, fileExt, partitionFilesByPriority,
+import { describe, expect, it } from "vitest";
+import {fileExt, 
+  filesTouched, partitionFilesByPriority,
 } from "../filesTouched.js";
 
 // Matches the /api/pane/turns shape (history/search.py:262-275): each

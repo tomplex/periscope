@@ -9,11 +9,11 @@ import subprocess
 from pathlib import Path
 
 from periscope.pidfile import (
-    _pidfile_path,
     _pid_is_periscope,
-    _write_pidfile,
-    _remove_pidfile,
+    _pidfile_path,
     _reclaim_existing_instance,
+    _remove_pidfile,
+    _write_pidfile,
 )
 
 

@@ -1,12 +1,12 @@
 // Preact entry point. Mounts the full dashboard into #app. Split is the only
 // view (grid was retired).
 import { render } from "preact";
-import { Toaster } from "./overlays/Toast.jsx";
-import { DialogHost } from "./overlays/Dialog.jsx";
 import { Header } from "./chrome/Header.jsx";
-import { Split } from "./split/Split.jsx";
+import { DialogHost } from "./overlays/Dialog.jsx";
 import { Overlays } from "./overlays/Overlays.jsx";
-import { loadPrefs, getLastSelected } from "./prefs.js";
+import { Toaster } from "./overlays/Toast.jsx";
+import { getLastSelected, loadPrefs } from "./prefs.js";
+import { Split } from "./split/Split.jsx";
 import { railSelection } from "./store.js";
 import { track } from "./track.js";
 

@@ -14,7 +14,10 @@ def reset_panes_and_channels():
     """Clear in-memory pane + channel state between tests."""
     from periscope import panes
     from periscope.channels import (
-        _CHANNELS_LOCK, _CHANNEL_ALERTS, _CHANNEL_UNREAD, _MCP_SESSIONS,
+        _CHANNEL_ALERTS,
+        _CHANNEL_UNREAD,
+        _CHANNELS_LOCK,
+        _MCP_SESSIONS,
     )
     panes._focused_at.clear()
     panes._acted_at.clear()
@@ -83,7 +86,6 @@ def test_view_promotes_blank_state_to_working_when_spinner_present(mocker, clean
     """Spinner hysteresis: if we have a spinner but parse_pane returned
     a blank/idle state, the spinner promotes the state to 'working'."""
     from periscope.window_view import build_window_view
-    from periscope import panes
 
     mocker.patch("periscope.window_view.capture", return_value="claude pane")
     # parse_pane returns is_claude=True, state=idle, but has a spinner.
@@ -105,8 +107,8 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
     """If the previous state was working and current is idle, the
     completed_at stamp bumps. If acked_at < completed_at and the pane
     is_claude, the state becomes 'done'."""
-    from periscope.window_view import build_window_view
     from periscope import panes
+    from periscope.window_view import build_window_view
 
     pid = "abc12345"
     # Seed prior state: was working last poll.
@@ -129,8 +131,8 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
 def test_view_no_stamp_update_when_persisted_already_current(mocker, clean_state):
     """If the persisted completed_at/acked_at already match the in-memory
     values, no stamp update is needed."""
-    from periscope.window_view import build_window_view
     from periscope import panes
+    from periscope.window_view import build_window_view
 
     pid = "abc12345"
     panes._completed_at["main:0"] = 5000
@@ -197,8 +199,8 @@ def test_view_surfaces_linked_linear(mocker, clean_state):
 
 
 def test_view_channel_attached_reflects_mcp_session_presence(mocker, clean_state):
+    from periscope.channels import _CHANNEL_UNREAD, _CHANNELS_LOCK, _MCP_SESSIONS
     from periscope.window_view import build_window_view
-    from periscope.channels import _MCP_SESSIONS, _CHANNEL_UNREAD, _CHANNELS_LOCK
 
     pane_id = "%7"
     with _CHANNELS_LOCK:
@@ -234,7 +236,6 @@ def test_view_persisted_acked_at_suppresses_done_state(mocker, clean_state):
     """When acked_at >= completed_at, state stays 'idle' (user has
     already engaged since the last completion)."""
     from periscope.window_view import build_window_view
-    from periscope import panes
 
     pid = "abc12345"
     clean_state["windows"][pid] = {"completed_at": 5000, "acked_at": 6000}
@@ -300,8 +301,7 @@ def test_working_pane_always_recaptures_even_if_activity_unchanged(mocker, clean
 def test_skipped_pane_still_reflects_fresh_focus(mocker, clean_state):
     """A skipped (quiet) pane still gets fresh focused_at — only capture+parse
     is skipped, not the recency assembly."""
-    from periscope import window_view
-    from periscope import panes
+    from periscope import panes, window_view
     mocker.patch("periscope.window_view.capture", return_value="")
     w = _window()
     w["activity"] = 500

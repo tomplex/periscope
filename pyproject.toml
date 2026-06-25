@@ -22,9 +22,52 @@ dev = [
     # tests/test_tmux_mirror.py. Deliberately NOT a runtime dep — the
     # design keeps emulation out of periscope (tmux is the emulator).
     "pyte>=0.8",
+    # Lint + typecheck gate (see bin/check / .pre-commit-config.yaml).
+    "ruff>=0.14",
+    "ty>=0.0.31",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "history/tests"]
 python_files = ["test_*.py"]
 addopts = "-ra --strict-markers --strict-config"
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["static", "node_modules", "src-tauri", ".venv"]
+
+[tool.ruff.lint]
+# Deep set: real bug/quality coverage beyond pyflakes. E501 (line length) and
+# E701/E702 (terse multi-statement lines) are deliberate style here, so off.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PIE", "RET", "PERF"]
+ignore = ["E501", "E701", "E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests group imports under section-divider comments on purpose (E402) and
+# bind small lambda fixtures to names for readability (E731).
+"tests/**" = ["E402", "E731"]
+"history/tests/**" = ["E402", "E731"]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+# build_icons.py is a manual icon-build script with an undeclared optional dep
+# (Pillow); not part of the server or tests.
+exclude = ["build_icons.py"]
+
+# Tests stay in the gate so the rules that catch real test-code bugs (undefined
+# names, bad imports, syntax) still fire. But tests are mock-heavy
+# (MagicMock) / monkeypatched / happy-path, so the six rules below only ever
+# fire as noise there — never a real bug. Silence them for tests only; they
+# stay strict on source.
+[[tool.ty.overrides]]
+include = ["tests/**", "history/tests/**"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+invalid-argument-type = "ignore"
+not-subscriptable = "ignore"
+invalid-assignment = "ignore"
+unsupported-operator = "ignore"
+not-iterable = "ignore"

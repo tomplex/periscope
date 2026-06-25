@@ -1,4 +1,5 @@
-import os, shutil
+import shutil
+
 import pytest
 
 needs_tmux = pytest.mark.skipif(not shutil.which("tmux"), reason="tmux not installed")

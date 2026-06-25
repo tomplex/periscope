@@ -5,18 +5,18 @@
 // attention.js. Out-of-tree rows use `attn-row` classes (NOT child-row) so they
 // never enter the tree's connector-adjacency CSS.
 import { useEffect } from "preact/hooks";
-import {
-  windows, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection,
-} from "../store.js";
-import { alertItems, revealPane } from "./alertFeed.js";
 import * as prefs from "../prefs.js";
-import { relTime, waitLabel, shortestUniqueSuffix } from "../util.js";
-import { SectionHeader } from "./SectionHeader.jsx";
-import {
-  buildNeedsYou, buildReady, buildRunning, needsYouCount, resolvePinned, buildActivity,
-  isSoftQuestion, prunedStateDismissals,
+import {dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection,
+  windows, 
+} from "../store.js";
+import { relTime, shortestUniqueSuffix, waitLabel } from "../util.js";
+import { alertItems, revealPane } from "./alertFeed.js";
+import {buildActivity,
+  buildNeedsYou, buildReady, buildRunning, 
+  isSoftQuestion, needsYouCount, prunedStateDismissals,resolvePinned, 
 } from "./attention.js";
 import { statusDotClass } from "./RailRows.jsx";
+import { SectionHeader } from "./SectionHeader.jsx";
 
 function paneLabel(w) {
   return w?.name || (w?.is_claude ? "claude" : "shell");
@@ -182,7 +182,7 @@ export function AttentionTop() {
                  onClick={() => selectPane(r.w)}>
               <span class="attn-dot dot dot-green"></span>
               <span class="attn-label">{originLabel(r.w, null, null, shorten)}</span>
-              <span class="attn-reason">{(r.w?.spinner || "working") + "…"}</span>
+              <span class="attn-reason">{`${r.w?.spinner || "working"}…`}</span>
             </div>
           ))}
         </>

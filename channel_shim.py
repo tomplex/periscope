@@ -33,10 +33,10 @@ channel.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
-
 
 SOCKET_PATH = os.environ.get(
     "PERISCOPE_MCP_SOCKET_PATH", "/tmp/periscope-mcp.sock"
@@ -85,7 +85,7 @@ class Shim:
         self._stdin_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
     async def run(self) -> None:
-        if not (CALLER_ID.startswith("%") or CALLER_ID.startswith("cmdr:")):
+        if not (CALLER_ID.startswith(("%", "cmdr:"))):
             _err(
                 f"caller id missing or malformed ({CALLER_ID!r}); "
                 "periscope MCP inactive for this session"
@@ -141,10 +141,8 @@ class Shim:
                     return
         finally:
             stdin_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await stdin_task
-            except asyncio.CancelledError:
-                pass
 
     async def _stdin_pump(self, reader: asyncio.StreamReader) -> None:
         while True:
@@ -161,7 +159,7 @@ class Shim:
         try:
             await asyncio.wait_for(self._stdin_eof.wait(), timeout=secs)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     async def _serve(
@@ -209,10 +207,8 @@ class Shim:
         )
         for t in pending:
             t.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await t
-            except asyncio.CancelledError:
-                pass
 
     async def _stdin_to_socket(self, sock_w: asyncio.StreamWriter) -> None:
         while True:
@@ -299,10 +295,8 @@ class Shim:
                     "message": "periscope channel reconnected; please retry",
                 },
             }
-            try:
+            with contextlib.suppress(BrokenPipeError, OSError):
                 os.write(1, (json.dumps(err_resp) + "\n").encode())
-            except (BrokenPipeError, OSError):
-                pass
         self._inflight_ids.clear()
 
 
@@ -315,10 +309,8 @@ def _parse_json_object(line: bytes) -> dict | None:
 
 
 def main() -> None:
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(Shim().run())
-    except KeyboardInterrupt:
-        pass
 
 
 if __name__ == "__main__":

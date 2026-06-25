@@ -23,21 +23,23 @@ listener here only removes a stale socket file on startup before binding.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import threading
 import time
 import uuid
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypedDict
 
 from periscope import workspaces
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
-from periscope.panes import list_windows, note_focus, note_action
+from periscope.panes import list_windows, note_action, note_focus
 from periscope.pids import _attach_git_then_resolve_pids, stamp_new_window
-from periscope.store import set_window_fields, get_window
+from periscope.store import get_window, set_window_fields
 from periscope.tabs import open_tab
-from periscope.tmux import tmux, _run, _tmux_mutate
+from periscope.tmux import _run, _tmux_mutate, tmux
 
 CHANNEL_INSTRUCTIONS = """\
 You are running inside periscope, a dashboard the user has open in their
@@ -475,7 +477,7 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # the worktree; resolve_worktree_session registers the project + dedupes a
     # foreign-name clash, and returns None when cwd isn't in a git repo (no
     # worktree to anchor → fall back to the caller's session).
-    from periscope import open_ops, activity
+    from periscope import activity, open_ops
     workspace = str(arguments.get("workspace") or "same").strip().lower()
     if commander_caller:
         # The commander is ALWAYS cwd-anchored: it has no pane (cmdr:<id> is not
@@ -605,7 +607,8 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     tagged_workspace = None
     ws_id = str(arguments.get("workspace_id") or "").strip()
     if ws_id and pane_id:
-        from periscope import activity, workspaces as _workspaces
+        from periscope import activity
+        from periscope import workspaces as _workspaces
         if _workspaces.get_workspace(ws_id):
             activity.set_pane_workspace(pane_id, ws_id)
             tagged_workspace = ws_id
@@ -624,7 +627,6 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
 
 def _do_create_workspace_tool(pane: str, arguments: dict):
     """Create a periscope workspace (goal-scoped rail group)."""
-    from periscope import workspaces
     name = str(arguments.get("name", "")).strip()
     if not name:
         return _tool_result({"ok": False, "error": "name is required"})
@@ -758,6 +760,7 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     # (dismiss_dev_channels_consent_bg) — a top-level import back at it
     # would be circular.
     from fastapi import HTTPException
+
     from periscope.config import CLAUDE_EXEC
     from periscope.routes.sessions import _window_new_resume
     try:
@@ -773,7 +776,8 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     # tagging spawn_claude does. The resume result carries session:index; resolve
     # the pane id from it (the rail tag is keyed on %N).
     if ws_id:
-        from periscope import activity, workspaces as _workspaces
+        from periscope import activity
+        from periscope import workspaces as _workspaces
         if _workspaces.get_workspace(ws_id):
             target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
             pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
@@ -822,10 +826,8 @@ async def emit_channel_event(pane: str, content: str, meta: dict | None = None) 
 async def _mcp_listener() -> None:
     """Bind the unix socket and accept connections from channel_shim.py.
     Each connection runs a fresh per-pane MCP Server in _handle_mcp_connection."""
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.unlink(MCP_SOCKET_PATH)
-    except FileNotFoundError:
-        pass
 
     server = await asyncio.start_unix_server(
         _handle_mcp_connection, path=MCP_SOCKET_PATH
@@ -843,11 +845,9 @@ async def _mcp_listener() -> None:
         # underlying socket is gone, and an unbounded wait_closed() wedges
         # the lifespan handler so every dev save hangs the server.
         server.close()
-        server.close_clients()
-        try:
+        server.close_clients()  # ty: ignore[unresolved-attribute]  # asyncio.Server.close_clients() exists since 3.13
+        with contextlib.suppress(TimeoutError, Exception):
             await asyncio.wait_for(server.wait_closed(), timeout=1.0)
-        except (asyncio.TimeoutError, Exception):
-            pass
 
 
 async def _handle_mcp_connection(
@@ -869,7 +869,7 @@ async def _handle_mcp_connection(
             pane = hello.get("pane", "")
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
-        if not (pane.startswith("%") or pane.startswith("cmdr:")):
+        if not (pane.startswith(("%", "cmdr:"))):
             return
 
         await _run_mcp_for_pane(reader, writer, pane)
@@ -948,9 +948,9 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
     capture fan-out is offloaded to a thread so it doesn't block the event
     loop; pid resolution (which writes state.json and is not thread-safe) runs
     in the loop first, mirroring the /api/state route's ordering."""
-    from periscope.tmux import capture
-    from periscope.panes import parse_pane
     from periscope.activity import pane_status_lines
+    from periscope.panes import parse_pane
+    from periscope.tmux import capture
 
     windows = list_windows()
     _attach_git_then_resolve_pids(windows)  # attaches pid, strips pid_raw (not thread-safe)
@@ -989,8 +989,8 @@ def _do_list_workspaces_tool(pane: str, arguments: dict):
     the caller can pass a workspace_id to spawn_claude and fan tabs into a goal.
     `tagged_tabs` counts the workspace's currently-live tagged tabs (db rows for
     dead panes are excluded by intersecting with live pane ids)."""
-    from periscope.workspaces import all_workspaces
     from periscope.activity import pane_workspace_map
+    from periscope.workspaces import all_workspaces
 
     live_panes = {w.get("pane_id") for w in list_windows() if w.get("pane_id")}
     counts: dict[str, int] = {}
@@ -1019,7 +1019,9 @@ def _do_peek_tool(pane: str, arguments: dict):
     sibling pane's transcript). Bypasses get_turns_for_pane precisely because
     that helper re-derives pane_id and has the cwd fallback."""
     from periscope.turns import (
-        session_id_for_pane, jsonl_for_session, messages_from_jsonl,
+        jsonl_for_session,
+        messages_from_jsonl,
+        session_id_for_pane,
     )
 
     handle = str(arguments.get("handle", "")).strip()
@@ -1062,7 +1064,14 @@ def _do_terminate_tool(pane: str, arguments: dict):
 # itself stays plain data); `_call_tool` dispatches by iterating it. Adding a
 # tool is one record here plus one `_do_*` handler — no separate schema list and
 # dispatch branch to keep in sync.
-_CHANNEL_TOOLS = [
+class _ChannelTool(TypedDict):
+    name: str
+    description: str
+    inputSchema: dict[str, Any]
+    handler: Callable[..., Any]
+
+
+_CHANNEL_TOOLS: list[_ChannelTool] = [
     {
         "name": "notify",
         "description": (
@@ -1505,10 +1514,10 @@ async def _run_mcp_for_pane(
     per-pane state without needing thread-local lookups."""
     # Lazy-imported — MCP SDK is heavy; only loaded once any pane connects.
     import anyio
+    from mcp import types
     from mcp.server import Server
     from mcp.server.models import InitializationOptions
     from mcp.shared.message import SessionMessage
-    from mcp import types
     from mcp.types import JSONRPCMessage, ServerCapabilities, ToolsCapability
 
     server = Server("periscope")

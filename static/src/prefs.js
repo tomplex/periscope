@@ -45,7 +45,7 @@ export async function loadPrefs() {
     };
     await migrateLocalStorage();
     return prefsSignal.value;
-  } catch (err) {
+  } catch (_err) {
     prefsSignal.value = { ...prefsSignal.value, loaded: false };
     return null;
   }

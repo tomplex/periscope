@@ -18,20 +18,20 @@
 // detail-side, detail-review/-header/-iframe, detail-empty, review-start-card,
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
-import { useRef, useEffect, useState } from "preact/hooks";
-import { track } from "../track.js";
-import {
-  windows, activeTarget, railSelection, paneTranscript,
-  paneTabs, paneActiveTab, openFileTab, closeFileTab, setActiveTab,
-} from "../store.js";
-import { apiCall, rewriteLgtmHost, prUrl, targetQuery, relTime } from "../util.js";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { Inspector } from "../inspector/Inspector.jsx";
 import { getDetailMode, setDetailMode } from "../prefs.js";
+import { PreviewTab } from "../preview/PreviewTab.jsx";
+import {activeTarget, closeFileTab, openFileTab, paneActiveTab, 
+  paneTabs, paneTranscript,railSelection, setActiveTab,
+  windows, 
+} from "../store.js";
 import { Terminal } from "../terminal/Terminal.jsx";
 import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
-import { writeTerminalLine, scrollTerminalToBottom, isTerminalAtBottom, setTerminalFileCallback } from "../terminal/terminalCore.js";
-import { Inspector } from "../inspector/Inspector.jsx";
+import { isTerminalAtBottom, scrollTerminalToBottom, setTerminalFileCallback, writeTerminalLine } from "../terminal/terminalCore.js";
+import { track } from "../track.js";
+import { apiCall, prUrl, relTime, rewriteLgtmHost, targetQuery } from "../util.js";
 import { TranscriptView } from "./Transcript.jsx";
-import { PreviewTab } from "../preview/PreviewTab.jsx";
 
 // Match the modal's /api/pane cadence so the two views feel identical.
 const DETAIL_POLL_MS = 1500;
@@ -97,7 +97,7 @@ function lookupWindow(pid) {
 }
 
 function computeMode(w) {
-  if (!w || !w.is_claude) return "terminal";
+  if (!w?.is_claude) return "terminal";
   // Default to terminal; per-pid explicit choice (the Transcript/Terminal toggle
   // in the header) is persisted in UI prefs (detail_mode_by_pid) so it survives
   // reloads. We deliberately do NOT auto-flip to transcript once data is seen —
@@ -185,7 +185,7 @@ function PaneHeader({ w, mode, onMode }) {
     // layout), the segment is fully redundant with the branch chip — show
     // only the parent (the project name, e.g. "fdy") instead.
     const last = segs[segs.length - 1] || "";
-    const branchSlug = w.branch ? w.branch.replace(/[\/\\]/g, "-") : null;
+    const branchSlug = w.branch ? w.branch.replace(/[/\\]/g, "-") : null;
     let tail;
     if (branchSlug && last === branchSlug && segs.length >= 2) {
       tail = segs[segs.length - 2];
@@ -261,7 +261,7 @@ function PaneHeader({ w, mode, onMode }) {
   }
   return (
     <header id="detail-pane-header" class="detail-pane-header">
-      {parts.map((p, i) => <>{p}</>)}
+      {parts.map((p, _i) => <>{p}</>)}
       {w.status_line && (
         <span
           class="header-status"
@@ -348,7 +348,7 @@ function PaneDetail({ w }) {
     const el = document.getElementById("detail-pane-header");
     const detail = document.getElementById("detail");
     if (!el || !detail) return;
-    const apply = () => detail.style.setProperty("--detail-header-h", el.offsetHeight + "px");
+    const apply = () => detail.style.setProperty("--detail-header-h", `${el.offsetHeight}px`);
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(el);
@@ -465,7 +465,7 @@ function ReviewDetail({ worktreeKey }) {
   const mountedSrc = useRef(null);
   const everHadSession = useRef(false);
   const session = lgtmSessionForWorktree(worktreeKey);
-  const hasSession = !!(session && session.url);
+  const hasSession = !!(session?.url);
   if (hasSession) everHadSession.current = true;
   // Use LGTM's EMBEDDING contract (?embedded=1&host=periscope), same as the
   // modal review — NOT the bare standalone URL. The bare URL boots LGTM's full

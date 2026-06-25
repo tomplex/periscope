@@ -58,7 +58,7 @@ def _decode_pane_token(token: str) -> tuple[str, int]:
     try:
         raw = base64.urlsafe_b64decode(padded).decode("utf-8")
     except (binascii.Error, UnicodeDecodeError, ValueError):
-        raise HTTPException(status_code=400, detail="invalid pane token")
+        raise HTTPException(status_code=400, detail="invalid pane token") from None
     # Split on the LAST colon — session names may contain colons too.
     session, sep, index_str = raw.rpartition(":")
     if not sep or not session or not index_str.isdigit():

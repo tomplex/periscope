@@ -19,15 +19,18 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from periscope.gitutil import resolve_repo_and_branch
 from periscope.log import log
 from periscope.panes import list_windows
 from periscope.projects import (
-    all_projects, archive_project, create_project, get_project,
-    update_project, MAIN_KEY,
+    MAIN_KEY,
+    all_projects,
+    archive_project,
+    create_project,
+    get_project,
+    update_project,
 )
-from periscope.gitutil import resolve_repo_and_branch
 from periscope.tmux import _run, _tmux_mutate
-
 
 router = APIRouter()
 
@@ -79,7 +82,9 @@ def projects_adopt(body: AdoptBody):
                 break
         tmux_session = matched_session or (body.name or os.path.basename(pinned_dir))
     else:
-        # Adopt an unmanaged tmux session.
+        # Adopt an unmanaged tmux session. The XOR guard above guarantees
+        # tmux_session is truthy here (pinned_dir was falsy).
+        assert body.tmux_session is not None
         windows = [w for w in list_windows() if w["session"] == body.tmux_session]
         if not windows:
             raise HTTPException(404, f"no tmux session named {body.tmux_session!r}")
@@ -112,7 +117,7 @@ def projects_adopt(body: AdoptBody):
             base_branch=branch or None,
         )
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"ok": True, "pinned_dir": pinned_dir, **row}
 
 
@@ -281,7 +286,7 @@ def projects_promote(body: PromoteBody):
             base_branch=branch or None,
         )
     except ValueError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
 
     return {"ok": True, "pinned_dir": pinned_dir, **row}
 
@@ -299,7 +304,7 @@ def projects_discoverable():
 
     for p in all_projects().values():
         if p.get("repo"):
-            repos.add(os.path.realpath(p["repo"]))
+            repos.add(os.path.realpath(p["repo"] or ""))
 
     dev = Path.home() / "dev"
     if dev.is_dir():

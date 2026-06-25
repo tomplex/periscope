@@ -135,7 +135,7 @@ def test_ws_closes_on_subscription_eof(client, mocker):
         _ = ws.receive_text()
         _ = ws.receive_bytes()
         sub.push(None)  # EOF sentinel
-        with pytest.raises(Exception):  # starlette raises on closed ws
+        with pytest.raises(Exception):  # noqa: B017 — starlette's closed-ws exception type is an internal detail
             ws.receive_bytes()
 
 

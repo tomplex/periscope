@@ -107,7 +107,7 @@ export function UsagePill() {
   // Prefer the server-fetched plan percentages. Fall back to the
   // JSONL-derived 5h pill when the first fetch hasn't completed yet or the
   // OAuth endpoint is unreachable.
-  if (plan && plan.available && plan.meters) {
+  if (plan?.available && plan.meters) {
     const m = plan.meters;
     const order = ["session", "week_all", "week_opus", "week_sonnet"];
     const compactLabels = {
@@ -147,7 +147,7 @@ export function UsagePill() {
     );
   }
 
-  if (!fallback || !fallback.available) {
+  if (!fallback?.available) {
     return <div id="usage" class="usage"></div>;
   }
 

@@ -11,7 +11,10 @@ from pydantic import BaseModel
 
 from periscope import activity, open_ops, worktree_spawn
 from periscope.workspaces import (
-    create_workspace, get_workspace, update_workspace, archive_workspace,
+    archive_workspace,
+    create_workspace,
+    get_workspace,
+    update_workspace,
 )
 from periscope.workspaces import get_workspace as _get_ws
 
@@ -95,7 +98,8 @@ def workspaces_spawn(body: SpawnBody):
     ws = _get_ws(body.workspace_id)
     if not ws:
         raise HTTPException(404, f"no workspace {body.workspace_id!r}")
-    if not ws.get("base_repo"):
+    base_repo = ws.get("base_repo")
+    if not base_repo:
         raise HTTPException(400, "workspace has no base_repo to spawn from")
     base_branch = None
     base_wt = ws.get("base_worktree")
@@ -107,7 +111,7 @@ def workspaces_spawn(body: SpawnBody):
         )
         base_branch = out.stdout.strip() or None
     spawn = worktree_spawn.spawn_worktree(
-        ws["base_repo"], body.branch, base_branch=base_branch, fetch=False,
+        base_repo, body.branch, base_branch=base_branch, fetch=False,
     )
     result = open_ops.open_target(open_ops.PathTarget(path=spawn["path"]))
     activity.set_pane_workspace(result.claude_pane_id, body.workspace_id)

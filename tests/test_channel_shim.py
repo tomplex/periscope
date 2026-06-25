@@ -6,13 +6,13 @@ periscope restart without /clear.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
 from pathlib import Path
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,10 +49,8 @@ class FakeServer:
         close_clients = getattr(self._server, "close_clients", None)
         if close_clients is not None:
             close_clients()
-        try:
+        with contextlib.suppress(TimeoutError, Exception):
             await asyncio.wait_for(self._server.wait_closed(), timeout=1.0)
-        except (asyncio.TimeoutError, Exception):
-            pass
         self._server = None
 
     async def wait_for_connection(self, timeout: float = 2.0) -> None:
@@ -66,10 +64,8 @@ class FakeServer:
         self.records.append(record)
         try:
             hello = await reader.readline()
-            try:
+            with contextlib.suppress(Exception):
                 record["pane"] = json.loads(hello).get("pane")
-            except Exception:
-                pass
             self._conn_event.set()
             while True:
                 line = await reader.readline()
@@ -152,7 +148,7 @@ async def _terminate(proc: asyncio.subprocess.Process) -> None:
         proc.terminate()
         try:
             await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
 
@@ -302,7 +298,7 @@ def test_exits_cleanly_on_missing_tmux_pane(short_sock):
         )
         try:
             await asyncio.wait_for(proc.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.terminate()
             await proc.wait()
             pytest.fail("shim did not exit on missing TMUX_PANE")
@@ -330,7 +326,7 @@ def test_stdin_eof_terminates_shim(short_sock):
             proc.stdin.close()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=3.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("shim did not exit after stdin EOF")
             assert proc.returncode == 0
         finally:
@@ -341,7 +337,9 @@ def test_stdin_eof_terminates_shim(short_sock):
 
 
 def test_caller_id_prefers_explicit_handle(monkeypatch):
-    import importlib, channel_shim
+    import importlib
+
+    import channel_shim
     monkeypatch.setenv("PERISCOPE_CALLER_ID", "cmdr:abc")
     monkeypatch.setenv("TMUX_PANE", "%9")
     importlib.reload(channel_shim)

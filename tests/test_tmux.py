@@ -7,8 +7,13 @@ the wrappers compose argv correctly and return what they claim to return.
 import subprocess
 
 from periscope.tmux import (
-    tmux, capture, deliver_input, _run, _tmux_mutate,
-    _ANSI_SGR_RE, _FG_COLOR_RE,
+    _ANSI_SGR_RE,
+    _FG_COLOR_RE,
+    _run,
+    _tmux_mutate,
+    capture,
+    deliver_input,
+    tmux,
 )
 
 

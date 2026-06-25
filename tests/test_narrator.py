@@ -18,9 +18,9 @@ def narrator_enabled(monkeypatch):
 
 
 def _row(**over):
-    base = dict(pane_id="%1", session_id="sid-a", status="doing a thing",
-                generated_at=1000, jsonl_size=2048, seen_name="claude",
-                renamed_at=None)
+    base = {"pane_id": "%1", "session_id": "sid-a", "status": "doing a thing",
+                "generated_at": 1000, "jsonl_size": 2048, "seen_name": "claude",
+                "renamed_at": None}
     base.update(over)
     return PaneStatusRow(**base)
 

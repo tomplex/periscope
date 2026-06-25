@@ -13,6 +13,7 @@ def _patch(mocker, name, **kwargs):
             return mocker.patch(prefix, **kwargs)
         except (AttributeError, ModuleNotFoundError):
             continue
+    return None
 
 
 def test_session_delete_unmanaged_session_400(client, mocker):

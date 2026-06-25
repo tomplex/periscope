@@ -16,11 +16,12 @@ docs/superpowers/specs/2026-06-10-terminal-mirror-reconciliation-design.md
 """
 
 import asyncio
+import contextlib
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
-from periscope.log import log, _task
+from periscope.log import _task, log
 
 QUIESCE_S = 0.15        # reconcile this long after output stops
 MAX_INTERVAL_S = 1.0    # ... or at least this often during sustained output
@@ -394,7 +395,10 @@ class _SessionMirror:
             # Runs synchronously inside the reader task at this reply's
             # %end — the ordering rule. No %output can leapfrog the frame.
             cap = got.get("capture")
-            if isinstance(cap, ReplyError) or isinstance(reply, ReplyError):
+            # `cap` is always set (on_capture fires before on_display per the
+            # %end ordering), but guard None so the type checker — and a
+            # protocol violation — both narrow to the dead-pane path.
+            if cap is None or isinstance(cap, ReplyError) or isinstance(reply, ReplyError):
                 self._end_pane(pane_id)  # pane died mid-capture
                 return
             subs = self._subs.get(pane_id)
@@ -427,10 +431,8 @@ class _SessionMirror:
 
     def _kill(self) -> None:
         if self._proc is not None and self._proc.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 self._proc.terminate()
-            except ProcessLookupError:
-                pass
         # reader sees EOF → _finalize
 
     def _finalize(self) -> None:
@@ -480,8 +482,6 @@ async def shutdown() -> None:
         if mirror._reader is not None:
             mirror._reader.cancel()
         if mirror._proc is not None and mirror._proc.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 mirror._proc.terminate()
-            except ProcessLookupError:
-                pass
     _MIRRORS.clear()

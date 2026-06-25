@@ -30,7 +30,7 @@ def open_endpoint(body: OpenBody):
     try:
         result = open_ops.open_target(descriptor)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"tmux_session": result.tmux_session, "repo": result.repo,
             "claude_pid": result.claude_pid, "ui": result.ui}
 
