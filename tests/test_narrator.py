@@ -155,6 +155,63 @@ def test_parse_response_rail_strips_whitespace():
     assert out.rail == "comparing rates"
 
 
+# ---- parse_response: goal ----
+
+def test_parse_response_goal_extracted_and_stripped():
+    out = narrator.parse_response(
+        '{"status": "s", "goal": "  redesign the rail  ", "rename": null}')
+    assert out.goal == "redesign the rail"
+
+
+def test_parse_response_goal_missing_is_none():
+    assert narrator.parse_response('{"status": "s", "rename": null}').goal is None
+
+
+def test_parse_response_goal_overlength_or_nonstring_dropped_status_kept():
+    # A bad goal must never discard the status — it's carried-forward memory,
+    # not the meal.
+    long = "x" * (narrator.GOAL_MAX_LEN + 1)
+    assert narrator.parse_response(
+        f'{{"status": "s", "goal": "{long}", "rename": null}}').goal is None
+    out = narrator.parse_response('{"status": "s", "goal": 42, "rename": null}')
+    assert out is not None and out.goal is None and out.status == "s"
+
+
+# ---- update_arc / load_arc ----
+
+def test_update_arc_appends_newest_last():
+    arc = narrator.update_arc([], "sketching tracks", now=100)
+    arc = narrator.update_arc(arc, "writing the spec", now=200)
+    assert arc == [{"t": 100, "s": "sketching tracks"},
+                   {"t": 200, "s": "writing the spec"}]
+
+
+def test_update_arc_skips_consecutive_duplicate():
+    arc = narrator.update_arc([], "same line", now=100)
+    arc = narrator.update_arc(arc, "same line", now=200)
+    assert arc == [{"t": 100, "s": "same line"}]   # quiet stretch doesn't crowd
+
+
+def test_update_arc_caps_to_last_n():
+    arc: list[dict] = []
+    for i in range(narrator.ARC_MAX + 3):
+        arc = narrator.update_arc(arc, f"line {i}", now=i)
+    assert len(arc) == narrator.ARC_MAX
+    assert arc[-1]["s"] == f"line {narrator.ARC_MAX + 2}"   # newest kept
+    assert arc[0]["s"] == "line 3"                          # oldest dropped
+
+
+def test_load_arc_roundtrips_and_degrades_safely():
+    raw = _json.dumps([{"t": 1, "s": "a"}])
+    assert narrator.load_arc(raw) == [{"t": 1, "s": "a"}]
+    assert narrator.load_arc(None) == []
+    assert narrator.load_arc("not json") == []
+    assert narrator.load_arc('{"not": "a list"}') == []
+    # entries missing the status key are dropped
+    assert narrator.load_arc('[{"t": 1}, {"t": 2, "s": "ok"}]') == [
+        {"t": 2, "s": "ok"}]
+
+
 # ---- rename_decision ----
 
 def test_rename_decision_passes_valid_suggestion():
@@ -288,6 +345,31 @@ def test_prompt_without_workspace_unchanged():
         workspace_name=None, sibling_names=[],
     )
     assert "Auth refactor" not in p
+
+
+# ---- build_narrator_prompt: goal + arc ----
+
+def test_prompt_renders_goal_and_arc():
+    p = narrator.build_narrator_prompt(
+        window_name="workspace-design", branch=None, pr=None, cwd="/repo",
+        signals={}, goal="redesign the rail into track-based organization",
+        arc=[{"t": 0, "s": "sketching tracks"},
+             {"t": 580, "s": "wiring the filter"}], now=600)
+    assert "goal so far: redesign the rail into track-based organization" in p
+    assert "thread arc so far" in p
+    assert "sketching tracks" in p and "wiring the filter" in p
+    assert "10m ago" in p and "just now" in p   # ages 600s and 20s from now=600
+    # the goal contract is in the return shape
+    assert '"goal"' in p
+    # rename rules anchor on the goal, not the current step
+    assert "tracks the" in p.lower() or "the goal" in p.lower()
+
+
+def test_prompt_omits_goal_and_arc_when_absent():
+    p = narrator.build_narrator_prompt(
+        window_name="x", branch=None, pr=None, cwd="/repo", signals={})
+    assert "goal so far:" not in p
+    assert "thread arc so far" not in p   # the data header, not the rules prose
 
 
 # ---- disabled latch ----

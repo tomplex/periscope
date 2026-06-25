@@ -42,6 +42,8 @@ MAX_PER_TICK = 5
 RENAME_COOLDOWN_S = 1800
 STATUS_MAX_LEN = 72
 RAIL_MAX_LEN = 28
+GOAL_MAX_LEN = 120
+ARC_MAX = 6   # status lines kept as thread-divergence evidence
 
 Regen = Literal["session_switch", "size_changed", "first_sight"]
 
@@ -68,6 +70,7 @@ class NarratorResult:
     status: str
     rename: str | None
     rail: str | None = None
+    goal: str | None = None   # None = model gave none; caller carries previous
 
 
 def should_regenerate(row: PaneStatusRow | None, *, session_id: str,
@@ -128,7 +131,48 @@ def parse_response(raw: str) -> NarratorResult | None:
             rail = None
     else:
         rail = None
-    return NarratorResult(status=status, rename=rename, rail=rail)
+    goal = d.get("goal")
+    if isinstance(goal, str):
+        goal = goal.strip()
+        if not goal or len(goal) > GOAL_MAX_LEN:
+            goal = None
+    else:
+        goal = None
+    return NarratorResult(status=status, rename=rename, rail=rail, goal=goal)
+
+
+def update_arc(history: list[dict], status: str, now: int, *,
+               cap: int = ARC_MAX) -> list[dict]:
+    """Append this tick's status to the thread arc (newest last), skipping a
+    consecutive duplicate so a quiet stretch re-emitting the same line never
+    crowds out earlier phases. Keeps only the last `cap` entries."""
+    arc = list(history)
+    if not arc or arc[-1].get("s") != status:
+        arc.append({"t": now, "s": status})
+    return arc[-cap:]
+
+
+def load_arc(raw: str | None) -> list[dict]:
+    """Parse a stored history column. Model/DB boundary — any malformed value
+    degrades to an empty arc, never raises."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [e for e in data if isinstance(e, dict) and "s" in e]
+
+
+def _fmt_age(seconds: int) -> str:
+    """Coarse relative age for the thread-arc lines in the prompt."""
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    return f"{seconds // 3600}h ago"
 
 
 def rename_decision(suggestion: str | None, *, current_name: str,
@@ -156,9 +200,14 @@ def is_external_rename(row: PaneStatusRow, current_name: str) -> bool:
 def build_narrator_prompt(*, window_name: str, branch: str | None,
                           pr: int | None, cwd: str, signals: dict,
                           workspace_name: str | None = None,
-                          sibling_names: list[str] | None = None) -> str:
+                          sibling_names: list[str] | None = None,
+                          goal: str | None = None,
+                          arc: list[dict] | None = None, now: int = 0) -> str:
     """One pane's status+rename prompt. The rename half splices
-    rename_ai.RENAME_RULES so taste can't drift from the manual surface."""
+    rename_ai.RENAME_RULES so taste can't drift from the manual surface.
+    `goal` (the persistent thread carried across ticks) and `arc` (recent
+    status lines) are the memory that keeps the name at goal-altitude instead
+    of drifting to whatever step is happening right now."""
     lines = [
         "You watch one developer terminal pane running Claude Code and keep",
         "a one-line status for a dashboard of many such panes.",
@@ -180,17 +229,34 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
         "    name's concept; give the differentiating detail instead.",
         "  - No trailing punctuation or ellipsis. All lowercase.",
         "",
-        "Also decide whether the window deserves a NEW NAME. Suggest one ONLY",
-        "when the work has meaningfully diverged from the current name. Rules:",
+        "Also maintain `goal`: ONE sentence naming the overarching THREAD of",
+        "work in this tab — the persistent objective that outlives any single",
+        "step. A brainstorm → spec → implementation run on one feature is ONE",
+        "goal the whole way through. Rules:",
+        f"  - Max {GOAL_MAX_LEN} characters, plain prose (not a tab-name).",
+        "  - You are given 'goal so far' below when one exists. Echo it back",
+        "    UNCHANGED unless the work has genuinely moved to a different",
+        "    objective — not merely a new phase or sub-task of the same one.",
+        "  - With no goal yet, infer it from the EARLIEST intent you can see in",
+        "    the thread arc and prompts, not the latest action.",
+        "",
+        "Also decide whether the window deserves a NEW NAME. The name tracks the",
+        "GOAL, never the current step. Suggest a rename ONLY when the goal itself",
+        "changed — never for a new phase, file, or sub-task within one goal.",
         *[f"  {r}" for r in RENAME_RULES],
-        "  - Most calls should return null for rename — name churn is worse than",
-        "    a slightly stale name. Example: current_name='fs-liveness', recent",
-        "    work is still feature-store liveness checks → return",
-        '    {"status": "...", "rail": "...", "rename": null}.',
+        "  - Most calls MUST return rename: null — name churn is worse than a",
+        "    slightly stale name. Example: goal is still 'redesign the rail',",
+        "    current step is wiring a filter into it → keep the name, rename: null.",
         "",
         f"current_name: {window_name}",
         f"cwd: {cwd}",
     ]
+    if goal:
+        lines.append(f"goal so far: {goal}")
+    if arc:
+        lines.append("thread arc so far (oldest→newest):")
+        lines += [f"  - {_fmt_age(now - e.get('t', now))}: {e.get('s', '')}"
+                  for e in arc]
     if branch:
         lines.append(f"branch: {branch}" + (f", PR #{pr}" if pr else ""))
     prompts = signals.get("recent_user_prompts") or []
@@ -216,7 +282,8 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
     lines += [
         "",
         'Return ONLY a JSON object: {"status": "<status line>",'
-        ' "rail": "<short fragment>", "rename": null | "<new-name>"}.',
+        ' "rail": "<short fragment>", "goal": "<thread sentence>",'
+        ' "rename": null | "<new-name>"}.',
         "No markdown fences, no commentary, just the JSON object.",
     ]
     return "\n".join(lines)
@@ -294,22 +361,30 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     the previous row (natural retry next tick)."""
     current_name = w.get("name") or ""
     cwd = w.get("cwd") or ""
+    # Session switch (/clear, recycled pane id) is a fresh thread: the prior
+    # occupant's goal and arc are as stale as its cooldown, so we start blank.
+    fresh_session = reason == "session_switch"
+    prev_goal = None if fresh_session else (row.goal if row else None)
+    prev_arc = [] if fresh_session else load_arc(row.history if row else None)
     signals = transcript_summary_from_path(jsonl)
     git = cached_git_state(cwd) or {}
     pr = (cached_pr_state(cwd, git.get("branch")) or {}).get("pr")
     raw = claude_complete(build_narrator_prompt(
         window_name=current_name, branch=git.get("branch"), pr=pr,
         cwd=cwd, signals=signals, workspace_name=workspace_name,
-        sibling_names=sibling_names))
+        sibling_names=sibling_names, goal=prev_goal, arc=prev_arc, now=now))
     result = parse_response(raw)
     if result is None:
         log.warning("narrator: unparseable response for %s; keeping previous "
                     "status", pane_id)
         return
-    # Session switch resets the cooldown AND the external-rename memory: a
+    # A parse that drops `goal` (None) carries the previous one forward — never
+    # wipe the thread memory on a single bad/omitted field.
+    goal = result.goal or prev_goal
+    arc = update_arc(prev_arc, result.status, now)
+    # Session switch also resets the cooldown AND the external-rename memory: a
     # recycled pane id (or /clear) must not inherit the previous occupant's
     # renamed_at, and its seen_name is equally stale.
-    fresh_session = reason == "session_switch"
     renamed_at = None if fresh_session else (row.renamed_at if row else None)
     seen_name = current_name
     suggestion = result.rename
@@ -351,5 +426,6 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     activity.upsert_pane_status(PaneStatusRow(
         pane_id=pane_id, session_id=sid, status=result.status,
         generated_at=now, jsonl_size=size, seen_name=seen_name,
-        renamed_at=renamed_at, rail=result.rail))
+        renamed_at=renamed_at, rail=result.rail, goal=goal,
+        history=json.dumps(arc)))
     log.info("narrator: %s status %r", pane_id, result.status)
