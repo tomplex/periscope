@@ -137,6 +137,9 @@ async def lifespan(_app: FastAPI):
     # session-match fallback), so this must complete before serving.
     from periscope import tracks
     try:
+        folded = tracks.migrate_workspaces_to_tracks()
+        if folded:
+            log.info("folded %d pane(s) from workspaces into goal tracks", folded)
         seeded = tracks.seed_tracks(list_windows())
         if seeded:
             log.info("seeded %d pane_tracks row(s)", seeded)

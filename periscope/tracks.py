@@ -144,3 +144,47 @@ def seed_tracks(windows: list[dict]) -> int:
         activity.set_pane_track(pane_id, resolve_track_for_window(w))
         written += 1
     return written
+
+
+def migrate_workspaces_to_tracks() -> int:
+    """Fold legacy workspaces into goal tracks. A workspace WAS a goal track —
+    a curated cross-cutting group — so each non-archived workspace becomes a
+    track (id == workspace id, so re-runs are idempotent), and its
+    pane_workspaces members are tagged into it.
+
+    Skips a pane that ALREADY carries an explicit pane_tracks tag, so a later
+    user move/re-tag wins and a second run is a no-op. Goes fully inert once
+    pane_workspaces is emptied/dropped (the entity fold in T14b). Returns the
+    number of panes newly tagged. Run BEFORE seed_tracks so workspace panes get
+    their goal track and only the rest fall to repo-default."""
+    from periscope import workspaces as _ws
+
+    rows = _ws.all_workspaces()  # {ws_id: Workspace}
+    for ws_id, ws in rows.items():
+        if ws.get("archived_at"):
+            continue
+        if activity.get_track(ws_id) is None:
+            activity.insert_track({"id": ws_id, "name": ws.get("name") or ws_id,
+                                   "repo": ws.get("base_repo"),
+                                   "created_at": int(time.time()), "archived_at": None})
+    already = activity.pane_track_map()
+    written = 0
+    for pane_id, ws_id in activity.pane_workspace_map().items():
+        ws = rows.get(ws_id)
+        if not ws or ws.get("archived_at"):
+            continue
+        cur = already.get(pane_id)
+        if cur is not None and cur != ws_id:
+            # The pane already carries a track tag. Workspace membership
+            # OVERRIDES a repo-default tag (id == repo path — just the lazy
+            # fallback, e.g. a prior seed), but PRESERVES an explicit goal-track
+            # move (the user re-homed it). A repo-default row has repo == its id.
+            cur_row = activity.get_track(cur)
+            is_repo_default = bool(cur_row and cur_row.get("repo") == cur)
+            if not is_repo_default:
+                continue  # user moved it to another goal track → leave it
+        elif cur == ws_id:
+            continue  # already in this workspace's track → no-op
+        activity.set_pane_track(pane_id, ws_id)
+        written += 1
+    return written

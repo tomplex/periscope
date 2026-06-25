@@ -60,3 +60,46 @@ def test_teardown_targets_refuses_loose_and_repo_default(monkeypatch):
         tracks.teardown_targets(tracks.LOOSE_KEY, [])
     with pytest.raises(ValueError):
         tracks.teardown_targets(tid, [])  # repo-default is a catchall, never mass-kill
+
+
+def test_migrate_workspaces_to_tracks(clean_state):
+    """A legacy workspace folds into a goal track (id == ws id), its members
+    get tagged, an already-track-tagged pane is preserved, and re-runs no-op."""
+    from periscope import workspaces
+    ws = workspaces.create_workspace(name="Auth", base_repo="/r/fdy")
+    activity.set_pane_workspace("%1", ws["id"])
+    activity.set_pane_workspace("%2", ws["id"])
+    activity.set_pane_track("%2", "tk_other")  # user already moved %2 elsewhere
+
+    n = tracks.migrate_workspaces_to_tracks()
+    assert n == 1  # only %1 newly tagged
+    row = activity.get_track(ws["id"])
+    assert row and row["name"] == "Auth" and row["repo"] == "/r/fdy"
+    assert activity.get_pane_track("%1") == ws["id"]
+    assert activity.get_pane_track("%2") == "tk_other"  # move preserved
+    assert tracks.migrate_workspaces_to_tracks() == 0  # idempotent
+
+
+def test_migrate_workspaces_skips_archived(clean_state):
+    from periscope import workspaces
+    ws = workspaces.create_workspace(name="Gone", base_repo="/r/x")
+    activity.set_pane_workspace("%9", ws["id"])
+    workspaces.archive_workspace(ws["id"])
+    assert tracks.migrate_workspaces_to_tracks() == 0
+    assert activity.get_track(ws["id"]) is None
+    assert activity.get_pane_track("%9") is None
+
+
+def test_migrate_workspaces_overrides_repo_default(clean_state):
+    """Workspace membership overrides a repo-default tag (the lazy fallback /
+    a prior seed), but a goal-track move still wins (see the test above)."""
+    from periscope import workspaces
+    ws = workspaces.create_workspace(name="Auth", base_repo="/r/fdy")
+    # %3 was repo-default-seeded into the fdy track (id == repo path).
+    activity.insert_track({"id": "/r/fdy", "name": "fdy", "repo": "/r/fdy",
+                           "created_at": 1, "archived_at": None})
+    activity.set_pane_track("%3", "/r/fdy")
+    activity.set_pane_workspace("%3", ws["id"])
+
+    assert tracks.migrate_workspaces_to_tracks() == 1
+    assert activity.get_pane_track("%3") == ws["id"]  # repo-default overridden
