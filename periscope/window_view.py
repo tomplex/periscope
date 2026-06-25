@@ -24,7 +24,6 @@ from periscope.panes import (
     smooth_is_claude,
     smooth_spinner,
 )
-from periscope.projects import get_project, resolve_project_for_window
 from periscope.session_status import session_state_for
 from periscope.store import get_window
 from periscope.tmux import capture
@@ -171,19 +170,16 @@ def build_window_view(
         # resolves it. Drop the stale glyph rather than mislead.
         pr.pop("ci", None)
 
-    project_key = resolve_project_for_window(w)
-    project = get_project(project_key) if project_key else {}
-    # `project_key` is already canonical (post-migration / post-create); pass
-    # it directly without re-realpath. `affiliation` realpaths the cwd as
-    # part of its classification, which is the only realpath this code
-    # path needs to pay per poll.
-    pinned_for_aff = project_key if project_key and project_key != "__main__" else None
-    aff = affiliation(w.get("cwd", ""), pinned_for_aff, project.get("repo"))
-
-    # Function-scope import: workspaces → activity, avoiding any import-order
-    # surprise at module load. Resolves the pane's workspace tag (or None).
-    from periscope.workspaces import resolve_workspace_for_window
-    workspace_id = resolve_workspace_for_window(w)
+    # The track is the grouping authority. A repo-default track has id == repo
+    # (the anchor / pinned dir); a goal track carries its repo on the row (or
+    # None — spans repos, so no worktree affiliation). Source the affiliation
+    # chip from the track instead of the retired project registry.
+    track_id = resolve_track_for_window(w)
+    from periscope import activity
+    track_row = activity.get_track(track_id) or {}
+    aff_repo = track_row.get("repo")
+    pinned_for_aff = aff_repo if aff_repo else None
+    aff = affiliation(w.get("cwd", ""), pinned_for_aff, aff_repo)
 
     view = {
         **w, **parsed, **git, **pr,
@@ -203,15 +199,11 @@ def build_window_view(
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,
         "lgtm": lgtm,
-        # The track this tab belongs to (the new organizational primitive).
-        # workspace_id / project_pinned_dir are kept until the frontend stops
-        # reading them (Task 12/13); track_id supersedes both.
-        "track_id": (_tid := resolve_track_for_window(w)),
-        "track_name": track_label(_tid),
-        "workspace_id": workspace_id,
-        "project_pinned_dir": project_key,
-        "project_name": project.get("name"),
-        "project_archived": bool(project.get("archived_at")),
+        # The track this tab belongs to — the sole organizational primitive.
+        # (project_pinned_dir / workspace_id / project_name / project_archived
+        # are gone; the frontend groups purely by track_id.)
+        "track_id": track_id,
+        "track_name": track_label(track_id),
         "worktree_affiliation": aff,
     }
     return view, stamp_update

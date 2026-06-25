@@ -131,17 +131,17 @@ async def lifespan(_app: FastAPI):
     except Exception:
         log.warning("single-session migration failed; windows left in place",
                     exc_info=True)
-    # Synchronous (pre-serve) backfill: seed pane_projects from today's
-    # session-derived grouping so the rail is byte-identical at cutover. NOT
-    # _bg — the collapse follow-on deletes the session-match fallback, so this
-    # must already be a blocking step. Failure degrades to the fallback.
-    from periscope import projects as _projects
+    # Synchronous (pre-serve) seed: tag every managed pane with its resolved
+    # track so the rail groups by track_id from the first poll. Idempotent —
+    # skips already-tagged panes. NOT _bg: grouping is now track-only (no
+    # session-match fallback), so this must complete before serving.
+    from periscope import tracks
     try:
-        seeded = _projects.backfill_pane_projects()
+        seeded = tracks.seed_tracks(list_windows())
         if seeded:
-            log.info("backfilled %d pane_projects row(s)", seeded)
+            log.info("seeded %d pane_tracks row(s)", seeded)
     except Exception:
-        log.warning("pane_projects backfill failed; using session-match fallback",
+        log.warning("track seed failed; panes resolve to repo-default lazily",
                     exc_info=True)
     try:
         yield

@@ -337,19 +337,15 @@ def test_skipped_pane_still_reflects_fresh_focus(mocker, clean_state):
     assert view["focused_at"] == expected
 
 
-def test_window_view_emits_workspace_id(mocker, clean_state, fresh_activity_db):
-    from periscope import activity
+def test_window_view_drops_dead_project_workspace_fields(mocker, clean_state, fresh_activity_db):
+    """track_id supersedes project_pinned_dir / workspace_id (and the
+    project_name/project_archived fields the frontend never read off windows)
+    — the view no longer ships any of them."""
     from periscope.window_view import build_window_view
-    from periscope.workspaces import create_workspace
     _stub_subsystems(mocker)
-    ws = create_workspace(name="WS")
-    activity.set_pane_workspace("%9", ws["id"])
     view, _ = build_window_view(_window(pane_id="%9"), now_ts=1000)
-    assert view["workspace_id"] == ws["id"]
-
-
-def test_window_view_workspace_id_none_when_untagged(mocker, clean_state, fresh_activity_db):
-    from periscope.window_view import build_window_view
-    _stub_subsystems(mocker)
-    view, _ = build_window_view(_window(pane_id="%8"), now_ts=1000)
-    assert view.get("workspace_id") is None
+    assert "project_pinned_dir" not in view
+    assert "workspace_id" not in view
+    assert "project_name" not in view
+    assert "project_archived" not in view
+    assert "track_id" in view

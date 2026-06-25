@@ -45,16 +45,33 @@ def test_session_delete_kills_placement_set_sparing_ws_pane(
     assert all("%claude" not in a for a in calls)       # claude (ws) spared
 
 
-def test_window_new_simple_shell(client, mocker):
-    # display-message → cwd
-    _patch(mocker, "tmux", return_value="/tmp")
-    _patch(mocker, "_tmux_mutate", return_value=(True, "3"))
-    _patch(mocker, "_run", return_value=(0, ""))  # has-session: exists (never real tmux)
-    r = client.post("/api/window/new?session=main&mode=shell")
+def _fake_window_tmux(index="3", pane_id="%new"):
+    """tmux() side_effect for the plain-window path: window_id → index/pane_id
+    via display-message, everything else (send-keys etc.) → ''."""
+    def fake(*a):
+        if a and a[0] == "display-message":
+            if "#{window_index}" in a:
+                return index
+            if "#{pane_id}" in a:
+                return pane_id
+        return ""
+    return fake
+
+
+def test_window_new_simple_shell(client, mocker, fresh_activity_db):
+    # `session` is now a track id. An unknown track → cwd ~/dev; the window is
+    # created in MANAGED_SESSION; the new pane is tagged into the track param.
+    from periscope import config
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="3", pane_id="%new"))
+    _patch(mocker, "_tmux_mutate", return_value=(True, "@9"))  # new-window → window_id
+    _patch(mocker, "_run", return_value=(0, ""))  # has-session: exists
+    r = client.post("/api/window/new?session=untracked&mode=shell")
     body = r.json()
     assert body["ok"] is True
+    assert body["session"] == config.MANAGED_SESSION
     assert body["index"] == 3
-    assert body["target"] == "main:3"
+    assert body["target"] == f"{config.MANAGED_SESSION}:3"
+    assert fresh_activity_db.get_pane_track("%new") == "untracked"
 
 
 def test_window_new_resume_unknown_session_id(client, mocker):
@@ -98,92 +115,59 @@ def test_window_delete(client, mocker):
     assert body["target"] == "main:0"
 
 
-# === phase 3 ==============================================================
-# /api/window/new defaults cwd to project.pinned_dir when the target session
-# is owned by a non-archived non-main project.
+# === track-model "+ New tab" ==============================================
+# /api/window/new's `session` param is a TRACK ID. cwd comes from the track's
+# repo (repo-default track id == repo path; loose/None → ~/dev). The window is
+# always created in MANAGED_SESSION; the new pane is tagged into the track.
 
-def test_window_new_uses_project_pinned_dir(client, mocker):
-    # display-message would return /tmp; project pin should win.
-    pin = "/Users/foo/dev/myproj"
-    _patch(mocker, "resolve_project_for_window", return_value=pin)
-    _patch(mocker, "get_project", return_value={
-        "name": "myproj", "tmux_session": "myproj", "archived_at": None,
-    })
-    _patch(mocker, "tmux", return_value="/tmp")
-    _patch(mocker, "_run", return_value=(0, ""))  # has-session: exists
-    new_window = _patch(mocker, "_tmux_mutate", return_value=(True, "7"))
-    r = client.post("/api/window/new?session=myproj&mode=shell")
-    assert r.status_code == 200
-    # Verify _tmux_mutate was called with -c <pin>, not -c /tmp.
-    call = next(c for c in new_window.call_args_list if c.args[0] == "new-window")
-    assert "-c" in call.args
+def test_window_new_repo_track_uses_repo_cwd(client, mocker, fresh_activity_db):
+    # A repo-default track (id == repo path, repo set) → cwd is the repo.
+    from periscope import config, tracks
+    tid = tracks.repo_default_track("/Users/foo/dev/myproj")
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="7", pane_id="%p7"))
+    _patch(mocker, "_run", return_value=(0, ""))  # MANAGED_SESSION exists
+    mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@7"))
+    r = client.post(f"/api/window/new?session={tid}&mode=shell")
+    assert r.status_code == 200, r.text
+    call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
     cwd_idx = list(call.args).index("-c") + 1
-    assert call.args[cwd_idx] == pin
+    assert call.args[cwd_idx] == "/Users/foo/dev/myproj"
+    # Target MANAGED_SESSION exactly (=prefix), and tag the new pane.
+    assert call.args[2] == f"={config.MANAGED_SESSION}:"
+    assert fresh_activity_db.get_pane_track("%p7") == tid
 
 
-def test_window_new_archived_project_falls_through_to_cwd(client, mocker):
-    # An archived project shouldn't override; legacy display-message wins.
-    _patch(mocker, "resolve_project_for_window", return_value="/Users/foo/dev/myproj")
-    _patch(mocker, "get_project", return_value={
-        "name": "myproj", "tmux_session": "myproj", "archived_at": 1234567890,
-    })
-    _patch(mocker, "tmux", return_value="/tmp")
-    _patch(mocker, "_run", return_value=(0, ""))  # has-session: exists
-    new_window = _patch(mocker, "_tmux_mutate", return_value=(True, "1"))
-    r = client.post("/api/window/new?session=myproj&mode=shell")
-    assert r.status_code == 200
-    call = next(c for c in new_window.call_args_list if c.args[0] == "new-window")
-    cwd_idx = list(call.args).index("-c") + 1
-    assert call.args[cwd_idx] == "/tmp"
-
-
-def test_window_new_main_key_defaults_to_dev_dir(client, mocker):
-    # MAIN_KEY (dev / folded unmanaged sessions) → ~/dev, not pane-cwd.
+def test_window_new_loose_track_defaults_to_dev_dir(client, mocker, fresh_activity_db):
+    # A goal track with no repo (or an unknown track id) → cwd ~/dev.
     import os
-    _patch(mocker, "resolve_project_for_window", return_value="__main__")
-    _patch(mocker, "get_project", return_value={"name": "main", "tmux_session": "main"})
-    _patch(mocker, "tmux", return_value="/tmp")          # pane cwd must NOT win
-    _patch(mocker, "_run", return_value=(0, ""))          # has-session: exists
-    new_window = _patch(mocker, "_tmux_mutate", return_value=(True, "3"))
-    r = client.post("/api/window/new?session=main&mode=shell")
-    assert r.status_code == 200
-    call = next(c for c in new_window.call_args_list if c.args[0] == "new-window")
+
+    from periscope import tracks
+    tk = tracks.create_track(name="my goal")  # repo=None
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="2", pane_id="%pg"))
+    _patch(mocker, "_run", return_value=(0, ""))  # MANAGED_SESSION exists
+    mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@2"))
+    r = client.post(f"/api/window/new?session={tk['id']}&mode=shell")
+    assert r.status_code == 200, r.text
+    call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
     cwd_idx = list(call.args).index("-c") + 1
     assert call.args[cwd_idx] == os.path.expanduser("~/dev")
+    assert fresh_activity_db.get_pane_track("%pg") == tk["id"]
 
 
-def test_window_new_auto_creates_missing_session(client, mocker):
-    # Dev's "+ New tab" can target a dead "main" session — auto-create it
-    # instead of letting new-window 500.
+def test_window_new_creates_managed_session_when_absent(client, mocker, fresh_activity_db):
+    # If MANAGED_SESSION doesn't exist yet, new-session creates it (the new
+    # window IS the tab — no follow-on new-window).
     import os
-    _patch(mocker, "resolve_project_for_window", return_value="__main__")
-    _patch(mocker, "get_project", return_value={"name": "main", "tmux_session": "main"})
-    _patch(mocker, "tmux", return_value="")
-    _patch(mocker, "_run", return_value=(1, ""))          # has-session: missing
-    mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "1"))
-    r = client.post("/api/window/new?session=main&mode=shell")
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="1", pane_id="%p1"))
+    _patch(mocker, "_run", return_value=(1, ""))  # has-session: missing
+    mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@1"))
+    r = client.post("/api/window/new?session=untracked&mode=shell")
     assert r.status_code == 200
-    body = r.json()
-    assert body["target"] == "main:1"
     new_session = next(c for c in mutate.call_args_list if c.args[0] == "new-session")
     cwd_idx = list(new_session.args).index("-c") + 1
     assert new_session.args[cwd_idx] == os.path.expanduser("~/dev")
-    # No new-window after creating the session — new-session's window IS the tab.
     assert not any(c.args[0] == "new-window" for c in mutate.call_args_list)
-
-
-def test_window_new_no_auto_create_for_project_sessions(client, mocker):
-    # Auto-create is gated on MAIN_KEY: a typo'd session= on a project
-    # call must error, not silently mint a session.
-    _patch(mocker, "resolve_project_for_window", return_value="/Users/foo/dev/myproj")
-    _patch(mocker, "get_project", return_value={
-        "name": "myproj", "tmux_session": "myproj", "archived_at": None,
-    })
-    _patch(mocker, "_run", return_value=(1, ""))          # has-session: missing
-    mutate = _patch(mocker, "_tmux_mutate", return_value=(False, "no such session"))
-    r = client.post("/api/window/new?session=myproj-typo&mode=shell")
-    assert r.status_code == 500
-    assert not any(c.args[0] == "new-session" for c in mutate.call_args_list)
+    assert fresh_activity_db.get_pane_track("%p1") == "untracked"
 
 
 # /api/window/new-worktree — the new endpoint.

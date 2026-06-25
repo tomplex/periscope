@@ -217,12 +217,19 @@ from periscope import store
 
 
 @needs_tmux
-def test_open_target_path_spawns_dormant_then_focuses(tmp_git_repo, clean_state, tmux_test_server):
+def test_open_target_path_spawns_dormant_then_focuses(
+        tmp_git_repo, clean_state, fresh_activity_db, tmux_test_server):
+    from periscope import tracks
     repo = str(tmp_git_repo)
     r1 = open_ops.open_target(open_ops.PathTarget(path=repo))
     assert r1.repo == repo and r1.claude_pid
     assert r1.tmux_session == config.MANAGED_SESSION
     assert r1.tmux_session in r1.ui["worktrees_by_repo"][repo]
+    # Opened panes are tagged into the repo's default track (pane_tracks),
+    # NOT pane_projects — grouping is track-only.
+    tid = tracks.repo_default_track(repo)
+    assert tid == repo  # repo-default track id == repo path
+    assert fresh_activity_db.get_pane_track(r1.claude_pane_id) == tid
     r2 = open_ops.open_target(open_ops.PathTarget(path=repo))   # idempotent focus
     assert r2.tmux_session == r1.tmux_session
 

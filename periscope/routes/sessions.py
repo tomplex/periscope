@@ -18,8 +18,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from periscope import activity, tracks
 from periscope.channels import dismiss_dev_channels_consent_bg
-from periscope.config import CLAUDE_EXEC
+from periscope.config import CLAUDE_EXEC, MANAGED_SESSION
 from periscope.panes import (
     _acted_at,
     _active_per_session,
@@ -206,56 +207,57 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
     }
 
 
-def _window_new_plain(session: str, exec_cmd: str, mode: str) -> dict:
-    """Non-resume window spawn: resolve cwd, open a new window in `session`,
-    optionally run `exec_cmd`."""
-    # Project pin always wins over active-pane cwd. If the target session
-    # is owned by a non-archived non-main project, new tabs land in the
-    # project's pinned_dir — even if the user has cd'd away in the active
-    # pane. MAIN_KEY (dev, incl. folded unmanaged sessions) lands in ~/dev;
-    # pane-cwd inheritance survives only for archived-project sessions.
-    project_key = resolve_project_for_window({"session": session})
-    project = get_project(project_key) if project_key else {}
-    if project_key == MAIN_KEY:
-        cwd = os.path.expanduser("~/dev")
-    elif project_key and not project.get("archived_at"):
-        cwd = project_key  # the projects dict's key IS the pinned_dir path
-        # (see _lookup_key in periscope/projects.py for the realpath normalization).
-    else:
-        cwd = tmux(
-            "display-message", "-t", f"{session}:", "-p", "#{pane_current_path}",
-        ).strip() or os.path.expanduser("~")
+def _window_new_plain(track_id: str, exec_cmd: str, mode: str) -> dict:
+    """Non-resume "+ New tab": open a window in the one shared MANAGED_SESSION
+    and tag the new pane into `track_id` (the `session` query param now carries
+    a track id, not a tmux session name — the rail groups by track).
 
-    # Dev's "+ New tab" can target __main__'s tmux_session while it doesn't
-    # exist (dev can be populated purely by folded ad-hoc sessions). Create
-    # it instead of letting `new-window -t` error. Gated on MAIN_KEY so a
-    # typo'd session= on any other call still errors instead of silently
-    # minting a session. Same -P -F rationale as _window_new_resume:
-    # base-index 1 makes hardcoded :0 targets no-op.
-    code, _ = _run(["tmux", "has-session", "-t", session])
-    if code != 0 and project_key == MAIN_KEY:
+    cwd comes from the track: a repo-default track (id == repo path) carries
+    its repo; a goal/loose track (repo None) or an unknown id → ~/dev.
+    """
+    row = activity.get_track(track_id)
+    cwd = row["repo"] if row and row.get("repo") else os.path.expanduser("~/dev")
+
+    # Everything lives in one session. Create it lazily, else add a window.
+    # Capture the STABLE #{window_id} (-P -F), never the index — with one
+    # session under `renumber-windows on`, indices drift the moment any window
+    # closes. Target MANAGED_SESSION with `=` (exact match): a bare `-t periscope`
+    # PREFIX-matches sibling sessions (e.g. periscope-input).
+    code, _ = _run(["tmux", "has-session", "-t", f"={MANAGED_SESSION}"])
+    if code != 0:
         ok, msg = _tmux_mutate(
-            "new-session", "-d", "-s", session, "-c", cwd,
-            "-P", "-F", "#{window_index}",
+            "new-session", "-d", "-s", MANAGED_SESSION, "-c", cwd,
+            "-P", "-F", "#{window_id}",
         )
         if not ok:
-            raise HTTPException(500, f"failed to create session '{session}': {msg}")
+            raise HTTPException(500, f"failed to create session '{MANAGED_SESSION}': {msg}")
     else:
         ok, msg = _tmux_mutate(
-            "new-window", "-t", f"{session}:", "-c", cwd,
-            "-P", "-F", "#{window_index}",
+            "new-window", "-t", f"={MANAGED_SESSION}:", "-c", cwd,
+            "-P", "-F", "#{window_id}",
         )
         if not ok:
             raise HTTPException(500, msg)
-    try:
-        index = int(msg)
-    except ValueError:
-        raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
-    target = f"{session}:{index}"
+    window_id = msg.strip()
+    if not window_id.startswith("@"):
+        raise HTTPException(500, f"tmux returned unexpected window id: {msg!r}")
 
+    # Resolve the new window's index (for the recency stamp, which is keyed by
+    # session:index in window_view) and its pane id (for the track tag).
+    index_s = tmux("display-message", "-t", window_id, "-p", "#{window_index}").strip()
+    try:
+        index = int(index_s)
+    except ValueError:
+        raise HTTPException(500, f"tmux returned unexpected index: {index_s!r}") from None
+    pane_id = tmux("display-message", "-t", window_id, "-p", "#{pane_id}").strip()
+    if pane_id:
+        tracks.move_pane(pane_id, track_id)
+
+    target = f"{MANAGED_SESSION}:{index}"
     cmd = exec_cmd.strip()
     _send_and_stamp(target, cmd)
-    return {"ok": True, "session": session, "index": index, "target": target, "mode": mode, "exec": cmd}
+    return {"ok": True, "session": MANAGED_SESSION, "index": index,
+            "target": target, "mode": mode, "exec": cmd}
 
 
 @router.post("/api/window/new")
