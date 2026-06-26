@@ -82,18 +82,18 @@ def test_placeholder_row_is_not_a_session_switch():
 
 def test_parse_response_happy_path():
     out = narrator.parse_response(
-        '{"status": "fixing flaky reconcile test", "rename": null}')
+        '{"status": "fixing flaky reconcile test", "name": "fs-build"}')
     assert out == narrator.NarratorResult(
-        status="fixing flaky reconcile test", rename=None)
+        status="fixing flaky reconcile test", name="fs-build")
 
 
-def test_parse_response_with_rename():
-    out = narrator.parse_response('{"status": "s", "rename": "fs-liveness"}')
-    assert out.rename == "fs-liveness"
+def test_parse_response_with_name():
+    out = narrator.parse_response('{"status": "s", "name": "fs-liveness"}')
+    assert out.name == "fs-liveness"
 
 
 def test_parse_response_strips_code_fences():
-    out = narrator.parse_response('```json\n{"status": "s", "rename": null}\n```')
+    out = narrator.parse_response('```json\n{"status": "s", "name": null}\n```')
     assert out is not None and out.status == "s"
 
 
@@ -106,52 +106,52 @@ def test_parse_response_non_dict_json_returns_none():
 
 
 def test_parse_response_missing_status_returns_none():
-    assert narrator.parse_response('{"rename": "x"}') is None
+    assert narrator.parse_response('{"name": "x"}') is None
 
 
 def test_parse_response_overlength_status_returns_none():
     long = "x" * (narrator.STATUS_MAX_LEN + 1)
-    assert narrator.parse_response(f'{{"status": "{long}", "rename": null}}') is None
+    assert narrator.parse_response(f'{{"status": "{long}", "name": null}}') is None
 
 
-def test_parse_response_non_string_rename_dropped_status_kept():
-    out = narrator.parse_response('{"status": "s", "rename": 42}')
-    assert out is not None and out.rename is None
+def test_parse_response_non_string_name_dropped_status_kept():
+    out = narrator.parse_response('{"status": "s", "name": 42}')
+    assert out is not None and out.name is None
 
 
 def test_parse_response_rail_accepted_at_limit():
     rail = "x" * narrator.RAIL_MAX_LEN
     out = narrator.parse_response(
-        f'{{"status": "s", "rail": "{rail}", "rename": null}}')
+        f'{{"status": "s", "rail": "{rail}", "name": null}}')
     assert out.rail == rail
 
 
-def test_parse_response_rail_over_limit_dropped_status_and_rename_kept():
-    # A bad rail must never discard a good status or rename — the rail is
+def test_parse_response_rail_over_limit_dropped_status_and_name_kept():
+    # A bad rail must never discard a good status or name — the rail is
     # the optional garnish, not the meal.
     rail = "x" * (narrator.RAIL_MAX_LEN + 1)
     out = narrator.parse_response(
-        f'{{"status": "s", "rail": "{rail}", "rename": "fs-liveness"}}')
+        f'{{"status": "s", "rail": "{rail}", "name": "fs-liveness"}}')
     assert out is not None
     assert out.rail is None
     assert out.status == "s"
-    assert out.rename == "fs-liveness"
+    assert out.name == "fs-liveness"
 
 
 def test_parse_response_rail_empty_or_nonstring_dropped():
     assert narrator.parse_response(
-        '{"status": "s", "rail": "  ", "rename": null}').rail is None
+        '{"status": "s", "rail": "  ", "name": null}').rail is None
     assert narrator.parse_response(
-        '{"status": "s", "rail": 42, "rename": null}').rail is None
+        '{"status": "s", "rail": 42, "name": null}').rail is None
 
 
 def test_parse_response_rail_missing_is_none():
-    assert narrator.parse_response('{"status": "s", "rename": null}').rail is None
+    assert narrator.parse_response('{"status": "s", "name": null}').rail is None
 
 
 def test_parse_response_rail_strips_whitespace():
     out = narrator.parse_response(
-        '{"status": "s", "rail": "  comparing rates  ", "rename": null}')
+        '{"status": "s", "rail": "  comparing rates  ", "name": null}')
     assert out.rail == "comparing rates"
 
 
@@ -159,12 +159,12 @@ def test_parse_response_rail_strips_whitespace():
 
 def test_parse_response_goal_extracted_and_stripped():
     out = narrator.parse_response(
-        '{"status": "s", "goal": "  redesign the rail  ", "rename": null}')
+        '{"status": "s", "goal": "  redesign the rail  ", "name": null}')
     assert out.goal == "redesign the rail"
 
 
 def test_parse_response_goal_missing_is_none():
-    assert narrator.parse_response('{"status": "s", "rename": null}').goal is None
+    assert narrator.parse_response('{"status": "s", "name": null}').goal is None
 
 
 def test_parse_response_goal_overlength_or_nonstring_dropped_status_kept():
@@ -172,8 +172,8 @@ def test_parse_response_goal_overlength_or_nonstring_dropped_status_kept():
     # not the meal.
     long = "x" * (narrator.GOAL_MAX_LEN + 1)
     assert narrator.parse_response(
-        f'{{"status": "s", "goal": "{long}", "rename": null}}').goal is None
-    out = narrator.parse_response('{"status": "s", "goal": 42, "rename": null}')
+        f'{{"status": "s", "goal": "{long}", "name": null}}').goal is None
+    out = narrator.parse_response('{"status": "s", "goal": 42, "name": null}')
     assert out is not None and out.goal is None and out.status == "s"
 
 
@@ -300,7 +300,7 @@ def test_build_narrator_prompt_carries_all_signals():
     assert "implement liveness check" in p
     assert "Edit anthology/liveness.py" in p
     assert str(narrator.STATUS_MAX_LEN) in p     # status length rule in-prompt
-    assert '"rename": null' in p                 # the keep-name few-shot
+    assert '"name"' in p                         # name-the-goal contract
     assert "JSON" in p
 
 
@@ -365,6 +365,21 @@ def test_prompt_renders_goal_and_arc():
     assert "tracks the" in p.lower() or "the goal" in p.lower()
 
 
+def test_prompt_names_the_goal_not_a_rename_decision():
+    # Regression (the brainstorm-skill→normalization case): the OLD "decide
+    # whether to rename" framing made Haiku return null every tick even when the
+    # name no longer matched the goal — it's loss-averse on the rename decision.
+    # The fix reframes it as "name the goal" (the model is good at naming, bad at
+    # deciding to rename); a code-side diff turns a changed name into a rename.
+    p = narrator.build_narrator_prompt(
+        window_name="x", branch=None, pr=None, cwd="/repo", signals={},
+        goal="some goal")
+    low = p.lower()
+    assert "name` " in low or "`name`" in low      # outputs a name field
+    assert "not a yes/no rename decision" in low    # the reframe is explicit
+    assert "return it unchanged" in low             # keep = echo current_name
+
+
 def test_prompt_omits_goal_and_arc_when_absent():
     p = narrator.build_narrator_prompt(
         window_name="x", branch=None, pr=None, cwd="/repo", signals={})
@@ -421,7 +436,7 @@ def tick_env(fresh_activity_db, tmp_path, monkeypatch):
         "set_session": set_session,
         "haiku_calls": [],
         "tmux_calls": [],
-        "response": '{"status": "fixing flaky reconcile test", "rename": null}',
+        "response": '{"status": "fixing flaky reconcile test", "name": null}',
         # What the pre-apply display-message recheck sees; defaults to the
         # _pane() default name so the snapshot matches and renames apply.
         "live_name": "claude",
@@ -466,7 +481,7 @@ def test_tick_generates_first_status(tick_env):
 
 def test_tick_persists_rail(tick_env):
     tick_env["response"] = ('{"status": "fixing flaky reconcile test", '
-                            '"rail": "comparing hit rates", "rename": null}')
+                            '"rail": "comparing hit rates", "name": null}')
     narrator.tick([_pane()])
     assert activity.get_pane_status("%1").rail == "comparing hit rates"
 
@@ -495,7 +510,7 @@ def test_tick_idle_pane_never_regenerates(tick_env):
 
 
 def test_tick_applies_rename_and_records_event(tick_env):
-    tick_env["response"] = '{"status": "s", "rename": "fs-liveness"}'
+    tick_env["response"] = '{"status": "s", "name": "fs-liveness"}'
     narrator.tick([_pane()])
     assert ("rename-window", "-t", "s:0", "fs-liveness") in tick_env["tmux_calls"]
     row = activity.get_pane_status("%1")
@@ -534,7 +549,7 @@ def test_tick_external_rename_starts_cooldown_instead_of_renaming(tick_env):
     activity.upsert_pane_status(activity.PaneStatusRow(
         pane_id="%1", session_id="sid-a", status="old", generated_at=1,
         jsonl_size=size + 1, seen_name="claude", renamed_at=None))
-    tick_env["response"] = '{"status": "s", "rename": "fs-liveness"}'
+    tick_env["response"] = '{"status": "s", "name": "fs-liveness"}'
     now = int(_time.time())
     narrator.tick([_pane(name="human-chosen")])   # differs from seen_name
     assert tick_env["tmux_calls"] == []           # never clobber the human
@@ -549,7 +564,7 @@ def test_tick_rename_cooldown_blocks_but_status_updates(tick_env):
     activity.upsert_pane_status(activity.PaneStatusRow(
         pane_id="%1", session_id="sid-a", status="old", generated_at=1,
         jsonl_size=size + 1, seen_name="claude", renamed_at=now - 60))
-    tick_env["response"] = '{"status": "new status", "rename": "fs-liveness"}'
+    tick_env["response"] = '{"status": "new status", "name": "fs-liveness"}'
     narrator.tick([_pane()])
     assert tick_env["tmux_calls"] == []
     row = activity.get_pane_status("%1")
@@ -568,7 +583,7 @@ def test_tick_recheck_drops_rename_when_live_name_moved(tick_env):
     activity.upsert_pane_status(activity.PaneStatusRow(
         pane_id="%1", session_id="sid-a", status="old", generated_at=1,
         jsonl_size=size + 1, seen_name="claude", renamed_at=old_stamp))
-    tick_env["response"] = '{"status": "new status", "rename": "fs-liveness"}'
+    tick_env["response"] = '{"status": "new status", "name": "fs-liveness"}'
     tick_env["live_name"] = "human-renamed"              # moved mid-tick
     narrator.tick([_pane()])
     assert not any(c[0] == "rename-window" for c in tick_env["tmux_calls"])
@@ -592,7 +607,7 @@ def test_tick_session_switch_resets_cooldown(tick_env):
 
 def test_tick_persists_goal_and_arc(tick_env):
     tick_env["response"] = ('{"status": "wiring the filter", '
-                            '"goal": "redesign the rail", "rename": null}')
+                            '"goal": "redesign the rail", "name": null}')
     narrator.tick([_pane()])
     row = activity.get_pane_status("%1")
     assert row.goal == "redesign the rail"
@@ -648,7 +663,7 @@ def test_tick_session_switch_resets_goal_and_arc(tick_env):
 
 def test_tick_records_status_event_with_goal(tick_env):
     tick_env["response"] = ('{"status": "wiring the filter", '
-                            '"goal": "redesign the rail", "rename": null}')
+                            '"goal": "redesign the rail", "name": null}')
     narrator.tick([_pane()])
     log = activity.status_log_for("%1")
     assert len(log) == 1

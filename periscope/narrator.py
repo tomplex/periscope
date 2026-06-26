@@ -68,7 +68,8 @@ def _enabled() -> bool:
 @dataclass(frozen=True)
 class NarratorResult:
     status: str
-    rename: str | None
+    name: str | None          # the model's best name for the goal (may == current);
+                              # rename_decision diffs it against current_name
     rail: str | None = None
     goal: str | None = None   # None = model gave none; caller carries previous
 
@@ -104,8 +105,8 @@ def pick_regenerations(candidates: list[tuple[int, str]], *,
 def parse_response(raw: str) -> NarratorResult | None:
     """Model output is an external boundary — the ONLY defensive parsing
     in this module. None means: keep the previous status, retry next tick
-    naturally. A non-string rename drops just the rename, and a bad rail
-    drops just the rail — never the status."""
+    naturally. A non-string name drops just the name (→ keep current), and a
+    bad rail drops just the rail — never the status."""
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned,
@@ -122,8 +123,8 @@ def parse_response(raw: str) -> NarratorResult | None:
     status = status.strip()
     if not status or len(status) > STATUS_MAX_LEN:
         return None
-    rename = d.get("rename")
-    rename = rename.strip() or None if isinstance(rename, str) else None
+    name = d.get("name")
+    name = name.strip() or None if isinstance(name, str) else None
     rail = d.get("rail")
     if isinstance(rail, str):
         rail = rail.strip()
@@ -138,7 +139,7 @@ def parse_response(raw: str) -> NarratorResult | None:
             goal = None
     else:
         goal = None
-    return NarratorResult(status=status, rename=rename, rail=rail, goal=goal)
+    return NarratorResult(status=status, name=name, rail=rail, goal=goal)
 
 
 def update_arc(history: list[dict], status: str, now: int, *,
@@ -240,13 +241,19 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
         "  - With no goal yet, infer it from the EARLIEST intent you can see in",
         "    the thread arc and prompts, not the latest action.",
         "",
-        "Also decide whether the window deserves a NEW NAME. The name tracks the",
-        "GOAL, never the current step. Suggest a rename ONLY when the goal itself",
-        "changed — never for a new phase, file, or sub-task within one goal.",
+        "Finally output `name`: the 1-3 word tab name that best fits the GOAL",
+        "above. This is NOT a yes/no rename decision — you are just naming the",
+        "goal, and the dashboard renames the tab only if your name differs from",
+        "current_name. (Haiku is reliably good at naming and bad at deciding to",
+        "rename — so name the goal, and let the diff decide.)",
+        "  - If current_name already describes the goal, return it UNCHANGED.",
+        "    A stable goal keeps its name — most ticks return current_name as-is.",
+        "  - If current_name does NOT describe the goal — wrong topic, or the",
+        "    goal moved on (e.g. current_name 'brainstorm-skill' but the goal is",
+        "    now a data-normalization pipeline) — return the name that fits it.",
+        "  - Judge fit against the GOAL, not the current step: a new phase, file,",
+        "    or sub-task within the same goal keeps the SAME name (no churn).",
         *[f"  {r}" for r in RENAME_RULES],
-        "  - Most calls MUST return rename: null — name churn is worse than a",
-        "    slightly stale name. Example: goal is still 'redesign the rail',",
-        "    current step is wiring a filter into it → keep the name, rename: null.",
         "",
         f"current_name: {window_name}",
         f"cwd: {cwd}",
@@ -283,7 +290,7 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
         "",
         'Return ONLY a JSON object: {"status": "<status line>",'
         ' "rail": "<short fragment>", "goal": "<thread sentence>",'
-        ' "rename": null | "<new-name>"}.',
+        ' "name": "<1-3 word tab name for the goal>"}.',
         "No markdown fences, no commentary, just the JSON object.",
     ]
     return "\n".join(lines)
@@ -387,7 +394,9 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     # renamed_at, and its seen_name is equally stale.
     renamed_at = None if fresh_session else (row.renamed_at if row else None)
     seen_name = current_name
-    suggestion = result.rename
+    # The model names the goal every tick (may == current_name); rename_decision
+    # turns that into an actual rename only when it differs and passes guards.
+    suggestion = result.name
     if not fresh_session and row is not None and is_external_rename(row, current_name):
         # Someone renamed the window since we last looked — never clobber;
         # record the new name and start the cooldown instead of renaming.
