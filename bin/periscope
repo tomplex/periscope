@@ -57,6 +57,15 @@ case "$1" in
   <true/>
   <key>ThrottleInterval</key>
   <integer>5</integer>
+  <!-- launchd's default RLIMIT_NOFILE is 256. EMFILE here doesn't crash the
+       process (KeepAlive can't recycle it) — it wedges, 500ing forever. Give
+       headroom well above legit usage (~1 fd/pane); the worker tick warns long
+       before this if fds actually run away. -->
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>1024</integer>
+  </dict>
   <key>StandardOutPath</key>
   <string>$CONFIG_DIR/launchd-stdout.log</string>
   <key>StandardErrorPath</key>
