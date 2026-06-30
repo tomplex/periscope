@@ -13,6 +13,7 @@ happens at import time — the connection opens lazily on first use.
 import asyncio
 import contextlib
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -838,6 +839,17 @@ def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
 # it captures each active Claude pane, runs the context-reset check, and
 # drives the narrator (semantic status + auto-rename).
 
+_FD_WARN = 512   # half the launchd SoftResourceLimits NumberOfFiles cap (1024)
+
+
+def _fd_count() -> int | None:
+    """This process's open-fd count via /dev/fd (macOS). None if unreadable."""
+    try:
+        return len(os.listdir("/dev/fd"))
+    except OSError:
+        return None
+
+
 def _worker_tick(last_ctx: dict) -> None:
     """One worker pass. Blocking (tmux + git subprocesses) — run off-loop."""
     panes: list[tuple[dict, dict]] = []
@@ -870,6 +882,12 @@ def _worker_tick(last_ctx: dict) -> None:
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()
+    # fd watchdog: EMFILE doesn't crash the server, it wedges it silently
+    # (the Jun-2026 bg_commander connection leak). Surface a climbing fd
+    # count loudly while there's still headroom under the 1024 soft cap.
+    n = _fd_count()
+    if n is not None and n >= _FD_WARN:
+        log.warning("open fd count high: %d (soft cap 1024)", n)
 
 
 async def run_worker() -> None:
