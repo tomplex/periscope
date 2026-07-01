@@ -224,7 +224,12 @@ def parse_plan_usage(data: dict) -> dict:
     # own meter keyed week_<slug>.
     for lim in data.get("limits", []):
         model = ((lim.get("scope") or {}).get("model") or {}).get("display_name")
-        if not model or not lim.get("is_active"):  # dormant until Anthropic flips it live
+        pct = float(lim.get("percent") or 0)
+        # Show once there's any usage OR the sub-limit is the binding constraint.
+        # `is_active` alone means "currently-binding limit" (like weekly_all),
+        # so it stays False while Fable usage accumulates below its cap —
+        # gating on it alone would hide the meter during exactly that window.
+        if not model or not (lim.get("is_active") or pct > 0):
             continue
         slug = re.sub(r"[^a-z0-9]+", "_", model.lower()).strip("_")
         resets_at = None
@@ -232,7 +237,6 @@ def parse_plan_usage(data: dict) -> dict:
         if isinstance(rs, str):
             with contextlib.suppress(ValueError):
                 resets_at = int(datetime.fromisoformat(rs).timestamp())
-        pct = float(lim.get("percent") or 0)
         meters[f"week_{slug}"] = {
             "label": f"Current week ({model} only)",
             "percent": round(pct),

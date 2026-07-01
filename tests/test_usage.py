@@ -56,9 +56,24 @@ def test_parse_plan_usage_includes_scoped_model_meter_when_active():
     assert out["meters"]["week_fable"]["label"] == "Current week (Fable only)"
 
 
+def test_parse_plan_usage_surfaces_scoped_meter_with_usage_but_not_active():
+    """is_active means 'currently-binding limit', not 'has usage' — it stays
+    False while Fable accumulates below its cap. Any percent > 0 surfaces it."""
+    sample = {
+        "five_hour": {"utilization": 6.0, "resets_at": "2026-07-01T17:10:00+00:00"},
+        "limits": [{
+            "kind": "weekly_scoped", "group": "weekly", "percent": 1, "is_active": False,
+            "resets_at": "2026-07-05T14:00:00+00:00",
+            "scope": {"model": {"id": None, "display_name": "Fable"}},
+        }],
+    }
+    out = parse_plan_usage(sample)
+    assert out["meters"]["week_fable"]["percent"] == 1
+
+
 def test_parse_plan_usage_skips_dormant_scoped_model_meter():
-    """A scoped limit with is_active=False (the pre-launch dormant state) is
-    NOT surfaced — matches how null seven_day_opus/sonnet stay hidden."""
+    """A scoped limit with is_active=False AND percent 0 (the pre-launch
+    dormant state) is NOT surfaced — matches null seven_day_opus/sonnet."""
     sample = {
         "five_hour": {"utilization": 6.0, "resets_at": "2026-07-01T17:10:00+00:00"},
         "limits": [{
