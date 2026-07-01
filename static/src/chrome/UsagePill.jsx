@@ -109,13 +109,18 @@ export function UsagePill() {
   // OAuth endpoint is unreachable.
   if (plan?.available && plan.meters) {
     const m = plan.meters;
-    const order = ["session", "week_all", "week_opus", "week_sonnet"];
+    const known = ["session", "week_all", "week_opus", "week_sonnet"];
+    // Scoped per-model meters (week_fable, ...) are keyed dynamically by the
+    // server — append any we don't know about, in a stable order.
+    const extra = Object.keys(m).filter((k) => !known.includes(k)).sort();
+    const order = [...known, ...extra];
     const compactLabels = {
       session: "session",
       week_all: "week",
       week_opus: "opus",
       week_sonnet: "sonnet",
     };
+    const labelFor = (k) => compactLabels[k] || k.replace(/^week_/, "");
     const present = order.filter((k) => m[k]);
     const stale =
       plan.fetched_at &&
@@ -136,7 +141,7 @@ export function UsagePill() {
         {present.map((k) => (
           <MeterBar
             key={k}
-            label={compactLabels[k]}
+            label={labelFor(k)}
             m={m[k]}
             resets={fmtReset(m[k].resets_at)}
             pace={paceLines(m[k])}
