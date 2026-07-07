@@ -31,6 +31,13 @@ let termReconnectedNotified = false; // only print "reconnecting…" once per ou
 // The pane's app-level mouse reporting state, pushed by the server at attach
 // (tmux eats the DECSET, so xterm can't observe it — see the wheel handler).
 let mouseReportingOn = false;
+// Wheel scroll sensitivity. We emit one SGR wheel report per this many lines
+// of accumulated (cell-height-normalized) travel — mirroring the old
+// wheel→arrow cadence, which normalized by cell height rather than firing per
+// DOM event. Higher = coarser/slower. `wheelAccumPx` carries sub-line remainder
+// between events so slow trackpad scrolls still register.
+const WHEEL_LINES_PER_TICK = 1;
+let wheelAccumPx = 0;
 let fitAddon = null;
 let webglAddon = null;
 let searchAddon = null;
@@ -149,19 +156,23 @@ function urlAtClick(e, t) {
   return null;
 }
 
-// Pixel → 1-based (col,row) on the .xterm-screen grid, for SGR mouse coords.
-// Same screen-relative math as urlAtClick (padding/scrollbar-safe), clamped
-// into range so a report always lands on a valid cell.
+// Pixel → 1-based (col,row) on the .xterm-screen grid, for SGR mouse coords,
+// plus the cell height so the wheel handler can normalize pixel deltas into
+// lines. Same screen-relative math as urlAtClick (padding/scrollbar-safe),
+// clamped into range so a report always lands on a valid cell.
 function wheelCell(e, t) {
   const screen = t.element?.querySelector(".xterm-screen");
   if (!screen) return null;
   const rect = screen.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return null;
+  const cellH = rect.height / t.rows;
   const col = Math.floor((e.clientX - rect.left) / (rect.width / t.cols)) + 1;
-  const row = Math.floor((e.clientY - rect.top) / (rect.height / t.rows)) + 1;
+  const row = Math.floor((e.clientY - rect.top) / cellH) + 1;
   return {
     col: Math.min(Math.max(col, 1), t.cols),
     row: Math.min(Math.max(row, 1), t.rows),
+    cellH,
+    pageH: rect.height,
   };
 }
 
@@ -330,11 +341,24 @@ export function startLiveTerminal(target) {
     if (!mouseReportingOn || !ev.deltaY) return true;
     const cell = wheelCell(ev, term);
     if (!cell) return true;
-    const btn = ev.deltaY < 0 ? 64 : 65;   // SGR wheel-up / wheel-down button
+    ev.preventDefault();                   // always own the event once we're here
+    // Normalize the delta to pixels (line-/page-mode wheels → px), then to
+    // lines via cell height, accumulating remainder so speed matches the old
+    // per-line cadence instead of firing once per DOM event.
+    let px = ev.deltaY;
+    if (ev.deltaMode === 1) px *= cell.cellH;       // DOM_DELTA_LINE
+    else if (ev.deltaMode === 2) px *= cell.pageH;  // DOM_DELTA_PAGE
+    if ((px < 0) !== (wheelAccumPx < 0)) wheelAccumPx = 0;  // reversal → drop stale remainder
+    wheelAccumPx += px;
+    const step = cell.cellH * WHEEL_LINES_PER_TICK;
+    let ticks = Math.trunc(wheelAccumPx / step);
+    if (!ticks) return false;
+    wheelAccumPx -= ticks * step;
+    ticks = Math.max(-8, Math.min(8, ticks));        // cap a fling to a sane burst
+    const btn = ticks < 0 ? 64 : 65;                 // SGR wheel-up / wheel-down
     if (termWs && termWs.readyState === WebSocket.OPEN) {
-      termWs.send(`\x1b[<${btn};${cell.col};${cell.row}M`);
+      termWs.send(`\x1b[<${btn};${cell.col};${cell.row}M`.repeat(Math.abs(ticks)));
     }
-    ev.preventDefault();
     return false;                          // suppress xterm's arrow/scroll fallback
   });
 
