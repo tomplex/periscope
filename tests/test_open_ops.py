@@ -240,6 +240,46 @@ def test_open_target_non_git_path_raises(tmp_path, clean_state):
 
 
 @needs_tmux
+def test_open_path_tags_only_its_own_panes(
+        tmp_path, clean_state, fresh_activity_db, tmux_test_server):
+    """Opening a project must tag ONLY the panes at its toplevel. The shared
+    MANAGED_SESSION holds EVERY project's panes, so a session-wide re-tag
+    moves the entire rail into the newly opened track (the sts2-seed-finder
+    clobber: one open re-homed all 31 tabs)."""
+    from periscope import tracks
+
+    def _repo(name: str) -> str:
+        d = tmp_path / name
+        d.mkdir()
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "init", "-q"], cwd=d, check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-qm", "i"],
+                       cwd=d, env=env, check=True)
+        return os.path.realpath(d)
+
+    repo_a, repo_b = _repo("a"), _repo("b")
+    r_a = open_ops.open_target(open_ops.PathTarget(path=repo_a))
+    assert fresh_activity_db.get_pane_track(r_a.claude_pane_id) == repo_a
+    # A user goal-track move must also survive later opens.
+    tk = tracks.create_track(name="my goal")
+    moved_pane = next(
+        w["pane_id"] for w in open_ops.list_windows()
+        if w.get("pane_id") and w["pane_id"] != r_a.claude_pane_id
+        and os.path.realpath(w.get("cwd") or "") == repo_a)
+    tracks.move_pane(moved_pane, tk["id"])
+
+    r_b = open_ops.open_target(open_ops.PathTarget(path=repo_b))
+    assert fresh_activity_db.get_pane_track(r_b.claude_pane_id) == repo_b
+    # B's open left A's panes alone.
+    assert fresh_activity_db.get_pane_track(r_a.claude_pane_id) == repo_a
+    assert fresh_activity_db.get_pane_track(moved_pane) == tk["id"]
+    # Re-opening A (focus path) keeps the explicit goal-track tag too.
+    open_ops.open_target(open_ops.PathTarget(path=repo_a))
+    assert fresh_activity_db.get_pane_track(moved_pane) == tk["id"]
+
+
+@needs_tmux
 def test_open_target_pr_stamps_linked_pr(tmp_git_repo, clean_state, tmux_test_server, monkeypatch):
     repo = str(tmp_git_repo)
     monkeypatch.setattr(projects, "fetch_pr_into_worktree",

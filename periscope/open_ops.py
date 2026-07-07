@@ -209,14 +209,18 @@ def _open_path(path: str) -> OpenResult:
         "",
     )
     ui = place_in_rail(session, project, pane_pids or [claude_pid])
-    # Tag every pane in this session into the repo's default track so grouping
-    # works off track metadata (the rail groups purely by track_id), not the
-    # session. The repo-default track is keyed on the repo path, so a fresh
-    # boot re-derives the same id.
-    from periscope import tracks
+    # Tag THIS open's panes into the repo's default track so grouping works off
+    # track metadata (the rail groups purely by track_id). Scope is panes at
+    # `toplevel` with no existing tag: the shared MANAGED_SESSION holds every
+    # project's panes, so a session-wide re-tag moves the whole rail into this
+    # track (the sts2-seed-finder clobber); an existing tag is either already
+    # right or a user's goal-track move — never overwrite it here.
+    from periscope import activity, tracks
     tid = tracks.repo_default_track(repo)
     for w in list_windows():
-        if w.get("session") == session and w.get("pane_id"):
+        if (w.get("session") == session and w.get("pane_id")
+                and os.path.realpath(w.get("cwd") or "") == toplevel
+                and activity.get_pane_track(w["pane_id"]) is None):
             tracks.move_pane(w["pane_id"], tid)
     return OpenResult(tmux_session=session, repo=repo, claude_pid=claude_pid,
                       claude_pane_id=claude_pane_id, ui=ui)
