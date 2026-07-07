@@ -22,7 +22,7 @@ import { computed, signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
 import * as prefs from "../prefs.js";
-import { windows } from "../store.js";
+import { tracks, windows } from "../store.js";
 import { track } from "../track.js";
 import { apiCall } from "../util.js";
 import { trackLabel } from "../split/railTree.js";
@@ -87,8 +87,12 @@ export function LauncherModal() {
 
   const commands = prefs.getCommands();
   const bs = branches.value;
-  // Loose / repo-less track: no worktree branches to pick → command list only.
-  const showBranchPicker = bs.length > 0 || newBranchName.value != null;
+  // Branch picker shows when the track has live branches OR a repo on its
+  // registry row (an EMPTY repo-backed goal track can still "+ new branch…" —
+  // the backend spawns the worktree off the track's repo). Loose / repo-less
+  // track: command list only.
+  const trackRepo = (tracks.value || []).find((t) => t.id === trackId)?.repo || null;
+  const showBranchPicker = bs.length > 0 || newBranchName.value != null || !!trackRepo;
 
   async function run(cmd) {
     const exec = cmd?.exec || "";
@@ -120,7 +124,7 @@ export function LauncherModal() {
           <h2>+ New tab</h2>
           <button id="launcher-close" title="close" onClick={close}>×</button>
         </header>
-        <p class="launcher-modal-sub" id="launcher-session-name">Add to track: {trackLabel(trackId, windows.value)}</p>
+        <p class="launcher-modal-sub" id="launcher-session-name">Add to track: {trackLabel(trackId, windows.value, tracks.value)}</p>
 
         {showBranchPicker && (
           <div class="launcher-section">

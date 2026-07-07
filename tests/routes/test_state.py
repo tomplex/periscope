@@ -209,3 +209,22 @@ def test_state_includes_workspaces(client, mocker, clean_state, fresh_activity_d
     body = client.get("/api/state").json()
     ids = [w["id"] for w in body["workspaces"]]
     assert ws["id"] in ids
+
+
+def test_state_includes_tracks_registry(client, mocker, clean_state, fresh_activity_db):
+    """The payload carries non-archived track rows — the rail needs them to
+    render EMPTY goal tracks (live windows can't surface a track with no tabs)."""
+    from periscope import tracks
+    kept = tracks.create_track(name="Fresh goal", repo="/dev/fdy")
+    gone = tracks.create_track(name="Old goal")
+    tracks.dissolve_track(gone["id"])          # archived → excluded
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+
+    body = client.get("/api/state").json()
+    rows = {t["id"]: t for t in body["tracks"]}
+    assert rows[kept["id"]] == {"id": kept["id"], "name": "Fresh goal", "repo": "/dev/fdy"}
+    assert gone["id"] not in rows

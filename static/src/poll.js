@@ -10,6 +10,7 @@ import {
   editingTarget,
   projects,
   syncTabsFromWindows,
+  tracks,
   usage,
   windows,
   workspaces,
@@ -40,6 +41,7 @@ export async function poll() {
     windows.value = data.windows || [];
     projects.value = data.projects || [];
     workspaces.value = data.workspaces || [];
+    tracks.value = data.tracks || [];
     syncTabsFromWindows(windows.value);
     // UsagePill reads { plan, fallback }.
     usage.value = { plan: data.usage_plan, fallback: data.usage };

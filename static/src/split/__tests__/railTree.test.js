@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeLiveAndPrefs, paneChip } from "../railTree.js";
+import { mergeLiveAndPrefs, paneChip, trackLabel } from "../railTree.js";
 
 // Window factory. `track_id` is the backend-resolved grouping authority
 // (always present — repo-default fallback guarantees a value). `branch` is
@@ -100,6 +100,46 @@ describe("mergeLiveAndPrefs — track grouping", () => {
     // two distinct branch buckets ("master" + the empty fallback) → sub-clusters
     expect(m.branchesByTrack.tk_a.length).toBe(2);
     expect(m.tabsByTrack.tk_a).toEqual(["a", "b"]);
+  });
+});
+
+describe("mergeLiveAndPrefs — empty goal tracks (registry rows)", () => {
+  const goal = { id: "tk_fresh", name: "Fresh goal", repo: "/dev/fdy" };
+  const repoDefault = { id: "/dev/fdy", name: "fdy", repo: "/dev/fdy" };
+
+  it("an empty goal track renders (appended after live tracks)", () => {
+    const m = mergeLiveAndPrefs([win({ pid: "a", track_id: "tk_a" })], [], [], {}, [goal]);
+    expect(m.trackOrder).toEqual(["tk_a", "tk_fresh"]);
+    expect(m.tabsByTrack.tk_fresh).toEqual([]);      // no tabs yet
+    expect(m.branchesByTrack.tk_fresh).toEqual([]);  // flat render
+  });
+
+  it("an empty repo-default track stays hidden (lazy catchall, id == repo)", () => {
+    const m = mergeLiveAndPrefs([win({ pid: "a", track_id: "tk_a" })], [], [], {}, [repoDefault]);
+    expect(m.trackOrder).toEqual(["tk_a"]);
+  });
+
+  it("an empty goal track keeps its pref position", () => {
+    const m = mergeLiveAndPrefs(
+      [win({ pid: "a", track_id: "tk_a" })], [], [],
+      { trackOrder: ["tk_fresh", "tk_a"] }, [goal],
+    );
+    expect(m.trackOrder).toEqual(["tk_fresh", "tk_a"]);
+  });
+
+  it("a populated goal track isn't duplicated by its registry row", () => {
+    const m = mergeLiveAndPrefs([win({ pid: "a", track_id: "tk_fresh" })], [], [], {}, [goal]);
+    expect(m.trackOrder).toEqual(["tk_fresh"]);
+    expect(m.tabsByTrack.tk_fresh).toEqual(["a"]);
+  });
+
+  it("trackLabel resolves an empty track's name from the registry", () => {
+    expect(trackLabel("tk_fresh", [], [goal])).toBe("Fresh goal");
+    // windows win over the registry when present
+    expect(trackLabel("tk_fresh", [win({ track_id: "tk_fresh", track_name: "live name" })], [goal]))
+      .toBe("live name");
+    // no row, no window → basename fallback unchanged
+    expect(trackLabel("/dev/myproj", [], [])).toBe("myproj");
   });
 });
 

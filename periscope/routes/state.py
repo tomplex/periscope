@@ -124,10 +124,21 @@ def state():
         v for v in all_workspaces().values() if not v.get("archived_at")
     ]
 
+    # Track registry rows (non-archived), so the rail can render EMPTY goal
+    # tracks — live windows alone can't surface a track with no tabs yet, and
+    # a freshly created track must be visible to receive its first tab.
+    from periscope.activity import all_tracks
+    tracks_view = [
+        {"id": t["id"], "name": t["name"], "repo": t["repo"]}
+        for t in all_tracks()
+        if not t.get("archived_at")
+    ]
+
     return {
         "windows": result,
         "projects": projects_view,
         "workspaces": workspaces_view,
+        "tracks": tracks_view,
         "ts": int(time.time()),
         "usage": cached_claude_usage(),
         "usage_plan": cached_plan_usage(),

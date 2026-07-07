@@ -25,7 +25,7 @@ import { useRef, useState } from "preact/hooks";
 import { passesFilter } from "../filter.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
 import * as prefs from "../prefs.js";
-import { currentFilter, dragState, projects, railSelection, windows, workspaces } from "../store.js";
+import { currentFilter, dragState, projects, railSelection, tracks, windows, workspaces } from "../store.js";
 import { track } from "../track.js";
 import { apiCall, targetQuery } from "../util.js";
 import { ActivitySection, AttentionTop } from "./AttentionSections.jsx";
@@ -98,7 +98,7 @@ function syncRailPrefs() {
     trackOrder: prefs.getTrackOrder(),
     tabsByTrack: prefs.getTabsByTrack(),
     branchOrderByTrack: prefs.getBranchOrderByTrack(),
-  });
+  }, tracks.value);
   const prefTrackOrder = prefs.getTrackOrder();
   const prefTabsByTrack = prefs.getTabsByTrack();
 
@@ -132,7 +132,7 @@ function currentMergedOrder() {
     trackOrder: prefs.getTrackOrder(),
     tabsByTrack: prefs.getTabsByTrack(),
     branchOrderByTrack: prefs.getBranchOrderByTrack(),
-  });
+  }, tracks.value);
 }
 
 async function reorderTracks(draggedKey, targetKey, insertAfter) {
@@ -211,12 +211,17 @@ export function Rail() {
   // Across-all-windows pid → window map (the flat per-track tab lists).
   const windowsByPid = {};
   for (const w of live) windowsByPid[w.pid] = w;
+  // Registry rows feed EMPTY goal tracks into the tree; a track-scope lens
+  // narrows them the same way scopeWindows narrows the live set.
+  const allTracks = tracks.value;
+  const scopedTracks = (!trackScope || trackScope === "all")
+    ? allTracks : allTracks.filter((t) => t.id === trackScope);
   const { trackOrder, tabsByTrack, branchesByTrack, tabsByBranch } = mergeLiveAndPrefs(
     live, projects.value, workspaces.value, {
       trackOrder: prefs.getTrackOrder(),
       tabsByTrack: prefs.getTabsByTrack(),
       branchOrderByTrack: prefs.getBranchOrderByTrack(),
-    }
+    }, scopedTracks
   );
 
   // --- Selection -----------------------------------------------------------
@@ -416,7 +421,7 @@ export function Rail() {
         const trackCollapsed = collapsed[`repo:${trackId}`] === true;
         const branches = branchesByTrack[trackId] || [];
         const multiBranch = branches.length >= 2;
-        const label = trackLabel(trackId, live);
+        const label = trackLabel(trackId, live, allTracks);
 
         // Rolled-up status + filter-dim over ALL the track's tabs.
         const trackPids = tabsByTrack[trackId] || [];
