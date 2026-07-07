@@ -28,6 +28,9 @@ let termIntentionalClose = false;   // suppress reconnect when we close on purpo
 let termReconnectTimer = null;
 let termReconnectAttempt = 0;
 let termReconnectedNotified = false; // only print "reconnecting…" once per outage
+// The pane's app-level mouse reporting state, pushed by the server at attach
+// (tmux eats the DECSET, so xterm can't observe it — see the wheel handler).
+let mouseReportingOn = false;
 let fitAddon = null;
 let webglAddon = null;
 let searchAddon = null;
@@ -144,6 +147,22 @@ function urlAtClick(e, t) {
     if (cx >= s && cx < e2) return m[0];
   }
   return null;
+}
+
+// Pixel → 1-based (col,row) on the .xterm-screen grid, for SGR mouse coords.
+// Same screen-relative math as urlAtClick (padding/scrollbar-safe), clamped
+// into range so a report always lands on a valid cell.
+function wheelCell(e, t) {
+  const screen = t.element?.querySelector(".xterm-screen");
+  if (!screen) return null;
+  const rect = screen.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const col = Math.floor((e.clientX - rect.left) / (rect.width / t.cols)) + 1;
+  const row = Math.floor((e.clientY - rect.top) / (rect.height / t.rows)) + 1;
+  return {
+    col: Math.min(Math.max(col, 1), t.cols),
+    row: Math.min(Math.max(row, 1), t.rows),
+  };
 }
 
 function installUrlClickHandler(t) {
@@ -298,16 +317,26 @@ export function startLiveTerminal(target) {
   term.open(containerEl);
   term.focus();
 
-  // Mouse wheel over a full-screen TUI (alt-screen buffer — Claude Code,
-  // vim, less) is converted by xterm into arrow-key presses (xterm's
-  // "alternate scroll", DECSET 1007). Claude reads those Up/Down arrows as
-  // prompt-history navigation, so a trackpad scroll silently walks back
-  // through sent prompts. Returning false suppresses xterm's wheel handling
-  // entirely — no scroll, no arrow injection. Gated on the alt buffer so
-  // the normal buffer keeps real scrollback scrolling. (If a future
-  // alt-screen app captures the wheel via mouse mode, this would block it
-  // too; Claude doesn't, so it's the right call here.)
-  term.attachCustomWheelEventHandler(() => term.buffer.active.type !== "alternate");
+  // Mouse wheel. tmux consumes the app's mouse-mode DECSET (it's a tmux pane
+  // flag, `mouse_any_flag`), so the xterm mirror never sees `\e[?1003h` and
+  // can't forward wheel as mouse events — it converts them to arrow keys,
+  // which Claude reads as prompt-history navigation (scrolling walks back
+  // through sent prompts). When the server reports the pane has mouse
+  // reporting on, synthesize SGR wheel reports at the hovered cell and send
+  // them through the input channel so the app scrolls its own transcript —
+  // the scrollback the user actually wants. Otherwise (plain shell, no app
+  // mouse) let xterm scroll its local scrollback.
+  term.attachCustomWheelEventHandler((ev) => {
+    if (!mouseReportingOn || !ev.deltaY) return true;
+    const cell = wheelCell(ev, term);
+    if (!cell) return true;
+    const btn = ev.deltaY < 0 ? 64 : 65;   // SGR wheel-up / wheel-down button
+    if (termWs && termWs.readyState === WebSocket.OPEN) {
+      termWs.send(`\x1b[<${btn};${cell.col};${cell.row}M`);
+    }
+    ev.preventDefault();
+    return false;                          // suppress xterm's arrow/scroll fallback
+  });
 
   // Try WebGL renderer; fall back to canvas on init failure (older Chromes,
   // headless contexts, GPU-disabled environments). The addon writes to its
@@ -486,6 +515,8 @@ function connectTerminalWs(target, hintCols = 0, hintRows = 0) {
         const msg = JSON.parse(event.data);
         if (msg.type === "size") {
           term.resize(msg.cols, msg.rows);
+        } else if (msg.type === "mouse") {
+          mouseReportingOn = !!msg.on;
         }
       } catch (_) {
         // Not JSON; treat as data

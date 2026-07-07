@@ -61,7 +61,8 @@ def _fake_tmux(calls=None):
         if calls is not None:
             calls.append(args)
         if args and args[0] == "display-message":
-            return "80|24|0|0|0|%7|main|0"
+            # fields: width|height|cx|cy|alt|pane_id|session|window|mouse_any
+            return "80|24|0|0|0|%7|main|0|0"
         if args and args[0] == "capture-pane":
             return "hello\n"
         return ""
@@ -76,6 +77,8 @@ def test_ws_pane_initial_paint(client, mocker):
     with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
         payload = json.loads(ws.receive_text())
         assert payload == {"type": "size", "cols": 80, "rows": 24}
+        mouse = json.loads(ws.receive_text())
+        assert mouse == {"type": "mouse", "on": False}
         blob = ws.receive_bytes()
         assert b"hello" in blob
         assert b"\x1b[2J" in blob  # initial paint still clears before body
@@ -96,7 +99,8 @@ def test_ws_pane_recency_stamp_keyed_on_session_index(client, mocker):
     _patch_mirror(mocker)
 
     with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
-        _ = ws.receive_text()
+        _ = ws.receive_text()   # size
+        _ = ws.receive_text()   # mouse
         _ = ws.receive_bytes()
 
     assert recency_stamps_for("main:0")["acted_at"] > 0
@@ -116,7 +120,8 @@ def test_ws_pane_resizes_tmux_before_capture(client, mocker):
     with client.websocket_connect(
         "/ws/pane?pane_id=%7&cols=100&rows=30"
     ) as ws:
-        _ = ws.receive_text()
+        _ = ws.receive_text()   # size
+        _ = ws.receive_text()   # mouse
         _ = ws.receive_bytes()
 
     op_seq = [c[0] for c in calls]
@@ -138,7 +143,8 @@ def test_ws_streams_subscription_bytes(client, mocker):
     sub = _patch_mirror(mocker)
 
     with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
-        _ = ws.receive_text()
+        _ = ws.receive_text()   # size
+        _ = ws.receive_text()   # mouse
         _ = ws.receive_bytes()
         sub.push(b"live-bytes")
         assert ws.receive_bytes() == b"live-bytes"
@@ -151,7 +157,8 @@ def test_ws_closes_on_subscription_eof(client, mocker):
     sub = _patch_mirror(mocker)
 
     with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
-        _ = ws.receive_text()
+        _ = ws.receive_text()   # size
+        _ = ws.receive_text()   # mouse
         _ = ws.receive_bytes()
         sub.push(None)  # EOF sentinel
         with pytest.raises(Exception):  # noqa: B017 — starlette's closed-ws exception type is an internal detail
@@ -163,7 +170,8 @@ def test_ws_resize_message_triggers_reconcile(client, mocker):
     sub = _patch_mirror(mocker)
 
     with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
-        _ = ws.receive_text()
+        _ = ws.receive_text()   # size
+        _ = ws.receive_text()   # mouse
         _ = ws.receive_bytes()
         ws.send_text(json.dumps({"type": "resize", "cols": 90, "rows": 30}))
         # Resize handling is async; poll briefly for the side effect.

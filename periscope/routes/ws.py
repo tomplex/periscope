@@ -72,13 +72,19 @@ async def ws_pane(
         meta = await loop.run_in_executor(None, lambda: tmux(
             "display-message", "-t", target, "-p",
             "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}"
-            "|#{alternate_on}|#{pane_id}|#{session_name}|#{window_index}",
+            "|#{alternate_on}|#{pane_id}|#{session_name}|#{window_index}"
+            "|#{mouse_any_flag}",
         ))
         (cols_s, rows_s, cx_s, cy_s, alt_s,
-         _pane_id, session_name, window_index) = meta.strip().split("|")
+         _pane_id, session_name, window_index, mouse_s) = meta.strip().split("|")
         cols, rows = int(cols_s), int(rows_s)
         cx, cy = int(cx_s), int(cy_s)
         alt_on = alt_s == "1"
+        # tmux consumes the app's mouse-mode DECSET (that's why it's a pane
+        # flag), so the xterm mirror never sees `\e[?1003h` and can't forward
+        # wheel as mouse events — it converts them to arrows instead. Tell the
+        # client the pane's mouse state so it can synthesize wheel reports.
+        mouse_on = mouse_s == "1"
     except Exception:
         await websocket.close()
         return
@@ -92,6 +98,9 @@ async def ws_pane(
     async with sub:
         await websocket.send_text(
             json.dumps({"type": "size", "cols": cols, "rows": rows})
+        )
+        await websocket.send_text(
+            json.dumps({"type": "mouse", "on": mouse_on})
         )
 
         # 3) Initial paint, via the fork path — NOT the control client: a
