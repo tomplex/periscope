@@ -44,8 +44,12 @@ RENAME_RULES = [
     "- Good: 'postcode-ingestion', 'monitoring-cert', 'rust-port', 'fs-liveness'",
     "- If the existing name still captures the work accurately, KEEP IT.",
     "  Don't change names just to feel like progress.",
-    "- If a workspace goal is provided, don't repeat the goal; pick the name",
-    "  that sets this tab apart from its siblings.",
+    "- Never echo the tab's branch / worktree / track name (or an abbreviation",
+    "  of it): the dashboard already shows that label on the tab's group",
+    "  header. e.g. on branch 'tc/attr-worker-phase2', 'drift-detection' is a",
+    "  good name; 'attr-worker-phase2' is dead weight.",
+    "- If a track goal is provided, don't repeat it; pick the name that sets",
+    "  this tab apart from its siblings.",
 ]
 
 

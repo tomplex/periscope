@@ -200,7 +200,7 @@ def is_external_rename(row: PaneStatusRow, current_name: str) -> bool:
 
 def build_narrator_prompt(*, window_name: str, branch: str | None,
                           pr: int | None, cwd: str, signals: dict,
-                          workspace_name: str | None = None,
+                          track_name: str | None = None,
                           sibling_names: list[str] | None = None,
                           goal: str | None = None,
                           arc: list[dict] | None = None, now: int = 0) -> str:
@@ -277,14 +277,18 @@ def build_narrator_prompt(*, window_name: str, branch: str | None,
     files = signals.get("files_touched") or []
     if files:
         lines.append(f"files touched: {', '.join(files)}")
-    if workspace_name:
+    if track_name:
         sibs = ", ".join(n for n in (sibling_names or []) if n) or "(none yet)"
         lines += [
             "",
-            f"This pane is part of the workspace GOAL: \"{workspace_name}\".",
-            f"Sibling tabs in this workspace: {sibs}.",
-            "  - The goal is shared context — do NOT repeat it in the name.",
-            "  - Name what distinguishes THIS tab from its siblings.",
+            f'This tab renders under its track\'s header row, labeled "{track_name}".',
+            f"Sibling tabs under the same header: {sibs}.",
+            "  - The header label — and the branch, shown as a subgroup row — are",
+            "    ALREADY VISIBLE right above this tab. A tab name that echoes the",
+            "    track, branch, or worktree name (or an abbreviation of it) says",
+            "    nothing: never return one, and if current_name is such an echo it",
+            "    does NOT count as describing the goal — replace it.",
+            "  - Name the sub-thread that sets THIS tab apart from its siblings.",
         ]
     lines += [
         "",
@@ -308,17 +312,27 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
     # needs them all anyway, and a per-pane SELECT would acquire
     # activity._LOCK N times per tick.
     rows = {r.pane_id: r for r in activity.all_pane_statuses()}
-    # Workspace context: pane_id → workspace_id (one bulk read) plus a
-    # per-workspace sibling-name index built from this tick's panes, so each
-    # tab can be named against its goal + siblings instead of repeating them.
-    tag_map = activity.pane_workspace_map()
-    from periscope.workspaces import all_workspaces
-    ws_names = {k: v["name"] for k, v in all_workspaces().items()}
+    # Track context: resolve each pane's track (explicit tag or repo-default
+    # fallback — same resolution the rail groups by) and build a per-track
+    # sibling-name index from this tick's panes, so each tab is named against
+    # the header label already shown above it + its siblings instead of
+    # echoing them. Wired to TRACKS, not the legacy pane_workspaces table —
+    # the old wiring left track-grouped tabs without sibling context and
+    # Haiku named every tab after its branch.
+    from periscope import tracks as tracks_mod
+    pane_tracks: dict[str, str] = {}
     siblings: dict[str, list[str]] = {}
     for w, _parsed in panes:
-        wid = tag_map.get(w.get("pane_id") or "")
-        if wid:
-            siblings.setdefault(wid, []).append(w.get("name") or "")
+        pid = w.get("pane_id") or ""
+        if not pid:
+            continue
+        try:
+            tid = tracks_mod.resolve_track_for_window(w)
+        except Exception:
+            log.exception("narrator track resolve failed for %s", pid)
+            continue
+        pane_tracks[pid] = tid
+        siblings.setdefault(tid, []).append(w.get("name") or "")
     work: dict[str, tuple[dict, str, Path, int, PaneStatusRow | None, Regen]] = {}
     candidates: list[tuple[int, str]] = []
     for w, _parsed in panes:
@@ -347,13 +361,13 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
             log.exception("narrator candidate scan failed for %s", pane_id)
     for pane_id in pick_regenerations(candidates):
         w, sid, jsonl, size, row, reason = work[pane_id]
-        wid = tag_map.get(pane_id)
-        workspace_name = ws_names.get(wid) if wid else None
-        sibling_names = siblings.get(wid) if wid else None
+        tid = pane_tracks.get(pane_id)
+        track_name = tracks_mod.track_label(tid) if tid else None
+        sibling_names = siblings.get(tid) if tid else None
         try:
             _generate(w, pane_id=pane_id, sid=sid, jsonl=jsonl, size=size,
                       row=row, reason=reason, now=now,
-                      workspace_name=workspace_name,
+                      track_name=track_name,
                       sibling_names=sibling_names)
         except Exception:
             log.exception("narrator generation failed for %s", pane_id)
@@ -361,7 +375,7 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
 
 def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
               row: PaneStatusRow | None, reason: Regen, now: int,
-              workspace_name: str | None = None,
+              track_name: str | None = None,
               sibling_names: list[str] | None = None) -> None:
     """One pane's regeneration: signals → one Haiku call → persist row,
     maybe rename. Raises freely; tick()'s per-pane guard logs and keeps
@@ -378,7 +392,7 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     pr = (cached_pr_state(cwd, git.get("branch")) or {}).get("pr")
     raw = claude_complete(build_narrator_prompt(
         window_name=current_name, branch=git.get("branch"), pr=pr,
-        cwd=cwd, signals=signals, workspace_name=workspace_name,
+        cwd=cwd, signals=signals, track_name=track_name,
         sibling_names=sibling_names, goal=prev_goal, arc=prev_arc, now=now))
     result = parse_response(raw)
     if result is None:

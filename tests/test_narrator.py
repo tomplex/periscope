@@ -325,26 +325,31 @@ def test_build_narrator_prompt_includes_rail_rules():
     assert "f2-post-deploy" in rules_block
 
 
-def test_prompt_includes_workspace_and_siblings():
+def test_prompt_includes_track_and_siblings():
     from periscope.narrator import build_narrator_prompt
     p = build_narrator_prompt(
         window_name="token-store", branch="auth-core", pr=None, cwd="/dev/fdy",
-        signals={}, workspace_name="Auth refactor",
+        signals={}, track_name="Auth refactor",
         sibling_names=["rename-flow", "token-store"],
     )
     assert "Auth refactor" in p
     assert "rename-flow" in p
-    # the don't-repeat-the-goal rule is present
-    assert "don't repeat" in p.lower() or "do not repeat" in p.lower()
+    # The anti-echo contract: the track/branch label is already visible above
+    # the tab, so an echoing current_name must NOT count as "describes the
+    # goal" (that's how branch-named tabs froze — the KEEP-IT rule locked
+    # them in).
+    assert "ALREADY VISIBLE" in p
+    assert "echo" in p.lower()
 
 
-def test_prompt_without_workspace_unchanged():
+def test_prompt_without_track_has_no_sibling_block():
     from periscope.narrator import build_narrator_prompt
     p = build_narrator_prompt(
         window_name="x", branch=None, pr=None, cwd="/dev/x", signals={},
-        workspace_name=None, sibling_names=[],
+        track_name=None, sibling_names=[],
     )
     assert "Auth refactor" not in p
+    assert "ALREADY VISIBLE" not in p
 
 
 # ---- build_narrator_prompt: goal + arc ----
@@ -465,6 +470,25 @@ def tick_env(fresh_activity_db, tmp_path, monkeypatch):
 def _pane(pane_id="%1", name="claude", session="s", index=0, cwd="/repo"):
     return ({"pane_id": pane_id, "name": name, "session": session,
              "index": index, "cwd": cwd}, {"is_claude": True, "state": "idle"})
+
+
+def test_tick_feeds_track_label_and_siblings_into_prompt(tick_env):
+    """Track context is wired from the TRACKS registry (pane_tracks tag or
+    repo-default fallback), not the legacy pane_workspaces table — with the
+    old wiring, track-grouped tabs got no sibling context and Haiku happily
+    named every tab after its branch (the attr-worker-phase2 twins)."""
+    from periscope import tracks
+    tk = tracks.create_track(name="attr worker phase2")
+    activity.set_pane_track("%1", tk["id"])
+    activity.set_pane_track("%2", tk["id"])
+    narrator.tick([
+        _pane(),                                      # %1 — regenerates
+        _pane(pane_id="%2", name="drift-detection"),  # sibling, no session mapping
+    ])
+    prompt = tick_env["haiku_calls"][0]
+    assert "attr worker phase2" in prompt     # track label, from the registry
+    assert "drift-detection" in prompt        # sibling names from this tick
+    assert "ALREADY VISIBLE" in prompt        # anti-echo block engaged
 
 
 def test_tick_generates_first_status(tick_env):
