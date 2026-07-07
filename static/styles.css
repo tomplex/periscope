@@ -2995,6 +2995,16 @@ body.modal-open { overflow: hidden; }
   object-fit: contain;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
 }
+.preview-image.zoomable { cursor: zoom-in; }
+/* Actual-size: drop the fit constraints so the image renders at natural
+   dimensions and the host scrolls. margin:auto keeps it centered while
+   staying scroll-reachable — flex centering alone clips the overflow. */
+.preview-image.zoomed {
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  cursor: zoom-out;
+}
 /* ── rendered-markdown document skin (file viewer) ──
    Complete parallel to the .turn-prose .md-* rules — document-scale
    typography instead of transcript-compact. */

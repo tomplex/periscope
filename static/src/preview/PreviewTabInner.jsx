@@ -132,6 +132,12 @@ export function PreviewTabInner({ entry }) {
   // else goes to source. A `:NN` line jump always wins → source, since
   // line numbers don't translate to the rendered view.
   const [view, setView] = useState(entry.line ? "source" : "rendered");
+  // Image click-to-zoom: false = fit-to-pane, true = actual (natural) size
+  // with the host scrolling. `zoomable` gates the toggle to images that
+  // are actually larger than the fitted display — no point zooming a
+  // thumbnail. Set on <img> load by comparing natural vs. rendered size.
+  const [zoomed, setZoomed] = useState(false);
+  const [zoomable, setZoomable] = useState(false);
 
   // Target the file's pane: caller-provided (every entry carries the
   // target captured at openFileTab() time, so the fetch hits the pane
@@ -283,7 +289,16 @@ export function PreviewTabInner({ entry }) {
         )}
         {!state.loading && !state.error && imageSrc && (
           <div class="preview-image-host">
-            <img class="preview-image" src={imageSrc} alt={state.resolved || entry.path} />
+            <img
+              class={`preview-image${zoomed ? " zoomed" : ""}${zoomable ? " zoomable" : ""}`}
+              src={imageSrc}
+              alt={state.resolved || entry.path}
+              onLoad={(e) => {
+                const img = e.currentTarget;
+                setZoomable(img.naturalWidth > img.clientWidth || img.naturalHeight > img.clientHeight);
+              }}
+              onClick={() => zoomable && setZoomed((z) => !z)}
+            />
           </div>
         )}
         {!state.loading && !state.error && !imageSrc && effectiveView === "source" && (
