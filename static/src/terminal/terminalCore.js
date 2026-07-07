@@ -298,6 +298,17 @@ export function startLiveTerminal(target) {
   term.open(containerEl);
   term.focus();
 
+  // Mouse wheel over a full-screen TUI (alt-screen buffer — Claude Code,
+  // vim, less) is converted by xterm into arrow-key presses (xterm's
+  // "alternate scroll", DECSET 1007). Claude reads those Up/Down arrows as
+  // prompt-history navigation, so a trackpad scroll silently walks back
+  // through sent prompts. Returning false suppresses xterm's wheel handling
+  // entirely — no scroll, no arrow injection. Gated on the alt buffer so
+  // the normal buffer keeps real scrollback scrolling. (If a future
+  // alt-screen app captures the wheel via mouse mode, this would block it
+  // too; Claude doesn't, so it's the right call here.)
+  term.attachCustomWheelEventHandler(() => term.buffer.active.type !== "alternate");
+
   // Try WebGL renderer; fall back to canvas on init failure (older Chromes,
   // headless contexts, GPU-disabled environments). The addon writes to its
   // own canvas inside xterm's element tree, so failure is silent on success
