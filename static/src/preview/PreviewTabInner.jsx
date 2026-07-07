@@ -223,6 +223,10 @@ export function PreviewTabInner({ entry }) {
     ? renderUrl(target, state.resolved)
     : null;
 
+  const imageSrc = state.lang === "image" && state.resolved && target
+    ? renderUrl(target, state.resolved)
+    : null;
+
   return (
     <div class="preview-tab-content" role="region" aria-label="File preview">
       <header class="preview-header">
@@ -277,7 +281,12 @@ export function PreviewTabInner({ entry }) {
             </div>
           </div>
         )}
-        {!state.loading && !state.error && effectiveView === "source" && (
+        {!state.loading && !state.error && imageSrc && (
+          <div class="preview-image-host">
+            <img class="preview-image" src={imageSrc} alt={state.resolved || entry.path} />
+          </div>
+        )}
+        {!state.loading && !state.error && !imageSrc && effectiveView === "source" && (
           <div ref={hostRef} class="preview-cm-host" />
         )}
       </div>

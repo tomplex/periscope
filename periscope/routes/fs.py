@@ -32,6 +32,14 @@ _LANGUAGE_BY_EXT = {
     ".sql": "sql",
 }
 
+# Raster/vector formats the browser renders natively. These bypass the
+# UTF-8 text read (which 415s on binary) and are shown via /api/fs/render.
+# SVG is text but treated as an image so it displays rendered, not as XML.
+_IMAGE_EXTS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    ".svg", ".bmp", ".ico", ".avif",
+}
+
 
 # Render cap: high enough for typical bundled JS / hero images that pages
 # pull in via <script src> / <img src>. The 1MB safe_read cap is too tight
@@ -69,6 +77,11 @@ def _decode_pane_token(token: str) -> tuple[str, int]:
 @router.get("/api/fs/read")
 def fs_read(session: str, index: int, path: str):
     target = f"{session}:{index}"
+    # Images: resolve the path (safe-root gated) but don't read the bytes —
+    # they're not UTF-8 and the client streams them via /api/fs/render.
+    if os.path.splitext(path)[1].lower() in _IMAGE_EXTS:
+        resolved = fs.safe_resolve_for_pane(target, path)
+        return {"path": str(resolved), "content": None, "language": "image"}
     resolved, content = fs.safe_read_for_pane(target, path)
     return {"path": resolved, "content": content, "language": _language_for(resolved)}
 
