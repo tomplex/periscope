@@ -62,8 +62,10 @@ function isDirty(git) {
 // Inline-rename label. `kind` is "pane" or "track" (pane renders plain, track
 // renders bold; both rename when `renameable`).
 // `onCommit(next)` does the network write; `label` is the bold/plain display
-// node. Non-renameable rows just render the label.
-function RailLabel({ label, kind, renameable, onCommit }) {
+// node. Non-renameable rows just render the label. `editRef`, when given,
+// receives the begin-editing trigger so a sibling button (the pane row's ✎)
+// can open the same editor the dblclick path uses.
+function RailLabel({ label, kind, renameable, onCommit, editRef }) {
   const [editing, setEditing] = useState(false);
   const inputRef = useRef(null);
   const settled = useRef(false);
@@ -77,11 +79,12 @@ function RailLabel({ label, kind, renameable, onCommit }) {
 
   function begin(e) {
     if (!renameable) return;
-    e.preventDefault();
-    e.stopPropagation();
+    e?.preventDefault();
+    e?.stopPropagation();
     settled.current = false;
     setEditing(true);
   }
+  if (editRef) editRef.current = begin;
 
   function commit(value) {
     if (settled.current) return;
@@ -140,6 +143,7 @@ export function PaneRow({
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
+  const renameRef = useRef(null);
   const expanded = sel || w.state === "needs-input";
   const stateCls = w.is_claude ? (w.state || "idle") : "shell";
   const dimCls = dim ? "" : " rail-dim";
@@ -176,7 +180,7 @@ export function PaneRow({
         {w.is_claude
           ? <span class="rail-icon icon-claude">✻</span>
           : <span class="rail-icon icon-shell">$</span>}
-        <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
+        <RailLabel label={label} kind="pane" renameable onCommit={onRename} editRef={renameRef} />
         {/* Line 1 carries only the name + one quiet metric: model when
             expanded, context% when compact. PR/Linear ride line 2 (compact) or
             the footer (expanded) so they never crowd the name. */}
@@ -221,6 +225,11 @@ export function PaneRow({
       )}
       {/* Hover-only actions, zero footprint at rest (absolute + faded). */}
       <div class="pane-actions">
+        <button
+          class="rail-rename"
+          title="rename"
+          onClick={(e) => { e.stopPropagation(); renameRef.current?.(); }}
+        >✎</button>
         <button
           class={`rail-pin${pinned ? " pinned" : ""}`}
           title={pinned ? "unpin" : "pin"}

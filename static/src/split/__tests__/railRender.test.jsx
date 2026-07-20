@@ -45,5 +45,6 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain("master");        // branch sub-cluster label
     expect(html).toContain("feat-x");        // second branch sub-cluster label
     expect(html).toContain("New tab");       // newtab affordance
+    expect(html).toContain("rail-rename");   // ✎ rename button in pane hover actions
   });
 });

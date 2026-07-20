@@ -2171,6 +2171,23 @@ body.modal-open { overflow: hidden; }
 .rail-row:hover .rail-close { opacity: .7; }
 .rail-close:hover { opacity: 1 !important; background: var(--bg-2); color: var(--s-danger); }
 
+/* Hover-reveal rename ✎ in the pane action overlay — same footprint as the
+   close ×, accent (not danger) on hover since it's a safe action. */
+.rail-rename {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--fg-3);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity .12s, background .12s;
+}
+.rail-rename:hover { background: var(--bg-2); color: var(--fg-1); }
+
 /* Drop-indicator line — top or bottom of the row the cursor is over.
    data-drop-pos="before" → line at top; "after" → line at bottom.
    Box-shadow (inset) avoids conflicting with the tree-connector
@@ -2449,6 +2466,7 @@ body.modal-open { overflow: hidden; }
 .pane-expanded.selected .pane-actions { background: linear-gradient(to right, transparent, var(--bg-1-hi) 42%); }
 /* The overlay owns visibility; neutralize the rows' own pin/close opacity
    rules (need #rail to outrank #rail .child-row .rail-pin / :hover .rail-close). */
+#rail .pane-actions .rail-rename,
 #rail .pane-actions .rail-pin,
 #rail .pane-actions .rail-close { opacity: 1; margin: 0; position: static; }
 
