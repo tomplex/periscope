@@ -1,20 +1,20 @@
-// The cross-pane alert feed: owns the /api/alerts/recent poll loop and the
-// native-notify/dock-badge side effects, exposing `alertItems` as the read
-// model. Non-component (mirrors poll.js → windows) so the badge stays
-// fresh and native-notify fires regardless of what's rendered. Started once
-// from Split.jsx. Lifted from the former overlays/Alerts.jsx.
-import { signal } from "@preact/signals";
-import { showToast } from "../overlays/Toast.jsx";
+// The cross-pane alert feed: owns the native-notify/dock-badge side effects
+// and exposes `alertItems` as the read model. The list itself arrives on the
+// pushed /api/state blob (store.alerts) rather than a poll of its own, so it
+// shares the state hub's transport and its notify()-driven kick — an alert
+// lands as soon as the tool call that raised it returns. Non-component
+// (mirrors poll.js → windows) so the badge stays fresh and native-notify
+// fires regardless of what's rendered. Started once from Split.jsx.
+import { effect } from "@preact/signals";
 import * as prefs from "../prefs.js";
-import { railSelection, windows } from "../store.js";
+import { alerts, railSelection, windows } from "../store.js";
 import { inTauri, notify, onNotificationClick, setBadgeCount } from "../tauri.js";
 
-const POLL_MS = 3000;
+// The pushed feed IS the read model — re-exported so consumers keep importing
+// alerts from the module that owns their semantics.
+export const alertItems = alerts;
 
-export const alertItems = signal([]);
-
-let pollFailed = false;
-let seenAlertKeys = null;       // first-poll sentinel — see maybeNativeNotify
+let seenAlertKeys = null;       // first-load sentinel — see maybeNativeNotify
 let started = false;
 
 // Reveal a pane from an alert/native-notification click via inline rail
@@ -45,31 +45,18 @@ function maybeNativeNotify(list) {
   for (const k of seenAlertKeys) if (!current.has(k)) seenAlertKeys.delete(k);
 }
 
-async function poll() {
-  try {
-    const res = await fetch("/api/alerts/recent?limit=100");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (pollFailed) { pollFailed = false; showToast("notifications feed reconnected", "good"); }
-    const list = data.items || [];
-    maybeNativeNotify(list);
-    setBadgeCount(list.filter((r) => r.kind === "need_human").length);
-    alertItems.value = list;
-  } catch (e) {
-    if (!pollFailed) { pollFailed = true; showToast(`notifications feed unavailable: ${e.message}`, "bad"); }
-    // Keep the stale list visible — better than blanking the panel.
-  }
-}
-
 export function startAlertFeed() {
   if (started) return;
   started = true;
   onNotificationClick((target) => revealPane(target));
-  // Chained setTimeout, NOT setInterval: schedule the next poll only after the
-  // current resolves, so a slow response can't overlap and stomp a newer list.
-  async function tick() {
-    await poll();   // poll() has its own try/catch — never rejects
-    setTimeout(tick, POLL_MS);
-  }
-  tick();
+  // Side effects only — the list is written by poll.js. `null` is the
+  // not-yet-loaded value: skipping it keeps the sentinel below honest, and
+  // transport failure is already surfaced by poll.js's connection banner, so
+  // the stale list simply stays on screen.
+  effect(() => {
+    const list = alerts.value;
+    if (list === null) return;
+    maybeNativeNotify(list);
+    setBadgeCount(list.filter((r) => r.kind === "need_human").length);
+  });
 }

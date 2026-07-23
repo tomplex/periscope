@@ -247,3 +247,24 @@ def test_state_includes_tracks_registry(client, mocker, clean_state, fresh_activ
     rows = {t["id"]: t for t in body["tracks"]}
     assert rows[kept["id"]] == {"id": kept["id"], "name": "Fresh goal", "repo": "/dev/fdy"}
     assert gone["id"] not in rows
+
+
+def test_state_includes_alerts_so_the_dashboard_needs_no_alert_poll(
+    client, mocker, clean_state
+):
+    """Alerts ride the state blob — that's what lets the frontend drop its
+    own /api/alerts/recent loop and inherit the hub's push transport."""
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    mocker.patch(
+        "periscope.channels.recent_alerts",
+        return_value=[{"id": "a1", "kind": "need_human", "message": "blocked"}],
+    )
+
+    body = client.get("/api/state").json()
+    assert body["alerts"] == [
+        {"id": "a1", "kind": "need_human", "message": "blocked"}
+    ]

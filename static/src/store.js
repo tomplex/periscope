@@ -12,6 +12,11 @@ export const windows = signal([]);            // /api/state windows (poll-fed)
 export const projects = signal([]);
 export const workspaces = signal([]);  // /api/state workspaces (poll-fed)
 export const tracks = signal([]);      // /api/state track registry rows (poll-fed) — includes EMPTY goal tracks
+// Cross-pane alert feed, fed by /api/state. `null` means "not loaded yet" and
+// is distinct from `[]` ("loaded, no alerts"): alertFeed's native-notify
+// sentinel must not treat the pre-load value as a real empty feed, or every
+// alert already present at boot fires a desktop notification.
+export const alerts = signal(null);
 export const currentFilter = signal("all");
 export const activeTarget = signal(null);     // detail-pane focused pane "session:index" (split); shared paste/poll target
 export const railSelection = signal(null);    // string highlight-key: "pane:<pid>" | "review:<worktree>" | null

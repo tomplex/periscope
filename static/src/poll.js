@@ -9,6 +9,7 @@
 // consecutive REST failures (≈6s); a WS drop alone doesn't trip it because the
 // REST fallback keeps data flowing.
 import {
+  alerts,
   dragState,
   editingTarget,
   projects,
@@ -34,6 +35,10 @@ function lastUpdateEl() {
 }
 
 function applyState(data) {
+  // Alerts commit ahead of the rename/drag guard below: they share none of
+  // that state, and stalling them would stall the dock badge and native
+  // notifications for as long as a drag is held.
+  alerts.value = data.alerts || [];
   // user is mid-rename / mid-drag; a commit would blow away their input or
   // destroy the drag source.
   if (editingTarget.value) return;

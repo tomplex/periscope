@@ -149,11 +149,17 @@ def build_state() -> dict:
         if not t.get("archived_at")
     ]
 
+    # Alerts ride the state blob so the dashboard has one transport and one
+    # clock — notify() kicks the hub, so a need_human surfaces immediately.
+    # Reuses `windows` above rather than re-running the tmux fan-out.
+    from periscope.channels import recent_alerts
+
     return {
         "windows": result,
         "projects": projects_view,
         "workspaces": workspaces_view,
         "tracks": tracks_view,
+        "alerts": recent_alerts(windows),
         "ts": int(time.time()),
         "usage": cached_claude_usage(),
         "usage_plan": cached_plan_usage(),

@@ -18,8 +18,14 @@ from periscope.channels import (
     _do_link_pr_tool,
     _do_notify_tool,
     _do_open_document_tool,
+    recent_alerts,
     rehydrate_alerts_from_events,
 )
+
+_WINDOW = {
+    "pane_id": "%5", "session": "tc/x", "index": "0",
+    "name": "win", "cwd": "/tmp",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +41,33 @@ def reset_channel_state():
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
+
+
+def test_recent_alerts_drops_panes_missing_from_windows():
+    """The feed joins against live windows, so a closed pane's alerts fall out
+    on their own — the same invariant _channel_gc enforces on the store."""
+    _do_notify_tool("%5", {"message": "live", "kind": "info"})
+    _do_notify_tool("%99", {"message": "pane is gone", "kind": "need_human"})
+    assert [it["message"] for it in recent_alerts([_WINDOW])] == ["live"]
+
+
+def test_recent_alerts_sorts_newest_first_and_caps_at_limit():
+    with _CHANNELS_LOCK:
+        _CHANNEL_ALERTS["%5"] = [
+            {"id": f"a{i}", "ts": i, "kind": "info",
+             "severity": "info", "message": f"m{i}"}
+            for i in range(5)
+        ]
+    items = recent_alerts([_WINDOW], limit=3)
+    assert [it["message"] for it in items] == ["m4", "m3", "m2"]
+
+
+def test_notify_kicks_state_hub_so_the_alert_pushes_immediately(mocker):
+    """An alert's whole value is immediacy: notify() must wake the broadcast
+    loop instead of letting the alert wait out the steady tick."""
+    kick = mocker.patch("periscope.state_hub.kick")
+    _do_notify_tool("%5", {"message": "blocked", "kind": "need_human"})
+    kick.assert_called_once()
 
 
 def test_notify_tool_appends_alert_and_bumps_unread():
