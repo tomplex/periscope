@@ -434,7 +434,11 @@ function PaneDetail({ w }) {
           class="detail-changes-host"
           style={activeTab === "changes" ? "display:contents" : "display:none"}
         >
-          <ChangesTab target={w.target} active={activeTab === "changes"} />
+          <ChangesTab
+            target={w.target}
+            active={activeTab === "changes"}
+            gitSig={w.git || ""}
+          />
         </div>
         {/* Each opened file preview tab stays mounted; CSS-hidden when
             inactive so switching is instant and per-tab CM state survives.

@@ -9,6 +9,13 @@
 // diffing algorithm here; we render the hunks the server parsed.
 import { useEffect, useState } from "preact/hooks";
 import { targetQuery } from "../util.js";
+import {
+  diffReview,
+  fileState,
+  setCollapsed,
+  setViewed,
+  viewedCount,
+} from "./reviewState.js";
 
 const SCOPES = [
   ["session", "This session", "Changes since the current Claude session started"],
@@ -23,21 +30,36 @@ function Line({ line }) {
   );
 }
 
-function FileBlock({ file }) {
-  const [open, setOpen] = useState(true);
+function FileBlock({ file, repo, review }) {
+  const { collapsed, viewed } = fileState(review, repo, file.path, file.sig);
+  const open = !collapsed;
   const stat = (file.additions || 0) + (file.deletions || 0);
   return (
-    <div class={`dfile dfile-${file.status}`}>
-      <button type="button" class="dfile-head" onClick={() => setOpen(!open)}>
-        <span class="dfile-caret">{open ? "▾" : "▸"}</span>
-        <span class="dfile-path">{file.path}</span>
-        <span class="dfile-status">{file.status}</span>
-        <span class="dfile-stat">
-          {file.additions ? <span class="dstat-add">+{file.additions}</span> : null}
-          {file.deletions ? <span class="dstat-del">−{file.deletions}</span> : null}
-          {!stat && file.status === "binary" ? <span class="dstat-bin">binary</span> : null}
-        </span>
-      </button>
+    <div class={`dfile dfile-${file.status}${viewed ? " is-viewed" : ""}`}>
+      <div class="dfile-head">
+        <button
+          type="button"
+          class="dfile-toggle"
+          onClick={() => setCollapsed(repo, file.path, open)}
+        >
+          <span class="dfile-caret">{open ? "▾" : "▸"}</span>
+          <span class="dfile-path">{file.path}</span>
+          <span class="dfile-status">{file.status}</span>
+          <span class="dfile-stat">
+            {file.additions ? <span class="dstat-add">+{file.additions}</span> : null}
+            {file.deletions ? <span class="dstat-del">−{file.deletions}</span> : null}
+            {!stat && file.status === "binary" ? <span class="dstat-bin">binary</span> : null}
+          </span>
+        </button>
+        <button
+          type="button"
+          class={`dfile-viewed${viewed ? " is-on" : ""}`}
+          title={viewed
+            ? "Marked viewed — re-surfaces automatically if this file changes again"
+            : "Mark viewed (folds it away until it changes again)"}
+          onClick={() => setViewed(repo, file.path, file.sig, !viewed)}
+        >{viewed ? "✓ viewed" : "viewed"}</button>
+      </div>
       {open && file.hunks.map((h, i) => (
         <div class="dhunk" key={i}>
           <div class="dhunk-head">
@@ -54,13 +76,15 @@ function FileBlock({ file }) {
   );
 }
 
-export function ChangesTab({ target, active }) {
+export function ChangesTab({ target, active, gitSig }) {
   const [scope, setScope] = useState("session");
   const [state, setState] = useState({ loading: true, error: null, data: null });
 
-  // Refetch when the tab is shown or the scope flips. Like the preview tab,
-  // load() only setStates after the fetch resolves, so switching scopes swaps
-  // content without a loading flash.
+  // Refetch when the tab is shown, the scope flips, or the worktree's git
+  // summary moves. `gitSig` is the pane's `git` field from /api/state ("+14 -6
+  // ?2") — it changes exactly when the working tree does, so it makes the tab
+  // live off the state push instead of a poll of its own. Only setStates after
+  // the fetch resolves, so a refresh never flashes a loading state.
   useEffect(() => {
     if (!active || !target) return undefined;
     let alive = true;
@@ -79,9 +103,12 @@ export function ChangesTab({ target, active }) {
       }
     })();
     return () => { alive = false; };
-  }, [target, scope, active]);
+  }, [target, scope, active, gitSig]);
 
   const files = state.data?.files || [];
+  const repo = state.data?.repo || "";
+  const review = diffReview.value;
+  const nViewed = viewedCount(review, repo, files);
   const totals = files.reduce(
     (acc, f) => ({ a: acc.a + (f.additions || 0), d: acc.d + (f.deletions || 0) }),
     { a: 0, d: 0 },
@@ -104,8 +131,8 @@ export function ChangesTab({ target, active }) {
         {!state.loading && !state.error && (
           <span class="changes-summary">
             {files.length
-              ? <>{files.length} file{files.length === 1 ? "" : "s"}
-                  {" "}<span class="dstat-add">+{totals.a}</span>
+              ? <>{nViewed ? `${nViewed}/${files.length} viewed · ` : `${files.length} file${files.length === 1 ? "" : "s"} · `}
+                  <span class="dstat-add">+{totals.a}</span>
                   {" "}<span class="dstat-del">−{totals.d}</span></>
               : "no changes"}
           </span>
@@ -121,7 +148,9 @@ export function ChangesTab({ target, active }) {
               : "This branch matches its fork point."}
           </div>
         ) : null}
-        {files.map((f) => <FileBlock file={f} key={f.path} />)}
+        {files.map((f) => (
+          <FileBlock file={f} repo={repo} review={review} key={f.path} />
+        ))}
         {state.data?.truncated ? (
           <div class="changes-msg">
             {state.data.truncated} more file{state.data.truncated === 1 ? "" : "s"} not shown

@@ -16,6 +16,7 @@ Line matching is git's job — unified-diff output IS the matched result, so the
 is no LCS/Myers implementation here. This module shells out, parses hunks, and
 returns a structure the client renders directly.
 """
+import hashlib
 import os
 import re
 
@@ -131,6 +132,25 @@ def parse_unified(text: str) -> list[dict]:
     return files
 
 
+def file_sig(f: dict) -> str:
+    """Short content signature for one file's diff.
+
+    The client marks files "viewed" against this. When the file changes again
+    the signature moves, the mark drops, and the file re-surfaces — without it,
+    a live-updating diff would keep hiding work you never actually looked at.
+    Derived from the rendered hunk bodies (not the raw diff text) so cosmetic
+    changes to git's headers — @@ line offsets shifting because an *earlier*
+    hunk grew — don't spuriously un-view a file whose own content is untouched.
+    """
+    h = hashlib.sha1(f.get("status", "").encode())
+    for hunk in f.get("hunks", []):
+        for line in hunk["lines"]:
+            h.update(line["kind"].encode())
+            h.update(line["text"].encode("utf-8", "replace"))
+            h.update(b"\n")
+    return h.hexdigest()[:12]
+
+
 def diff_for(repo: str, base: str) -> dict:
     """Structured diff of the worktree against `base`."""
     code, text = _run(
@@ -146,5 +166,6 @@ def diff_for(repo: str, base: str) -> dict:
     for f in files:
         adds, dels = stats.get(f["path"], (0, 0))
         f["additions"], f["deletions"] = adds, dels
+        f["sig"] = file_sig(f)
     dropped = max(0, len(files) - MAX_FILES)
     return {"base": base, "files": files[:MAX_FILES], "truncated": dropped}

@@ -2907,19 +2907,42 @@ body.modal-open { overflow: hidden; }
 .dfile { margin: 0 10px 14px; border: 1px solid var(--line-soft); border-radius: var(--r-md); overflow: hidden; }
 .dfile-head {
   display: flex;
+  align-items: stretch;
+  background: var(--bg-1);
+}
+.dfile-toggle {
+  display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 6px 10px;
   border: 0;
-  background: var(--bg-1);
+  background: transparent;
   color: var(--fg-1);
   font-family: var(--mono);
   font-size: 12px;
   cursor: pointer;
   text-align: left;
 }
-.dfile-head:hover { background: var(--bg-1-hi); }
+.dfile-toggle:hover { background: var(--bg-1-hi); }
+/* Viewed marks are per-content: the file re-surfaces on its own if it changes
+   again, so this only ever hides work you've actually seen. */
+.dfile-viewed {
+  padding: 0 10px;
+  border: 0;
+  border-left: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--fg-4);
+  font-size: 10px;
+  letter-spacing: .04em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dfile-viewed:hover { background: var(--bg-1-hi); color: var(--fg-2); }
+.dfile-viewed.is-on { color: var(--s-success); }
+.dfile.is-viewed { opacity: .55; }
+.dfile.is-viewed:hover { opacity: 1; }
 .dfile-caret { color: var(--fg-4); }
 .dfile-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dfile-status { color: var(--fg-4); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }

@@ -135,6 +135,35 @@ def test_parse_unified_marks_binary_and_deleted():
     assert [f["status"] for f in files] == ["binary", "deleted"]
 
 
+# --- viewed-mark signature -------------------------------------------
+
+def test_file_sig_ignores_hunk_offset_shifts():
+    """A file's signature must not move just because an EARLIER file/hunk grew
+    and pushed its @@ offsets down — otherwise every unrelated edit elsewhere
+    would un-view files whose own content never changed."""
+    a = gitdiff.parse_unified(
+        "diff --git a/x.py b/x.py\n@@ -10,3 +10,3 @@ def f():\n-old\n+new\n")[0]
+    b = gitdiff.parse_unified(
+        "diff --git a/x.py b/x.py\n@@ -99,3 +120,3 @@ def f():\n-old\n+new\n")[0]
+    assert gitdiff.file_sig(a) == gitdiff.file_sig(b)
+
+
+def test_file_sig_moves_when_content_changes():
+    a = gitdiff.parse_unified(
+        "diff --git a/x.py b/x.py\n@@ -1,2 +1,2 @@\n-old\n+new\n")[0]
+    b = gitdiff.parse_unified(
+        "diff --git a/x.py b/x.py\n@@ -1,2 +1,2 @@\n-old\n+newer\n")[0]
+    assert gitdiff.file_sig(a) != gitdiff.file_sig(b)
+
+
+def test_file_sig_moves_when_status_changes():
+    base = "diff --git a/x.py b/x.py\n@@ -1,1 +1,1 @@\n+one\n"
+    modified = gitdiff.parse_unified(base)[0]
+    added = gitdiff.parse_unified(
+        "diff --git a/x.py b/x.py\nnew file mode 100644\n@@ -1,1 +1,1 @@\n+one\n")[0]
+    assert gitdiff.file_sig(modified) != gitdiff.file_sig(added)
+
+
 def test_parse_unified_truncates_huge_files(monkeypatch):
     monkeypatch.setattr(gitdiff, "MAX_LINES_PER_FILE", 3)
     body = "".join(f"+line{i}\n" for i in range(50))
