@@ -244,9 +244,9 @@ to the project layer.
 
 ---
 
-## 6. Reboot restored a 24-day-old tmux layout
+## 6. Periscope silently disables tmux-continuum; reboot restored a 24-day-old layout
 
-**Severity: medium.** One-off in effect, but the mechanism is still armed.
+**Severity: high.** Not a one-off — an ongoing steady state, caused by periscope.
 
 Saves in `~/.local/share/tmux/resurrect/`:
 
@@ -278,11 +278,46 @@ Continuum's config is also intact: `status on`, `status-interval 15`,
 session that no longer exists. The next reboot restores essentially nothing — the
 opposite failure, equally unwanted.
 
-**Open question — not established.** I can explain *what* happened (stale restore
-from a 24-day-old save) but not *why* saves stopped on Jun 29. Suggestive but
-unproven: Jun 29 files are mode `0600`, Jul 23 files are `0644`, hinting at a
-config or plugin change between those dates. Worth a targeted look before
-attempting a fix; do not fix blind.
+### Root cause: periscope's control-mode clients suppress continuum entirely
+
+**tmux-continuum has no timer.** Its save fires purely as a side effect of
+`status-right` format expansion — which is why the hook is installed there.
+A status line is only expanded when it is *drawn for a client*.
+
+Every client attached to this server is control-mode (periscope's mirror + input
+clients), with no tty:
+
+```
+client-21443 | tty= | flags=attached,focused,control-mode,UTF-8
+client-49554 | tty= | flags=attached,focused,control-mode,ignore-size,read-only,UTF-8
+```
+
+Control-mode clients render no status line → `status-right` is never expanded →
+`continuum_save.sh` is never invoked → **no saves, indefinitely.**
+
+| Period | Attached clients | Saves |
+|---|---|---|
+| ≤ Jun 29 13:35 | real terminal | every 10 min |
+| Jun 30 – Jul 22 | dashboard only (control-mode) | **none — the 24-day gap** |
+| Jul 23 11:22, 11:31 | briefly, during reboot/restore | 2 |
+| since 11:31 | dashboard only | none (the 11:54 file was a manual run) |
+
+Ruled out along the way: periscope's rewrite hook (runs clean), periscope's test
+suite (isolated `-L` socket + `-f /dev/null`, `tests/test_tmux_input.py:48-58`),
+periscope source (never touches `status-right`), the plugins (unchanged since
+Mar 11), and `.tmux.conf` (unchanged since Jun 5).
+
+**This is structural, not a one-off.** The more completely periscope replaces an
+attached terminal, the more completely it disables tmux persistence. The
+single-session/tracks migration accelerated it: one managed session, viewed
+entirely through the dashboard, no reason to attach a real client. Every reboot
+restores whatever was last saved while a real terminal happened to be attached —
+this morning, 24 days stale.
+
+Fix direction (not yet designed): periscope should drive the save itself rather
+than depending on a status line it never renders — e.g. invoke
+`continuum_save.sh` (or `resurrect`'s save directly) on its own interval from the
+activity worker, which already ticks every 30s in prod.
 
 ---
 
@@ -294,5 +329,7 @@ attempting a fix; do not fix blind.
    keys and `ensure_session` stops answering "already open?" by cwd.
 3. **#5 CLAUDE.md** — cheapest, and stops future sessions reasoning from a dead map.
 4. **#4 cursor race** — self-contained in `tmux_mirror`.
-5. **#3 rail capability hole** — needs a design conversation, not just a fix.
-6. **#6 resurrect** — diagnose the Jun 29 save stoppage before changing anything.
+5. **#6 continuum** — root cause established; periscope drives the save itself
+   instead of relying on a status line it never renders. Until then, tmux
+   persistence is effectively off.
+6. **#3 rail capability hole** — needs a design conversation, not just a fix.
