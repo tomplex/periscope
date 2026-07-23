@@ -17,6 +17,7 @@ from periscope.channels import _channel_gc
 from periscope.panes import (
     RESUME_EXPIRY_S,
     _resuming,
+    all_pane_ids,
     list_windows,
     update_focus_from_windows,
 )
@@ -90,7 +91,13 @@ def state():
         stamp for _, stamp in built if stamp is not None
     ]
 
-    _channel_gc({w["pane_id"] for w in windows if w.get("pane_id")})
+    # GC against ALL live panes, not the active-pane-per-window set `windows`
+    # carries — otherwise a split window's background Claude pane has its alerts
+    # dropped every poll. Skip entirely on an empty result (a tmux hiccup must
+    # not wipe every pane's alerts).
+    live_panes = all_pane_ids()
+    if live_panes:
+        _channel_gc(live_panes)
 
     # Batched stamp persistence: single lock + single write across every
     # pane in this poll. set_window_fields_bulk skips the write when no

@@ -45,10 +45,14 @@ def test_state_with_window(client, mocker, clean_state):
     _patch(mocker, "cached_lgtm_state", return_value=None)
     _patch(mocker, "cached_claude_usage", return_value={})
     _patch(mocker, "cached_plan_usage", return_value={})
-    _patch(mocker, "_channel_gc")
+    _patch(mocker, "all_pane_ids", return_value={"%7", "%8"})
+    gc = _patch(mocker, "_channel_gc")
 
     r = client.get("/api/state")
     assert r.status_code == 200
+    # GC keys on the FULL live-pane set (which includes a split window's
+    # background %8), not just the active-pane-per-window %7.
+    gc.assert_called_once_with({"%7", "%8"})
     body = r.json()
     assert len(body["windows"]) == 1
     w = body["windows"][0]
@@ -56,6 +60,21 @@ def test_state_with_window(client, mocker, clean_state):
     assert w["index"] == 0
     assert w["target"] == "main:0"
     assert w["state"] == "shell"
+
+
+def test_state_skips_channel_gc_when_no_panes(client, mocker, clean_state):
+    """An empty all_pane_ids (a transient tmux hiccup) must NOT run GC — else
+    every pane's alerts get wiped on one bad poll."""
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    _patch(mocker, "all_pane_ids", return_value=set())
+    gc = _patch(mocker, "_channel_gc")
+
+    client.get("/api/state")
+    gc.assert_not_called()
 
 
 def test_state_resume_gc_drops_stale(client, mocker, clean_state):
