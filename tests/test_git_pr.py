@@ -57,6 +57,54 @@ def test_git_state_for_returns_branch_for_mocked_git_repo(tmp_path, mocker):
     assert out["git"] == "clean"
 
 
+def _mock_git(mocker, *, diff="", untracked="", ahead="0"):
+    """Patch _run so git_state_for sees a controlled repo shape."""
+    def fake_run(cmd, cwd=None, timeout=3.0):
+        if "rev-parse" in cmd and "--git-dir" in cmd:
+            return (0, ".git")
+        if "rev-parse" in cmd and "--abbrev-ref" in cmd:
+            return (0, "main")
+        if "ls-files" in cmd:
+            return (0, untracked)
+        if "diff" in cmd:
+            return (0, diff)
+        if "rev-list" in cmd:
+            return (0, ahead)
+        return (0, "")
+    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
+
+
+def test_git_state_counts_untracked_files(tmp_path, mocker):
+    """`git diff HEAD` ignores untracked files, so a worktree whose only change
+    was brand-new files used to report "clean" — and isDirty() then suppressed
+    the chip entirely, hiding the work."""
+    _mock_git(mocker, untracked="brand_new.py\n")
+    assert git_state_for(str(tmp_path))["git"] == "?1"
+
+
+def test_git_state_combines_tracked_and_untracked(tmp_path, mocker):
+    _mock_git(
+        mocker,
+        diff=" 1 file changed, 12 insertions(+), 3 deletions(-)",
+        untracked="a.py\nnewdir/\n",
+    )
+    assert git_state_for(str(tmp_path))["git"] == "+12 -3 ?2"
+
+
+def test_git_state_untracked_with_unpushed_commits(tmp_path, mocker):
+    """The `*` suffix means unpushed commits and composes with the ? count."""
+    _mock_git(mocker, untracked="a.py\n", ahead="2")
+    assert git_state_for(str(tmp_path))["git"] == "?1 *"
+
+
+def test_git_state_clean_stays_clean(tmp_path, mocker):
+    """No tracked diff, no untracked, no unpushed -> the literal isDirty() checks."""
+    _mock_git(mocker)
+    assert git_state_for(str(tmp_path))["git"] == "clean"
+    _mock_git(mocker, ahead="3")
+    assert git_state_for(str(tmp_path))["git"] == "clean *"
+
+
 def test_cached_git_state_uses_ttl(mocker):
     """First call hits git_state_for; second call within TTL serves the cache."""
     mock_inner = mocker.patch(

@@ -53,8 +53,9 @@ function ctxClass(p) {
   return "";
 }
 
-// A worktree's git field is "clean" / "clean *" (untracked only) when there's
-// nothing to surface; anything else ("+149 -118") is a real dirty count.
+// A worktree's git field is "clean" / "clean *" (the `*` means unpushed
+// commits, not untracked files) when there's nothing to surface; anything
+// else ("+149 -118", "?3", "+12 -3 ?1") is a real dirty count.
 function isDirty(git) {
   return git && git !== "clean" && git !== "clean *";
 }

@@ -60,10 +60,22 @@ def git_state_for(path: str) -> dict | None:
     dels_m = re.search(r"(\d+) deletion", diff)
     adds = int(adds_m.group(1)) if adds_m else 0
     dels = int(dels_m.group(1)) if dels_m else 0
+    # Untracked files. `git diff HEAD` ignores them entirely, so a worktree
+    # whose only change is brand-new files reported "clean" — and isDirty()
+    # then suppressed the chip, so nothing surfaced at all. --directory
+    # collapses a wholly-untracked dir to one entry instead of walking it.
+    _, untracked = _run(["git", "-C", path, "ls-files", "-o", "--exclude-standard",
+                         "--directory", "--no-empty-directory"])
+    new = sum(1 for line in untracked.splitlines() if line.strip())
     # Unpushed commits ahead of upstream.
     code, ahead_s = _run(["git", "-C", path, "rev-list", "--count", "@{u}..HEAD"])
     ahead = int(ahead_s) if code == 0 and ahead_s.isdigit() else 0
-    state = "clean" if (adds == 0 and dels == 0) else f"+{adds} -{dels}"
+    bits = []
+    if adds or dels:
+        bits.append(f"+{adds} -{dels}")
+    if new:
+        bits.append(f"?{new}")
+    state = " ".join(bits) if bits else "clean"
     if ahead > 0:
         state += " *"
     # `repo_slug` (owner/repo) lets the frontend build PR URLs without
