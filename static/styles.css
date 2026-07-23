@@ -2216,6 +2216,11 @@ body.modal-open { overflow: hidden; }
 .launcher-branch { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border, rgba(255,255,255,.15)); background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
 .launcher-branch:hover { background: rgba(255,255,255,.05); }
 .launcher-branch.is-active { background: var(--accent, #6c8cff); border-color: var(--accent, #6c8cff); color: #fff; }
+/* Not currently running: reachable, but visually secondary to live branches so
+   the picker still reads "what's going on" at a glance. is-active wins. */
+.launcher-branch.is-dormant { opacity: .62; }
+.launcher-branch.is-dormant:hover,
+.launcher-branch.is-dormant.is-active { opacity: 1; }
 .launcher-branch-new { opacity: .7; border-style: dashed; }
 .launcher-branch-input { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--accent, #6c8cff); background: rgba(255,255,255,.04); color: inherit; font-size: 12px; min-width: 160px; }
 .launcher-row.is-default { font-weight: 600; }

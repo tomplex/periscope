@@ -16,7 +16,7 @@ import time
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from periscope import activity, tracks
+from periscope import activity, open_ops, tracks
 from periscope.channels import dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC, MANAGED_SESSION
 from periscope.panes import (
@@ -170,7 +170,7 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
 
 def _window_new_plain(
     track_id: str, exec_cmd: str, mode: str,
-    cwd_param: str | None = None, new_branch: str | None = None,
+    cwd_param: str | None = None, branch: str | None = None,
 ) -> dict:
     """Non-resume "+ New tab": open a window in the one shared MANAGED_SESSION
     and tag the new pane into `track_id` (the `session` query param now carries
@@ -178,24 +178,30 @@ def _window_new_plain(
 
     cwd resolution precedence (the launcher's branch picker drives the first
     two):
-      1. `new_branch` set AND the track has a repo → spawn a fresh worktree off
-         the repo's default branch and land the tab in it.
-      2. else `cwd_param` set AND it's a real dir → use it (an existing
-         branch's worktree path the client passed).
+      1. `branch` set AND the track has a repo → resolve it to a worktree: an
+         existing one if the branch already has it, else create one (checking
+         the branch out when it exists, forking a new branch when it doesn't).
+         This is what lets the launcher open a branch that isn't running.
+      2. else `cwd_param` set AND it's a real dir → use it (a worktree path the
+         client already knows, e.g. straight from the open catalog).
       3. else → the track's repo (repo-default track id == repo path), or
          ~/dev for a goal/loose track (repo None) or an unknown id.
     """
     row = activity.get_track(track_id)
     repo = row["repo"] if row and row.get("repo") else None
 
-    new_branch = (new_branch or "").strip()
-    if new_branch and repo:
-        try:
-            wt = spawn_worktree(repo, new_branch)
-        except ValueError as e:
-            msg = str(e)
-            raise HTTPException(409 if "already exists" in msg else 400, msg) from e
-        cwd = wt["path"]
+    branch = (branch or "").strip()
+    if branch and repo:
+        existing = open_ops.worktree_for_branch(repo, branch)
+        if existing:
+            cwd = existing
+        else:
+            try:
+                wt = spawn_worktree(repo, branch)
+            except ValueError as e:
+                msg = str(e)
+                raise HTTPException(409 if "already exists" in msg else 400, msg) from e
+            cwd = wt["path"]
     elif cwd_param and os.path.isdir(cwd_param):
         cwd = cwd_param
     else:
@@ -250,7 +256,7 @@ def window_new(
     mode: str = "shell",
     resume_id: str | None = None,
     cwd: str | None = None,
-    new_branch: str | None = None,
+    branch: str | None = None,
 ):
     """Spawn a window in `session`. `exec` param sends a command to the new
     window; legacy `mode` maps to `exec` for backwards-compat. `mode=resume`
@@ -260,9 +266,9 @@ def window_new(
     want.
 
     The plain (non-resume) path takes two optional cwd hints from the
-    launcher's branch picker: `cwd` (land the tab in an existing branch's
-    worktree path) and `new_branch` (spawn a fresh worktree off the track's
-    repo first). See `_window_new_plain`."""
+    launcher's branch picker: `cwd` (land the tab in a worktree path the
+    client already knows) and `branch` (resolve the branch to a worktree,
+    creating one if it has none). See `_window_new_plain`."""
     # Legacy `mode` → exec_cmd mapping for callers still on the old
     # contract. `mode=resume` synthesizes the command from resume_id.
     if not exec_cmd:
@@ -273,7 +279,7 @@ def window_new(
 
     if mode == "resume":
         return _window_new_resume(session, exec_cmd, resume_id, mode)
-    return _window_new_plain(session, exec_cmd, mode, cwd_param=cwd, new_branch=new_branch)
+    return _window_new_plain(session, exec_cmd, mode, cwd_param=cwd, branch=branch)
 
 
 @router.post("/api/window/move")
