@@ -37,6 +37,33 @@ _PANE_FIELDS = 11
 
 _CHANNEL_RE = re.compile(r"--dangerously-load-development-channels (\S+)")
 
+_CONTINUUM_SAVE_SH = (
+    Path.home() / ".tmux/plugins/tmux-continuum/scripts/continuum_save.sh"
+)
+
+
+def save_now() -> None:
+    """Drive tmux-continuum's periodic save.
+
+    tmux-continuum has no timer: its save fires purely as a side effect of
+    `status-right` being EXPANDED, which only happens when a status line is
+    drawn for a client. Every client periscope attaches is control-mode
+    (the pane mirror and the input client), and control-mode clients render no
+    status line — so on a host driven entirely through the dashboard the save
+    never runs. Observed: a 24-day gap between saves, after which a reboot
+    restored a 24-day-old layout.
+
+    Safe to call every worker tick: the script self-gates on
+    `@continuum-save-interval` and takes its own lock, so it only writes when
+    an interval has actually elapsed. Degrades silently when continuum isn't
+    installed — same contract as the LGTM integration.
+    """
+    if not config.is_prod():
+        return
+    if not _CONTINUUM_SAVE_SH.exists():
+        return
+    subprocess.run([str(_CONTINUUM_SAVE_SH)], capture_output=True, check=False)
+
 
 def _live_pane_map() -> dict[str, str]:
     """`session:window.pane` -> tmux pane id, for every live pane. Empty on any
