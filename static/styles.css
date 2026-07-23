@@ -319,13 +319,6 @@ main {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
 
-
-}
-
-  color: var(--s-needs);
-  font-weight: 500;
-}
-
 /* ─── Modal ─────────────────────────────────────── */
 
 body.modal-open { overflow: hidden; }
