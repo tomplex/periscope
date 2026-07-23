@@ -28,6 +28,7 @@ import contextlib
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import time
 
@@ -39,12 +40,59 @@ _SCHEMA = (
     ")"
 )
 
+_SCHEMA_BASES = (
+    "CREATE TABLE IF NOT EXISTS session_bases ("
+    "  session_id TEXT PRIMARY KEY,"
+    "  repo TEXT NOT NULL,"
+    "  base_sha TEXT NOT NULL,"
+    "  created_at INTEGER NOT NULL"
+    ")"
+)
+
+
+def _git(cwd: str, *args: str) -> str:
+    r = subprocess.run(["git", "-C", cwd, *args], capture_output=True,
+                       text=True, timeout=10.0)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _stamp_session_base(c: sqlite3.Connection, sid: str, cwd: str) -> None:
+    """Snapshot the worktree once per session, as the baseline for periscope's
+    "changes this session" diff scope.
+
+    Timing is why this lives in the hook rather than server-side: SessionStart
+    fires before Claude's first edit, so the baseline is exact. A server-side
+    stamp would only notice the new session on its next tick, and everything
+    done in that window would be misattributed to before the session.
+
+    Cost on the common path is one indexed SELECT — git only runs the first
+    time a session id is seen, so the per-prompt UserPromptSubmit firing does
+    no subprocess work. `git stash create` captures uncommitted work WITHOUT
+    touching the worktree or the stash ref; it prints nothing on a clean tree,
+    so fall back to HEAD.
+    """
+    if c.execute("SELECT 1 FROM session_bases WHERE session_id=?",
+                 (sid,)).fetchone():
+        return
+    repo = _git(cwd, "rev-parse", "--show-toplevel")
+    if not repo:
+        return   # not a git worktree; session scope simply won't be offered
+    base = _git(repo, "stash", "create") or _git(repo, "rev-parse", "HEAD")
+    if not base:
+        return   # unborn branch (no commits yet)
+    c.execute(
+        "INSERT OR IGNORE INTO session_bases "
+        "(session_id, repo, base_sha, created_at) VALUES (?,?,?,?)",
+        (sid, repo, base, int(time.time())),
+    )
+
 
 def record() -> None:
     pane = os.environ.get("TMUX_PANE", "")
     if not pane.startswith("%"):
         return
-    sid = (json.load(sys.stdin) or {}).get("session_id") or ""
+    payload = json.load(sys.stdin) or {}
+    sid = payload.get("session_id") or ""
     if not sid:
         return
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
@@ -63,6 +111,11 @@ def record() -> None:
             "  updated_at=excluded.updated_at",
             (pane, sid, int(time.time())),
         )
+        c.execute(_SCHEMA_BASES)
+        # Own try: a git failure must never cost the pane_sessions write above,
+        # which is what the transcript view depends on.
+        with contextlib.suppress(Exception):
+            _stamp_session_base(c, sid, payload.get("cwd") or os.getcwd())
 
 
 def main() -> None:
