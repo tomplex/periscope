@@ -229,8 +229,8 @@ def test_dispatch_reply_with_empty_callback_queue_is_dropped():
     asyncio.run(drive())
 
 
-def test_reconcile_frame_enqueued_synchronously_on_display_reply():
-    # The ordering rule: after the display reply dispatches, the frame is
+def test_reconcile_frame_enqueued_synchronously_on_second_reply():
+    # The ordering rule: after the SECOND reply dispatches, the frame is
     # already in the queue — no task switch in between.
     async def drive():
         m = _SessionMirror("sess")
@@ -239,13 +239,29 @@ def test_reconcile_frame_enqueued_synchronously_on_display_reply():
         m._send_command = lambda cmd, cb: (sent.append(cmd), m._reply_callbacks.append(cb))
         sub = m.subscribe("%7")
         m._fire_reconcile("%7")
-        assert sent[0].startswith("capture-pane -p -e -t %7")
-        assert sent[1].startswith("display-message -p -t %7")
-        m._dispatch(Reply(body=(b"row",)))                # capture reply
         m._dispatch(Reply(body=(b"1|0|0|0|1",)))          # display reply
+        m._dispatch(Reply(body=(b"row",)))                # capture reply
         frame = sub._q.get_nowait()
         assert frame.startswith(b"\x1b[?1049l")
         assert b"row" in frame
+    asyncio.run(drive())
+
+
+def test_cursor_is_sampled_before_the_body():
+    # Regression guard for "cursor renders one ahead of where typing lands".
+    # The two samples are separate tmux commands; a cursor sampled AFTER the
+    # body points past a character the body lacks, and the row's \x1b[K then
+    # erases that character. Cursor must go first so the body is the fresher.
+    async def drive():
+        m = _SessionMirror("sess")
+        m._proc = object()
+        sent = []
+        m._send_command = lambda cmd, cb: (sent.append(cmd), m._reply_callbacks.append(cb))
+        m.subscribe("%7")
+        m._fire_reconcile("%7")
+        assert sent[0].startswith("display-message -p -t %7"), \
+            "cursor must be sampled BEFORE the body, never after"
+        assert sent[1].startswith("capture-pane -p -e -t %7")
     asyncio.run(drive())
 
 
