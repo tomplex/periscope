@@ -14,7 +14,17 @@ from periscope.git_pr import cached_git_state
 from periscope.log import log
 from periscope.tmux import tmux
 
-_PID_TTL_S = 30 * 86400  # 30 days
+_PID_TTL_S = 30 * 86400  # 30 days — GC retention for state.json window entries
+
+# Rebind eligibility is a DIFFERENT question from GC retention, and much
+# shorter. Rebind exists so persisted state reattaches when the tmux server
+# restarts (window options are lost, so @periscope_id vanishes and every window
+# is re-sighted unstamped) — that reattachment happens seconds-to-minutes after
+# boot, not weeks. Sharing the 30-day GC TTL meant a fresh Claude at fdy master
+# matched ANY entry from the last month on the (branch, cwd) fallback and
+# inherited its immunity fields — surfacing as a brand-new pane wearing a stale
+# PR and Linear ticket.
+_REBIND_TTL_S = 15 * 60  # 15 minutes
 
 
 def _mint_pid() -> str:
@@ -65,7 +75,7 @@ def _rebind_pid(
                 continue
             ls = entry.get("last_seen") or {}
             ts = ls.get("ts")
-            if not ts or now - ts > _PID_TTL_S:
+            if not ts or now - ts > _REBIND_TTL_S:
                 continue
             if pass_n == 1:
                 if ls.get("session") == session and ls.get("name") == name:
@@ -144,8 +154,14 @@ def _resolve_one(w: dict, wblock: dict, taken: set[str], now_ts: int) -> bool:
         pid = _mint_pid()
     dirty = False
     # Stamp tmux only when we synthesized the id (mint or rebind).
+    # Target the WINDOW ID (@N), never session:index. Indices renumber under
+    # move-window — which the tracks migration does in bulk, and which moving a
+    # tab between tracks does again. A stamp aimed at session:index after a
+    # renumber lands on a DIFFERENT window, so the duplicate that triggered the
+    # re-mint is never cleared and the next poll re-mints again: a self-
+    # sustaining loop (observed 683 times on one window in three days).
     if pid != pid_raw:
-        _stamp_pid(target, pid)
+        _stamp_pid(w.get("window_id") or target, pid)
         dirty = True
     taken.add(pid)
     w["pid"] = pid
