@@ -6,11 +6,14 @@ import pytest
 
 from periscope.git_pr import (
     _GIT_TTL,
+    _ci_glyph,
     _gh_run_state,
     _git_cache,
+    _linked_pr_cache,
     _pr_cache,
     cached_git_state,
     git_state_for,
+    linked_pr_state_for,
 )
 
 
@@ -18,9 +21,11 @@ from periscope.git_pr import (
 def _reset_caches():
     _git_cache.clear()
     _pr_cache.clear()
+    _linked_pr_cache.clear()
     yield
     _git_cache.clear()
     _pr_cache.clear()
+    _linked_pr_cache.clear()
 
 
 def test_git_state_for_returns_none_for_non_git_path(tmp_path):
@@ -152,6 +157,48 @@ def test_gh_run_state_returns_none_for_neutral():
 
 def test_gh_run_state_returns_none_for_unknown():
     assert _gh_run_state({}) is None
+
+
+def test_ci_glyph_rollup():
+    assert _ci_glyph([{"conclusion": "FAILURE"}]) == "✗"
+    assert _ci_glyph([{"conclusion": "SUCCESS"}, {"status": "IN_PROGRESS"}]) == "⟳"
+    assert _ci_glyph([{"conclusion": "SUCCESS"}, {"conclusion": "SKIPPED"}]) == "✓"
+    assert _ci_glyph([]) is None
+    assert _ci_glyph(None) is None
+
+
+def _fake_gh(mocker, *, state, rollup=None):
+    """Patch _run so linked_pr_state_for sees `gh pr view` returning one PR."""
+    import json as _json
+    payload = _json.dumps({"state": state, "statusCheckRollup": rollup or []})
+
+    def fake_run(cmd, cwd=None, timeout=3.0):
+        return (0, payload)
+    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
+    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+
+
+def test_linked_pr_state_merged(tmp_path, mocker):
+    _fake_gh(mocker, state="MERGED")
+    out = linked_pr_state_for(str(tmp_path), 1234)
+    assert out == {"pr_state": "merged", "ci": None}
+
+
+def test_linked_pr_state_open_with_ci(tmp_path, mocker):
+    _fake_gh(mocker, state="OPEN", rollup=[{"conclusion": "SUCCESS"}])
+    out = linked_pr_state_for(str(tmp_path), 1234)
+    assert out == {"pr_state": "open", "ci": "✓"}
+
+
+def test_linked_pr_state_closed(tmp_path, mocker):
+    _fake_gh(mocker, state="CLOSED")
+    assert linked_pr_state_for(str(tmp_path), 7)["pr_state"] == "closed"
+
+
+def test_linked_pr_state_none_without_number(tmp_path, mocker):
+    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    assert linked_pr_state_for(str(tmp_path), 0) is None
+    assert linked_pr_state_for("", 5) is None
 
 
 from periscope.gitutil import github_slug
