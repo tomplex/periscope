@@ -2869,6 +2869,89 @@ body.modal-open { overflow: hidden; }
   overflow: hidden;
 }
 
+/* ─── Changes tab (git-backed diff) ──────────────────────────── */
+
+.changes-tab {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+.changes-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.changes-scope { display: flex; gap: 2px; }
+.changes-scope button {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-3);
+  font: inherit;
+  cursor: pointer;
+}
+.changes-scope button:hover { background: var(--bg-2); color: var(--fg-1); }
+.changes-scope button.is-active { background: var(--bg-2); color: var(--fg-0); }
+.changes-summary { margin-left: auto; font-family: var(--mono); }
+.changes-body { flex: 1; overflow: auto; padding: 8px 0 24px; }
+.changes-msg { padding: 14px 16px; color: var(--fg-3); font-size: 12px; }
+.changes-err { color: var(--s-danger); }
+
+.dfile { margin: 0 10px 14px; border: 1px solid var(--line-soft); border-radius: var(--r-md); overflow: hidden; }
+.dfile-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.dfile-head:hover { background: var(--bg-1-hi); }
+.dfile-caret { color: var(--fg-4); }
+.dfile-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dfile-status { color: var(--fg-4); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.dfile-stat { display: flex; gap: 6px; }
+.dstat-add { color: var(--s-success); }
+.dstat-del { color: var(--s-danger); }
+.dstat-bin { color: var(--fg-4); }
+.dfile-trunc { padding: 6px 10px; color: var(--fg-3); font-size: 11px; background: var(--bg-1); }
+
+.dhunk { border-top: 1px solid var(--line-soft); }
+.dhunk-head {
+  display: flex;
+  gap: 10px;
+  padding: 3px 10px;
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.dhunk-sym { color: var(--fg-2); }
+
+/* One row per line. Horizontal scroll rather than wrap: wrapping destroys
+   the column alignment that makes a diff readable (minified JS, long
+   string literals). */
+.dl { font-family: var(--mono); font-size: 12px; line-height: 1.45; white-space: pre; overflow-x: auto; padding: 0 10px 0 22px; position: relative; }
+.dl::before { position: absolute; left: 8px; color: var(--fg-4); }
+.dl-add { background: color-mix(in oklch, var(--s-success) 12%, transparent); }
+.dl-add::before { content: "+"; color: var(--s-success); }
+.dl-del { background: color-mix(in oklch, var(--s-danger) 12%, transparent); }
+.dl-del::before { content: "−"; color: var(--s-danger); }
+.dl-ctx { color: var(--fg-2); }
+
 /* Browser-style tab strip above the pane meta-header. The first tab is
    the pane (terminal/transcript); each Cmd+click on a file path adds a
    tab. State persists per-pid across rail selection changes. */

@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { Inspector } from "../inspector/Inspector.jsx";
 import { getDetailMode, setDetailMode } from "../prefs.js";
+import { ChangesTab } from "../diff/ChangesTab.jsx";
 import { PreviewTab } from "../preview/PreviewTab.jsx";
 import {activeTarget, closeFileTab, openFileTab, paneActiveTab, 
   paneTabs, paneTranscript,railSelection, setActiveTab,
@@ -65,6 +66,19 @@ function TabStrip({ pid, paneLabel }) {
         title={paneLabel}
       >
         <span class="detail-tab-label">{paneLabel}</span>
+      </button>
+      {/* Changes is permanent, not openable: it's a standing view of the
+          worktree, not a document you opened. Sits next to the pane so it's
+          one click from the terminal. */}
+      <button
+        type="button"
+        role="tab"
+        class={`detail-tab${active === "changes" ? " is-active" : ""}`}
+        aria-selected={active === "changes"}
+        onClick={() => setActiveTab(pid, "changes")}
+        title="Changes in this worktree"
+      >
+        <span class="detail-tab-label">Changes</span>
       </button>
       {tabs.map((t) => {
         const key = `file:${t.path}`;
@@ -413,6 +427,14 @@ function PaneDetail({ w }) {
             target={w.pane_id}
             onPaste={handleDetailPaste}
           />
+        </div>
+        {/* Changes stays mounted alongside the terminal so scroll position and
+            scope choice survive tab switches, same as the preview tabs. */}
+        <div
+          class="detail-changes-host"
+          style={activeTab === "changes" ? "display:contents" : "display:none"}
+        >
+          <ChangesTab target={w.target} active={activeTab === "changes"} />
         </div>
         {/* Each opened file preview tab stays mounted; CSS-hidden when
             inactive so switching is instant and per-tab CM state survives.
