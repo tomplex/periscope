@@ -151,12 +151,18 @@ def file_sig(f: dict) -> str:
     return h.hexdigest()[:12]
 
 
-def diff_for(repo: str, base: str) -> dict:
-    """Structured diff of the worktree against `base`."""
+def diff_for(repo: str, base: str, context: int = 3) -> dict:
+    """Structured diff of the worktree against `base`.
+
+    `context` is git's -U. Widening it is how the client "expands context":
+    at the default 3 git already merges hunks less than 6 lines apart, so
+    there is little intra-hunk context to collapse — the useful direction is
+    asking for more, not folding away what little there is.
+    """
+    context = max(0, min(int(context), 100))
     code, text = _run(
-        # -M detects renames; -U3 is git's default context and reads well at
-        # the transcript column's width.
-        ["git", "-C", repo, "diff", "-M", "-U3", "--no-color", base],
+        # -M detects renames.
+        ["git", "-C", repo, "diff", "-M", f"-U{context}", "--no-color", base],
         timeout=30.0,
     )
     if code != 0:

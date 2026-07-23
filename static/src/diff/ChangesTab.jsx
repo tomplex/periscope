@@ -9,6 +9,7 @@
 // diffing algorithm here; we render the hunks the server parsed.
 import { useEffect, useState } from "preact/hooks";
 import { targetQuery } from "../util.js";
+import { withIntraline } from "./intraline.js";
 import {
   diffReview,
   fileState,
@@ -22,17 +23,53 @@ const SCOPES = [
   ["branch", "This branch", "Changes vs where this branch forked"],
 ];
 
-function Line({ line }) {
+// path -> the language key highlightCode understands.
+const LANG_BY_EXT = {
+  js: "js", mjs: "js", cjs: "js", jsx: "jsx", ts: "ts", tsx: "tsx",
+  py: "py", rs: "rs", json: "json", css: "css",
+  html: "html", htm: "html", md: "md", markdown: "md",
+};
+
+function langFor(path) {
+  const leaf = (path || "").split("/").pop() || "";
+  const dot = leaf.lastIndexOf(".");
+  return dot > 0 ? LANG_BY_EXT[leaf.slice(dot + 1).toLowerCase()] || "" : "";
+}
+
+// Syntax colour is foreground, the intraline mark is background, so the two
+// compose instead of fighting (the row tint already says add/delete).
+// Segments always break on token boundaries, so highlighting each separately
+// only mis-tokenizes in the rare case where a change lands inside a string
+// literal — worth it to keep the changed span exact.
+function Text({ text, lang, hl }) {
+  if (!hl || !lang) return text || " ";
+  try {
+    return hl(text, lang);
+  } catch {
+    return text || " ";
+  }
+}
+
+function Line({ line, lang, hl }) {
   return (
     <div class={`dl dl-${line.kind}`}>
-      <span class="dl-text">{line.text || " "}</span>
+      <span class="dl-text">
+        {line.segs
+          ? line.segs.map((s, i) => (
+              <span class={s.changed ? "dl-intra" : ""} key={i}>
+                <Text text={s.text} lang={lang} hl={hl} />
+              </span>
+            ))
+          : <Text text={line.text} lang={lang} hl={hl} />}
+      </span>
     </div>
   );
 }
 
-function FileBlock({ file, repo, review }) {
+function FileBlock({ file, repo, review, hl }) {
   const { collapsed, viewed } = fileState(review, repo, file.path, file.sig);
   const open = !collapsed;
+  const lang = langFor(file.path);
   const stat = (file.additions || 0) + (file.deletions || 0);
   return (
     <div class={`dfile dfile-${file.status}${viewed ? " is-viewed" : ""}`}>
@@ -66,7 +103,9 @@ function FileBlock({ file, repo, review }) {
             <span class="dhunk-range">@@ {h.new_start}</span>
             {h.header ? <span class="dhunk-sym">{h.header}</span> : null}
           </div>
-          {h.lines.map((l, j) => <Line line={l} key={j} />)}
+          {withIntraline(h.lines).map((l, j) => (
+            <Line line={l} lang={lang} hl={hl} key={j} />
+          ))}
         </div>
       ))}
       {open && file.truncated ? (
@@ -76,9 +115,25 @@ function FileBlock({ file, repo, review }) {
   );
 }
 
+const CONTEXTS = [3, 10, 25];
+
 export function ChangesTab({ target, active, gitSig }) {
   const [scope, setScope] = useState("session");
+  const [context, setContext] = useState(3);
   const [state, setState] = useState({ loading: true, error: null, data: null });
+  const [hl, setHl] = useState(null);
+
+  // The lezer parsers live in the lazy `preview` chunk (vite manualChunks), so
+  // pull them in only once the tab is actually opened. Until they land — or if
+  // the chunk fails — lines render as plain text rather than not at all.
+  useEffect(() => {
+    if (!active || hl) return undefined;
+    let alive = true;
+    import("../preview/highlightCode.jsx")
+      .then((m) => { if (alive) setHl(() => m.highlightCode); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [active, hl]);
 
   // Refetch when the tab is shown, the scope flips, or the worktree's git
   // summary moves. `gitSig` is the pane's `git` field from /api/state ("+14 -6
@@ -90,7 +145,8 @@ export function ChangesTab({ target, active, gitSig }) {
     let alive = true;
     (async () => {
       try {
-        const res = await fetch(`/api/fs/diff?${targetQuery(target)}&scope=${scope}`);
+        const res = await fetch(
+          `/api/fs/diff?${targetQuery(target)}&scope=${scope}&context=${context}`);
         if (!alive) return;
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -103,7 +159,7 @@ export function ChangesTab({ target, active, gitSig }) {
       }
     })();
     return () => { alive = false; };
-  }, [target, scope, active, gitSig]);
+  }, [target, scope, active, gitSig, context]);
 
   const files = state.data?.files || [];
   const repo = state.data?.repo || "";
@@ -128,6 +184,16 @@ export function ChangesTab({ target, active, gitSig }) {
             >{label}</button>
           ))}
         </span>
+        <span class="changes-ctx" title="Lines of context around each change">
+          {CONTEXTS.map((n) => (
+            <button
+              type="button"
+              key={n}
+              class={context === n ? "is-active" : ""}
+              onClick={() => setContext(n)}
+            >{n}</button>
+          ))}
+        </span>
         {!state.loading && !state.error && (
           <span class="changes-summary">
             {files.length
@@ -149,7 +215,7 @@ export function ChangesTab({ target, active, gitSig }) {
           </div>
         ) : null}
         {files.map((f) => (
-          <FileBlock file={f} repo={repo} review={review} key={f.path} />
+          <FileBlock file={f} repo={repo} review={review} hl={hl} key={f.path} />
         ))}
         {state.data?.truncated ? (
           <div class="changes-msg">

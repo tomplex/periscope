@@ -18,6 +18,7 @@ def fs_diff(
     session: str,
     index: int,
     scope: str = Query("branch", pattern="^(branch|session)$"),
+    context: int = Query(3, ge=0, le=100),
 ):
     target = f"{session}:{index}"
     # One fork for both fields — same pattern as turns.get_turns_for_pane.
@@ -54,7 +55,7 @@ def fs_diff(
             raise HTTPException(
                 409, f"session baseline was taken in {base_repo}, not {repo}")
 
-    out = gitdiff.diff_for(repo, base)
+    out = gitdiff.diff_for(repo, base, context)
     out["scope"] = scope
     out["repo"] = repo
     return out

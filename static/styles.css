@@ -2974,6 +2974,26 @@ body.modal-open { overflow: hidden; }
 .dl-del { background: color-mix(in oklch, var(--s-danger) 12%, transparent); }
 .dl-del::before { content: "−"; color: var(--s-danger); }
 .dl-ctx { color: var(--fg-2); }
+/* Intraline mark: a STRONGER tint of the row's own colour, never a new hue —
+   the row already says add/delete, this only says where. Background-only so it
+   composes with the syntax colours rather than overriding them. */
+.dl-intra { border-radius: 2px; padding: 1px 0; }
+.dl-add .dl-intra { background: color-mix(in oklch, var(--s-success) 30%, transparent); }
+.dl-del .dl-intra { background: color-mix(in oklch, var(--s-danger) 30%, transparent); }
+
+.changes-ctx { display: flex; gap: 1px; }
+.changes-ctx button {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-4);
+  font: inherit;
+  font-family: var(--mono);
+  cursor: pointer;
+}
+.changes-ctx button:hover { background: var(--bg-2); color: var(--fg-1); }
+.changes-ctx button.is-active { background: var(--bg-2); color: var(--fg-1); }
 
 /* Browser-style tab strip above the pane meta-header. The first tab is
    the pane (terminal/transcript); each Cmd+click on a file path adds a
@@ -3170,23 +3190,23 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    Order matters: tok-definition must come after tok-variableName — lezer
    emits the compound "tok-variableName tok-definition" and equal
    specificity means last-declared wins. */
-.md-doc .tok-keyword { color: #c678dd; }
-.md-doc .tok-atom, .md-doc .tok-bool, .md-doc .tok-number, .md-doc .tok-literal { color: #d19a66; }
-.md-doc .tok-string { color: #98c379; }
-.md-doc .tok-string2 { color: #56b6c2; }
-.md-doc .tok-variableName { color: #e06c75; }
-.md-doc .tok-variableName2 { color: #d19a66; }
-.md-doc .tok-definition { color: #e6edf3; }
-.md-doc .tok-propertyName { color: #e6edf3; }
-.md-doc .tok-typeName, .md-doc .tok-className, .md-doc .tok-namespace { color: #e5c07b; }
-.md-doc .tok-comment { color: #7f848e; font-style: italic; }
-.md-doc .tok-operator { color: #56b6c2; }
-.md-doc .tok-meta { color: #7f848e; }
-.md-doc .tok-url, .md-doc .tok-link { color: #61afef; }
-.md-doc .tok-heading { color: #e06c75; font-weight: 650; }
-.md-doc .tok-emphasis { font-style: italic; }
-.md-doc .tok-strong { font-weight: 700; }
-.md-doc .tok-invalid { color: #ff6b6b; }
+.md-doc .tok-keyword, .dl .tok-keyword { color: #c678dd; }
+.md-doc .tok-atom, .md-doc .tok-bool, .md-doc .tok-number, .md-doc .tok-literal, .dl .tok-atom, .dl .tok-bool, .dl .tok-number, .dl .tok-literal { color: #d19a66; }
+.md-doc .tok-string, .dl .tok-string { color: #98c379; }
+.md-doc .tok-string2, .dl .tok-string2 { color: #56b6c2; }
+.md-doc .tok-variableName, .dl .tok-variableName { color: #e06c75; }
+.md-doc .tok-variableName2, .dl .tok-variableName2 { color: #d19a66; }
+.md-doc .tok-definition, .dl .tok-definition { color: #e6edf3; }
+.md-doc .tok-propertyName, .dl .tok-propertyName { color: #e6edf3; }
+.md-doc .tok-typeName, .md-doc .tok-className, .md-doc .tok-namespace, .dl .tok-typeName, .dl .tok-className, .dl .tok-namespace { color: #e5c07b; }
+.md-doc .tok-comment, .dl .tok-comment { color: #7f848e; font-style: italic; }
+.md-doc .tok-operator, .dl .tok-operator { color: #56b6c2; }
+.md-doc .tok-meta, .dl .tok-meta { color: #7f848e; }
+.md-doc .tok-url, .md-doc .tok-link, .dl .tok-url, .dl .tok-link { color: #61afef; }
+.md-doc .tok-heading, .dl .tok-heading { color: #e06c75; font-weight: 650; }
+.md-doc .tok-emphasis, .dl .tok-emphasis { font-style: italic; }
+.md-doc .tok-strong, .dl .tok-strong { font-weight: 700; }
+.md-doc .tok-invalid, .dl .tok-invalid { color: #ff6b6b; }
 /* Text-labeled toggle (Source/Rendered) — same hover affordance as the
    icon buttons but sized for a short word. */
 .preview-btn-text {
