@@ -64,6 +64,7 @@ There IS a test suite — small, surgical, run with `uv run`:
 uv run pytest -q                     # full suite (incl. parse_pane / status-line regex regressions in tests/test_panes.py)
 uv run pytest tests/test_channel_shim.py # channel-shim reconnect protocol (if these fail spuriously, `uv sync` — see .venv drift below)
 uv run pytest tests/test_tmux_mirror.py  # mirror protocol + pyte convergence oracle (spawns a real tmux on -L periscope-mirror-test)
+npm test                             # vitest over the Preact app's pure helpers (railTree, classify, attention, launcher branches, …)
 ```
 
 These exist because each one tracks a class of regression that has bitten
@@ -172,6 +173,20 @@ One file per subsystem:
 | `periscope/store.py` | `state.json` layer (`_STATE`, load/write, migrations) |
 | `periscope/channels.py` | In-process MCP server + tool implementations |
 | `periscope/panes.py` | `parse_pane` + smoothing + focus tracking + `list_windows` + `_resuming` |
+| `periscope/window_view.py` | `build_window_view` — the per-window dict the dashboard renders (+ parsed-pane cache) |
+| `periscope/tracks.py` | Track registry: `repo_default_track` / `resolve_track_for_window` / create / rename / dissolve / teardown |
+| `periscope/tabs.py` | FILE-PREVIEW tabs on a pane card (`open_tab` / `close_tab` / `activate_tab`) — NOT rail tabs; two meanings of "tab" |
+| `periscope/workspaces.py` | Legacy workspace rows, folded into tracks |
+| `periscope/projects.py` | Project registry (`ensure_project`, PR-worktree fetch) |
+| `periscope/worktrees.py` | `git worktree list` cache + `affiliation` |
+| `periscope/worktree_spawn.py` | `spawn_worktree` + `worktree_path` + `_layout_two_window` |
+| `periscope/repo_locks.py` | Per-repo advisory lock around git mutations |
+| `periscope/gitutil.py` | Shared git helpers (`detect_default_branch`, toplevel resolution) |
+| `periscope/session_status.py` | Authoritative Claude-session state from `sessions/<pid>.json` |
+| `periscope/tmux_input.py` | Persistent control-mode client for low-latency keystrokes |
+| `periscope/bg_commander.py` | Background command jobs (`commands` table) + status sync |
+| `periscope/resurrect.py` | tmux-resurrect save-file rewrite (`--resume <uuid>`) + `save_now()` continuum trigger |
+| `periscope/migrate_single_session.py` | One-shot consolidation into `MANAGED_SESSION` |
 | `periscope/pids.py` | `@periscope_id` mint / stamp / rebind / resolve |
 | `periscope/git_pr.py` | Git state + GitHub PR cache + activity timeline + `prewarm_pr_cache` |
 | `periscope/lgtm.py` | LGTM mirror (poll + per-session SSE) |
@@ -179,21 +194,29 @@ One file per subsystem:
 | `periscope/rename_ai.py` | Anthropic SDK plumbing for auto-rename (`RENAME_RULES` taste block shared with the narrator) |
 | `periscope/narrator.py` | Per-pane AI status lines + divergence renames (pure decision core + worker-driven tick; see "Narrator" below) |
 | `periscope/open_ops.py` | Unified-open core: `open_target` dispatch (path/branch/pr descriptors → resolve → register → idempotent create-or-focus → server-side rail placement) + `ensure_session` / `worktree_for_branch` / `place_in_rail` / `build_catalog`. No HTTP (see "Unified open" below) |
-| `periscope/routes/*.py` | One APIRouter per file (alerts, auto_rename, channel, cleanup, events, fs, healthz, history, lgtm, open, pane, paste_image, prefs, projects, send, sessions, settings, state, ws) |
+| `periscope/routes/*.py` | One APIRouter per file (alerts, auto_rename, channel, cleanup, command, events, fs, healthz, history, lgtm, open, pane, paste_image, prefs, projects, send, sessions, settings, state, tracks, workspaces, ws) |
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
-`tests/routes/test_<route>.py` per route). 634 pytest tests on a
-clean run. Run with `uv run pytest -q`.
+`tests/routes/test_<route>.py` per route). 788 pytest tests on a
+clean run. Run with `uv run pytest -q`. The Preact app has its own
+suite: `npm test` (vitest), 111 tests over the pure helpers.
 
 `cleanup.py` has no `tests/test_<module>.py` but is exercised
 indirectly through its route tests (`tests/routes/test_cleanup.py`).
-`repo_locks.py` and `worktrees.py` have no direct test and no route
-test — they currently lack coverage. Add a direct
-`tests/test_<module>.py` when you next touch those. (`worktree_spawn.py`
-gained `tests/test_worktree_spawn.py` and `open_ops.py` has
-`tests/test_open_ops.py`, both real-tmux integration tests gated on
+`gitutil.py`, `projects.py`, `repo_locks.py` and `worktrees.py` have no
+direct test module. Add a direct `tests/test_<module>.py` when you next
+touch those. (`worktree_spawn.py` has `tests/test_worktree_spawn.py` and
+`open_ops.py` has `tests/test_open_ops.py`; their tmux cases are gated on
 `@needs_tmux`.)
+
+**`WORKTREES_DIR` points at the USER'S real `~/dev/worktrees`.** A
+`spawn_worktree` test without a redirect fixture creates worktrees there
+for real, then fails on the *next* run because `wt_path.exists()`
+short-circuits. Use the `tmp_worktrees` fixture in
+`tests/test_worktree_spawn.py`, which monkeypatches
+`worktree_spawn.WORKTREES_DIR` into `tmp_path`. Strays from before that
+fixture existed are still sitting in `~/dev/worktrees/repo/`.
 
 `tests/test_channel_shim.py` exercises the channel-shim reconnect
 protocol (spawns the shim as a real subprocess against a fake unix-socket
@@ -206,7 +229,7 @@ is no separate smoke script and no `collect_ignore`.
 the shim subprocess misbehaves — surfacing as two spurious
 `test_channel_shim.py` reconnect failures (`TimeoutError`/fast EOF) with
 NO code change. Fix: `uv sync` to rebuild `.venv` from the lock. The
-canonical locked env collects 634 tests, all green. If you ever see only
+canonical locked env collects 788 tests, all green. If you ever see only
 those two channel tests fail, suspect the env before the code.
 
 ### Key invariants the split preserved
@@ -234,9 +257,8 @@ into `#app`. Components grouped by area:
 | entry / state | `src/main.jsx` (mount + boot), `src/store.js` (transient signals — the read model), `src/prefs.js` (server-prefs cache as a signal — the persistence boundary) |
 | chrome | `src/chrome/{Header,FilterBar,UsagePill}.jsx` |
 | poll | `src/poll.js` — the single `/api/state` poll loop (writes `windows` / `projects` / `usage` signals); `openModal` bridge for poll-driven open requests |
-| split view | `src/split/{Split,Rail,RailRows,Detail}.jsx` + `src/split/railTree.js` (`mergeLiveAndPrefs`) — the only dashboard view (grid retired). Rail membership is SESSION-ANCHORED: windows group by their tmux session's project (`project_pinned_dir` + the projects payload), never by cwd — cd shows as an affiliation chip, not a move. Unmanaged sessions fold into the flat bottom-pinned "dev" group (`MAIN_KEY`); its pane order persists as `panes_by_worktree.__main__` |
-| modal | `src/modal/Modal.jsx` (tab strip + sidebar + review pane) |
-| terminal | `src/terminal/Terminal.jsx` (ref+effect wrapper) + `src/terminal/terminalCore.js` (imperative xterm + `/ws/pane`, ported ~verbatim) |
+| split view | `src/split/{Split,Rail,RailRows,Detail,AttentionSections,SectionHeader,Transcript}.jsx` + `src/split/railTree.js` (`mergeLiveAndPrefs`) — the only dashboard view (grid retired). Rail membership is TRACK-ANCHORED: every window carries a server-resolved `track_id`, and the tree is Track → (derived Branch) → Pane. A track spanning ≥2 branches renders branch sub-clusters; otherwise it renders flat. Branch rows are DERIVED from live `w.branch`, not entities — you can't close one, only tear down the track |
+| terminal | `src/terminal/{Terminal,TerminalSearch}.jsx` + `src/terminal/terminalCore.js` (imperative xterm + `/ws/pane`) + `theme.js` |
 | overlays | `src/overlays/{Dialog,Toast,Overlays,CommandsModal,CleanupModal,SettingsModal,LauncherModal,OpenOmnibox}.jsx` + `src/hooks/useEscape.js` (LIFO escape stack). `OpenOmnibox` is the command-palette (↑↓↵ nav, ⌘K, grouped cards) behind the header's single `+ new` button — it replaced the old `+ session` / `+ project` / `review PR` menu and the retired `NewProjectModal` / `ReviewPrModal` / `OpenPickerModal`. `src/open/classify.js` is its pure (unit-tested) query→cards classifier |
 | util | `src/util.js` (`targetQuery` last-colon split, `apiCall`, `relTime`, `prUrl`, `rewriteLgtmHost`) |
 
@@ -281,6 +303,20 @@ These are the non-obvious behaviors worth preserving:
    `%output` land first and be reverted by the frame. Don't "optimize"
    this to futures.
 
+   **The cursor is sampled BEFORE the body, and the order matters.** The
+   two samples are separate tmux commands (`display-message` then
+   `capture-pane`), so a character echoed between them lands in exactly
+   one of the pair. A cursor *fresher* than the body renders one cell
+   past a character the body doesn't carry, and the row's `\x1b[K` then
+   erases that character — a visible gap that persists until the pane's
+   next output. Staler cursor is the safe direction: text intact, cursor
+   at worst one cell behind, corrected by the next byte. Reported as
+   "the cursor is one ahead of where typing lands, with stuttering as it
+   reconciles". Sending both as one `;`-joined command does NOT fix it —
+   tmux still replies with two `%begin`/`%end` blocks, and
+   `_send_command` registers one callback per write, so a combined line
+   desyncs the whole reply-callback queue.
+
 4. **`capture-pane` separates rows with bare `\n`; xterm needs `\r\n`.**
    Forgetting the carriage return staircases every line right by the
    previous line's length.
@@ -313,6 +349,30 @@ These are the non-obvious behaviors worth preserving:
     exits. A non-zero exit pops macOS's crash reporter every time Claude
     reconnects, which is intolerable for a nice-to-have channel.
 
+11. **`@periscope_id` is stamped by WINDOW ID (`@N`), never `session:index`.**
+    Indices renumber under `move-window` — which the single-session
+    migration does in bulk and which moving a tab between tracks does
+    again. A stamp aimed at `session:index` after a renumber lands on a
+    *different* window, so the duplicate that triggered the re-mint is
+    never cleared and the next poll re-mints again: a self-sustaining
+    loop (observed 683 times on one window across three days, in
+    `~/.config/periscope/periscope-8765.log`). A re-mint changes a
+    window's identity, and `railSelection` is keyed `pane:<pid>` — so the
+    detail pane silently detaches. Historically reported as "detail pane
+    closes on cd". `grep -c re-minting` on the log is the regression
+    signal.
+
+12. **Rebind eligibility (`_REBIND_TTL_S`, 15 min) is NOT GC retention
+    (`_PID_TTL_S`, 30 days).** Rebind exists so persisted state reattaches
+    when the tmux server restarts — window options are lost, so every
+    window is re-sighted unstamped — and that happens seconds-to-minutes
+    after boot. Sharing the 30-day GC TTL meant a fresh Claude at a repo
+    root on master matched ANY entry from the past month via the
+    `(branch, cwd)` fallback and inherited its `_IMMUNITY_FIELDS`,
+    surfacing as a brand-new pane wearing a stale PR and Linear ticket.
+    Both passes are collision-prone by construction now that `session` is
+    a constant — the TTL is what keeps them honest.
+
 ## Status-line parsing
 
 Claude Code renders a two-line block at the very bottom of its pane:
@@ -331,11 +391,18 @@ shell." Add a case to `tests/test_panes.py` for any new variation.
 
 ## Unified open (`periscope/open_ops.py` + `routes/open.py`)
 
-One endpoint and one UI surface materialize a session into the rail. The
-header's `+ new` button (and ⌘K) open the `OpenOmnibox` command-palette,
-which loads `GET /api/open/catalog` (discoverable repos + their worktrees)
-and POSTs a *target descriptor* to `POST /api/open`. The server owns all
-dispatch.
+TWO UI surfaces materialize work into the rail, and they answer different
+questions. Know which one you're touching:
+
+| Surface | Aims at a track? | Reaches things that aren't running? |
+|---|---|---|
+| Header `+ new` / ⌘K → `OpenOmnibox` | No — opens into the repo-default track | Yes (whole catalog) |
+| Per-track `+ New tab` → `LauncherModal` | Yes (`openLauncher(trackId)`) | Yes (catalog branches for that track's repo) |
+
+The omnibox loads `GET /api/open/catalog` (discoverable repos + their
+worktrees) and POSTs a *target descriptor* to `POST /api/open`. The launcher
+loads the same catalog and POSTs to `/api/window/new` with the track id. The
+server owns all dispatch in both cases.
 
 `open_ops.open_target(descriptor)` takes one of three frozen-dataclass
 variants and converges branch/PR onto the path case:
@@ -349,17 +416,34 @@ variants and converges branch/PR onto the path case:
 
 Invariants worth knowing before touching it:
 
-- **Idempotent create-or-focus is NAME-based, not cwd-based.** `ensure_session`
-  checks `tmux has-session` on the project's recorded `tmux_session`; cwd
-  collides (the documented footgun — multiple panes per dir). Live-and-ours →
-  focus; dead → spawn; live-but-foreign (name reused) → dedupe the name and
-  `update_project`. This is what fixes the "project already exists" dead-end:
-  a dormant registered project (session killed) reopens instead of 409ing.
-- **Rail placement is server-side.** `place_in_rail` writes the rail pref
-  (`repo_order` / `worktrees_by_repo` keyed by tmux **session name** /
-  `panes_by_worktree`) and the route returns the `ui` blob; the omnibox writes
-  it straight into `prefsSignal` via `prefs.setUI`. This killed the old
-  client-side ~3500ms `deferRailAdd` poll-wait race.
+- **Create-or-focus is cwd-based now, and that IS the old footgun.** Everything
+  lives in one `MANAGED_SESSION`, so a per-project session name no longer
+  exists to key on: `ensure_session` answers "already open?" by cwd ownership
+  *within* the shared session. cwd collides (multiple panes per dir), which the
+  pre-tracks design deliberately avoided. Consequence: when a pane already owns
+  the target cwd, **no window is created** — the call is a pure focus.
+- **A focus that isn't visible reads as a no-op.** Because of the above, the
+  client MUST select the returned `claude_pid`; `OpenOmnibox.post()` sets
+  `railSelection` + `prefs.setLastSelected`. Without it, opening something
+  already open did nothing observable at all — the reported "I tried to open
+  fdy master multiple times and nothing happened".
+- **Rail placement is server-side, and writes the TRACK keys.** `place_in_rail`
+  writes `track_order` / `tabs_by_track` (keyed by **track id**, values are
+  `@periscope_id` pids) and the route returns the `ui` blob; the omnibox writes
+  it into `prefsSignal` via `prefs.setUI`. This killed the old client-side
+  ~3500ms `deferRailAdd` poll-wait race. The pre-tracks trio (`repo_order` /
+  `worktrees_by_repo` / `panes_by_worktree`) is NOT read by the rail —
+  `prefs.js` drops `worktrees_by_repo`, never reads `panes_by_worktree`, and
+  honours `repo_order` only as the fallback when `track_order` is unset.
+  Writing them persisted nothing once the rail had saved an order once.
+- **Placement is ordering, not visibility.** `mergeLiveAndPrefs` already
+  appends live-new tracks and tabs on the next poll, so a genuinely-created
+  window shows up regardless. Placement is what makes the order the user chose
+  survive. Don't diagnose a missing window by looking at prefs first.
+- **`spawn_worktree` checks out an existing branch.** `git worktree add -b`
+  fails outright on a branch git already knows, so a branch that exists with no
+  worktree used to be unreachable from BOTH surfaces. `_branch_exists` picks
+  `worktree add <path> <branch>` (checkout) vs `-b` (fork) accordingly.
 - **`_layout_two_window` stamps BOTH windows** (claude + shell) so the full
   pane list is known synchronously — `place_in_rail` needs it without waiting
   for the next poll's `resolve_pids`.
@@ -371,6 +455,37 @@ Invariants worth knowing before touching it:
   `tests/test_worktree_spawn.py` spawn real tmux on an isolated `-L` socket
   (`PERISCOPE_TMUX_SOCKET`) with a stub exec (`PERISCOPE_CLAUDE_EXEC`); both
   seams live in `periscope/tmux.py` + `config.py` and are inert in prod.
+
+## tmux persistence (`periscope/resurrect.py`)
+
+Session survival across reboots is tmux-resurrect + tmux-continuum, with two
+periscope hooks into it.
+
+**Save-file rewrite (`python -m periscope.resurrect <file>`).** Registered as
+`@resurrect-hook-post-save-layout` via `bin/periscope resurrect-rewrite`.
+Resurrect re-runs each Claude pane's captured command, but that command starts
+a *fresh* session — no `--resume <uuid>`. This rewrites each Claude pane's
+command in the just-written save file. It must run at SAVE time while panes are
+live: the pane→session map is keyed by tmux pane id, and pane ids are reassigned
+when the server restarts, so at restore time there is nothing left to map.
+Import discipline: stdlib + `periscope.config` only — it runs under plain
+`python3`, and `periscope.activity` would drag in the Anthropic SDK.
+
+**Periscope drives the periodic save (`resurrect.save_now()`).**
+tmux-continuum has NO timer: its save fires purely as a side effect of
+`status-right` being *expanded*, which only happens when a status line is drawn
+for a client. Every client periscope attaches is control-mode (the pane mirror
+and the input client) and control-mode clients render no status line — so on a
+host driven entirely through the dashboard, continuum silently never saves.
+Observed: a 24-day gap between saves, after which a reboot restored a 24-day-old
+layout. The activity worker now calls `save_now()` each tick; the script
+self-gates on `@continuum-save-interval` and takes its own lock, so calling it
+every 30s only writes when an interval has actually elapsed. Prod-only, and it
+degrades silently when continuum isn't installed.
+
+Diagnosing a stale restore: `ls -lt ~/.local/share/tmux/resurrect/` — gaps in
+that timeline are the story. `tmux list-clients -F "#{client_flags}"` tells you
+whether anything is drawing a status line.
 
 ## History (`history/`)
 
