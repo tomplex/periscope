@@ -40,6 +40,13 @@ const NO_BRANCH = "";
 // `projects`/`workspaces` are accepted (and ignored for grouping) purely so
 // existing callers don't break on the signature; labels still index projects.
 //
+// `tracks` is the /api/state track registry (non-archived rows). It exists so
+// EMPTY GOAL TRACKS render: live windows alone can't surface a track with no
+// tabs, and a freshly created track must be visible to receive its first tab
+// (drag / "+ New tab") — otherwise creation dead-ends. Goal tracks (id !== repo
+// — repo-default catchalls have id == repo) are always in the tree; an empty
+// repo-default track stays hidden (it's a lazy catchall, an empty one is noise).
+//
 // `prefs` is `{ trackOrder?, tabsByTrack?, branchOrderByTrack? }`:
 //   trackOrder          — ordered track ids (replaces the old repo_order)
 //   tabsByTrack         — { trackId: [pid, ...] } tab order within a track
@@ -56,7 +63,7 @@ const NO_BRANCH = "";
 //                      flat from tabsByTrack"
 //   tabsByBranch     — { trackId: { branch: [pid, ...] } } per-branch tab
 //                      order; only populated for MULTI-branch tracks
-export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}) {
+export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, tracks = []) {
   const prefTrackOrder = prefs.trackOrder || [];
   const prefTabsByTrack = prefs.tabsByTrack || {};
   const prefBranchOrder = prefs.branchOrderByTrack || {};
@@ -81,11 +88,22 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}) {
     if (!liveTabsByBranch[t][branch].includes(w.pid)) liveTabsByBranch[t][branch].push(w.pid);
   }
 
-  // Top-level order: pref-first (kept iff still live), then live-new appended.
+  // Empty goal tracks join the tree alongside live membership (see header).
+  const goalIds = (tracks || [])
+    .filter(t => t.id && t.id !== t.repo)
+    .map(t => t.id);
+  const goalSet = new Set(goalIds);
+
+  // Top-level order: pref-first (kept iff still live OR a goal track), then
+  // live-new, then new empty goal tracks appended.
   const liveTrackSet = new Set(liveTracks);
-  const fromPref = prefTrackOrder.filter(t => liveTrackSet.has(t));
+  const fromPref = prefTrackOrder.filter(t => liveTrackSet.has(t) || goalSet.has(t));
   const fromPrefSet = new Set(fromPref);
-  const trackOrder = [...fromPref, ...liveTracks.filter(t => !fromPrefSet.has(t))];
+  const trackOrder = [
+    ...fromPref,
+    ...liveTracks.filter(t => !fromPrefSet.has(t)),
+    ...goalIds.filter(t => !fromPrefSet.has(t) && !liveTrackSet.has(t)),
+  ];
 
   const tabsByTrack = {};
   const branchesByTrack = {};
@@ -119,11 +137,15 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}) {
 
 // Top-level track row label. The backend ships `track_name` on every window
 // (track_label() — goal tracks carry the user name, repo-default tracks carry
-// basename(repo)); the rail reads it off any window in the track. Falls back to
-// the track id's path basename when no window carries a name (defensive).
-export function trackLabel(trackId, windows) {
+// basename(repo)); the rail reads it off any window in the track. An EMPTY
+// track has no window to read from — its name comes from the registry rows
+// (`tracks`). Falls back to the track id's path basename (defensive).
+export function trackLabel(trackId, windows, tracks = []) {
   for (const w of (windows || [])) {
     if (w.track_id === trackId && w.track_name) return w.track_name;
+  }
+  for (const t of (tracks || [])) {
+    if (t.id === trackId && t.name) return t.name;
   }
   if (trackId === "loose") return "loose";
   const parts = String(trackId || "").split("/").filter(Boolean);

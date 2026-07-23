@@ -13,6 +13,7 @@ happens at import time — the connection opens lazily on first use.
 import asyncio
 import contextlib
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -162,6 +163,22 @@ def events_for(pane_id, repo_path, branch, limit=40):
             (pane_id or "\x00", branch_key, limit),
         ).fetchall()
     return [_row_to_event(*r) for r in rows]
+
+
+def alert_events_since(cutoff_ts: int) -> list[tuple[str, int, str, str]]:
+    """(pane_id, at, message, kind) for durable 'alert' events at/after
+    `cutoff_ts`, oldest-first. Feeds channel-alert cache rehydration after a
+    periscope restart — the in-memory cache is empty on boot but the events
+    table (written by every notify()) survived. id/severity aren't persisted."""
+    with _LOCK:
+        c = _conn()
+        rows = c.execute(
+            "SELECT scope_key, at, text, detail FROM events "
+            "WHERE scope_kind='pane' AND event_kind='alert' AND at >= ? "
+            "ORDER BY at ASC",
+            (cutoff_ts,),
+        ).fetchall()
+    return [(r[0], int(r[1] or 0), r[2] or "", r[3] or "info") for r in rows]
 
 
 def status_log_for(pane_id: str, limit: int = 200) -> list[dict]:
@@ -838,6 +855,17 @@ def _check_reset(pane_id: str, cwd: str, context_pct, last_ctx: dict) -> bool:
 # it captures each active Claude pane, runs the context-reset check, and
 # drives the narrator (semantic status + auto-rename).
 
+_FD_WARN = 512   # half the launchd SoftResourceLimits NumberOfFiles cap (1024)
+
+
+def _fd_count() -> int | None:
+    """This process's open-fd count via /dev/fd (macOS). None if unreadable."""
+    try:
+        return len(os.listdir("/dev/fd"))
+    except OSError:
+        return None
+
+
 def _worker_tick(last_ctx: dict) -> None:
     """One worker pass. Blocking (tmux + git subprocesses) — run off-loop."""
     panes: list[tuple[dict, dict]] = []
@@ -870,6 +898,12 @@ def _worker_tick(last_ctx: dict) -> None:
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()
+    # fd watchdog: EMFILE doesn't crash the server, it wedges it silently
+    # (the Jun-2026 bg_commander connection leak). Surface a climbing fd
+    # count loudly while there's still headroom under the 1024 soft cap.
+    n = _fd_count()
+    if n is not None and n >= _FD_WARN:
+        log.warning("open fd count high: %d (soft cap 1024)", n)
 
 
 async def run_worker() -> None:

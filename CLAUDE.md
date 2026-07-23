@@ -637,26 +637,40 @@ Periscope runs in two flavors:
   launchd respawns on crash and picks up changes on next restart whether
   intended or not. Manage with `bin/periscope {start|stop|restart|status|tail}`.
 
-- **Dev** — manually started in a git worktree, port 8766. This is where
-  edits and iteration happen. Browse at http://localhost:8766/. Dev
-  periscope doesn't bind `/tmp/periscope-mcp.sock` — Claude's channels
-  always talk to prod on 8765.
+- **Dev** — runs in a worktree on port 8766. This is where edits and
+  iteration happen. Browse at http://localhost:8766/. Dev periscope doesn't
+  bind `/tmp/periscope-mcp.sock` — Claude's channels always talk to prod on
+  8765.
+
+This repo works in worktrees, which is the standing instruction that
+sanctions `EnterWorktree` here. Use the built-in tools — never
+`git worktree add` / `remove`.
 
 Standard loop for a periscope change:
 
-```sh
-# one-time per feature
-git worktree add ../periscope-feature -b feature/my-change
-cd ../periscope-feature
-PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py
-# edit, test at http://localhost:8766/
-
-# when done
-cd ~/dev/periscope
-git merge feature/my-change
-bin/periscope restart       # launchd respawns prod with new code
-git worktree remove ../periscope-feature
-```
+1. **Push `main` first.** `EnterWorktree` branches from `origin/main`
+   (`worktree.baseRef` defaults to `fresh`), so unpushed commits on local
+   `main` are silently absent from the worktree. This repo commits straight
+   to `main` and pushes rarely, so local `main` is routinely dozens of
+   commits ahead — skipping this step means developing against stale code.
+2. `EnterWorktree(name: "my-change")` → creates `.claude/worktrees/my-change`
+   and switches the session into it.
+3. `PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py`, then edit and test
+   at http://localhost:8766/. Commit as you go (see "Commit as you go").
+   Rebuild the bundle (`npm run build`) and commit `static/dist/` if you
+   touched `static/src/`.
+4. Merge **without leaving the worktree**:
+   `git -C ~/dev/periscope merge <branch>`. Merging a branch that's checked
+   out in a linked worktree is fine — git only blocks *checking it out*
+   twice.
+5. `bin/periscope restart` — `launchctl kickstart -k`, so it always respawns
+   prod from `~/dev/periscope` (the plist pins `WorkingDirectory` there)
+   regardless of where you run it. Step 4 is what makes the code live, not
+   this.
+6. `ExitWorktree(action: "remove")` — deletes the worktree and its branch.
+   This only succeeds *after* step 4: before the merge, the commits aren't
+   on `main` and the tool refuses. That refusal is the safety net — don't
+   reach for `discard_changes: true` to get past it.
 
 `PERISCOPE_NO_RECLAIM=1` skips the pidfile-reclaim step in `__main__`.
 Set it when intentionally running a second instance that must not kill

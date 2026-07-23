@@ -259,6 +259,16 @@ TOOL_RESULT_RE = re.compile(r"^\s*⎿\s+")
 API_ERROR_RE = re.compile(r"^\s*⎿\s+API Error:")
 
 
+def all_pane_ids() -> set[str]:
+    """Every live pane id across all sessions. `list_windows` reports one pane
+    per window (the active one — `list-windows -F #{pane_id}` resolves against
+    the active pane), so a split window's background panes are invisible to it.
+    Channel-alert GC keys on pane id, so using the window set there would delete
+    a background Claude pane's alerts every poll. This is the full set."""
+    out = tmux("list-panes", "-a", "-F", "#{pane_id}")
+    return {line.strip() for line in out.split("\n") if line.strip()}
+
+
 def list_windows() -> list[dict]:
     out = tmux(
         "list-windows",

@@ -17,6 +17,7 @@ from periscope.channels import _channel_gc
 from periscope.panes import (
     RESUME_EXPIRY_S,
     _resuming,
+    all_pane_ids,
     list_windows,
     update_focus_from_windows,
 )
@@ -48,8 +49,16 @@ def _safe_build(w: dict, now_ts: int) -> tuple[dict, tuple[str, int, int] | None
         )
 
 
-@router.get("/api/state")
-def state():
+def build_state() -> dict:
+    """Assemble the full dashboard state blob.
+
+    The body of GET /api/state, lifted out so the state hub's broadcast loop
+    (periscope.state_hub) can compute the same blob on the server's own clock
+    and push it over /ws/state. Blocking (tmux subprocess + 32-thread capture
+    fan-out); callers off the event loop run it in an executor. Concurrent
+    execution is already tolerated — multiple browser tabs hit /api/state at
+    once today — so the hub running it alongside a REST poll adds no new race.
+    """
     windows = list_windows()
     update_focus_from_windows(windows)
     _attach_git_then_resolve_pids(windows)
@@ -90,7 +99,13 @@ def state():
         stamp for _, stamp in built if stamp is not None
     ]
 
-    _channel_gc({w["pane_id"] for w in windows if w.get("pane_id")})
+    # GC against ALL live panes, not the active-pane-per-window set `windows`
+    # carries — otherwise a split window's background Claude pane has its alerts
+    # dropped every poll. Skip entirely on an empty result (a tmux hiccup must
+    # not wipe every pane's alerts).
+    live_panes = all_pane_ids()
+    if live_panes:
+        _channel_gc(live_panes)
 
     # Batched stamp persistence: single lock + single write across every
     # pane in this poll. set_window_fields_bulk skips the write when no
@@ -124,11 +139,33 @@ def state():
         v for v in all_workspaces().values() if not v.get("archived_at")
     ]
 
+    # Track registry rows (non-archived), so the rail can render EMPTY goal
+    # tracks — live windows alone can't surface a track with no tabs yet, and
+    # a freshly created track must be visible to receive its first tab.
+    from periscope.activity import all_tracks
+    tracks_view = [
+        {"id": t["id"], "name": t["name"], "repo": t["repo"]}
+        for t in all_tracks()
+        if not t.get("archived_at")
+    ]
+
+    # Alerts ride the state blob so the dashboard has one transport and one
+    # clock — notify() kicks the hub, so a need_human surfaces immediately.
+    # Reuses `windows` above rather than re-running the tmux fan-out.
+    from periscope.channels import recent_alerts
+
     return {
         "windows": result,
         "projects": projects_view,
         "workspaces": workspaces_view,
+        "tracks": tracks_view,
+        "alerts": recent_alerts(windows),
         "ts": int(time.time()),
         "usage": cached_claude_usage(),
         "usage_plan": cached_plan_usage(),
     }
+
+
+@router.get("/api/state")
+def state():
+    return build_state()

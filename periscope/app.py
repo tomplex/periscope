@@ -80,6 +80,16 @@ async def lifespan(_app: FastAPI):
             log.info("pruned %d dead pane_tracks row(s)", dropped_tracks)
 
     _bg("pane-sessions-housekeeping", _pane_sessions_housekeeping)
+
+    # Reload the alert feed from its durable backing store — a restart empties
+    # the in-memory cache but tmux pane ids (and the events table) survive.
+    def _rehydrate_alerts() -> None:
+        from periscope import channels
+        n = channels.rehydrate_alerts_from_events()
+        if n:
+            log.info("rehydrated %d channel alert(s) from events log", n)
+
+    _bg("alert-rehydrate", _rehydrate_alerts)
     # Kick off cache prewarms eagerly so the first /api/state poll already
     # has PR badges and the usage bars populated.
     _bg("prewarm-pr", prewarm_pr_cache)
@@ -94,6 +104,12 @@ async def lifespan(_app: FastAPI):
         mcp_task = None
         log.info("non-prod (port %d, dev=%s): skipping MCP listener",
                  config.PORT, config.DEV)
+    # State hub: one central compute loop that pushes /api/state over /ws/state
+    # to all subscribers. Demand-gated (idle until a client connects), so it's
+    # safe to run in dev too — no Claude spend, just the same tmux/git fan-out
+    # the REST endpoint already does.
+    from periscope import state_hub
+    state_task = _task("state-hub", state_hub.run())
     # LGTM mirror: polls localhost:9900 + subscribes per-session SSE.
     # No-op while LGTM isn't running; surfaces on the dashboard the
     # moment it comes up.
@@ -153,6 +169,7 @@ async def lifespan(_app: FastAPI):
                                        # across dev reloads
         if mcp_task is not None:
             mcp_task.cancel()
+        state_task.cancel()
         lgtm_task.cancel()
         if activity_task is not None:
             activity_task.cancel()

@@ -40,6 +40,52 @@ def test_parse_plan_usage_includes_opus_meter_when_present():
     assert out["meters"]["week_opus"]["label"] == "Current week (Opus only)"
 
 
+def test_parse_plan_usage_includes_scoped_model_meter_when_active():
+    """An active per-model weekly sub-limit (Fable) in the `limits` array
+    surfaces as week_<slug>; scope.model.display_name names it."""
+    sample = {
+        "five_hour": {"utilization": 6.0, "resets_at": "2026-07-01T17:10:00+00:00"},
+        "limits": [{
+            "kind": "weekly_scoped", "group": "weekly", "percent": 31, "is_active": True,
+            "resets_at": "2026-07-05T14:00:00+00:00",
+            "scope": {"model": {"id": "fable-5", "display_name": "Fable"}},
+        }],
+    }
+    out = parse_plan_usage(sample)
+    assert out["meters"]["week_fable"]["percent"] == 31
+    assert out["meters"]["week_fable"]["label"] == "Current week (Fable only)"
+
+
+def test_parse_plan_usage_surfaces_scoped_meter_with_usage_but_not_active():
+    """is_active means 'currently-binding limit', not 'has usage' — it stays
+    False while Fable accumulates below its cap. Any percent > 0 surfaces it."""
+    sample = {
+        "five_hour": {"utilization": 6.0, "resets_at": "2026-07-01T17:10:00+00:00"},
+        "limits": [{
+            "kind": "weekly_scoped", "group": "weekly", "percent": 1, "is_active": False,
+            "resets_at": "2026-07-05T14:00:00+00:00",
+            "scope": {"model": {"id": None, "display_name": "Fable"}},
+        }],
+    }
+    out = parse_plan_usage(sample)
+    assert out["meters"]["week_fable"]["percent"] == 1
+
+
+def test_parse_plan_usage_skips_dormant_scoped_model_meter():
+    """A scoped limit with is_active=False AND percent 0 (the pre-launch
+    dormant state) is NOT surfaced — matches null seven_day_opus/sonnet."""
+    sample = {
+        "five_hour": {"utilization": 6.0, "resets_at": "2026-07-01T17:10:00+00:00"},
+        "limits": [{
+            "kind": "weekly_scoped", "group": "weekly", "percent": 0, "is_active": False,
+            "resets_at": None,
+            "scope": {"model": {"id": None, "display_name": "Fable"}},
+        }],
+    }
+    out = parse_plan_usage(sample)
+    assert "week_fable" not in out["meters"]
+
+
 def test_parse_plan_usage_tolerates_bad_resets_at():
     """A malformed resets_at yields resets_at=None, not a parse failure."""
     sample = {"five_hour": {"utilization": 5.0, "resets_at": "soon"}}

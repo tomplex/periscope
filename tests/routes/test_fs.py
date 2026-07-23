@@ -19,6 +19,22 @@ def test_fs_read_happy(tmp_path, monkeypatch):
     assert body["path"].endswith("/f.py")
 
 
+def test_fs_read_image_returns_image_lang_without_bytes(tmp_path, monkeypatch):
+    # Images resolve (safe-root gated) but skip the UTF-8 read that would
+    # 415 on binary — the client streams them via /api/fs/render instead.
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nnot-utf8\xff")
+    monkeypatch.setattr("periscope.fs.tmux",
+                        lambda *a: str(tmp_path) + "\n")
+    client = TestClient(app)
+    r = client.get("/api/fs/read",
+                   params={"session": "s", "index": 1, "path": "logo.png"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["language"] == "image"
+    assert body["content"] is None
+    assert body["path"].endswith("/logo.png")
+
+
 def test_fs_read_blank_path(tmp_path, monkeypatch):
     monkeypatch.setattr("periscope.fs.tmux",
                         lambda *a: str(tmp_path) + "\n")

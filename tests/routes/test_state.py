@@ -45,10 +45,14 @@ def test_state_with_window(client, mocker, clean_state):
     _patch(mocker, "cached_lgtm_state", return_value=None)
     _patch(mocker, "cached_claude_usage", return_value={})
     _patch(mocker, "cached_plan_usage", return_value={})
-    _patch(mocker, "_channel_gc")
+    _patch(mocker, "all_pane_ids", return_value={"%7", "%8"})
+    gc = _patch(mocker, "_channel_gc")
 
     r = client.get("/api/state")
     assert r.status_code == 200
+    # GC keys on the FULL live-pane set (which includes a split window's
+    # background %8), not just the active-pane-per-window %7.
+    gc.assert_called_once_with({"%7", "%8"})
     body = r.json()
     assert len(body["windows"]) == 1
     w = body["windows"][0]
@@ -56,6 +60,21 @@ def test_state_with_window(client, mocker, clean_state):
     assert w["index"] == 0
     assert w["target"] == "main:0"
     assert w["state"] == "shell"
+
+
+def test_state_skips_channel_gc_when_no_panes(client, mocker, clean_state):
+    """An empty all_pane_ids (a transient tmux hiccup) must NOT run GC — else
+    every pane's alerts get wiped on one bad poll."""
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    _patch(mocker, "all_pane_ids", return_value=set())
+    gc = _patch(mocker, "_channel_gc")
+
+    client.get("/api/state")
+    gc.assert_not_called()
 
 
 def test_state_resume_gc_drops_stale(client, mocker, clean_state):
@@ -209,3 +228,43 @@ def test_state_includes_workspaces(client, mocker, clean_state, fresh_activity_d
     body = client.get("/api/state").json()
     ids = [w["id"] for w in body["workspaces"]]
     assert ws["id"] in ids
+
+
+def test_state_includes_tracks_registry(client, mocker, clean_state, fresh_activity_db):
+    """The payload carries non-archived track rows — the rail needs them to
+    render EMPTY goal tracks (live windows can't surface a track with no tabs)."""
+    from periscope import tracks
+    kept = tracks.create_track(name="Fresh goal", repo="/dev/fdy")
+    gone = tracks.create_track(name="Old goal")
+    tracks.dissolve_track(gone["id"])          # archived → excluded
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+
+    body = client.get("/api/state").json()
+    rows = {t["id"]: t for t in body["tracks"]}
+    assert rows[kept["id"]] == {"id": kept["id"], "name": "Fresh goal", "repo": "/dev/fdy"}
+    assert gone["id"] not in rows
+
+
+def test_state_includes_alerts_so_the_dashboard_needs_no_alert_poll(
+    client, mocker, clean_state
+):
+    """Alerts ride the state blob — that's what lets the frontend drop its
+    own /api/alerts/recent loop and inherit the hub's push transport."""
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    mocker.patch(
+        "periscope.channels.recent_alerts",
+        return_value=[{"id": "a1", "kind": "need_human", "message": "blocked"}],
+    )
+
+    body = client.get("/api/state").json()
+    assert body["alerts"] == [
+        {"id": "a1", "kind": "need_human", "message": "blocked"}
+    ]

@@ -14,12 +14,42 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from periscope import tmux_input, tmux_mirror
-from periscope.log import _task
+from periscope import state_hub, tmux_input, tmux_mirror
+from periscope.log import _task, log
 from periscope.panes import note_action
 from periscope.tmux import tmux
 
 router = APIRouter()
+
+
+@router.websocket("/ws/state")
+async def ws_state(websocket: WebSocket):
+    """Push the dashboard state blob (the /api/state payload) on the hub's
+    clock. Replaces the browser's 3s poll; the REST endpoint stays as fallback.
+    """
+    await websocket.accept()
+    q = state_hub.subscribe()
+
+    # A reader task so a client disconnect is noticed promptly even between
+    # ticks (the send loop alone would only see it on the next blob).
+    async def drain_in():
+        with contextlib.suppress(Exception):
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+
+    reader = _task("ws-state-reader", drain_in())
+    try:
+        while True:
+            blob = await q.get()
+            await websocket.send_text(blob)
+    except (WebSocketDisconnect, RuntimeError):
+        # RuntimeError: send after the socket closed (reader saw disconnect).
+        pass
+    finally:
+        reader.cancel()
+        state_hub.unsubscribe(q)
 
 
 @router.websocket("/ws/pane")
@@ -48,38 +78,61 @@ async def ws_pane(
     # buffer twice, and reflows during streaming produce duplicated table
     # fragments in Claude's scrollback. Holding the pane at periscope's
     # size means subsequent opens at the same width are no-ops.
+    # A tmux invocation runs its `;`-separated commands in order, so pairing
+    # them costs one fork instead of two. Each fork is ~20ms — measurable on
+    # the pane-switch path, where this runs on every connect.
     def set_pane_size(c: int, r: int) -> None:
-        try:
-            tmux("setw", "-t", target, "window-size", "manual")
-            tmux("resize-window", "-t", target, "-x", str(c), "-y", str(r))
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            tmux("setw", "-t", target, "window-size", "manual", ";",
+                 "resize-window", "-t", target, "-x", str(c), "-y", str(r))
 
-    # 1) Resize tmux to the client's hint BEFORE capture-pane, so the
-    #    initial blob is rendered at the width xterm will display it at —
-    #    otherwise box-drawing TUIs mangle on the first frame.
-    if cols > 0 and rows > 0:
-        await loop.run_in_executor(None, lambda: set_pane_size(cols, rows))
+    # 1+2) One fork: resize to the client's hint, then read tmux's view of the
+    #    pane back. The resize must land BEFORE the initial capture or box-
+    #    drawing TUIs mangle on the first frame, and chaining guarantees that
+    #    ordering — display-message reports the post-resize geometry.
+    #    The meta itself is size, cursor and alt-screen (all three needed to
+    #    render the initial blob into a matching xterm state) plus
+    #    #{session_name}/#{window_index} for the mirror subscription (keyed on
+    #    session NAME) and the recency stamp (keyed on session:index, NOT the
+    #    %pane_id address — window_view reads recency_stamps_for(
+    #    f"{session}:{index}")). If the pane is gone, close: the client's
+    #    reconnect FSM handles it.
+    meta_fmt = ("#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}"
+                "|#{alternate_on}|#{pane_id}|#{session_name}|#{window_index}"
+                "|#{mouse_any_flag}")
 
-    # 2) tmux's view of the pane: size, cursor, alt-screen — all three are
-    #    needed to render the initial blob into an xterm state matching
-    #    tmux's — plus #{session_name}/#{window_index} for the mirror
-    #    subscription (keyed on session NAME) and the recency stamp (keyed
-    #    on session:index, NOT the %pane_id address — window_view reads
-    #    recency_stamps_for(f"{session}:{index}")). If the pane is gone,
-    #    close: the client's reconnect FSM handles it.
+    def size_then_meta(c: int, r: int) -> str:
+        if c > 0 and r > 0:
+            out = tmux("setw", "-t", target, "window-size", "manual", ";",
+                       "resize-window", "-t", target, "-x", str(c), "-y", str(r), ";",
+                       "display-message", "-t", target, "-p", meta_fmt)
+            # tmux aborts the chain at the first failing command. A resize
+            # failure has always been non-fatal here, so don't let it take the
+            # handshake down — re-ask for the meta on its own.
+            if out.strip():
+                return out
+        return tmux("display-message", "-t", target, "-p", meta_fmt)
+
     try:
-        meta = await loop.run_in_executor(None, lambda: tmux(
-            "display-message", "-t", target, "-p",
-            "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}"
-            "|#{alternate_on}|#{pane_id}|#{session_name}|#{window_index}",
-        ))
+        meta = await loop.run_in_executor(
+            None, lambda: size_then_meta(cols, rows))
         (cols_s, rows_s, cx_s, cy_s, alt_s,
-         _pane_id, session_name, window_index) = meta.strip().split("|")
+         _pane_id, session_name, window_index, mouse_s) = meta.strip().split("|")
         cols, rows = int(cols_s), int(rows_s)
         cx, cy = int(cx_s), int(cy_s)
         alt_on = alt_s == "1"
-    except Exception:
+        # tmux consumes the app's mouse-mode DECSET (that's why it's a pane
+        # flag), so the xterm mirror never sees `\e[?1003h` and can't forward
+        # wheel as mouse events — it converts them to arrows instead. Tell the
+        # client the pane's mouse state so it can synthesize wheel reports.
+        mouse_on = mouse_s == "1"
+    except Exception as e:
+        # Usually the pane died between the poll that listed it and this
+        # connect, which the client's reconnect FSM handles. But a caller that
+        # forgot to percent-encode the `%` of a pane id lands here too, and a
+        # bare close() — code 1000, no reason — makes that indistinguishable
+        # from a clean shutdown. Name it.
+        log.warning("ws/pane handshake failed for target=%r (%s)", target, e)
         await websocket.close()
         return
 
@@ -92,6 +145,9 @@ async def ws_pane(
     async with sub:
         await websocket.send_text(
             json.dumps({"type": "size", "cols": cols, "rows": rows})
+        )
+        await websocket.send_text(
+            json.dumps({"type": "mouse", "on": mouse_on})
         )
 
         # 3) Initial paint, via the fork path — NOT the control client: a

@@ -125,13 +125,19 @@ function languageExt(name) {
   }
 }
 
-export function PreviewTabInner({ entry }) {
+export function PreviewTabInner({ entry, active = true }) {
   const hostRef = useRef(null);
   const [state, setState] = useState({ loading: true, error: null, content: null, lang: null, resolved: null });
   // Renderable langs (HTML, Markdown) default to "rendered"; everything
   // else goes to source. A `:NN` line jump always wins → source, since
   // line numbers don't translate to the rendered view.
   const [view, setView] = useState(entry.line ? "source" : "rendered");
+  // Image click-to-zoom: false = fit-to-pane, true = actual (natural) size
+  // with the host scrolling. `zoomable` gates the toggle to images that
+  // are actually larger than the fitted display — no point zooming a
+  // thumbnail. Set on <img> load by comparing natural vs. rendered size.
+  const [zoomed, setZoomed] = useState(false);
+  const [zoomable, setZoomable] = useState(false);
 
   // Target the file's pane: caller-provided (every entry carries the
   // target captured at openFileTab() time, so the fetch hits the pane
@@ -139,8 +145,14 @@ export function PreviewTabInner({ entry }) {
   // Falls back to activeTarget defensively for old call sites.
   const target = entry.target ?? activeTarget.value;
 
-  // Fetch the file.
+  // Fetch the file. Re-runs when the tab is (re-)shown so a file regenerated
+  // while you were in another tab refreshes on return — the tab stays mounted,
+  // so without the `active` dep it would freeze at open-time content forever.
+  // load() only setStates after the fetch resolves, so a re-fetch never flashes
+  // "loading…"; identical content is Object.is-equal and doesn't churn the
+  // CodeMirror mount, preserving scroll position when nothing changed.
   useEffect(() => {
+    if (!active) return undefined;
     let alive = true;
     async function load() {
       if (!target) {
@@ -167,7 +179,7 @@ export function PreviewTabInner({ entry }) {
     }
     load();
     return () => { alive = false; };
-  }, [entry.path]);
+  }, [entry.path, active]);
 
   // Effective view: non-renderable langs always collapse to source.
   const effectiveView = RENDERABLE.has(state.lang) ? view : "source";
@@ -220,6 +232,10 @@ export function PreviewTabInner({ entry }) {
   }
 
   const iframeSrc = effectiveView === "rendered" && state.lang === "html" && state.resolved && target
+    ? renderUrl(target, state.resolved)
+    : null;
+
+  const imageSrc = state.lang === "image" && state.resolved && target
     ? renderUrl(target, state.resolved)
     : null;
 
@@ -277,7 +293,21 @@ export function PreviewTabInner({ entry }) {
             </div>
           </div>
         )}
-        {!state.loading && !state.error && effectiveView === "source" && (
+        {!state.loading && !state.error && imageSrc && (
+          <div class="preview-image-host">
+            <img
+              class={`preview-image${zoomed ? " zoomed" : ""}${zoomable ? " zoomable" : ""}`}
+              src={imageSrc}
+              alt={state.resolved || entry.path}
+              onLoad={(e) => {
+                const img = e.currentTarget;
+                setZoomable(img.naturalWidth > img.clientWidth || img.naturalHeight > img.clientHeight);
+              }}
+              onClick={() => zoomable && setZoomed((z) => !z)}
+            />
+          </div>
+        )}
+        {!state.loading && !state.error && !imageSrc && effectiveView === "source" && (
           <div ref={hostRef} class="preview-cm-host" />
         )}
       </div>

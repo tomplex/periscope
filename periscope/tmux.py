@@ -45,6 +45,12 @@ def _tmux_mutate(*args: str) -> tuple[bool, str]:
     r = subprocess.run(_tmux_argv(*args), capture_output=True, text=True, timeout=5)
     if r.returncode != 0:
         return False, (r.stderr.strip() or r.stdout.strip() or "tmux failed")
+    # Every periscope-initiated structural change (new/kill/rename window,
+    # kill-session) flows through here — kick the state hub so the dashboard
+    # reflects it on the next event-loop tick instead of waiting out the
+    # steady interval. Thread-safe + a no-op when the hub isn't running.
+    from periscope import state_hub
+    state_hub.kick()
     return True, r.stdout.strip()
 
 

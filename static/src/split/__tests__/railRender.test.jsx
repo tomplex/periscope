@@ -8,7 +8,7 @@
 
 import render from "preact-render-to-string";
 import { describe, expect, it } from "vitest";
-import { projects, windows } from "../../store.js";
+import { projects, tracks, windows } from "../../store.js";
 import { Rail } from "../Rail.jsx";
 
 const aff = (kind, label = null) => ({ kind, label });
@@ -46,5 +46,23 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain("feat-x");        // second branch sub-cluster label
     expect(html).toContain("New tab");       // newtab affordance
     expect(html).toContain("rail-rename");   // ✎ rename button in pane hover actions
+  });
+
+  it("renders an EMPTY goal track from the registry with its + New tab", () => {
+    projects.value = [];
+    tracks.value = [{ id: "tk_fresh", name: "Fresh goal", repo: "/dev/fdy" }];
+    windows.value = [
+      { pid: "aa11", session: "managed", index: 0, target: "managed:0", name: "claude",
+        is_claude: true, state: "working", track_id: "/dev/myproj", track_name: "myproj",
+        repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
+        cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"), pane_id: "%1" },
+    ];
+
+    const html = render(<Rail />);
+    tracks.value = [];   // don't leak into other cases
+
+    expect(html).toContain("Fresh goal");    // empty track card renders
+    const newTabs = html.split("New tab").length - 1;
+    expect(newTabs).toBe(2);                 // one per track, incl. the empty one
   });
 });

@@ -155,6 +155,42 @@ def channel_state_for(pane_id: str) -> dict:
         }
 
 
+def recent_alerts(windows: list[dict], limit: int = 100) -> list[dict]:
+    """Flatten `_CHANNEL_ALERTS` into one reverse-chronological feed, joined
+    against `windows` so alerts for dead panes drop out (matches _channel_gc's
+    invariant). Takes the window list rather than calling list_windows() itself
+    so build_state() can reuse the fan-out it already paid for.
+    """
+    by_pane = {w["pane_id"]: w for w in windows if w.get("pane_id")}
+
+    with _CHANNELS_LOCK:
+        snapshot = {pid: list(rs) for pid, rs in _CHANNEL_ALERTS.items()}
+
+    items: list[dict] = []
+    for pane_id, alerts in snapshot.items():
+        w = by_pane.get(pane_id)
+        if not w:
+            continue
+        items.extend(
+            {
+                "id": r.get("id") or "",
+                "ts": int(r.get("ts") or 0),
+                "kind": r.get("kind") or "info",
+                "severity": r.get("severity") or "info",
+                "message": r.get("message") or "",
+                "pane_id": pane_id,
+                "target": f"{w['session']}:{w['index']}",
+                "session": w["session"],
+                "index": w["index"],
+                "name": w["name"],
+            }
+            for r in alerts
+        )
+
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    return items[:limit]
+
+
 def _tool_result(body: dict) -> list:
     """Wrap a tool-result dict in the MCP TextContent list shape every tool
     handler returns. One place to change if the wire format ever grows an
@@ -203,8 +239,46 @@ def _do_notify_tool(pane: str, arguments: dict):
     except Exception:
         log.warning("activity.record failed for notify()", exc_info=True)
 
+    # Alerts ride the pushed state blob — kick the hub so a need_human lands on
+    # the dashboard (and fires its native notification) now rather than on the
+    # next steady tick. That immediacy is the whole point of an alert.
+    from periscope import state_hub
+    state_hub.kick()
+
     body = {"ok": True, "kind": kind, "severity": severity}
     return _tool_result(body)
+
+
+def rehydrate_alerts_from_events(max_age_s: int = 86400) -> int:
+    """Repopulate the in-memory alert cache from the durable events log on boot.
+    _CHANNEL_ALERTS is a write-through cache; after a `bin/periscope restart` it
+    starts empty while tmux (and its pane ids) live on, so the alert feed would
+    show nothing until the next notify(). Reload recent alerts so a pane that
+    called notify(need_human) before the restart still surfaces. id/severity
+    aren't persisted — id is regenerated, severity defaults to info; the feed
+    and the need_human badge only key on message/kind/ts. Returns the count."""
+    from periscope import activity
+    try:
+        rows = activity.alert_events_since(int(time.time()) - max_age_s)
+    except Exception:
+        log.warning("alert rehydrate failed", exc_info=True)
+        return 0
+    n = 0
+    with _CHANNELS_LOCK:
+        # Panes with live alerts before rehydrate (a notify() racing startup)
+        # are skipped WHOLESALE — snapshot once, not per-row, or the first
+        # appended alert would mask a pane's remaining rows and double-count.
+        preexisting = {p for p, rs in _CHANNEL_ALERTS.items() if rs}
+        for pane_id, at, message, kind in rows:
+            if pane_id in preexisting:
+                continue
+            _CHANNEL_ALERTS.setdefault(pane_id, []).append({
+                "id": uuid.uuid4().hex, "message": message,
+                "kind": kind, "severity": "info", "ts": at,
+            })
+            _CHANNEL_UNREAD[pane_id] = _CHANNEL_UNREAD.get(pane_id, 0) + 1
+            n += 1
+    return n
 
 
 def is_commander(handle: str) -> bool:

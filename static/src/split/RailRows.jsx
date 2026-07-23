@@ -16,7 +16,7 @@
 // <input>; Enter/blur commit, Escape cancels. A `settled` guard reproduces the
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { prUrl, relTime } from "../util.js";
+import { prStateMeta, prUrl, relTime } from "../util.js";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
 // quiet) and the one-liner no longer reflects "now".
@@ -53,8 +53,9 @@ function ctxClass(p) {
   return "";
 }
 
-// A worktree's git field is "clean" / "clean *" (untracked only) when there's
-// nothing to surface; anything else ("+149 -118") is a real dirty count.
+// A worktree's git field is "clean" / "clean *" (the `*` means unpushed
+// commits, not untracked files) when there's nothing to surface; anything
+// else ("+149 -118", "?3", "+12 -3 ?1") is a real dirty count.
 function isDirty(git) {
   return git && git !== "clean" && git !== "clean *";
 }
@@ -158,10 +159,15 @@ export function PaneRow({
   // PR + Linear as clickable chips, shared between the compact line-2 strip and
   // the expanded footer (the link just relocates as the card grows). stop-prop
   // so clicking the chip opens the link without also selecting the pane (#4).
+  // CI glyph is moot on a merged/closed PR — suppress it so a stale ✓/✗ can't
+  // ride a landed PR.
+  const prMeta = prStateMeta(w.pr_state);
+  const prTitle = `PR #${w.pr}${prMeta.suffix}`;
+  const prInner = <>#{w.pr}{w.ci && !prMeta.cls ? <span class={`pane-ci pane-ci-${ciClass(w.ci)}`}> {w.ci}</span> : null}</>;
   const prChip = w.pr && (
     prHref
-      ? <a class="pane-pill pane-pill-pr" href={prHref} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`PR #${w.pr}`}>#{w.pr}{w.ci ? <span class={`pane-ci pane-ci-${ciClass(w.ci)}`}> {w.ci}</span> : null}</a>
-      : <span class="pane-pill pane-pill-pr" title={`PR #${w.pr}`}>#{w.pr}{w.ci ? <span class={`pane-ci pane-ci-${ciClass(w.ci)}`}> {w.ci}</span> : null}</span>
+      ? <a class={`pane-pill pane-pill-pr ${prMeta.cls}`} href={prHref} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={prTitle}>{prInner}</a>
+      : <span class={`pane-pill pane-pill-pr ${prMeta.cls}`} title={prTitle}>{prInner}</span>
   );
   const linChip = w.linked_linear && (
     <a class="pane-pill pane-pill-linear" href={`https://linear.app/issue/${w.linked_linear}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`Linear ${w.linked_linear}${w.linked_linear_status ? ` [${w.linked_linear_status}]` : ""}`}>{w.linked_linear}</a>
@@ -288,14 +294,15 @@ export function WorktreeMeta({ wtWindows }) {
 
   if (w.pr) {
     const href = prUrl(w.repo_slug, w.pr);
-    const ciGlyph = w.ci
+    const meta = prStateMeta(w.pr_state);
+    const ciGlyph = w.ci && !meta.cls
       ? <span class={`wt-meta-ci wt-meta-ci-${ciClass(w.ci)}`}>{w.ci}</span>
       : null;
     const inner = <>#{w.pr}{ciGlyph ? <> {ciGlyph}</> : null}</>;
     parts.push(
       href
-        ? <a class="wt-meta-chip wt-meta-pr" href={href} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`PR #${w.pr}`}>{inner}</a>
-        : <span class="wt-meta-chip wt-meta-pr" title={`PR #${w.pr}`}>{inner}</span>
+        ? <a class={`wt-meta-chip wt-meta-pr ${meta.cls}`} href={href} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`PR #${w.pr}${meta.suffix}`}>{inner}</a>
+        : <span class={`wt-meta-chip wt-meta-pr ${meta.cls}`} title={`PR #${w.pr}${meta.suffix}`}>{inner}</span>
     );
   }
 

@@ -18,6 +18,8 @@ import sqlite3
 import subprocess
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import cast
 
@@ -181,10 +183,19 @@ def _parse_session_id(stdout: str) -> str | None:
 
 # --- table CRUD (shared ACTIVITY_DB file, own schema) ---
 
-def _conn() -> sqlite3.Connection:
+@contextmanager
+def _conn() -> Iterator[sqlite3.Connection]:
+    # `with sqlite3.connect(...) as c` commits/rolls back the transaction but
+    # never CLOSES the connection — that footgun leaked one fd pair (db + wal)
+    # per call here, and sync_jobs()'s 30s list_jobs() tick walked the server
+    # into EMFILE (Errno 24) against launchd's 256-fd default. Own close().
     c = sqlite3.connect(config.ACTIVITY_DB)
-    c.execute(_SCHEMA.strip())
-    return c
+    try:
+        c.execute(_SCHEMA.strip())
+        with c:            # commit on success / rollback on exception
+            yield c
+    finally:
+        c.close()
 
 
 def insert_job(*, id: str, text: str, cwd: str, at: int) -> None:

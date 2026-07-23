@@ -81,6 +81,15 @@ export function prUrl(slug, pr) {
   return slug ? `https://github.com/${slug}/pull/${pr}` : null;
 }
 
+// A linked PR's lifecycle state (open/merged/closed, resolved server-side by
+// number) → a modifier class + title suffix for the badge. Open/unknown render
+// as before. Merged and closed PRs no longer masquerade as live open work.
+export function prStateMeta(state) {
+  if (state === "merged") return { cls: "is-merged", suffix: " (merged)" };
+  if (state === "closed") return { cls: "is-closed", suffix: " (closed)" };
+  return { cls: "", suffix: "" };
+}
+
 // Rewrite an LGTM-server URL's hostname to match the parent page's host.
 // The server hands out 127.0.0.1; the parent may be on localhost or LAN
 // IP, and same-host iframes avoid mixed-host browser headaches.

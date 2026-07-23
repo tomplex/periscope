@@ -217,6 +217,32 @@ def parse_plan_usage(data: dict) -> dict:
             "utilization": float(entry["utilization"]),
             "resets_at": resets_at,
         }
+    # Per-model weekly sub-limits (e.g. Fable's "up to 50% of your weekly
+    # limit") arrive as scoped entries in the `limits` array — NOT as a
+    # top-level meter field, so the _PLAN_METERS loop above never sees them.
+    # scope.model.display_name names the model; surface each active one as its
+    # own meter keyed week_<slug>.
+    for lim in data.get("limits", []):
+        model = ((lim.get("scope") or {}).get("model") or {}).get("display_name")
+        pct = float(lim.get("percent") or 0)
+        # Show once there's any usage OR the sub-limit is the binding constraint.
+        # `is_active` alone means "currently-binding limit" (like weekly_all),
+        # so it stays False while Fable usage accumulates below its cap —
+        # gating on it alone would hide the meter during exactly that window.
+        if not model or not (lim.get("is_active") or pct > 0):
+            continue
+        slug = re.sub(r"[^a-z0-9]+", "_", model.lower()).strip("_")
+        resets_at = None
+        rs = lim.get("resets_at")
+        if isinstance(rs, str):
+            with contextlib.suppress(ValueError):
+                resets_at = int(datetime.fromisoformat(rs).timestamp())
+        meters[f"week_{slug}"] = {
+            "label": f"Current week ({model} only)",
+            "percent": round(pct),
+            "utilization": pct,
+            "resets_at": resets_at,
+        }
     return {"available": bool(meters), "meters": meters}
 
 
@@ -281,7 +307,10 @@ def attach_projections(meters: dict, now: float,
         m["projected_recent"] = None
         m["limit_at"] = None
         m["hot"] = False
-        window = _METER_WINDOW_S.get(key)
+        # Scoped model meters (week_fable, ...) are keyed dynamically, so they
+        # miss the static per-key window dicts — fall back to the weekly cadence.
+        weekly = key.startswith("week_")
+        window = _METER_WINDOW_S.get(key) or (7 * 86400 if weekly else None)
         resets_at = m.get("resets_at")
         if not window or not resets_at:
             continue
@@ -289,12 +318,14 @@ def attach_projections(meters: dict, now: float,
         elapsed = now - window_start
         if window >= elapsed >= window * _MIN_ELAPSED_FRAC:
             m["projected_percent"] = round(m["utilization"] * window / elapsed)
-        since = int(max(window_start, now - _SLOPE_WINDOW_S[key]))
+        slope_win = _SLOPE_WINDOW_S.get(key, 24 * 3600 if weekly else 3600)
+        min_span = _MIN_SLOPE_SPAN_S.get(key, 12 * 3600 if weekly else 600)
+        since = int(max(window_start, now - slope_win))
         samples = samples_for(key, since)
         if len(samples) < 2:
             continue
         (t0, p0), (t1, p1) = samples[0], samples[-1]
-        if t1 - t0 < _MIN_SLOPE_SPAN_S[key] or p1 <= p0:
+        if t1 - t0 < min_span or p1 <= p0:
             continue
         rate = (p1 - p0) / (t1 - t0)
         m["projected_recent"] = round(m["utilization"] + rate * (resets_at - now))
