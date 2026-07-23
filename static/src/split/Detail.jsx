@@ -426,7 +426,7 @@ function PaneDetail({ w }) {
               class="detail-preview-host"
               style={shown ? "display:contents" : "display:none"}
             >
-              <PreviewTab entry={t} />
+              <PreviewTab entry={t} active={shown} />
             </div>
           );
         })}

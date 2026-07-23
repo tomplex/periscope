@@ -33,7 +33,7 @@ function loadInner() {
   return _innerPromise;
 }
 
-export function PreviewTab({ entry }) {
+export function PreviewTab({ entry, active = true }) {
   const [Inner, setInner] = useState(() => _innerMod?.PreviewTabInner || null);
   const [loadError, setLoadError] = useState(null);
 
@@ -77,5 +77,5 @@ export function PreviewTab({ entry }) {
       </div>
     );
   }
-  return <Inner entry={entry} />;
+  return <Inner entry={entry} active={active} />;
 }
