@@ -10,6 +10,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { targetQuery } from "../util.js";
 import { withIntraline } from "./intraline.js";
+import { isGenerated, sortFiles } from "./noise.js";
 import {
   diffReview,
   fileState,
@@ -67,12 +68,15 @@ function Line({ line, lang, hl }) {
 }
 
 function FileBlock({ file, repo, review, hl }) {
-  const { collapsed, viewed } = fileState(review, repo, file.path, file.sig);
+  // Generated files default to folded; an explicit expand overrides and sticks.
+  const generated = isGenerated(file.path);
+  const { collapsed, viewed } =
+    fileState(review, repo, file.path, file.sig, generated);
   const open = !collapsed;
   const lang = langFor(file.path);
   const stat = (file.additions || 0) + (file.deletions || 0);
   return (
-    <div class={`dfile dfile-${file.status}${viewed ? " is-viewed" : ""}`}>
+    <div class={`dfile dfile-${file.status}${viewed ? " is-viewed" : ""}${generated ? " is-generated" : ""}`}>
       <div class="dfile-head">
         <button
           type="button"
@@ -81,6 +85,7 @@ function FileBlock({ file, repo, review, hl }) {
         >
           <span class="dfile-caret">{open ? "▾" : "▸"}</span>
           <span class="dfile-path">{file.path}</span>
+          {generated ? <span class="dfile-gen" title="Generated artifact — folded by default and sorted last">generated</span> : null}
           <span class="dfile-status">{file.status}</span>
           <span class="dfile-stat">
             {file.additions ? <span class="dstat-add">+{file.additions}</span> : null}
@@ -161,7 +166,7 @@ export function ChangesTab({ target, active, gitSig }) {
     return () => { alive = false; };
   }, [target, scope, active, gitSig, context]);
 
-  const files = state.data?.files || [];
+  const files = sortFiles(state.data?.files || []);
   const repo = state.data?.repo || "";
   const review = diffReview.value;
   const nViewed = viewedCount(review, repo, files);

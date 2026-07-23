@@ -2941,6 +2941,18 @@ body.modal-open { overflow: hidden; }
 }
 .dfile-viewed:hover { background: var(--bg-1-hi); color: var(--fg-2); }
 .dfile-viewed.is-on { color: var(--s-success); }
+/* Generated artifacts: folded by default and sorted last, but never hidden —
+   the label says why so a folded bundle doesn't read as a rendering bug. */
+.dfile-gen {
+  padding: 0 5px;
+  border-radius: 2px;
+  background: var(--bg-2);
+  color: var(--fg-4);
+  font-size: 9.5px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.dfile.is-generated .dfile-path { color: var(--fg-3); }
 .dfile.is-viewed { opacity: .55; }
 .dfile.is-viewed:hover { opacity: 1; }
 .dfile-caret { color: var(--fg-4); }

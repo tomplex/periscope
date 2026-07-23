@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearReview,
   diffReview,
   fileState,
   setCollapsed,
@@ -56,11 +57,43 @@ describe("collapse", () => {
   });
 });
 
+describe("auto-collapse defaults", () => {
+  it("takes the default fold when you have no opinion", () => {
+    expect(fileState(diffReview.value, REPO, "dist/app.js", "s", true).collapsed)
+      .toBe(true);
+    expect(fileState(diffReview.value, REPO, "src/a.py", "s", false).collapsed)
+      .toBe(false);
+  });
+
+  it("an explicit expand OVERRIDES the default and sticks", () => {
+    // The generated-file case: default says fold, you said no. Yours wins —
+    // otherwise the bundle would silently re-fold on the next live refresh.
+    setCollapsed(REPO, "dist/app.js", false);
+    expect(fileState(diffReview.value, REPO, "dist/app.js", "s", true).collapsed)
+      .toBe(false);
+  });
+
+  it("an explicit collapse sticks against a false default", () => {
+    setCollapsed(REPO, "src/a.py", true);
+    expect(fileState(diffReview.value, REPO, "src/a.py", "s2", false).collapsed)
+      .toBe(true);
+  });
+});
+
 describe("bookkeeping", () => {
-  it("drops empty entries instead of growing unbounded", () => {
+  it("keeps an explicit expand — it is an opinion, not an empty entry", () => {
     setCollapsed(REPO, "a.py", true);
     setCollapsed(REPO, "a.py", false);
-    expect(diffReview.value).toEqual({});
+    expect(diffReview.value).not.toEqual({});
+    expect(fileState(diffReview.value, REPO, "a.py", "s", true).collapsed).toBe(false);
+  });
+
+  it("clearReview forgets one repo's opinions and leaves others alone", () => {
+    setViewed(REPO, "a.py", "sig1", true);
+    setCollapsed("/other", "b.py", true);
+    clearReview(REPO);
+    expect(fileState(diffReview.value, REPO, "a.py", "sig1").viewed).toBe(false);
+    expect(fileState(diffReview.value, "/other", "b.py", "s").collapsed).toBe(true);
   });
 
   it("counts only files whose viewed mark is still valid", () => {
