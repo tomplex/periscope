@@ -65,6 +65,11 @@ export function startAlertFeed() {
   if (started) return;
   started = true;
   onNotificationClick((target) => revealPane(target));
-  poll();
-  setInterval(poll, POLL_MS);
+  // Chained setTimeout, NOT setInterval: schedule the next poll only after the
+  // current resolves, so a slow response can't overlap and stomp a newer list.
+  async function tick() {
+    await poll();   // poll() has its own try/catch — never rejects
+    setTimeout(tick, POLL_MS);
+  }
+  tick();
 }
