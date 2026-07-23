@@ -274,7 +274,7 @@ def list_windows() -> list[dict]:
         "list-windows",
         "-a",
         "-F",
-        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{@periscope_id}\t#{pane_id}\t#{window_activity}",
+        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{@periscope_id}\t#{pane_id}\t#{window_activity}\t#{window_id}",
     )
     rows = []
     for line in out.strip().split("\n"):
@@ -299,6 +299,10 @@ def list_windows() -> list[dict]:
         # skip-recapture hint in window_view; it must NEVER feed focus
         # (invariant #1 — focus is keyed on window_active above).
         activity = int(parts[7]) if len(parts) > 7 and parts[7] else 0
+        # window_id (@N) is tmux's stable handle for the WINDOW. Unlike
+        # session:index it survives move-window/renumbering, so it is the only
+        # safe target for writing @periscope_id back (see pids._resolve_one).
+        window_id = parts[8] if len(parts) > 8 else ""
         rows.append(
             {
                 "session": s,
@@ -309,6 +313,7 @@ def list_windows() -> list[dict]:
                 "pid_raw": pid_raw,
                 "pane_id": pane_id,
                 "activity": activity,
+                "window_id": window_id,
             }
         )
     return rows

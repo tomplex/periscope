@@ -1,13 +1,20 @@
 // Per-track "+ New tab" launcher. One launcher per track (see Rail.jsx); the
-// user first picks WHICH branch the new tab lands in — an existing branch in
-// the track, or a brand-new branch (spawns a worktree off the repo default) —
-// then the command (claude is the default; shell remains selectable).
+// user first picks WHICH branch the new tab lands in, then the command (claude
+// is the default; shell remains selectable).
+//
+// The branch list spans the track's whole repo, not just what's running:
+// live branches (badged), then the repo's other worktrees, then remaining git
+// branches with no worktree yet — all from GET /api/open/catalog. Restricting
+// it to live branches was the "can't open anything that isn't already open"
+// dead end; the omnibox could reach those repos but couldn't aim at a track.
 //
 // /api/window/new takes URL query parameters (not a JSON body): `session` (a
 // TRACK id, not a tmux session name), `exec` (the shell command), and two
 // optional cwd hints the branch picker drives:
-//   - new_branch=<name>  → backend spawns a worktree off the track's repo
-//   - cwd=<path>         → land the tab in an existing branch's worktree path
+//   - branch=<name>  → backend resolves it to a worktree, creating one if the
+//                      branch has none (checkout when the branch exists, fork
+//                      when it doesn't)
+//   - cwd=<path>     → land the tab in a worktree path we already know
 // With neither, the backend uses the track's repo (or ~/dev for a loose track).
 //
 // The opener (__periscopeOpenLauncher) takes the track id — the rail's "+ New
@@ -34,6 +41,11 @@ const pickedBranch = signal(null);
 // Non-null once the user opts to create a new branch: the typed name (may be "").
 const newBranchName = signal(null);
 
+// Catalog payload (GET /api/open/catalog), or null until it loads. Lets the
+// picker offer branches that are NOT currently running — the whole point of
+// the launcher: without it, "existing branches" meant only live ones.
+const catalog = signal(null);
+
 // Distinct branches in `trackId`, each with a representative worktree cwd.
 // Pure: exported for unit tests. Skips windows without a branch.
 export function trackBranches(trackId, wins) {
@@ -47,7 +59,40 @@ export function trackBranches(trackId, wins) {
   return [...seen.entries()].map(([branch, cwd]) => ({ branch, cwd }));
 }
 
-const branches = computed(() => trackBranches(target.value, windows.value));
+// The branch list the picker renders: live branches first (they carry a real
+// cwd), then the repo's other worktrees, then remaining git branches with no
+// worktree yet. `live` drives the badge; `cwd` is passed straight through when
+// known, otherwise the backend resolves the branch to a worktree.
+// Pure: exported for unit tests.
+export function pickerBranches(trackId, wins, repo, cat) {
+  const out = [];
+  const seen = new Set();
+  for (const b of trackBranches(trackId, wins)) {
+    seen.add(b.branch);
+    out.push({ ...b, live: true });
+  }
+  if (!repo || !cat) return out;
+  for (const w of (cat.worktrees || [])) {
+    if (w.repo !== repo || !w.branch || seen.has(w.branch)) continue;
+    seen.add(w.branch);
+    out.push({ branch: w.branch, cwd: w.path, live: false });
+  }
+  const repoRow = (cat.repos || []).find((r) => r.repo === repo);
+  for (const name of (repoRow?.branches || [])) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push({ branch: name, cwd: "", live: false });
+  }
+  return out;
+}
+
+const branches = computed(() => pickerBranches(
+  target.value, windows.value, trackRepoOf(target.value), catalog.value,
+));
+
+function trackRepoOf(trackId) {
+  return (tracks.value || []).find((t) => t.id === trackId)?.repo || null;
+}
 
 export function openLauncher(trackId) {
   target.value = trackId;
@@ -55,6 +100,11 @@ export function openLauncher(trackId) {
   pickedBranch.value = bs.length ? bs[0].branch : null;
   newBranchName.value = null;
   track("overlay.open", { which: "launcher" });
+  // Fetch fresh each open: worktrees and branches change outside periscope.
+  catalog.value = null;
+  apiCall("open catalog", "/api/open/catalog").then((data) => {
+    if (target.value === trackId) catalog.value = data;
+  });
 }
 function close() {
   target.value = null;
@@ -91,7 +141,7 @@ export function LauncherModal() {
   // registry row (an EMPTY repo-backed goal track can still "+ new branch…" —
   // the backend spawns the worktree off the track's repo). Loose / repo-less
   // track: command list only.
-  const trackRepo = (tracks.value || []).find((t) => t.id === trackId)?.repo || null;
+  const trackRepo = trackRepoOf(trackId);
   const showBranchPicker = bs.length > 0 || newBranchName.value != null || !!trackRepo;
 
   async function run(cmd) {
@@ -100,10 +150,14 @@ export function LauncherModal() {
     if (exec) qs.set("exec", exec);
     const nb = newBranchName.value;
     if (nb?.trim()) {
-      qs.set("new_branch", nb.trim());
+      qs.set("branch", nb.trim());
     } else if (pickedBranch.value != null) {
       const hit = bs.find((b) => b.branch === pickedBranch.value);
+      // A known worktree path goes straight through as cwd; a branch without
+      // one (never checked out here, or its worktree was removed) is resolved
+      // server-side — reused if it exists, created otherwise.
       if (hit?.cwd) qs.set("cwd", hit.cwd);
+      else if (hit) qs.set("branch", hit.branch);
     }
     await apiCall("new window", `/api/window/new?${qs.toString()}`, { method: "POST" });
     close();
@@ -133,7 +187,8 @@ export function LauncherModal() {
               {bs.map((b) => (
                 <button
                   key={b.branch}
-                  class={`launcher-branch${pickedBranch.value === b.branch ? " is-active" : ""}`}
+                  class={`launcher-branch${pickedBranch.value === b.branch ? " is-active" : ""}${b.live ? "" : " is-dormant"}`}
+                  title={b.live ? "running now" : (b.cwd || "no worktree yet")}
                   onClick={() => pickExisting(b.branch)}
                 >
                   ⎇ {b.branch}

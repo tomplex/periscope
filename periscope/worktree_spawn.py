@@ -102,6 +102,16 @@ def worktree_path(repo: str, slug: str) -> str:
     return str(WORKTREES_DIR / repo_name / safe)
 
 
+def _branch_exists(repo: str, branch: str) -> bool:
+    """True when `branch` is already a local ref in `repo`."""
+    code, _ = _run(
+        ["git", "-C", repo, "rev-parse", "--verify", "--quiet",
+         f"refs/heads/{branch}"],
+        timeout=10.0,
+    )
+    return code == 0
+
+
 def spawn_worktree(
     repo: str,
     branch: str,
@@ -176,20 +186,20 @@ def spawn_worktree(
         # handles arbitrary depth.
         wt_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # With fetch=True the fresh remote ref is the source of truth.
-        # With fetch=False the local ref is what we want — typically
-        # the project's own feature branch with the user's unpushed work.
-        base_ref = f"origin/{base}" if fetch else base
-        code, out = _run(
-            [
-                "git", "-C", repo,
-                "worktree", "add",
-                "-b", branch,
-                wt_path_str,
-                base_ref,
-            ],
-            timeout=30.0,
-        )
+        # An already-existing local branch is CHECKED OUT, not re-created:
+        # `-b` fails outright on a name git already knows. Without this, any
+        # branch that exists but has no worktree was unreachable from both the
+        # launcher and the omnibox's BranchTarget — the "open something that
+        # isn't currently open" gap.
+        if _branch_exists(repo, branch):
+            add_args = ["worktree", "add", wt_path_str, branch]
+        else:
+            # With fetch=True the fresh remote ref is the source of truth.
+            # With fetch=False the local ref is what we want — typically
+            # the project's own feature branch with the user's unpushed work.
+            base_ref = f"origin/{base}" if fetch else base
+            add_args = ["worktree", "add", "-b", branch, wt_path_str, base_ref]
+        code, out = _run(["git", "-C", repo, *add_args], timeout=30.0)
         if code != 0:
             raise ValueError(f"git worktree add failed: {out}")
 

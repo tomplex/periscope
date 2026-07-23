@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from periscope import config, open_ops, projects
+from periscope import config, open_ops, projects, tracks
 from periscope.tmux import _tmux_mutate
 from tests.conftest import needs_tmux
 
@@ -224,14 +224,18 @@ def test_open_target_path_spawns_dormant_then_focuses(
     r1 = open_ops.open_target(open_ops.PathTarget(path=repo))
     assert r1.repo == repo and r1.claude_pid
     assert r1.tmux_session == config.MANAGED_SESSION
-    assert r1.tmux_session in r1.ui["worktrees_by_repo"][repo]
     # Opened panes are tagged into the repo's default track (pane_tracks),
     # NOT pane_projects — grouping is track-only.
     tid = tracks.repo_default_track(repo)
     assert tid == repo  # repo-default track id == repo path
     assert fresh_activity_db.get_pane_track(r1.claude_pane_id) == tid
+    assert tid in r1.ui["track_order"]
+    assert r1.claude_pid in r1.ui["tabs_by_track"][tid]
     r2 = open_ops.open_target(open_ops.PathTarget(path=repo))   # idempotent focus
     assert r2.tmux_session == r1.tmux_session
+    # The focus branch must still report the pane it focused — that identity is
+    # what lets the client select it, so "already open" is visible, not a no-op.
+    assert r2.claude_pid == r1.claude_pid
 
 
 def test_open_target_non_git_path_raises(tmp_path, clean_state):
@@ -290,14 +294,35 @@ def test_open_target_pr_stamps_linked_pr(tmp_git_repo, clean_state, tmux_test_se
     assert store.get_window(res.claude_pid).get("linked_pr") == 9
 
 
-def test_place_in_rail_writes_keys(tmp_git_repo, clean_state):
+def test_place_in_rail_writes_track_keys(tmp_git_repo, clean_state):
     repo = str(tmp_git_repo)
     proj = open_ops.ensure_project(repo, repo)
-    ui = open_ops.place_in_rail(proj["tmux_session"], proj, ["%1", "%2"])
-    assert proj["repo"] in ui["repo_order"]
-    assert proj["tmux_session"] in ui["worktrees_by_repo"][proj["repo"]]
-    assert ui["panes_by_worktree"][proj["tmux_session"]] == ["%1", "%2"]
+    ui = open_ops.place_in_rail(proj["tmux_session"], proj, ["p1", "p2"])
+    track_id = tracks.repo_default_track(proj["repo"])
+    assert track_id in ui["track_order"]
+    assert ui["tabs_by_track"][track_id] == ["p1", "p2"]
     assert store.get_ui() == ui          # returns exactly what was persisted
+
+
+def test_place_in_rail_writes_no_pre_tracks_keys(tmp_git_repo, clean_state):
+    # Regression guard: the rail reads track_order/tabs_by_track. Writing the
+    # pre-tracks trio persisted nothing once track_order existed, so the
+    # omnibox's placement silently no-op'd.
+    repo = str(tmp_git_repo)
+    proj = open_ops.ensure_project(repo, repo)
+    ui = open_ops.place_in_rail(proj["tmux_session"], proj, ["p1"])
+    assert "worktrees_by_repo" not in ui
+    assert "panes_by_worktree" not in ui
+
+
+def test_place_in_rail_is_idempotent(tmp_git_repo, clean_state):
+    repo = str(tmp_git_repo)
+    proj = open_ops.ensure_project(repo, repo)
+    open_ops.place_in_rail(proj["tmux_session"], proj, ["p1"])
+    ui = open_ops.place_in_rail(proj["tmux_session"], proj, ["p1", "p2"])
+    track_id = tracks.repo_default_track(proj["repo"])
+    assert ui["track_order"].count(track_id) == 1
+    assert ui["tabs_by_track"][track_id] == ["p1", "p2"]   # p1 not duplicated
 
 
 def test_build_catalog_lists_repo_and_main_worktree(tmp_git_repo, clean_state, monkeypatch):

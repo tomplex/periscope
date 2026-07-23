@@ -895,6 +895,14 @@ def _worker_tick(last_ctx: dict) -> None:
         bg_commander.sync_jobs()
     except Exception:
         log.exception("bg_commander sync failed")
+    # tmux-continuum's save rides on status-line expansion, which never happens
+    # when the only attached clients are periscope's control-mode ones. Drive
+    # it from here instead; the script self-gates on its own interval + lock.
+    try:
+        from periscope import resurrect
+        resurrect.save_now()
+    except Exception:
+        log.exception("continuum save failed")
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()

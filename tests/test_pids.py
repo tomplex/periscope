@@ -4,6 +4,7 @@ import time
 
 from periscope.pids import (
     _PID_TTL_S,
+    _REBIND_TTL_S,
     _gc_windows,
     _mint_pid,
     _rebind_pid,
@@ -113,8 +114,51 @@ def test_rebind_pid_skips_taken_pids():
     assert pid is None
 
 
+def test_rebind_pid_skips_entries_older_than_rebind_ttl():
+    """A fresh pane must NOT inherit a long-dead entry's identity.
+
+    Regression: rebind shared the 30-day GC TTL, so a brand-new Claude at a
+    repo root on master matched any entry from the past month via the
+    (branch, cwd) fallback and inherited its immunity fields — surfacing as a
+    fresh pane wearing a stale PR and Linear ticket.
+    """
+    stale = int(time.time()) - _REBIND_TTL_S - 60
+    wblock = {
+        "deadbeef": {
+            "last_seen": {
+                "session": "periscope", "name": "old-goal",
+                "branch": "master", "cwd": "/repo", "ts": stale,
+            }
+        }
+    }
+    pid = _rebind_pid(
+        wblock, session="periscope", name="fresh-claude",
+        branch="master", cwd="/repo", taken_pids=set(),
+    )
+    assert pid is None, "stale entry must not capture a fresh pane"
+
+
+def test_rebind_pid_still_matches_within_rebind_ttl():
+    """The legitimate case survives: a tmux server restart drops @periscope_id
+    from every window, and they are re-sighted unstamped moments later."""
+    recent = int(time.time()) - 30
+    wblock = {
+        "deadbeef": {
+            "last_seen": {
+                "session": "periscope", "name": "old-goal",
+                "branch": "master", "cwd": "/repo", "ts": recent,
+            }
+        }
+    }
+    pid = _rebind_pid(
+        wblock, session="periscope", name="fresh-claude",
+        branch="master", cwd="/repo", taken_pids=set(),
+    )
+    assert pid == "deadbeef"
+
+
 def test_rebind_pid_skips_expired_entries():
-    """Entries with last_seen.ts older than _PID_TTL_S must not be rebound."""
+    """Entries with last_seen.ts older than the rebind TTL must not be rebound."""
     old = int(time.time()) - _PID_TTL_S - 100
     wblock = {
         "deadbeef": {
@@ -230,19 +274,22 @@ def test_resolve_pids_re_mints_when_two_windows_share_periscope_id(
     )
     windows = [
         {"session": "lgtm", "index": 1, "name": "shell",
-         "cwd": "/x", "pid_raw": "deadbeef"},
+         "cwd": "/x", "pid_raw": "deadbeef", "window_id": "@11"},
         {"session": "lgtm", "index": 2, "name": "walkthrough-pr-review",
-         "cwd": "/x", "pid_raw": "deadbeef"},
+         "cwd": "/x", "pid_raw": "deadbeef", "window_id": "@12"},
         {"session": "lgtm", "index": 3, "name": "walkthrough-design",
-         "cwd": "/x", "pid_raw": "deadbeef"},
+         "cwd": "/x", "pid_raw": "deadbeef", "window_id": "@13"},
     ]
     resolve_pids(windows)
     pids = [w["pid"] for w in windows]
     assert len(set(pids)) == 3, f"expected 3 distinct pids, got {pids}"
     assert pids[0] == "deadbeef"  # first window keeps the id
     assert "deadbeef" not in pids[1:]  # duplicates re-minted
-    # Re-stamped the corrected pid on the duplicate windows so the next
-    # poll sees the right @periscope_id directly.
+    # Re-stamped the corrected pid on the duplicate windows so the next poll
+    # sees the right @periscope_id directly — targeted by WINDOW ID, never
+    # session:index. An index-targeted stamp lands on the wrong window after a
+    # move-window renumber, leaving the duplicate uncleared so the next poll
+    # re-mints again (the observed 683-re-mint loop).
     stamped_targets = {call.args[0] for call in mock_stamp.call_args_list}
-    assert "lgtm:2" in stamped_targets
-    assert "lgtm:3" in stamped_targets
+    assert stamped_targets == {"@12", "@13"}
+    assert "lgtm:2" not in stamped_targets

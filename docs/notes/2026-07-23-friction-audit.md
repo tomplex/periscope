@@ -1,6 +1,24 @@
 # Periscope friction audit — 2026-07-23
 
-Diagnosis only. No code changed. Six findings, ranked by impact × confidence.
+All six findings are fixed on `fix/friction-audit`. The durable invariants now
+live in CLAUDE.md; this file is the diagnostic record of how they were found.
+
+Two claims below turned out to be wrong. They are corrected here rather than
+quietly edited away, because the reasoning is the useful part:
+
+- **#2 over-weighted the dead pref keys.** `mergeLiveAndPrefs` already appends
+  live-new tracks and tabs every poll, so a genuinely-created window appears
+  regardless of what `place_in_rail` writes. The dead keys lost explicit
+  *ordering*, not visibility. What actually produced "nothing happened" was the
+  `ensure_session` cwd early-return (no window created) plus nothing ever
+  *selecting* the focused pane.
+- **#4's proposed fix direction was wrong.** Combining the two tmux commands
+  into one `;`-joined line does not make them atomic — tmux still replies with
+  two `%begin`/`%end` blocks, and `_send_command` registers one callback per
+  write, so a combined line would desync the reply-callback queue. The fix was
+  to reverse the sampling order instead.
+
+Six findings, ranked by impact × confidence.
 
 ## The unifying story
 

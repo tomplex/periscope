@@ -1,6 +1,23 @@
 """Tests for periscope.worktree_spawn."""
 
+import pytest
+
 from tests.conftest import needs_tmux
+
+
+@pytest.fixture
+def tmp_worktrees(tmp_path, monkeypatch):
+    """Redirect the sibling-layout worktree root into tmp.
+
+    WORKTREES_DIR defaults to ~/dev/worktrees — the USER'S real directory. A
+    spawn test without this fixture creates worktrees there for real, and then
+    fails on the next run because `wt_path.exists()` short-circuits. (Two such
+    strays from May 2026 are still sitting in that directory.)
+    """
+    from periscope import worktree_spawn
+    root = tmp_path / "worktrees"
+    monkeypatch.setattr(worktree_spawn, "WORKTREES_DIR", root)
+    return root
 
 
 @needs_tmux
@@ -46,3 +63,41 @@ def test_layout_two_window_stamps_recency_by_session_index(tmp_git_repo, tmux_te
     assert idx, "claude window not found by periscope id"
     stamps = panes.recency_stamps_for(f"{session}:{idx}")
     assert stamps["acted_at"] > 0 and stamps["focused_at"] > 0
+
+
+def test_spawn_worktree_checks_out_an_existing_branch(tmp_git_repo, tmp_worktrees):
+    """A branch that already exists but has no worktree must be CHECKED OUT.
+
+    `git worktree add -b <name>` fails outright on a known branch name, which
+    left every existing-but-not-open branch unreachable from the launcher and
+    from the omnibox's BranchTarget.
+    """
+    import subprocess
+
+    from periscope.worktree_spawn import spawn_worktree
+    repo = str(tmp_git_repo)
+    subprocess.run(["git", "-C", repo, "branch", "already-here"], check=True)
+
+    res = spawn_worktree(repo, "already-here", fetch=False)
+
+    assert res["branch"] == "already-here"
+    head = subprocess.run(
+        ["git", "-C", res["path"], "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == "already-here"
+
+
+def test_spawn_worktree_still_creates_a_brand_new_branch(tmp_git_repo, tmp_worktrees):
+    import subprocess
+
+    from periscope.worktree_spawn import spawn_worktree
+    repo = str(tmp_git_repo)
+
+    res = spawn_worktree(repo, "brand-new", fetch=False)
+
+    head = subprocess.run(
+        ["git", "-C", res["path"], "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == "brand-new"

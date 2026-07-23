@@ -388,34 +388,41 @@ class _SessionMirror:
             return
         got: dict[str, Reply | ReplyError] = {}
 
-        def on_capture(reply: Reply | ReplyError) -> None:
-            got["capture"] = reply
-
         def on_display(reply: Reply | ReplyError) -> None:
+            got["display"] = reply
+
+        def on_capture(reply: Reply | ReplyError) -> None:
             # Runs synchronously inside the reader task at this reply's
             # %end — the ordering rule. No %output can leapfrog the frame.
-            cap = got.get("capture")
-            # `cap` is always set (on_capture fires before on_display per the
+            disp = got.get("display")
+            # `disp` is always set (on_display fires before on_capture per the
             # %end ordering), but guard None so the type checker — and a
             # protocol violation — both narrow to the dead-pane path.
-            if cap is None or isinstance(cap, ReplyError) or isinstance(reply, ReplyError):
+            if disp is None or isinstance(disp, ReplyError) or isinstance(reply, ReplyError):
                 self._end_pane(pane_id)  # pane died mid-capture
                 return
             subs = self._subs.get(pane_id)
             if not subs:
                 return  # unsubscribed while the commands were in flight
-            frame = build_reconcile_frame(snapshot_from_replies(cap, reply))
+            frame = build_reconcile_frame(snapshot_from_replies(reply, disp))
             for s in subs:
                 s._q.put_nowait(frame)
             timer = self._timers.get(pane_id)
             if timer:
                 timer.note_reconciled()
 
-        # Capture first so the cursor sample (display-message) is the
-        # fresher of the two.
-        self._send_command(f"capture-pane -p -e -t {pane_id}", on_capture)
+        # Cursor sampled BEFORE the body, deliberately. The two samples are
+        # separate tmux commands, so a character echoed between them lands in
+        # exactly one of the pair. A cursor FRESHER than the body renders one
+        # cell past a character the body doesn't carry yet, and the row's
+        # \x1b[K then erases that character — a visible gap that persists until
+        # the pane's next output. Staler cursor is the safe direction: the text
+        # is intact and the cursor sits at worst one cell behind, corrected by
+        # the next byte. Reported as "cursor is one ahead of where typing lands,
+        # with stuttering as it reconciles".
         self._send_command(
             f"display-message -p -t {pane_id} '{DISPLAY_FMT}'", on_display)
+        self._send_command(f"capture-pane -p -e -t {pane_id}", on_capture)
 
     # -- teardown --
 
