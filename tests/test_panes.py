@@ -682,6 +682,20 @@ def test_list_windows_parses_tmux_list_output(mocker):
     assert out[1]["active"] is False
 
 
+def test_all_pane_ids_parses_and_dedupes(mocker):
+    """list-panes -a yields every pane id (including a window's background
+    panes, which list_windows collapses to just the active one)."""
+    from periscope import panes
+    mocker.patch("periscope.panes.tmux", return_value="%5\n%6\n%7\n")
+    assert panes.all_pane_ids() == {"%5", "%6", "%7"}
+
+
+def test_all_pane_ids_empty_on_blank(mocker):
+    from periscope import panes
+    mocker.patch("periscope.panes.tmux", return_value="")
+    assert panes.all_pane_ids() == set()
+
+
 def test_list_windows_parses_window_activity(mocker):
     """list_windows surfaces #{window_activity} as an int `activity` field."""
     from periscope import panes

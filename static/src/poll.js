@@ -65,16 +65,25 @@ export async function poll() {
   }
 }
 
-// Start the single interval. Returns a teardown that clears it. Guarded so a
-// double-mount (StrictMode-style) never spins up two loops.
+// Start the single loop. Returns a teardown. Chained setTimeout, NOT
+// setInterval: the next poll is scheduled only after the current one resolves,
+// so a slow response can never overlap — and thus never commit its (older)
+// snapshot on top of a newer one. Guarded so a double-mount (StrictMode-style)
+// never spins up two loops.
 let started = false;
 export function startPolling() {
   if (started) return () => {};
   started = true;
-  poll();
-  const handle = setInterval(poll, POLL_MS);
+  let handle = null;
+  let stopped = false;
+  async function tick() {
+    await poll();   // poll() has its own try/catch — never rejects
+    if (!stopped) handle = setTimeout(tick, POLL_MS);
+  }
+  tick();
   return () => {
-    clearInterval(handle);
+    stopped = true;
+    if (handle) clearTimeout(handle);
     started = false;
   };
 }

@@ -22,10 +22,10 @@ import { computed, signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
 import * as prefs from "../prefs.js";
+import { trackLabel } from "../split/railTree.js";
 import { tracks, windows } from "../store.js";
 import { track } from "../track.js";
 import { apiCall } from "../util.js";
-import { trackLabel } from "../split/railTree.js";
 
 // The open track id (or null). A signal so the singleton modal reacts.
 const target = signal(null);

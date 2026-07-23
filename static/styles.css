@@ -319,13 +319,6 @@ main {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
 
-
-}
-
-  color: var(--s-needs);
-  font-weight: 500;
-}
-
 /* ─── Modal ─────────────────────────────────────── */
 
 body.modal-open { overflow: hidden; }
@@ -2412,6 +2405,12 @@ body.modal-open { overflow: hidden; }
 .pane-expanded .pane-pill { background: var(--bg-1); }
 .pane-pill:hover { background: var(--bg-3); color: var(--fg-1); }
 .pane-pill-pr { color: var(--fg-1); }
+/* Linked-PR lifecycle: a landed PR reads violet (merged), a dropped one dims
+   (closed) — so neither masquerades as live open work. Shared by every PR
+   badge surface (pill, wt-meta chip, detail header). */
+.pane-pill-pr.is-merged, .wt-meta-pr.is-merged, .header-pr.is-merged { color: var(--worktree); }
+.pane-pill-pr.is-closed, .wt-meta-pr.is-closed, .header-pr.is-closed { color: var(--fg-3); text-decoration: line-through; }
+.header-pr-state { opacity: 0.7; font-size: 0.9em; }
 .pane-pill-linear { color: oklch(0.7 0.13 280); }
 .pane-pill-git { color: var(--s-needs); }
 .pane-pill-ctx { color: var(--fg-3); }
