@@ -207,6 +207,38 @@ def _do_notify_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+def rehydrate_alerts_from_events(max_age_s: int = 86400) -> int:
+    """Repopulate the in-memory alert cache from the durable events log on boot.
+    _CHANNEL_ALERTS is a write-through cache; after a `bin/periscope restart` it
+    starts empty while tmux (and its pane ids) live on, so the alert feed would
+    show nothing until the next notify(). Reload recent alerts so a pane that
+    called notify(need_human) before the restart still surfaces. id/severity
+    aren't persisted — id is regenerated, severity defaults to info; the feed
+    and the need_human badge only key on message/kind/ts. Returns the count."""
+    from periscope import activity
+    try:
+        rows = activity.alert_events_since(int(time.time()) - max_age_s)
+    except Exception:
+        log.warning("alert rehydrate failed", exc_info=True)
+        return 0
+    n = 0
+    with _CHANNELS_LOCK:
+        # Panes with live alerts before rehydrate (a notify() racing startup)
+        # are skipped WHOLESALE — snapshot once, not per-row, or the first
+        # appended alert would mask a pane's remaining rows and double-count.
+        preexisting = {p for p, rs in _CHANNEL_ALERTS.items() if rs}
+        for pane_id, at, message, kind in rows:
+            if pane_id in preexisting:
+                continue
+            _CHANNEL_ALERTS.setdefault(pane_id, []).append({
+                "id": uuid.uuid4().hex, "message": message,
+                "kind": kind, "severity": "info", "ts": at,
+            })
+            _CHANNEL_UNREAD[pane_id] = _CHANNEL_UNREAD.get(pane_id, 0) + 1
+            n += 1
+    return n
+
+
 def is_commander(handle: str) -> bool:
     """True iff `handle` is a commander handle (the cmdr: prefix). The handle is a
     self-asserted token set at dispatch; we trust the prefix because the MCP

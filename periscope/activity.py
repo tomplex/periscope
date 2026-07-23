@@ -165,6 +165,22 @@ def events_for(pane_id, repo_path, branch, limit=40):
     return [_row_to_event(*r) for r in rows]
 
 
+def alert_events_since(cutoff_ts: int) -> list[tuple[str, int, str, str]]:
+    """(pane_id, at, message, kind) for durable 'alert' events at/after
+    `cutoff_ts`, oldest-first. Feeds channel-alert cache rehydration after a
+    periscope restart — the in-memory cache is empty on boot but the events
+    table (written by every notify()) survived. id/severity aren't persisted."""
+    with _LOCK:
+        c = _conn()
+        rows = c.execute(
+            "SELECT scope_key, at, text, detail FROM events "
+            "WHERE scope_kind='pane' AND event_kind='alert' AND at >= ? "
+            "ORDER BY at ASC",
+            (cutoff_ts,),
+        ).fetchall()
+    return [(r[0], int(r[1] or 0), r[2] or "", r[3] or "info") for r in rows]
+
+
 def status_log_for(pane_id: str, limit: int = 200) -> list[dict]:
     """Append-only narrator status/goal history for a pane (event_kind=
     'status'), newest-first. Kept out of the live activity timeline

@@ -80,6 +80,16 @@ async def lifespan(_app: FastAPI):
             log.info("pruned %d dead pane_tracks row(s)", dropped_tracks)
 
     _bg("pane-sessions-housekeeping", _pane_sessions_housekeeping)
+
+    # Reload the alert feed from its durable backing store — a restart empties
+    # the in-memory cache but tmux pane ids (and the events table) survive.
+    def _rehydrate_alerts() -> None:
+        from periscope import channels
+        n = channels.rehydrate_alerts_from_events()
+        if n:
+            log.info("rehydrated %d channel alert(s) from events log", n)
+
+    _bg("alert-rehydrate", _rehydrate_alerts)
     # Kick off cache prewarms eagerly so the first /api/state poll already
     # has PR badges and the usage bars populated.
     _bg("prewarm-pr", prewarm_pr_cache)
