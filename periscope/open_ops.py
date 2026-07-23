@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from periscope import config, projects, store, worktrees
+from periscope import config, projects, store, tracks, worktrees
 from periscope.gitutil import (
     detect_default_branch,
     resolve_repo,
@@ -113,23 +113,31 @@ def _dedupe_name(base: str) -> str:
 
 def place_in_rail(tmux_session: str, project: projects.Project,
                   pane_pids: list[str]) -> dict:
-    """Append the session to the rail prefs (idempotent) and return the
-    full ui blob for the client to write into prefsSignal."""
+    """Append the opened panes to the rail prefs (idempotent) and return the
+    full ui blob for the client to write into prefsSignal.
+
+    Keys are the TRACK-era ones. The pre-tracks trio (`repo_order` /
+    `worktrees_by_repo` / `panes_by_worktree`) is no longer read by the rail:
+    `prefs.js` drops `worktrees_by_repo` outright, never reads
+    `panes_by_worktree`, and honours `repo_order` only as the initial fallback
+    when `track_order` is unset — so writing them persisted nothing once the
+    rail had saved an order even once.
+
+    Placement is ordering only, not visibility: `mergeLiveAndPrefs` already
+    appends live-new tracks and tabs on the next poll. This makes the order
+    the user sees survive, rather than being silently re-derived.
+    """
+    track_id = tracks.repo_default_track(project["repo"])
     ui = store.get_ui()
-    repo = project["repo"]
-    order = list(ui.get("repo_order", []))
-    if repo not in order:
-        order.append(repo)
-    wts = {k: list(v) for k, v in ui.get("worktrees_by_repo", {}).items()}
-    wt_list = wts.setdefault(repo, [])
-    if tmux_session not in wt_list:
-        wt_list.append(tmux_session)
-    panes = {k: list(v) for k, v in ui.get("panes_by_worktree", {}).items()}
-    if tmux_session not in panes:
-        panes[tmux_session] = list(pane_pids)
-    patch = {"repo_order": order, "worktrees_by_repo": wts,
-             "panes_by_worktree": panes}
-    store.update_ui(patch)
+    order = list(ui.get("track_order", []))
+    if track_id not in order:
+        order.append(track_id)
+    tabs = {k: list(v) for k, v in ui.get("tabs_by_track", {}).items()}
+    tab_list = tabs.setdefault(track_id, [])
+    for pid in pane_pids:
+        if pid not in tab_list:
+            tab_list.append(pid)
+    store.update_ui({"track_order": order, "tabs_by_track": tabs})
     return store.get_ui()
 
 

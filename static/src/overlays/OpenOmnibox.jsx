@@ -8,7 +8,8 @@ import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
 import { classify } from "../open/classify.js";
-import { setUI } from "../prefs.js";
+import { setLastSelected, setUI } from "../prefs.js";
+import { railSelection } from "../store.js";
 import { track } from "../track.js";
 import { apiCall, relTime } from "../util.js";
 
@@ -135,6 +136,15 @@ export function OpenOmnibox() {
     setBusy(false);
     if (!data) { setError("open failed"); return; }
     setUI(data.ui);     // synchronous rail placement — no deferRailAdd
+    // Select the pane we just opened OR focused. /api/open is create-or-focus:
+    // when a pane already owns the target cwd the server creates nothing and
+    // returns that existing pane's id. Without this the focus branch had no
+    // visible effect at all — reported as "I tried to open fdy master
+    // multiple times and nothing happened".
+    if (data.claude_pid) {
+      railSelection.value = `pane:${data.claude_pid}`;
+      setLastSelected({ kind: "pane", pid: data.claude_pid });
+    }
     close();
   }
 
