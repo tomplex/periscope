@@ -90,14 +90,21 @@ let ws = null;
 let fallbackTimer = null;
 let retryTimer = null;
 
+// REST fallback while the socket is down. Chained setTimeout, NOT setInterval:
+// the next poll is scheduled only after the current one resolves, so a slow
+// response can't overlap and commit its (older) snapshot over a newer one —
+// the T0.8 guarantee, preserved here on the fallback path.
 function startFallbackPoll() {
   if (fallbackTimer) return;
-  poll();
-  fallbackTimer = setInterval(poll, POLL_MS);
+  const tick = async () => {
+    await poll(); // poll() has its own try/catch — never rejects
+    if (fallbackTimer !== null) fallbackTimer = setTimeout(tick, POLL_MS);
+  };
+  fallbackTimer = setTimeout(tick, 0); // poll now, then self-chain
 }
 function stopFallbackPoll() {
   if (fallbackTimer) {
-    clearInterval(fallbackTimer);
+    clearTimeout(fallbackTimer);
     fallbackTimer = null;
   }
 }

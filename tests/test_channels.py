@@ -18,6 +18,7 @@ from periscope.channels import (
     _do_link_pr_tool,
     _do_notify_tool,
     _do_open_document_tool,
+    rehydrate_alerts_from_events,
 )
 
 
@@ -65,6 +66,73 @@ def test_channel_gc_drops_unknown_panes():
     assert "%5" in _CHANNEL_UNREAD
     assert "%99" not in _CHANNEL_ALERTS
     assert "%99" not in _CHANNEL_UNREAD
+
+
+def test_rehydrate_alerts_from_events(fresh_activity_db):
+    """After a restart the in-memory cache is empty but the events log survives;
+    rehydrate reloads every recent alert per pane (not just one)."""
+    import time as _t
+
+    from periscope import activity
+    base = int(_t.time()) - 100
+    activity.record("pane", "%1", "alert", "tests pass", detail="done", at=base)
+    activity.record("pane", "%1", "alert", "need a nudge", detail="need_human", at=base + 10)
+    activity.record("pane", "%2", "alert", "fyi", detail="info", at=base + 5)
+    # A non-alert event must not be rehydrated as an alert.
+    activity.record("pane", "%1", "channel", "hi", detail="message", at=base + 20)
+
+    with _CHANNELS_LOCK:
+        _CHANNEL_ALERTS.clear()
+        _CHANNEL_UNREAD.clear()
+
+    n = rehydrate_alerts_from_events()
+    assert n == 3
+    assert len(_CHANNEL_ALERTS["%1"]) == 2          # BOTH of %1's alerts, not one
+    assert _CHANNEL_UNREAD["%1"] == 2
+    assert {a["kind"] for a in _CHANNEL_ALERTS["%1"]} == {"done", "need_human"}
+    assert _CHANNEL_ALERTS["%2"][0]["message"] == "fyi"
+
+
+def test_rehydrate_skips_panes_with_live_alerts(fresh_activity_db):
+    """A notify() racing startup already populated %1; rehydrate must leave it
+    untouched wholesale rather than double-count the badge."""
+    import time as _t
+
+    from periscope import activity
+    base = int(_t.time()) - 100
+    activity.record("pane", "%1", "alert", "old", detail="info", at=base)
+    activity.record("pane", "%1", "alert", "older", detail="info", at=base - 50)
+
+    with _CHANNELS_LOCK:
+        _CHANNEL_ALERTS.clear()
+        _CHANNEL_UNREAD.clear()
+        _CHANNEL_ALERTS["%1"] = [{"id": "live", "message": "fresh",
+                                  "kind": "info", "severity": "info", "ts": 999}]
+        _CHANNEL_UNREAD["%1"] = 1
+
+    n = rehydrate_alerts_from_events()
+    assert n == 0
+    assert len(_CHANNEL_ALERTS["%1"]) == 1
+    assert _CHANNEL_ALERTS["%1"][0]["id"] == "live"
+    assert _CHANNEL_UNREAD["%1"] == 1
+
+
+def test_rehydrate_respects_max_age(fresh_activity_db):
+    import time as _t
+
+    from periscope import activity
+    activity.record("pane", "%1", "alert", "ancient", detail="info",
+                    at=int(_t.time()) - 200000)
+    activity.record("pane", "%1", "alert", "recent", detail="info",
+                    at=int(_t.time()) - 10)
+
+    with _CHANNELS_LOCK:
+        _CHANNEL_ALERTS.clear()
+        _CHANNEL_UNREAD.clear()
+
+    n = rehydrate_alerts_from_events(max_age_s=3600)
+    assert n == 1
+    assert _CHANNEL_ALERTS["%1"][0]["message"] == "recent"
 
 
 def test_link_pr_tool_writes_to_state(clean_state, mocker):

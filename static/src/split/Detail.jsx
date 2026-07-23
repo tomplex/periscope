@@ -30,7 +30,7 @@ import { Terminal } from "../terminal/Terminal.jsx";
 import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
 import { isTerminalAtBottom, scrollTerminalToBottom, setTerminalFileCallback, writeTerminalLine } from "../terminal/terminalCore.js";
 import { track } from "../track.js";
-import { apiCall, prUrl, relTime, rewriteLgtmHost, targetQuery } from "../util.js";
+import { apiCall, prStateMeta, prUrl, relTime, rewriteLgtmHost, targetQuery } from "../util.js";
 import { TranscriptView } from "./Transcript.jsx";
 
 // Match the modal's /api/pane cadence so the two views feel identical.
@@ -218,12 +218,13 @@ function PaneHeader({ w, mode, onMode }) {
   }
   if (w.pr) {
     const href = prUrl(w.repo_slug, w.pr);
+    const prMeta = prStateMeta(w.pr_state);
     const ciCls = w.ci === "✓" ? "ci-ok" : w.ci === "✗" ? "ci-bad" : w.ci === "⟳" ? "ci-running" : "";
-    const ciSpan = w.ci ? <> <span class={`header-ci ${ciCls}`}>{w.ci}</span></> : null;
-    const inner = <>#{String(w.pr)}{ciSpan}</>;
+    const ciSpan = w.ci && !prMeta.cls ? <> <span class={`header-ci ${ciCls}`}>{w.ci}</span></> : null;
+    const inner = <>#{String(w.pr)}{prMeta.suffix ? <span class="header-pr-state">{prMeta.suffix}</span> : null}{ciSpan}</>;
     const prLink = href
-      ? <a class="header-pr" href={href} target="_blank" rel="noopener">{inner}</a>
-      : <span class="header-pr">{inner}</span>;
+      ? <a class={`header-pr ${prMeta.cls}`} href={href} target="_blank" rel="noopener">{inner}</a>
+      : <span class={`header-pr ${prMeta.cls}`}>{inner}</span>;
     parts.push(<><span class="hsep">·</span>{prLink}</>);
   }
   if (w.linked_linear) {
@@ -426,7 +427,7 @@ function PaneDetail({ w }) {
               class="detail-preview-host"
               style={shown ? "display:contents" : "display:none"}
             >
-              <PreviewTab entry={t} />
+              <PreviewTab entry={t} active={shown} />
             </div>
           );
         })}

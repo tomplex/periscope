@@ -57,12 +57,17 @@ def _window(**overrides) -> dict:
     return base
 
 
-def _stub_subsystems(mocker, *, pane_content="", git=None, pr=None, lgtm=None):
-    """Mock the read-only caches the view consumes."""
+def _stub_subsystems(mocker, *, pane_content="", git=None, pr=None, lgtm=None,
+                     linked_pr=None):
+    """Mock the read-only caches the view consumes. `linked_pr` defaults to None
+    (a cold SWR miss) — patched unconditionally so no real `gh pr view` thread
+    ever fires from a test (leaked-thread + live-network hazard)."""
     mocker.patch("periscope.window_view.capture", return_value=pane_content)
     mocker.patch("periscope.window_view.cached_git_state", return_value=git or {})
     mocker.patch("periscope.window_view.cached_pr_state", return_value=pr or {})
     mocker.patch("periscope.window_view.cached_lgtm_state", return_value=lgtm)
+    mocker.patch("periscope.window_view.cached_linked_pr_state",
+                 return_value=linked_pr)
 
 
 def test_view_returns_target_and_focused_at(mocker, clean_state):
@@ -151,8 +156,9 @@ def test_view_no_stamp_update_when_persisted_already_current(mocker, clean_state
 
 
 def test_view_linked_pr_overrides_auto_detected(mocker, clean_state):
-    """When _STATE["windows"][pid]["linked_pr"] is set, it overrides
-    the auto-detected pr field and pops the stale CI glyph."""
+    """When _STATE["windows"][pid]["linked_pr"] is set, it overrides the
+    auto-detected pr field. With the linked-PR resolver cold (None), the
+    branch-keyed CI glyph — which is for a different query — is dropped."""
     from periscope.window_view import build_window_view
 
     pid = "abc12345"
@@ -167,13 +173,37 @@ def test_view_linked_pr_overrides_auto_detected(mocker, clean_state):
         pane_content="x",
         pr={"pr": "999", "ci": "✓"},
     )
-    mocker.patch("periscope.window_view.capture", return_value="x")
 
     view, _ = build_window_view(_window(pid=pid), now_ts=1000)
     # `pr` is normalized to int regardless of source (auto-detect or linked).
     assert view["pr"] == 1234
     assert view["pr_linked"] is True
     assert "ci" not in view  # stale glyph dropped
+    assert view.get("pr_state") is None
+
+
+def test_view_linked_pr_merged_carries_state(mocker, clean_state):
+    """A resolved merged PR carries pr_state='merged' and its own CI, so the
+    rail can stop showing it as live open work."""
+    from periscope.window_view import build_window_view
+
+    pid = "abc12345"
+    clean_state["windows"][pid] = {"linked_pr": 1234}
+    mocker.patch(
+        "periscope.window_view.parse_pane",
+        return_value={"is_claude": True, "state": "idle", "spinner": None},
+    )
+    _stub_subsystems(
+        mocker,
+        pane_content="x",
+        pr={"pr": "999", "ci": "✓"},
+        linked_pr={"pr_state": "merged", "ci": None},
+    )
+
+    view, _ = build_window_view(_window(pid=pid), now_ts=1000)
+    assert view["pr"] == 1234
+    assert view["pr_state"] == "merged"
+    assert view["ci"] is None
 
 
 def test_view_surfaces_linked_linear(mocker, clean_state):

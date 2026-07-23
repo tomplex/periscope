@@ -15,7 +15,11 @@ _STATE_LOCK acquisition for efficiency.
 
 
 from periscope.channels import channel_state_for
-from periscope.git_pr import cached_git_state, cached_pr_state
+from periscope.git_pr import (
+    cached_git_state,
+    cached_linked_pr_state,
+    cached_pr_state,
+)
 from periscope.lgtm import cached_lgtm_state
 from periscope.panes import (
     parse_pane,
@@ -165,10 +169,17 @@ def build_window_view(
         # yields gh's `number` as an int); linked_pr is persisted as int too.
         pr["pr"] = int(linked_pr)
         pr["pr_linked"] = True
-        # `ci` (CI glyph) is keyed to the auto-detected PR; an explicit
-        # linked PR may not have a fresh CI signal until a future poll
-        # resolves it. Drop the stale glyph rather than mislead.
-        pr.pop("ci", None)
+        # Resolve the linked PR by NUMBER (its own SWR cache) — the branch-keyed
+        # `ci`/state above is for a different query and may not even be this PR.
+        # A cold cache returns None on this poll (badge shows the bare number,
+        # as before) and warms for the next. Once resolved, a merged/closed PR
+        # carries `pr_state` so the rail stops showing it as a live open PR.
+        linked_state = cached_linked_pr_state(w.get("cwd", ""), linked_pr)
+        if linked_state:
+            pr["pr_state"] = linked_state.get("pr_state")
+            pr["ci"] = linked_state.get("ci")
+        else:
+            pr.pop("ci", None)
 
     # The track is the grouping authority. A repo-default track has id == repo
     # (the anchor / pinned dir); a goal track carries its repo on the row (or

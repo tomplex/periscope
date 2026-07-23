@@ -34,6 +34,14 @@ _git_cache: dict[str, tuple[float, dict | None]] = {}
 _pr_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 _pr_fetching: set[tuple[str, str]] = set()
 _pr_lock = threading.Lock()
+
+# Explicitly-linked PRs (via the link_pr MCP tool) are keyed by number, not
+# branch: a linked PR may be merged or on a different branch than the pane's
+# current one, so pr_state_for's `--state open --head <branch>` query can't see
+# it. Separate number-keyed SWR cache resolves its lifecycle state + CI.
+_LINKED_PR_TTL = 60.0
+_linked_pr_cache: dict[tuple[str, int], tuple[float, dict | None]] = {}
+_linked_pr_fetching: set[tuple[str, int]] = set()
 _GH_AVAILABLE = shutil.which("gh") is not None
 
 # GitHub check conclusions that mean "failed". Shared by the PR-rollup glyph
@@ -60,10 +68,22 @@ def git_state_for(path: str) -> dict | None:
     dels_m = re.search(r"(\d+) deletion", diff)
     adds = int(adds_m.group(1)) if adds_m else 0
     dels = int(dels_m.group(1)) if dels_m else 0
+    # Untracked files. `git diff HEAD` ignores them entirely, so a worktree
+    # whose only change is brand-new files reported "clean" — and isDirty()
+    # then suppressed the chip, so nothing surfaced at all. --directory
+    # collapses a wholly-untracked dir to one entry instead of walking it.
+    _, untracked = _run(["git", "-C", path, "ls-files", "-o", "--exclude-standard",
+                         "--directory", "--no-empty-directory"])
+    new = sum(1 for line in untracked.splitlines() if line.strip())
     # Unpushed commits ahead of upstream.
     code, ahead_s = _run(["git", "-C", path, "rev-list", "--count", "@{u}..HEAD"])
     ahead = int(ahead_s) if code == 0 and ahead_s.isdigit() else 0
-    state = "clean" if (adds == 0 and dels == 0) else f"+{adds} -{dels}"
+    bits = []
+    if adds or dels:
+        bits.append(f"+{adds} -{dels}")
+    if new:
+        bits.append(f"?{new}")
+    state = " ".join(bits) if bits else "clean"
     if ahead > 0:
         state += " *"
     # `repo_slug` (owner/repo) lets the frontend build PR URLs without
@@ -95,6 +115,21 @@ def cached_git_state(path: str) -> dict | None:
     return data
 
 
+def _ci_glyph(rollup: list | None) -> str | None:
+    """Roll a PR's statusCheckRollup up to a single glyph: ✗ if anything failed,
+    ⟳ if anything's still running, ✓ if everything landed clean, else None."""
+    states = {(c.get("conclusion") or c.get("status") or "").upper()
+              for c in (rollup or [])}
+    states.discard("")
+    if states & _CI_FAILED_CONCLUSIONS:
+        return "✗"
+    if states & {"PENDING", "QUEUED", "IN_PROGRESS", "WAITING"}:
+        return "⟳"
+    if states and states <= {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+        return "✓"
+    return None
+
+
 def pr_state_for(path: str, branch: str) -> dict | None:
     """Return PR metadata + CI rollup for the PR open against `branch` in
     repo at `path`. Modal sidebar surfaces title/draft/+/−/reviewers; the
@@ -122,16 +157,7 @@ def pr_state_for(path: str, branch: str) -> dict | None:
     if not prs:
         return None
     pr = prs[0]
-    rollup = pr.get("statusCheckRollup") or []
-    states = {(c.get("conclusion") or c.get("status") or "").upper() for c in rollup}
-    states.discard("")
-    ci = None
-    if states & _CI_FAILED_CONCLUSIONS:
-        ci = "✗"
-    elif states & {"PENDING", "QUEUED", "IN_PROGRESS", "WAITING"}:
-        ci = "⟳"
-    elif states and states <= {"SUCCESS", "NEUTRAL", "SKIPPED"}:
-        ci = "✓"
+    ci = _ci_glyph(pr.get("statusCheckRollup"))
     # gh exposes requested reviewers as either users (with `login`) or teams
     # (with `name`) — take the login for users, name for teams, and trim to
     # the leading letters as the avatar text (2 chars max).
@@ -267,6 +293,56 @@ def cached_pr_state(path: str, branch: str | None) -> dict | None:
         if key not in _pr_fetching:
             _pr_fetching.add(key)
             _bg("pr-fetch", _fetch_pr_into_cache, path, branch)
+        return cached[1] if cached else None
+
+
+def linked_pr_state_for(path: str, number: int) -> dict | None:
+    """Resolve an explicitly-linked PR's lifecycle state + CI by number.
+    Returns {pr_state: 'open'|'merged'|'closed', ci: glyph|None} or None if gh
+    can't answer. Distinct from pr_state_for, which only sees OPEN PRs on the
+    current branch."""
+    if not _GH_AVAILABLE or not path or not number:
+        return None
+    code, out = _run(
+        ["gh", "pr", "view", str(number), "--json", "state,statusCheckRollup"],
+        cwd=path,
+        timeout=8.0,
+    )
+    if code != 0 or not out:
+        return None
+    try:
+        pr = json.loads(out)
+    except Exception:
+        return None
+    return {
+        "pr_state": (pr.get("state") or "").lower() or None,  # open/merged/closed
+        "ci": _ci_glyph(pr.get("statusCheckRollup")),
+    }
+
+
+def _fetch_linked_pr_into_cache(path: str, number: int) -> None:
+    try:
+        data = linked_pr_state_for(path, number)
+    except Exception:
+        data = None
+    with _pr_lock:
+        _linked_pr_cache[(path, number)] = (time.time(), data)
+        _linked_pr_fetching.discard((path, number))
+
+
+def cached_linked_pr_state(path: str, number: int | None) -> dict | None:
+    """SWR for a linked PR's state, keyed by number (mirrors cached_pr_state)."""
+    if not path or not number:
+        return None
+    key = (path, int(number))
+    now = time.time()
+    with _pr_lock:
+        cached = _linked_pr_cache.get(key)
+        if cached and now - cached[0] < _LINKED_PR_TTL:
+            return cached[1]
+        if key not in _linked_pr_fetching:
+            _linked_pr_fetching.add(key)
+            _bg("linked-pr-fetch", _fetch_linked_pr_into_cache, *key)
         return cached[1] if cached else None
 
 
