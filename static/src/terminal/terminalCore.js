@@ -21,6 +21,32 @@ import { track } from "../track.js";
 import { paneIdQuery } from "../util.js";
 import { terminalTheme } from "./theme.js";
 
+// Scalar Terminal options, exported so the unicode11 regression test can
+// construct a vendored Terminal with exactly what production passes.
+// allowProposedApi is load-bearing: `term.unicode` (the Unicode 11 width
+// activation below) is proposed API, and without the flag the activation
+// THROWS — swallowed by its try/catch into a console.warn, leaving emoji
+// at width 1 and the mirrored cursor one visible cell ahead of where
+// typed text lands (a 🐍 in the shell prompt reproduced it every time).
+export const XTERM_OPTIONS = {
+  allowProposedApi: true,
+  fontFamily: '"SF Mono", "JetBrains Mono", "Menlo", monospace',
+  fontSize: 12,
+  cursorBlink: true,
+  // Holds the initial paint (up to 10k lines from capture-pane in ws.py)
+  // plus everything that streams in afterwards. 20k gives modals room to
+  // grow during a long open session without dropping the most-recent
+  // pre-modal scrollback off the top.
+  scrollback: 20000,
+  convertEol: false,
+  // Option key → Meta escape prefix, so Option+Backspace becomes the
+  // readline word-back-delete sequence (ESC + DEL), Option+Left becomes
+  // ESC + b (word back), etc. Claude Code's input box honors these.
+  macOptionIsMeta: true,
+  cursorStyle: "block",
+  fontWeight: "400",
+};
+
 let term = null;
 let termWs = null;
 let termWsTarget = null;            // target the current/pending socket is for
@@ -282,22 +308,8 @@ export function startLiveTerminal(target) {
   containerEl.innerHTML = "";
 
   term = new Terminal({
-    fontFamily: '"SF Mono", "JetBrains Mono", "Menlo", monospace',
-    fontSize: 12,
-    cursorBlink: true,
-    // Holds the initial paint (up to 10k lines from capture-pane in ws.py)
-    // plus everything that streams in afterwards. 20k gives modals room to
-    // grow during a long open session without dropping the most-recent
-    // pre-modal scrollback off the top.
-    scrollback: 20000,
-    convertEol: false,
-    // Option key → Meta escape prefix, so Option+Backspace becomes the
-    // readline word-back-delete sequence (ESC + DEL), Option+Left becomes
-    // ESC + b (word back), etc. Claude Code's input box honors these.
-    macOptionIsMeta: true,
+    ...XTERM_OPTIONS,
     theme: terminalTheme,
-    cursorStyle: "block",
-    fontWeight: "400",
     // CSS ligatures aren't a runtime xterm setting in the vendored bundle,
     // but the parent container's CSS sets font-feature-settings so JetBrains
     // Mono / SF Mono show their ligatures when present.
