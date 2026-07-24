@@ -55,112 +55,89 @@ That is a genuine thesis. It is also a much larger product bet than "rewrite in
 Rust," and it does not require Rust.
 
 ---
+## Status
 
-## Tier 0 — live bugs, fix regardless of any decision
+The audit above is the original finding. What follows is where it actually
+landed — kept current so this file stays a map of what's *left*, not a list of
+things already done.
 
-**T0.1 — Split-pane Claudes are invisible and their alerts are destroyed every 3 s.**
-`list-windows -a` with `#{pane_id}` resolves against the *active pane only* (verified
-empirically on an isolated socket: a 2-pane window reports one pane). `routes/state.py:93`
-feeds that set to `_channel_gc`, which at `channels.py:167` drops `_CHANNEL_ALERTS`
-for every pane id not in it. A `notify(need_human)` from a background pane dies within
-one poll. Fix: `list-panes -a -F '#{pane_id}'`. ~5 lines.
+### Shipped
 
-**T0.2 — `MultiEdit` renders nothing.** `Transcript.jsx:99-105` — `fullInput` has cases
-for `Bash` and `Write`, then `default: return ""`; `isEdit` is `Edit` only. Expanding a
-MultiEdit shows one line: `Applied 3 edits to /path`. The edits are already on the client
-(`history/search.py:263` ships the full `input` dict). Same for `NotebookEdit`.
+| Was | Now |
+|---|---|
+| T0.1 split-pane alerts GC'd every 3 s | GC keys on `list-panes -a` (`1a5673d`) |
+| T0.3 ~60 ms of forks per pane switch | resize+geometry chained into one fork (`b85840f`) |
+| T0.4 untracked files report "clean" | counted as `?N` (`c191298`) |
+| T0.5 alerts vanish on restart | rehydrated from the events log (`624c57c`) |
+| T0.6 `styles.css` brace imbalance | scar removed, braces balance (`b6ec9a1`) |
+| T0.8 polls can commit a stale snapshot | chained `setTimeout` (`b473580`) |
+| T0.9 merged PRs keep their badge | lifecycle resolved by number (`da0a5cb`) |
+| T0.10 preview tabs never re-fetch | re-fetch on re-show (`961d551`) |
+| T1.2 zero transitions on state change | stripes/dots/chips transition (`6b7168f`) |
+| T1.3 rail shifts under the cursor | membership freezes while hovered (`6b7168f`) |
+| T1.5 no real diff viewer | Changes tab: git-backed, two scopes, live (`83ea05b`) |
+| T2.1 3 s poll ceiling | `/ws/state` push hub + alert feed folded onto it |
 
-**T0.3 — ~60 ms of removable forks per pane switch.** `ws.py:51-55` (`setw
-window-size manual` + `resize-window`) and `ws.py:114` (`capture-pane`) are subprocesses;
-the persistent control client in `tmux_input.py` already exists.
+**T1.1 (optimistic UI) was obviated rather than fixed.** The push hub kicks on
+tmux mutations, so the revert-then-correct window shrank from ~1.5 s to about
+one round trip. Rail mutations are still `await`-then-nothing; that's now a
+cosmetic detail rather than the "rename visibly reverts" bug it was.
 
-**T0.4 — Untracked files report "clean".** `git_pr.py:58` derives dirtiness from
-`git diff HEAD --shortstat`, which ignores untracked. Verified: scratch repo, one new
-file, empty shortstat, chip doesn't render. Add `git ls-files -o --exclude-standard`.
-
-**T0.5 — Alerts vanish on restart.** `routes/alerts.py` reads only in-memory
-`_CHANNEL_ALERTS`; `channels.py:196-203` already writes every alert to the durable
-`events` table. The read path just ignores it.
-
-**T0.6 — `styles.css` doesn't parse cleanly.** 779 `{` vs 781 `}`. Lines 322-327 are an
-amputation scar from the grid-view removal. Error recovery eats the following rule.
-Harmless today; anything added there vanishes silently.
-
-**T0.7 — 6 CSS tokens referenced, never defined.** `--warn` (7 uses), `--font-mono` (3),
-`--muted`, `--border`, `--chip-bg`, `--chip-fg`. Hex fallbacks always render.
-
-**T0.8 — Poll loops can commit an older snapshot over a newer one.** `poll.js:75`,
-`alertFeed.js:69` — `setInterval` with async callback, no in-flight guard, no sequence
-number. `Transcript.jsx:43` already does it correctly (chained `setTimeout`).
-
-**T0.9 — Merged PRs keep their badge forever.** `window_view.py:158-172` — `linked_pr`
-unconditionally overwrites auto-detected PR state and pops `ci`. No expiry, no
-cross-check against the `gh` cache being fetched 15 lines earlier.
-
-**T0.10 — Preview tabs never re-fetch.** `PreviewTabInner.jsx:149-176`, dep array is
-`[entry.path]`. `/api/fs/read` returns no mtime or ETag.
+**T0.2 / T0.7 were deliberately dropped.** MultiEdit-renders-nothing is real but
+transcript-only, and transcript mode is unused here (see
+`idea-own-the-agent-loop.md` for why that view isn't being invested in). The 6
+undefined CSS tokens render fine via their fallbacks and would be rewritten by
+T2.3 anyway — folding them into that rather than churning the lines twice.
 
 ---
 
-## Tier 1 — the actual polish gap
+## Open
 
-**T1.1 — Optimistic UI on every tmux mutation.** The template already exists and is
-good: `prefs.patchUI` (`prefs.js:106-126`) snapshots, writes eagerly, reverts on failure;
-file tabs (`store.js:84-111`) add a 3 s hydration-skip so an in-flight poll can't stomp
-the write. Not applied to: rename tab/track, close tab, move across tracks, dissolve,
-new tab, auto-rename, start review. Rename is worst — it visibly reverts first.
+Roughly by leverage.
 
-**T1.2 — Transitions on data-driven change.** All 20 existing transitions are hover
-affordances. Rows, chips, status lines, section membership all hard-swap. A correct
-`prefers-reduced-motion` block already exists at `styles.css:1070`.
+**Cross-pane changes.** Aggregate the Changes diff across every pane in a track:
+"what have all my Claudes touched." Composes directly with the existing hunk
+renderer and `filesTouched`, and it is squarely the thing Claude Code cannot
+show you — no CC surface spans panes. The natural next feature.
 
-**T1.3 — Stop shifting the rail.** `AttentionSections.jsx:112,142,172,191` render each
-section as `{rows.length > 0 && …}` above the tree; RUNNING churns constantly. Compounded
-by `RailRows.jsx:143` growing a footer mid-tick. Reserve space or animate membership.
+**Forkless pane open.** Spec'd in `specs/forkless-pane-open.md`. Sources the
+handshake geometry from the mirror (which already reads it on subscribe) instead
+of a second fork, taking pane-open from 2 forks to 1. ~20 ms per pane switch,
+which matters because switching is the most frequent interaction in a
+terminal-default workflow.
 
-**T1.4 — Composer send is 2 RTTs plus a 250 ms client gap.** `Transcript.jsx:227-250`
-POSTs paste, `setTimeout(250)`, POSTs Enter, then clears. `send.py:41-54` already handles
-paste+keys in one call with a 100 ms server-side gap. ~300 ms to acknowledge input, up to
-2.3 s to see your own turn, no optimistic echo.
+**T2.3 — Design-system reset.** Machine-counted from `styles.css` (re-measured
+2026-07-23; the audit's original figure was 30, so this drifts as the file is
+edited — re-count before acting on it): **28 distinct font sizes**, with a live
+half-pixel tier and roughly eleven steps between 9 and 15 px. Also **90 distinct
+padding shorthands for 145 declarations**, 22 shadows for 25
+declarations, 21% dead or inert, three unrelated design languages in identifiable
+line ranges. Keep the oklch token block (`:10-59`) verbatim — status colours
+pinned at constant lightness/chroma varying only hue is a real system. Add
+`--fs-*` and a 4 pt `--sp-*` scale up front. Real, but diffuse: low ceiling per
+hour compared to anything above it.
 
-**T1.5 — A real diff renderer.** Current `EditDiff` (`Transcript.jsx:84-93`) prints all
-old lines as deletions then all new lines as additions — a 1-line change in a 40-line
-pair renders 80 rows, 79 of them noise. Needs, in order:
-1. Line matching (Myers or histogram) + `+N −M` in the collapsed header
-2. MultiEdit (one file block, N hunks) and Write (new-file vs overwrite, labeled honestly)
-3. Context collapsing with symbol-carrying hunk headers
-4. Syntax highlighting — `preview/highlightCode.jsx` already wraps 8 lezer parsers
-   emitting stable `tok-*` classes; needs a lazy import and a widened selector scope
-   (currently `.md-doc .tok-*`). Same fix also highlights transcript code fences.
-5. Intraline word-diff, only above ~0.5 pairing similarity
-6. Gutters / line numbers as a real 2-column grid — the current `::before { content: "- " }`
-   is inside the text flow, so it misaligns on wrap and gets copied with selections
+**T2.4 — Hierarchy.** The detail header is a flat `·`-joined run of 8 items all
+at 12 px, where `⚠ API error` has the same weight as the model name. Should be
+three tiers — identity, state, metadata — with the alarm tier able to preempt.
+The rail's *expanded* footer inverts importance (six items, all 10 px, one
+weight) while the *compact* row gets it right; expansion currently buys more
+chips instead of more hierarchy.
 
-Unified, not split: the transcript column is 500–700 px, which gives ~40 columns per side.
+**T1.4 — Composer latency.** `Transcript.jsx` POSTs paste, waits 250 ms
+client-side, POSTs Enter, then clears. `send.py:41-54` already does paste+keys in
+one call with a 100 ms server-side gap. ~300 ms to acknowledge input, no
+optimistic echo. Transcript-scoped, so it only matters if that view gets used.
 
-**Cumulative per-file diffs — two sources, do not blur them.** Transcript-derived
-(`filesTouched.js` already walks it) can honestly render *"the hunks Claude applied this
-session"* but has no "before" for the first op and misses Bash and your own edits.
-Git-derived answers *"what actually changed on disk"* but needs a new endpoint and a
-recorded per-session base ref. Ship the first, labeled exactly that; treat the second as
-a separate per-worktree "Changes" tab.
+**T1.6 — Loading states.** Omnibox catalog: 285–515 ms pop-in, refetched on every
+⌘K, no cache. Launcher blocks on a real `git worktree add` with no busy state —
+double-click makes two worktrees (`OpenOmnibox` gets this right,
+`LauncherModal.jsx:97-110` doesn't). Boot flashes **"No tmux windows found"** —
+the opposite of the truth.
 
-**T1.6 — Loading states.** Omnibox catalog: 285–515 ms pop-in, refetched on every ⌘K,
-no cache. Launcher blocks on a real `git worktree add` with no busy state — double-click
-makes two worktrees (`OpenOmnibox` gets this right, `LauncherModal.jsx:97-110` doesn't).
-Boot flashes **"No tmux windows found"** — the opposite of the truth.
-
----
-
-## Tier 2 — architectural, inside Python
-
-**T2.1 — Push instead of poll.** Five independent client clocks (3000/3000/1500/2000/3000 ms)
-plus a 250 ms sampler. No `EventSource` anywhere in the frontend. `/api/state` costs
-10–16 ms server-side — the latency is entirely the client's wait. This is the hard ceiling
-on "feels live," and it is the single highest-leverage change in this document.
-Note `poll()` is exported and documented as a force-refresh hook but **has zero call sites**.
-
-**T2.2 — Close the worst half of the transcript blind window.** Measured gaps:
+**T2.2 — Transcript blind window.** Unfixable without owning the agent loop
+(parked — see `idea-own-the-agent-loop.md`). Measured gaps, kept because they're
+the evidence for that decision:
 
 | Tool | n | p90 | max |
 |---|---|---|---|
@@ -169,39 +146,34 @@ Note `poll()` is exported and documented as a force-refresh hook but **has zero 
 | Bash | 277 | 5.3 s | 122.8 s |
 | Edit | 40 | 2.7 s | 3.4 s |
 
-Claude Code commits an assistant message only once every `tool_use` in it resolves, and
-sidechain records are absent entirely — so a pane running subagents shows a frozen
-transcript for 7.5 min p90, 20 min worst case, on exactly the panes the attention system
-routes you to. A rejected tool call discards its whole turn permanently.
-
-Cheap mitigation without any rewrite: when `state === "needs-input"`, periscope already
-captures the pane every 3 s and already knows a dialog is open (`waiting_for`). Render
-that captured dialog into the transcript tail.
-
-**T2.3 — Design-system reset.** Machine-counted from `styles.css`: **30 distinct font
-sizes** (eleven steps between 9 and 15 px, including a live half-pixel tier), **90 distinct
-padding shorthands for 145 declarations**, 22 shadows for 25 declarations, 21% dead or
-inert, three unrelated design languages in identifiable line ranges. Keep the oklch token
-block (`:10-59`) verbatim — status colors pinned at constant lightness/chroma varying only
-hue is a real system. Add `--fs-*` and a 4 pt `--sp-*` scale up front.
-
-**T2.4 — Hierarchy.** The detail header is a flat `·`-joined run of 8 items all at 12 px,
-where `⚠ API error` has the same weight as the model name. Should be three tiers — identity,
-state, metadata — with the alarm tier able to preempt. The rail's *expanded* footer inverts
-importance (six items, all 10 px, one weight) while the *compact* row gets it right; expansion
-currently buys more chips instead of more hierarchy.
+Claude Code commits an assistant message only once every `tool_use` in it
+resolves, and sidechain records are absent entirely. Cheap partial mitigation if
+it ever matters: when `state === "needs-input"`, periscope already captures the
+pane every 3 s and knows a dialog is open (`waiting_for`) — render that captured
+dialog into the transcript tail.
 
 ---
 
-## Tier 3 — the fork in the road
+## Dials on things already shipped
 
-Not a backlog item; a product decision.
+- **Layout freeze** (`layoutFreeze.js`): currently thaws only on mouse-leave. If
+  holding still reads as *stuck* rather than *stable*, flush on a short idle
+  timer as well. The `updates paused` hint exists so the pause is never silent.
+- **Changes tab liveness**: refresh is keyed to the pane's `git` field, which has
+  a 15 s TTL — so worst case a disk change takes ~15 s to appear. Lower that TTL
+  or add a filesystem watch if it feels laggy.
+- **Generated-file folding** (`noise.js`): path patterns only, deliberately not
+  size — auto-folding by size would hide a large genuine refactor.
 
-- **Stay a viewer** of sessions started elsewhere. Everything above applies; nothing is wasted.
-- **Own the agent loop** — drive the Agent SDK directly. The only thing that fixes T2.2
-  properly, and it dissolves session-identity discovery. A different product, not a rewrite.
-- **Own the PTY but keep the CLI** — measured to buy ~1.27 ms and zero fidelity defects.
-  Not supported by evidence.
+---
+
+## Settled, not open
+
+- **Rewrite in Rust / own the PTY** — measured to buy ~1.27 ms and *zero*
+  fidelity defects. Not supported by evidence; see the Verdict above.
+- **Own the agent loop** — the one version that holds up, and parked
+  deliberately. Reasoning and the tripwires that would reopen it:
+  `idea-own-the-agent-loop.md`.
 
 ---
 
