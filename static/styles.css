@@ -1062,6 +1062,38 @@ body.modal-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .brand-cursor { animation: none; }
   *, *::before, *::after { transition-duration: 0.001s !important; }
+  /* Row-enter animations too — the transition clamp above doesn't cover
+     keyframes, and enter motion is the one thing that would still move. */
+  .attn-row, .rail-row { animation: none !important; }
+}
+
+/* ─── Motion on data-driven change ───────────────────────────────
+   Everything else in this file transitions on hover only. These are the
+   state-driven ones: with /ws/state pushing updates, rows and chips arrive
+   far more often than they used to, and a hard swap at that rate reads as
+   flicker. Enter-only — an element being removed is gone from the DOM before
+   a leave animation could run, and faking that needs JS for no real gain. */
+@keyframes row-enter {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: none; }
+}
+.attn-row { animation: row-enter 140ms ease-out; }
+/* Status/among-row colour changes: the pane state stripe, the dots, and the
+   chips all key off live state and previously snapped between colours. */
+.pane-stripe, .attn-dot, .dot,
+.pane-pill, .wt-meta-chip, .pane-ci, .wt-meta-ci,
+.rail-row, .attn-row {
+  transition: background-color 180ms ease, color 180ms ease,
+              border-color 180ms ease, opacity 180ms ease;
+}
+/* The freeze hint — deliberately quiet; it explains a pause, it isn't an alert. */
+.attn-frozen {
+  padding: 2px 12px;
+  color: var(--fg-4);
+  font-size: 9.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  opacity: .75;
 }
 
 .commands-modal-overlay {

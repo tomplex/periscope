@@ -4,7 +4,7 @@
 // Reads the windows + alertItems signals through the pure transforms in
 // attention.js. Out-of-tree rows use `attn-row` classes (NOT child-row) so they
 // never enter the tree's connector-adjacency CSS.
-import { useEffect } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 import * as prefs from "../prefs.js";
 import {dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection,
   windows, 
@@ -15,6 +15,7 @@ import {buildActivity,
   buildNeedsYou, buildReady, buildRunning, 
   isSoftQuestion, needsYouCount, prunedStateDismissals,resolvePinned, 
 } from "./attention.js";
+import { freezeRows, isStale, railHovered } from "./layoutFreeze.js";
 import { statusDotClass } from "./RailRows.jsx";
 import { SectionHeader } from "./SectionHeader.jsx";
 
@@ -48,6 +49,12 @@ function toggle(key, currentlyCollapsed) {
   prefs.setRailCollapsedKey(key, !currentlyCollapsed);
 }
 
+// Stable identity for the freeze latch — mirrors the JSX keys below, where
+// live rows key on pane pid and event rows on alert id.
+function rowKey(r) {
+  return `${r.kind}:${r.pid ?? r.id}`;
+}
+
 // NEEDS YOU + READY + RUNNING + PINNED — top of the rail, above the project tree.
 export function AttentionTop() {
   // Subscribe to prefs explicitly (pins + section-collapse live there), the
@@ -60,17 +67,48 @@ export function AttentionTop() {
   const collapsed = prefs.getRailCollapsed();
   const shorten = sessionShortener(live);
 
-  const needsRows = buildNeedsYou(live, items, dismissed, dismissedNeeds);
+  const needsRowsLive = buildNeedsYou(live, items, dismissed, dismissedNeeds);
   const needsCollapsed = collapsed["sec:needs"] === true;
 
-  const readyRows = buildReady(live, items, dismissed, dismissedReadyPids.value);
+  const readyRowsLive = buildReady(live, items, dismissed, dismissedReadyPids.value);
   const readyCollapsed = collapsed["sec:ready"] === true;
 
-  const runningRows = buildRunning(live);
+  const runningRowsLive = buildRunning(live);
   const runningCollapsed = collapsed["sec:running"] === true;
 
   const pinned = resolvePinned(prefs.getPinnedPids(), live);
   const pinnedCollapsed = collapsed["sec:pinned"] === true;
+
+  // --- layout freeze (see layoutFreeze.js) ---------------------------------
+  // Hold section MEMBERSHIP still while the pointer is in the rail, so the row
+  // you're aiming at can't move out from under the cursor. Contents stay live.
+  // PINNED is deliberately excluded: it only changes when you pin something,
+  // and a user action must never be the thing that's withheld.
+  const frozen = railHovered.value;
+  const held = useRef(null);
+  const needsRows = freezeRows(needsRowsLive, held.current?.needs, frozen, rowKey);
+  const readyRows = freezeRows(readyRowsLive, held.current?.ready, frozen, rowKey);
+  const runningRows = freezeRows(runningRowsLive, held.current?.running, frozen, rowKey);
+  const stale =
+    isStale(needsRowsLive, held.current?.needs, frozen, rowKey) ||
+    isStale(readyRowsLive, held.current?.ready, frozen, rowKey) ||
+    isStale(runningRowsLive, held.current?.running, frozen, rowKey);
+
+  // Capture the live set whenever we're thawed; that snapshot is what the next
+  // freeze holds. No dep array — cheap, and it must track every render.
+  useEffect(() => {
+    if (!frozen) {
+      held.current = {
+        needs: needsRowsLive, ready: readyRowsLive, running: runningRowsLive,
+      };
+    }
+  });
+
+  // Any click inside the sections is a user action, so let the pending changes
+  // through immediately rather than holding a row the user just acted on.
+  function flush() {
+    held.current = null;
+  }
 
   // Prune episode-scoped dismissals for panes that have left the relevant
   // state, so the next question/completion re-surfaces. Runs after render
@@ -83,6 +121,7 @@ export function AttentionTop() {
   }, [windows.value]);
 
   function dismiss(id) {
+    flush();
     const next = new Set(dismissed);
     next.add(id);
     dismissedAlertIds.value = next;
@@ -90,6 +129,7 @@ export function AttentionTop() {
   // Click a live needs-you row: navigate to it, and if it's a soft question
   // (no real dialog), dismiss it from the zone. Real dialogs stay sticky.
   function onLiveClick(w) {
+    flush();
     if (isSoftQuestion(w)) {
       const next = new Set(dismissedNeedsPids.value);
       next.add(w.pid);
@@ -101,6 +141,7 @@ export function AttentionTop() {
   // Selecting normally acks via the detail terminal's WS connect, but an
   // already-selected pane won't reconnect — the dismissal covers that case.
   function onReadyClick(w) {
+    flush();
     const next = new Set(dismissedReadyPids.value);
     next.add(w.pid);
     dismissedReadyPids.value = next;
@@ -109,6 +150,13 @@ export function AttentionTop() {
 
   return (
     <>
+      {/* Say so when the freeze is actually withholding something. A rail that
+          quietly stops updating is worse than one that moves. */}
+      {stale && (
+        <div class="attn-frozen" title="Move the pointer out of the rail to apply">
+          updates paused
+        </div>
+      )}
       {needsRows.length > 0 && (
         <>
           <SectionHeader
