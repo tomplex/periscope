@@ -2874,6 +2874,144 @@ body.modal-open { overflow: hidden; }
   overflow: hidden;
 }
 
+/* ─── Changes tab (git-backed diff) ──────────────────────────── */
+
+.changes-tab {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+.changes-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.changes-scope { display: flex; gap: 2px; }
+.changes-scope button {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-3);
+  font: inherit;
+  cursor: pointer;
+}
+.changes-scope button:hover { background: var(--bg-2); color: var(--fg-1); }
+.changes-scope button.is-active { background: var(--bg-2); color: var(--fg-0); }
+.changes-summary { margin-left: auto; font-family: var(--mono); }
+.changes-body { flex: 1; overflow: auto; padding: 8px 0 24px; }
+.changes-msg { padding: 14px 16px; color: var(--fg-3); font-size: 12px; }
+.changes-err { color: var(--s-danger); }
+
+.dfile { margin: 0 10px 14px; border: 1px solid var(--line-soft); border-radius: var(--r-md); overflow: hidden; }
+.dfile-head {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-1);
+}
+.dfile-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-1);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.dfile-toggle:hover { background: var(--bg-1-hi); }
+/* Viewed marks are per-content: the file re-surfaces on its own if it changes
+   again, so this only ever hides work you've actually seen. */
+.dfile-viewed {
+  padding: 0 10px;
+  border: 0;
+  border-left: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--fg-4);
+  font-size: 10px;
+  letter-spacing: .04em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dfile-viewed:hover { background: var(--bg-1-hi); color: var(--fg-2); }
+.dfile-viewed.is-on { color: var(--s-success); }
+/* Generated artifacts: folded by default and sorted last, but never hidden —
+   the label says why so a folded bundle doesn't read as a rendering bug. */
+.dfile-gen {
+  padding: 0 5px;
+  border-radius: 2px;
+  background: var(--bg-2);
+  color: var(--fg-4);
+  font-size: 9.5px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.dfile.is-generated .dfile-path { color: var(--fg-3); }
+.dfile.is-viewed { opacity: .55; }
+.dfile.is-viewed:hover { opacity: 1; }
+.dfile-caret { color: var(--fg-4); }
+.dfile-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dfile-status { color: var(--fg-4); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.dfile-stat { display: flex; gap: 6px; }
+.dstat-add { color: var(--s-success); }
+.dstat-del { color: var(--s-danger); }
+.dstat-bin { color: var(--fg-4); }
+.dfile-trunc { padding: 6px 10px; color: var(--fg-3); font-size: 11px; background: var(--bg-1); }
+
+.dhunk { border-top: 1px solid var(--line-soft); }
+.dhunk-head {
+  display: flex;
+  gap: 10px;
+  padding: 3px 10px;
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.dhunk-sym { color: var(--fg-2); }
+
+/* One row per line. Horizontal scroll rather than wrap: wrapping destroys
+   the column alignment that makes a diff readable (minified JS, long
+   string literals). */
+.dl { font-family: var(--mono); font-size: 12px; line-height: 1.45; white-space: pre; overflow-x: auto; padding: 0 10px 0 22px; position: relative; }
+.dl::before { position: absolute; left: 8px; color: var(--fg-4); }
+.dl-add { background: color-mix(in oklch, var(--s-success) 12%, transparent); }
+.dl-add::before { content: "+"; color: var(--s-success); }
+.dl-del { background: color-mix(in oklch, var(--s-danger) 12%, transparent); }
+.dl-del::before { content: "−"; color: var(--s-danger); }
+.dl-ctx { color: var(--fg-2); }
+/* Intraline mark: a STRONGER tint of the row's own colour, never a new hue —
+   the row already says add/delete, this only says where. Background-only so it
+   composes with the syntax colours rather than overriding them. */
+.dl-intra { border-radius: 2px; padding: 1px 0; }
+.dl-add .dl-intra { background: color-mix(in oklch, var(--s-success) 30%, transparent); }
+.dl-del .dl-intra { background: color-mix(in oklch, var(--s-danger) 30%, transparent); }
+
+.changes-ctx { display: flex; gap: 1px; }
+.changes-ctx button {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-4);
+  font: inherit;
+  font-family: var(--mono);
+  cursor: pointer;
+}
+.changes-ctx button:hover { background: var(--bg-2); color: var(--fg-1); }
+.changes-ctx button.is-active { background: var(--bg-2); color: var(--fg-1); }
+
 /* Browser-style tab strip above the pane meta-header. The first tab is
    the pane (terminal/transcript); each Cmd+click on a file path adds a
    tab. State persists per-pid across rail selection changes. */
@@ -3069,23 +3207,23 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    Order matters: tok-definition must come after tok-variableName — lezer
    emits the compound "tok-variableName tok-definition" and equal
    specificity means last-declared wins. */
-.md-doc .tok-keyword { color: #c678dd; }
-.md-doc .tok-atom, .md-doc .tok-bool, .md-doc .tok-number, .md-doc .tok-literal { color: #d19a66; }
-.md-doc .tok-string { color: #98c379; }
-.md-doc .tok-string2 { color: #56b6c2; }
-.md-doc .tok-variableName { color: #e06c75; }
-.md-doc .tok-variableName2 { color: #d19a66; }
-.md-doc .tok-definition { color: #e6edf3; }
-.md-doc .tok-propertyName { color: #e6edf3; }
-.md-doc .tok-typeName, .md-doc .tok-className, .md-doc .tok-namespace { color: #e5c07b; }
-.md-doc .tok-comment { color: #7f848e; font-style: italic; }
-.md-doc .tok-operator { color: #56b6c2; }
-.md-doc .tok-meta { color: #7f848e; }
-.md-doc .tok-url, .md-doc .tok-link { color: #61afef; }
-.md-doc .tok-heading { color: #e06c75; font-weight: 650; }
-.md-doc .tok-emphasis { font-style: italic; }
-.md-doc .tok-strong { font-weight: 700; }
-.md-doc .tok-invalid { color: #ff6b6b; }
+.md-doc .tok-keyword, .dl .tok-keyword { color: #c678dd; }
+.md-doc .tok-atom, .md-doc .tok-bool, .md-doc .tok-number, .md-doc .tok-literal, .dl .tok-atom, .dl .tok-bool, .dl .tok-number, .dl .tok-literal { color: #d19a66; }
+.md-doc .tok-string, .dl .tok-string { color: #98c379; }
+.md-doc .tok-string2, .dl .tok-string2 { color: #56b6c2; }
+.md-doc .tok-variableName, .dl .tok-variableName { color: #e06c75; }
+.md-doc .tok-variableName2, .dl .tok-variableName2 { color: #d19a66; }
+.md-doc .tok-definition, .dl .tok-definition { color: #e6edf3; }
+.md-doc .tok-propertyName, .dl .tok-propertyName { color: #e6edf3; }
+.md-doc .tok-typeName, .md-doc .tok-className, .md-doc .tok-namespace, .dl .tok-typeName, .dl .tok-className, .dl .tok-namespace { color: #e5c07b; }
+.md-doc .tok-comment, .dl .tok-comment { color: #7f848e; font-style: italic; }
+.md-doc .tok-operator, .dl .tok-operator { color: #56b6c2; }
+.md-doc .tok-meta, .dl .tok-meta { color: #7f848e; }
+.md-doc .tok-url, .md-doc .tok-link, .dl .tok-url, .dl .tok-link { color: #61afef; }
+.md-doc .tok-heading, .dl .tok-heading { color: #e06c75; font-weight: 650; }
+.md-doc .tok-emphasis, .dl .tok-emphasis { font-style: italic; }
+.md-doc .tok-strong, .dl .tok-strong { font-weight: 700; }
+.md-doc .tok-invalid, .dl .tok-invalid { color: #ff6b6b; }
 /* Text-labeled toggle (Source/Rendered) — same hover affordance as the
    icon buttons but sized for a short word. */
 .preview-btn-text {

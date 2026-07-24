@@ -47,6 +47,16 @@ CREATE TABLE IF NOT EXISTS pane_sessions (
   session_id  TEXT NOT NULL,         -- Claude CLAUDE_CODE_SESSION_ID (JSONL stem)
   updated_at  INTEGER NOT NULL
 );
+-- Baseline commit for the "changes this session" diff scope. Keyed on
+-- session_id (NOT pane_id) so /clear — which mints a new session id mid-work —
+-- naturally gets its own baseline instead of inheriting the pre-clear one, and
+-- so the hook that owns pane_sessions never races a write here.
+CREATE TABLE IF NOT EXISTS session_bases (
+  session_id  TEXT PRIMARY KEY,      -- Claude session id (JSONL stem)
+  repo        TEXT NOT NULL,         -- git toplevel the baseline was taken in
+  base_sha    TEXT NOT NULL,         -- `git stash create` snapshot, else HEAD
+  created_at  INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pane_workspaces (
   pane_id      TEXT PRIMARY KEY,   -- tmux pane id, e.g. '%56'
   workspace_id TEXT NOT NULL,      -- workspaces[].id (state.json)
@@ -237,6 +247,37 @@ def get_pane_session(pane_id: str) -> str | None:
             (pane_id,),
         ).fetchone()
     return row[0] if row else None
+
+
+def get_session_base(session_id: str) -> tuple[str, str] | None:
+    """(repo, base_sha) baseline for a session's diff scope, or None if the
+    session started before this feature (or outside a git repo)."""
+    if not session_id:
+        return None
+    with _LOCK:
+        c = _conn()
+        row = c.execute(
+            "SELECT repo, base_sha FROM session_bases WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+    return (row[0], row[1]) if row else None
+
+
+def set_session_base(session_id: str, repo: str, base_sha: str) -> bool:
+    """Record a session's baseline once. INSERT OR IGNORE: the first writer
+    wins, so a re-fired SessionStart can't move a baseline out from under a
+    session that has already made changes. Returns True if this call set it."""
+    if not (session_id and repo and base_sha):
+        return False
+    with _LOCK:
+        c = _conn()
+        cur = c.execute(
+            "INSERT OR IGNORE INTO session_bases "
+            "(session_id, repo, base_sha, created_at) VALUES (?,?,?,?)",
+            (session_id, repo, base_sha, int(time.time())),
+        )
+        c.commit()
+        return cur.rowcount > 0
 
 
 def prune_pane_sessions(alive_pane_ids: set[str]) -> int:

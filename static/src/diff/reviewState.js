@@ -1,0 +1,83 @@
+// Per-file review state for the Changes tab: which files you've collapsed and
+// which you've marked viewed.
+//
+// Keyed on (repo, path) rather than pane pid so the state follows the worktree
+// — switching panes in the same worktree, or flipping scope, keeps your place.
+//
+// The load-bearing rule is `viewed` expiring against the file's content
+// signature. The diff refreshes live; without expiry a file you marked viewed
+// would stay hidden even after Claude changed it again, which is exactly the
+// work you most need to see. Collapse is a manual view preference and does NOT
+// expire — if you folded a file away, it stays folded until you unfold it.
+import { signal } from "@preact/signals";
+
+// key -> { collapsed?: boolean, viewedSig?: string }
+export const diffReview = signal({});
+
+// NUL can't appear in a path, so it can't collide with repo/path content.
+// Shared by reviewKey and clearReview — deriving the prefix separately is
+// exactly how those two silently drifted apart once already.
+const SEP = "\u0000";
+
+export function reviewKey(repo, path) {
+  return `${repo}${SEP}${path}`;
+}
+
+/**
+ * Resolved state for one file, given the signature it currently has and the
+ * default fold for its kind (generated files start folded).
+ *
+ * `collapsed` is tri-state on purpose: an absent entry means "no opinion" and
+ * takes `defaultCollapsed`, while an explicit `false` means you deliberately
+ * expanded it and must win over the default — otherwise expanding the bundle
+ * would silently re-fold on the next refresh.
+ */
+export function fileState(review, repo, path, sig, defaultCollapsed = false) {
+  const e = review[reviewKey(repo, path)];
+  if (!e) return { collapsed: defaultCollapsed, viewed: false };
+  // Viewed only counts while the content is the content you viewed.
+  const viewed = !!e.viewedSig && e.viewedSig === sig;
+  const collapsed = e.collapsed === undefined ? defaultCollapsed : e.collapsed;
+  return { collapsed, viewed };
+}
+
+function patch(repo, path, fields) {
+  const key = reviewKey(repo, path);
+  const next = { ...diffReview.value };
+  const merged = { ...(next[key] || {}), ...fields };
+  // Only a genuinely opinion-free entry is dropped. An explicit collapsed
+  // false is an opinion — it's what overrides the generated-file default.
+  if (merged.collapsed === undefined && !merged.viewedSig) delete next[key];
+  else next[key] = merged;
+  diffReview.value = next;
+}
+
+export function setCollapsed(repo, path, collapsed) {
+  patch(repo, path, { collapsed });
+}
+
+/** Marking viewed also folds the file away — that's the point of the mark. */
+export function setViewed(repo, path, sig, viewed) {
+  patch(repo, path, {
+    viewedSig: viewed ? sig : undefined,
+    collapsed: !!viewed,
+  });
+}
+
+/** How many of `files` are currently viewed — for the header summary. */
+export function viewedCount(review, repo, files) {
+  return files.reduce(
+    (n, f) => n + (fileState(review, repo, f.path, f.sig).viewed ? 1 : 0),
+    0,
+  );
+}
+
+/** Forget every fold/viewed opinion for a repo — the "reset review" escape. */
+export function clearReview(repo) {
+  const prefix = `${repo}${SEP}`;
+  const next = {};
+  for (const [k, v] of Object.entries(diffReview.value)) {
+    if (!k.startsWith(prefix)) next[k] = v;
+  }
+  diffReview.value = next;
+}
