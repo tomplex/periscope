@@ -29,6 +29,7 @@ import { currentFilter, dragState, projects, railSelection, tracks, windows, wor
 import { track } from "../track.js";
 import { apiCall, targetQuery } from "../util.js";
 import { ActivitySection, AttentionTop } from "./AttentionSections.jsx";
+import { railHovered } from "./layoutFreeze.js";
 import { BranchRow, NewTabRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
 import { maxSeverity, mergeLiveAndPrefs, paneChip, trackLabel } from "./railTree.js";
 import { SectionHeader } from "./SectionHeader.jsx";
@@ -407,7 +408,15 @@ export function Rail() {
 
   // --- Tree ----------------------------------------------------------------
   return (
-    <aside id="rail" aria-label="tracks rail">
+    <aside
+      id="rail"
+      aria-label="tracks rail"
+      // Layout-freeze latch: while the pointer is in the rail, the attention
+      // sections hold their membership so a row can't move out from under the
+      // cursor mid-click. See layoutFreeze.js.
+      onMouseEnter={() => { railHovered.value = true; }}
+      onMouseLeave={() => { railHovered.value = false; }}
+    >
       <AttentionTop />
       <TrackFilterChips live={allLive} scope={trackScope} onScope={setTrackScope} />
       <SectionHeader

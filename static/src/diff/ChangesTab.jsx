@@ -8,6 +8,7 @@
 // about Edit/Write calls. Git also does the line matching, so there's no
 // diffing algorithm here; we render the hunks the server parsed.
 import { useEffect, useState } from "preact/hooks";
+import { openFileTab } from "../store.js";
 import { targetQuery } from "../util.js";
 import { withIntraline } from "./intraline.js";
 import { isGenerated, sortFiles } from "./noise.js";
@@ -74,6 +75,7 @@ function FileBlock({ file, repo, review, hl }) {
     fileState(review, repo, file.path, file.sig, generated);
   const open = !collapsed;
   const lang = langFor(file.path);
+  const openable = repo && file.status !== "deleted" && file.status !== "binary";
   const stat = (file.additions || 0) + (file.deletions || 0);
   return (
     <div class={`dfile dfile-${file.status}${viewed ? " is-viewed" : ""}${generated ? " is-generated" : ""}`}>
@@ -104,10 +106,23 @@ function FileBlock({ file, repo, review, hl }) {
       </div>
       {open && file.hunks.map((h, i) => (
         <div class="dhunk" key={i}>
-          <div class="dhunk-head">
+          {/* Opens the file at this hunk's line — reviewing and reading are the
+              same loop, and the diff already knows exactly where to land.
+              Absolute (repo + path) so it resolves no matter where the pane
+              has cd'd to. Deleted/binary files have nothing to open. */}
+          <button
+            type="button"
+            class="dhunk-head"
+            disabled={!openable}
+            title={openable ? `Open ${file.path}:${h.new_start}` : undefined}
+            onClick={() => openable && openFileTab({
+              path: `${repo}/${file.path}`,
+              line: h.new_start,
+            })}
+          >
             <span class="dhunk-range">@@ {h.new_start}</span>
             {h.header ? <span class="dhunk-sym">{h.header}</span> : null}
-          </div>
+          </button>
           {withIntraline(h.lines).map((l, j) => (
             <Line line={l} lang={lang} hl={hl} key={j} />
           ))}

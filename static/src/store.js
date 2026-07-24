@@ -93,8 +93,16 @@ export function openFileTab(entry) {
   if (!w) return;
   const pid = w.pid;
   const tabs = paneTabs.value[pid] || [];
-  if (!tabs.some((t) => t.path === entry.path)) {
+  const existing = tabs.find((t) => t.path === entry.path);
+  if (!existing) {
     paneTabs.value = { ...paneTabs.value, [pid]: [...tabs, { ...entry, target: tgt }] };
+  } else if (entry.line && entry.line !== existing.line) {
+    // Re-opening an open file at a DIFFERENT line (clicking a second hunk in
+    // the Changes tab) must move the jump target, or the click looks dead.
+    paneTabs.value = {
+      ...paneTabs.value,
+      [pid]: tabs.map((t) => (t.path === entry.path ? { ...t, line: entry.line } : t)),
+    };
   }
   paneActiveTab.value = { ...paneActiveTab.value, [pid]: `file:${entry.path}` };
   postTabMutation("open", { pid, path: entry.path, line: entry.line ?? null });
