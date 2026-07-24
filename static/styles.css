@@ -2973,12 +2973,21 @@ body.modal-open { overflow: hidden; }
 .dhunk-head {
   display: flex;
   gap: 10px;
+  width: 100%;
   padding: 3px 10px;
+  border: 0;
   background: color-mix(in oklch, var(--accent) 8%, transparent);
   color: var(--fg-3);
   font-family: var(--mono);
   font-size: 11px;
+  text-align: left;
+  cursor: pointer;
 }
+.dhunk-head:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
+  color: var(--fg-1);
+}
+.dhunk-head:disabled { cursor: default; }
 .dhunk-sym { color: var(--fg-2); }
 
 /* One row per line. Horizontal scroll rather than wrap: wrapping destroys

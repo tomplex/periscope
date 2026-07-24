@@ -127,6 +127,7 @@ function languageExt(name) {
 
 export function PreviewTabInner({ entry, active = true }) {
   const hostRef = useRef(null);
+  const editorRef = useRef(null);
   const [state, setState] = useState({ loading: true, error: null, content: null, lang: null, resolved: null });
   // Renderable langs (HTML, Markdown) default to "rendered"; everything
   // else goes to source. A `:NN` line jump always wins → source, since
@@ -218,8 +219,23 @@ export function PreviewTabInner({ entry, active = true }) {
         });
       }
     }
-    return () => editor.destroy();
+    editorRef.current = editor;
+    return () => { editorRef.current = null; editor.destroy(); };
   }, [state.loading, state.error, state.content, state.lang, effectiveView]);
+
+  // Line jumps AFTER mount — clicking another hunk for a file that's already
+  // open. Kept out of the mount effect so changing the target line re-scrolls
+  // instead of tearing down and rebuilding the whole editor.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const lineNo = Number(entry.line);
+    if (!editor || !Number.isFinite(lineNo) || lineNo <= 0) return;
+    const line = editor.state.doc.line(Math.min(lineNo, editor.state.doc.lines));
+    editor.dispatch({
+      selection: { anchor: line.from, head: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+    });
+  }, [entry.line]);
 
   async function reveal() {
     if (!target) return;
