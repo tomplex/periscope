@@ -20,7 +20,8 @@
 // a component tree (#6). The reorder splices run against currentMergedOrder()
 // (the same merged tree the render uses), not raw prefs. Two drag kinds:
 // "track" (top-level reorder) and "pane" (reorder within a track, or move a tab
-// to another track by POST /api/tracks/{id}/move-tab).
+// to another track by POST /api/tracks/move-tab?track_id=). The id is a QUERY
+// param, never a path segment — a repo-default id is a repo PATH (invariant #6).
 import { useRef, useState } from "preact/hooks";
 import { passesFilter } from "../filter.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
@@ -165,7 +166,7 @@ async function reorderTabs(dragChildKey, targetChildKey, trackKey, insertAfter) 
 // Move a tab into another track (cross-track pane drag). Re-tags server-side;
 // the next poll re-merges the pane under the destination track.
 async function moveTabToTrack(w, trackId) {
-  await apiCall("move tab", `/api/tracks/${encodeURIComponent(trackId)}/move-tab`, {
+  await apiCall("move tab", `/api/tracks/move-tab?track_id=${encodeURIComponent(trackId)}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pane_id: w.pane_id }),
   });
@@ -261,7 +262,7 @@ export function Rail() {
 
   // --- Track lifecycle -----------------------------------------------------
   async function renameTrack(trackId, next) {
-    await apiCall("rename track", `/api/tracks/${encodeURIComponent(trackId)}`, {
+    await apiCall("rename track", `/api/tracks?track_id=${encodeURIComponent(trackId)}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: next }),
     });
@@ -269,7 +270,7 @@ export function Rail() {
   // Dissolve is the safe default: archive the track, its tabs survive and fall
   // back to repo-default/loose on the next poll. No confirm — nothing is killed.
   async function dissolveTrack(trackId) {
-    await apiCall("dissolve track", `/api/tracks/${encodeURIComponent(trackId)}/dissolve`, {
+    await apiCall("dissolve track", `/api/tracks/dissolve?track_id=${encodeURIComponent(trackId)}`, {
       method: "POST",
     });
   }
@@ -288,7 +289,7 @@ export function Rail() {
       { okLabel: "Tear down", danger: true }
     );
     if (!ok) return;
-    await apiCall("teardown track", `/api/tracks/${encodeURIComponent(trackId)}/teardown`, {
+    await apiCall("teardown track", `/api/tracks/teardown?track_id=${encodeURIComponent(trackId)}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ delete_worktrees: false }),
     });

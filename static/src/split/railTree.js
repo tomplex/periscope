@@ -72,6 +72,7 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, t
   const liveTabsByTrack = {};            // trackId → [pid] (first-seen)
   const liveBranchesByTrack = {};        // trackId → [branch] (first-seen)
   const liveTabsByBranch = {};           // trackId → { branch: [pid] }
+  const branchOf = {};                   // pid → branch (buckets the merged order)
   for (const w of (windows || [])) {
     const t = w.track_id;
     if (!t) continue;  // backend guarantees a track_id; skip defensively
@@ -86,6 +87,7 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, t
     if (!liveBranchesByTrack[t].includes(branch)) liveBranchesByTrack[t].push(branch);
     if (!liveTabsByBranch[t][branch]) liveTabsByBranch[t][branch] = [];
     if (!liveTabsByBranch[t][branch].includes(w.pid)) liveTabsByBranch[t][branch].push(w.pid);
+    branchOf[w.pid] = branch;
   }
 
   // Empty goal tracks join the tree alongside live membership (see header).
@@ -126,7 +128,17 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, t
     if (branches.length >= 2) {
       branchesByTrack[t] = branches;
       tabsByBranch[t] = {};
-      for (const b of branches) tabsByBranch[t][b] = liveTabsByBranch[t][b] || [];
+      for (const b of branches) tabsByBranch[t][b] = [];
+      // Bucket the MERGED flat order, not the raw live order: a multi-branch
+      // track renders from tabsByBranch, so taking live order here threw away
+      // the pref that a drag had just written — the row snapped back on the
+      // next poll, and only in multi-branch tracks (single-branch renders flat
+      // from tabsByTrack, which honors the pref). Reported as tabs not landing
+      // where they were dropped.
+      for (const pid of tabsByTrack[t]) {
+        const b = branchOf[pid];
+        if (tabsByBranch[t][b]) tabsByBranch[t][b].push(pid);
+      }
     } else {
       branchesByTrack[t] = [];  // single-branch → flat render from tabsByTrack
     }

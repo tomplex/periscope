@@ -348,7 +348,7 @@ export function BranchRow({
 // track renders ⧉ and carries an action menu (⋯ toggles a small popover) —
 // dissolve [safe default — POSTs /dissolve, tabs survive] and tear down
 // [destructive — the caller confirms against the kill list from /teardown].
-// The catchalls render 🗀 and carry no menu. Rename POSTs PATCH /api/tracks/{id}.
+// The catchalls render 🗀 and carry no menu. Rename POSTs PATCH /api/tracks?track_id=.
 export function TrackRow({
   kind, label, collapsed, rolledUp, dim, onToggle, onRename, onDissolve, onTeardown, dragProps, dropPos,
 }) {

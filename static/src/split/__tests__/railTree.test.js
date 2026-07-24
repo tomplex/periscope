@@ -91,6 +91,32 @@ describe("mergeLiveAndPrefs — track grouping", () => {
     expect(m.branchesByTrack.tk_a).toEqual(["feat-x", "master"]);  // pref first
   });
 
+  it("branch sub-clusters honor the pref tab order", () => {
+    // A multi-branch track renders from tabsByBranch, which used to be built
+    // from raw poll order — so a drag inside a sub-cluster wrote the pref and
+    // then snapped back on the next poll. Single-branch tracks render flat
+    // from tabsByTrack and always worked, which is what made it feel random.
+    const wins = [
+      win({ pid: "a", track_id: "tk_a", branch: "master" }),
+      win({ pid: "b", track_id: "tk_a", branch: "master" }),
+      win({ pid: "c", track_id: "tk_a", branch: "feat-x" }),
+    ];
+    const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: ["b", "a", "c"] } });
+    expect(m.tabsByTrack.tk_a).toEqual(["b", "a", "c"]);
+    expect(m.tabsByBranch.tk_a.master).toEqual(["b", "a"]);   // pref, not poll order
+    expect(m.tabsByBranch.tk_a["feat-x"]).toEqual(["c"]);
+  });
+
+  it("a pane new since the last pref still lands in its branch bucket", () => {
+    const wins = [
+      win({ pid: "a", track_id: "tk_a", branch: "master" }),
+      win({ pid: "c", track_id: "tk_a", branch: "feat-x" }),
+      win({ pid: "new", track_id: "tk_a", branch: "master" }),
+    ];
+    const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: ["a", "c"] } });
+    expect(m.tabsByBranch.tk_a.master).toEqual(["a", "new"]);  // appended, not dropped
+  });
+
   it("a window missing branch is bucketed without crashing", () => {
     const wins = [
       win({ pid: "a", track_id: "tk_a", branch: "master" }),
