@@ -80,11 +80,32 @@ def config_dir() -> Path:
     return Path(base) / "periscope"
 
 
+def instance_file(name: str) -> Path:
+    """Path to a per-instance persistent file under `config_dir()`.
+
+    A dev instance gets its OWN file (`state-dev.json`, `periscope-dev.db`).
+    Both stores are read wholesale into memory at boot and written back
+    wholesale, so two instances sharing one file is last-writer-wins: a dev
+    server started at T silently reverts every prod change made after T, with
+    no error on either side. Observed 2026-07-23 — a dev server on :8766
+    reverted prod's state.json repeatedly over several hours, undoing edits
+    that had been verified correct seconds earlier.
+
+    Dev already gets its own port and skips the MCP socket; the persistent
+    stores were the last shared mutable resource. Reads `DEV` at call time so
+    tests that monkeypatch `config.DEV` observe the switch.
+    """
+    if DEV:
+        stem, dot, ext = name.partition(".")
+        return config_dir() / f"{stem}-dev{dot}{ext}"
+    return config_dir() / name
+
+
 # Activity store (periscope/activity.py). Named generically — periscope.db,
 # not activity.db — because it is the destination for other persistent
 # state (prefs, projects) that may migrate out of state.json later; the
 # generic name avoids a future rename. Path mirrors store.py:_state_path.
-ACTIVITY_DB = config_dir() / "periscope.db"
+ACTIVITY_DB = instance_file("periscope.db")
 
 # --- bg commander (per-command `claude --bg` dispatch) ---
 def claude_bin() -> str:

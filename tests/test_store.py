@@ -289,3 +289,58 @@ def test_set_window_fields_none_deletes_key(clean_state):
     assert get_window("abc") == {"notes": "hello", "tags": ["a", "b"]}
     set_window_fields("abc", notes=None)
     assert get_window("abc") == {"tags": ["a", "b"]}
+
+
+# --- dev/prod state separation -----------------------------------------------
+# A dev instance sharing prod's state.json is last-writer-wins: both read the
+# file wholesale at boot and write it back wholesale, so a dev server started
+# at T silently reverts every prod change after T, with no error either side.
+
+def test_instance_file_is_plain_for_prod(tmp_xdg_home, monkeypatch):
+    from periscope import config
+    monkeypatch.setattr(config, "DEV", False)
+    assert config.instance_file("state.json").name == "state.json"
+    assert config.instance_file("periscope.db").name == "periscope.db"
+
+
+def test_instance_file_is_suffixed_for_dev(tmp_xdg_home, monkeypatch):
+    from periscope import config
+    monkeypatch.setattr(config, "DEV", True)
+    assert config.instance_file("state.json").name == "state-dev.json"
+    assert config.instance_file("periscope.db").name == "periscope-dev.db"
+
+
+def test_dev_and_prod_state_paths_never_collide(tmp_xdg_home, monkeypatch):
+    from periscope import config
+    from periscope.store import _state_path
+    monkeypatch.setattr(config, "DEV", False)
+    prod = _state_path()
+    monkeypatch.setattr(config, "DEV", True)
+    assert _state_path() != prod
+
+
+def test_dev_state_seeds_from_prod_once(tmp_xdg_home, monkeypatch):
+    from periscope import config
+    from periscope.store import _seed_dev_state
+    monkeypatch.setattr(config, "DEV", True)
+    cfg = config.config_dir(); cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "state.json").write_text('{"version": 2, "marker": "prod"}')
+    dev = cfg / "state-dev.json"
+
+    _seed_dev_state(dev)
+    assert json.loads(dev.read_text())["marker"] == "prod"
+
+    # Second boot must NOT re-copy — dev has diverged by then.
+    dev.write_text('{"version": 2, "marker": "dev-edit"}')
+    _seed_dev_state(dev)
+    assert json.loads(dev.read_text())["marker"] == "dev-edit"
+
+
+def test_dev_state_seed_is_noop_for_prod(tmp_xdg_home, monkeypatch):
+    from periscope import config
+    from periscope.store import _seed_dev_state
+    monkeypatch.setattr(config, "DEV", False)
+    cfg = config.config_dir(); cfg.mkdir(parents=True, exist_ok=True)
+    target = cfg / "state.json"
+    _seed_dev_state(target)
+    assert not target.exists()

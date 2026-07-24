@@ -52,12 +52,14 @@ Full state read (rarely needed, mostly for /api/prefs):
 
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
 from typing import TypedDict, cast
 
-from periscope.config import CLAUDE_EXEC, config_dir
+from periscope import config
+from periscope.config import CLAUDE_EXEC, instance_file
 from periscope.log import log
 
 
@@ -89,7 +91,9 @@ class Command(TypedDict):
 
 
 def _state_path() -> Path:
-    return config_dir() / "state.json"
+    # instance_file, not config_dir: a dev instance writes state-dev.json so it
+    # can never revert prod's state (see config.instance_file).
+    return instance_file("state.json")
 
 
 MAIN_KEY_LITERAL = "__main__"
@@ -107,11 +111,31 @@ _STATE_DEFAULTS: dict = {
 }
 
 
+def _seed_dev_state(path: Path) -> None:
+    """One-time copy of prod's state.json into a fresh dev state file.
+
+    Dev writes its own file (see config.instance_file), so without this a dev
+    instance boots to an empty dashboard — no projects, no rail order. Copies
+    only when the dev file is absent; after that the two diverge freely and
+    dev never writes back. No-op outside dev."""
+    if not config.DEV or path.exists():
+        return
+    prod = config.config_dir() / "state.json"
+    if not prod.exists():
+        return
+    try:
+        shutil.copyfile(prod, path)
+        log.info("seeded %s from prod state.json", path.name)
+    except OSError as e:
+        log.warning("dev state seed failed (%s); starting empty", e)
+
+
 def _load_state() -> dict:
     """Read state.json. On parse failure rename to .corrupt-<ts> and return
     defaults — the next save writes a fresh valid file."""
     global _MIGRATION_RAN_THIS_LOAD
     path = _state_path()
+    _seed_dev_state(path)
     if not path.exists():
         data = json.loads(json.dumps(_STATE_DEFAULTS))
         data, _migrated = _migrate_v1_to_v2(data)

@@ -755,7 +755,28 @@ Periscope runs in two flavors:
 - **Dev** — runs in a worktree on port 8766. This is where edits and
   iteration happen. Browse at http://localhost:8766/. Dev periscope doesn't
   bind `/tmp/periscope-mcp.sock` — Claude's channels always talk to prod on
-  8765.
+  8765 — and it writes its OWN persistent stores: `state-dev.json` +
+  `periscope-dev.db` (see `config.instance_file`). `state-dev.json` is
+  seeded once from prod's on first boot so the dev dashboard isn't empty;
+  after that the two never touch again.
+
+**Never let two instances share a persistent store.** Both `state.json` and
+`periscope.db` are read wholesale into memory at boot and written back
+wholesale, so sharing one file is last-writer-wins: a dev server started at T
+silently reverts every prod change made after T, with no error on either side.
+This cost hours on 2026-07-23 — a dev server on :8766 repeatedly reverted
+prod's `state.json`, undoing edits that had been verified correct seconds
+before. If you add another persistent store, route it through
+`config.instance_file()`.
+
+Corollary for anything that edits `state.json` by hand: **the running server
+will clobber you.** It holds `_STATE` in memory and rewrites the whole file
+(observed within 8s). Prefer the API (`/api/prefs/*`). If you must edit the
+file: stop the server, poll until the *specific* process is gone — `bin/periscope
+stop` returns before the process exits, and it has twice ignored SIGTERM and
+lingered (once 20s, once 3+ min hung in teardown with the port already
+released) — then edit, then start. Verify AFTER a delay, not just immediately;
+a clean read seconds after a restart proves nothing.
 
 This repo works in worktrees, which is the standing instruction that
 sanctions `EnterWorktree` here. Use the built-in tools — never
