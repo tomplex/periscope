@@ -19,9 +19,9 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useEffect, useRef, useState } from "preact/hooks";
+import { ChangesTab } from "../diff/ChangesTab.jsx";
 import { Inspector } from "../inspector/Inspector.jsx";
 import { getDetailMode, setDetailMode } from "../prefs.js";
-import { ChangesTab } from "../diff/ChangesTab.jsx";
 import { PreviewTab } from "../preview/PreviewTab.jsx";
 import {activeTarget, closeFileTab, openFileTab, paneActiveTab, 
   paneTabs, paneTranscript,railSelection, setActiveTab,
@@ -31,7 +31,7 @@ import { Terminal } from "../terminal/Terminal.jsx";
 import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
 import { isTerminalAtBottom, scrollTerminalToBottom, setTerminalFileCallback, writeTerminalLine } from "../terminal/terminalCore.js";
 import { track } from "../track.js";
-import { apiCall, prStateMeta, prUrl, relTime, rewriteLgtmHost, targetQuery } from "../util.js";
+import { apiCall, memHint, prStateMeta, prUrl, relTime, rewriteLgtmHost, targetQuery } from "../util.js";
 import { TranscriptView } from "./Transcript.jsx";
 
 // Match the modal's /api/pane cadence so the two views feel identical.
@@ -260,6 +260,10 @@ function PaneHeader({ w, mode, onMode }) {
   }
   if (w.is_claude && w.context_pct != null) {
     parts.push(<><span class="hsep">·</span><span>{w.context_pct}%</span></>);
+  }
+  if (w.mem) {
+    const mh = memHint(w.mem);
+    parts.push(<><span class="hsep">·</span><span class={`header-mem ${mh.cls}`} title={mh.title}>↻ {mh.label}</span></>);
   }
   if (w.api_error) {
     parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);

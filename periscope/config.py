@@ -40,6 +40,14 @@ MANAGED_SESSION = "periscope"
 # reintroduce the channel-less-spawn bug.
 CLAUDE_EXEC = "claude --dangerously-load-development-channels server:periscope"
 
+# Claude cycle-hint thresholds (rail ↻ chip): red when a pane's claude RSS
+# crosses BAD, amber at WARN rss or WARN age. Healthy claudes idle around
+# 0.3–0.6GB; the leak class that motivated this shows up as multi-GB RSS on
+# multi-day processes.
+MEM_BAD_RSS_KB = 4 * 1024 * 1024   # 4GB
+MEM_WARN_RSS_KB = 2 * 1024 * 1024  # 2GB
+MEM_WARN_AGE_S = 3 * 86400         # 3 days
+
 
 def claude_exec() -> str:
     return os.environ.get("PERISCOPE_CLAUDE_EXEC", CLAUDE_EXEC)

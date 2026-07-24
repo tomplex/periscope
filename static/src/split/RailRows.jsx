@@ -16,7 +16,7 @@
 // <input>; Enter/blur commit, Escape cancels. A `settled` guard reproduces the
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { prStateMeta, prUrl, relTime } from "../util.js";
+import { memHint, prStateMeta, prUrl, relTime } from "../util.js";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
 // quiet) and the one-liner no longer reflects "now".
@@ -151,6 +151,7 @@ export function PaneRow({
     w.status_at && Math.floor(Date.now() / 1000) - w.status_at > STATUS_STALE_S;
   const model = shortModel(w.model);
   const prHref = w.pr ? prUrl(w.repo_slug, w.pr) : null;
+  const mh = memHint(w.mem);  // cycle-hint: server sends w.mem only past thresholds
 
   // PR + Linear as clickable chips, shared between the compact line-2 strip and
   // the expanded footer (the link just relocates as the card grows). stop-prop
@@ -197,6 +198,7 @@ export function PaneRow({
             title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
           >🔥</span>
         )}
+        {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
         {/* At-rest pinned flag — the hover actions take no width, so this keeps
             the "this tab is pinned" signal visible without one. Hidden on hover
             (the real toggle is in the action overlay). */}

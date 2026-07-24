@@ -35,7 +35,9 @@ _STATE_MAP = {"busy": "working", "waiting": "needs-input", "idle": "idle"}
 # both are built once and reused for the brief window a single poll spans.
 _CACHE_TTL_S = 1.0
 _index_cache: tuple[float, dict] | None = None        # (built_at, {sid: file})
-_claude_pids_cache: tuple[float, set[int]] | None = None  # (built_at, {pid})
+# (built_at, {pid: (rss_kb, age_s)}) — one ps snapshot serves both pid
+# liveness (the key set) and the memory/uptime cycle-hint.
+_claude_procs_cache: tuple[float, dict[int, tuple[int, int]]] | None = None
 
 
 def _build_index() -> dict:
@@ -65,34 +67,82 @@ def _index() -> dict:
     return idx
 
 
-def _live_claude_pids() -> set[int]:
-    """PIDs of running `claude` processes, snapshotted once per poll. Guards
-    against honoring a session file whose process has exited or whose pid was
-    recycled by something else. `comm` is the full executable path; claude's
-    launcher (`.../bin/claude`) and versioned binary
-    (`.../share/claude/versions/<v>`) both contain "claude"."""
-    global _claude_pids_cache
+def parse_etime(s: str) -> int:
+    """ps `etime` ([[dd-]hh:]mm:ss) → seconds; 0 on any malformed input."""
+    s = s.strip()
+    days = 0
+    if "-" in s:
+        d, _, s = s.partition("-")
+        try:
+            days = int(d)
+        except ValueError:
+            return 0
+    parts = s.split(":")
+    if not 2 <= len(parts) <= 3:
+        return 0
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return 0
+    while len(nums) < 3:
+        nums.insert(0, 0)
+    h, m, sec = nums
+    return ((days * 24 + h) * 60 + m) * 60 + sec
+
+
+def _claude_procs() -> dict[int, tuple[int, int]]:
+    """{pid: (rss_kb, age_s)} of running `claude` processes, snapshotted once
+    per poll. The key set guards against honoring a session file whose process
+    has exited or whose pid was recycled; rss/etime feed the memory cycle-hint.
+    `comm` is the full executable path; claude's launcher (`.../bin/claude`)
+    and versioned binary (`.../share/claude/versions/<v>`) both contain
+    "claude". comm may itself contain spaces, hence maxsplit=3."""
+    global _claude_procs_cache
     now = time.time()
-    if _claude_pids_cache and now - _claude_pids_cache[0] < _CACHE_TTL_S:
-        return _claude_pids_cache[1]
-    pids: set[int] = set()
+    if _claude_procs_cache and now - _claude_procs_cache[0] < _CACHE_TTL_S:
+        return _claude_procs_cache[1]
+    procs: dict[int, tuple[int, int]] = {}
     try:
         out = subprocess.run(
-            ["ps", "-axo", "pid=,comm="],
+            ["ps", "-axo", "pid=,rss=,etime=,comm="],
             capture_output=True, text=True, timeout=5,
         ).stdout
         for line in out.splitlines():
-            line = line.strip()
-            if not line:
+            parts = line.split(None, 3)
+            if len(parts) != 4:
                 continue
-            pid_s, _, comm = line.partition(" ")
+            pid_s, rss_s, etime, comm = parts
             if "claude" in comm.lower():
                 with contextlib.suppress(ValueError):
-                    pids.add(int(pid_s))
+                    procs[int(pid_s)] = (int(rss_s), parse_etime(etime))
     except (OSError, subprocess.SubprocessError):
         pass
-    _claude_pids_cache = (now, pids)
-    return pids
+    _claude_procs_cache = (now, procs)
+    return procs
+
+
+def _live_claude_pids() -> set[int]:
+    return set(_claude_procs())
+
+
+def claude_proc_for(sid: str | None) -> dict | None:
+    """Process stats for a sessionId's claude: {"pid", "rss_kb", "age_s"}, or
+    None when unmapped or not a live claude. Measurement, not state — applies
+    even when the status is one session_state_for doesn't trust (a bloated
+    claude deserves the cycle-hint regardless of what it's doing)."""
+    if not sid:
+        return None
+    d = _index().get(sid)
+    if not d:
+        return None
+    try:
+        pid = int(d.get("pid"))
+    except (TypeError, ValueError):
+        return None
+    info = _claude_procs().get(pid)
+    if info is None:
+        return None
+    return {"pid": pid, "rss_kb": info[0], "age_s": info[1]}
 
 
 def session_state_for(sid: str | None) -> dict | None:

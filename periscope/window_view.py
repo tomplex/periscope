@@ -15,6 +15,7 @@ _STATE_LOCK acquisition for efficiency.
 
 
 from periscope.channels import channel_state_for
+from periscope.config import MEM_BAD_RSS_KB, MEM_WARN_AGE_S, MEM_WARN_RSS_KB
 from periscope.git_pr import (
     cached_git_state,
     cached_linked_pr_state,
@@ -28,7 +29,7 @@ from periscope.panes import (
     smooth_is_claude,
     smooth_spinner,
 )
-from periscope.session_status import session_state_for
+from periscope.session_status import claude_proc_for, session_state_for
 from periscope.store import get_window
 from periscope.tmux import capture
 from periscope.tracks import resolve_track_for_window, track_kind, track_label
@@ -53,6 +54,24 @@ from periscope.worktrees import affiliation
 _view_cache: dict[tuple[str, str], dict] = {}
 
 _QUIET_STATES = ("idle", "shell")
+
+
+def mem_signal(proc: dict | None) -> dict | None:
+    """Cycle-hint for a claude process, from claude_proc_for's stats dict:
+    "bad" at ≥MEM_BAD_RSS_KB, "warn" at ≥MEM_WARN_RSS_KB or ≥MEM_WARN_AGE_S,
+    None otherwise — None renders nothing, so a healthy pane costs no rail
+    space. Policy lives here (config thresholds); measurement stays in
+    session_status, which is a stdlib-only leaf that can't import config."""
+    if not proc:
+        return None
+    rss, age = proc["rss_kb"], proc["age_s"]
+    if rss >= MEM_BAD_RSS_KB:
+        tier = "bad"
+    elif rss >= MEM_WARN_RSS_KB or age >= MEM_WARN_AGE_S:
+        tier = "warn"
+    else:
+        return None
+    return {"tier": tier, "rss_gb": round(rss / (1024 * 1024), 1), "age_s": age}
 
 
 def build_window_view(
@@ -118,7 +137,8 @@ def build_window_view(
     # through to the scraped state for shell/unknown status or unmapped panes.
     # A mapped live session is also proof the pane IS Claude (a dialog that
     # blanks the bottom status line no longer flips the card to "shell").
-    sess = session_state_for(session_id_for_pane(w.get("pane_id", "")))
+    sid = session_id_for_pane(w.get("pane_id", ""))
+    sess = session_state_for(sid)
     if sess:
         parsed["is_claude"] = True
         parsed["state"] = sess["state"]
@@ -201,6 +221,7 @@ def build_window_view(
         "focused_at": stamps["focused_at"],
         "acted_at": acked,
         "completed_at": completed,
+        "mem": mem_signal(claude_proc_for(sid)),
         "channel_attached": channel["attached"],
         "channel_unread": channel["unread"],
         "channel_alerts": channel["alerts"],

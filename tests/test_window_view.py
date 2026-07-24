@@ -379,3 +379,31 @@ def test_window_view_drops_dead_project_workspace_fields(mocker, clean_state, fr
     assert "project_name" not in view
     assert "project_archived" not in view
     assert "track_id" in view
+
+
+# ── mem_signal: cycle-hint tiers from claude process stats ───────────────
+
+def test_mem_signal_none_when_healthy():
+    from periscope.window_view import mem_signal
+    assert mem_signal(None) is None
+    assert mem_signal({"pid": 1, "rss_kb": 600_000, "age_s": 3600}) is None
+
+
+def test_mem_signal_warn_on_rss():
+    from periscope.window_view import mem_signal
+    out = mem_signal({"pid": 1, "rss_kb": 2 * 1024 * 1024, "age_s": 60})
+    assert out == {"tier": "warn", "rss_gb": 2.0, "age_s": 60}
+
+
+def test_mem_signal_warn_on_age_alone():
+    from periscope.window_view import mem_signal
+    out = mem_signal({"pid": 1, "rss_kb": 500_000, "age_s": 3 * 86400})
+    assert out["tier"] == "warn"
+    assert out["rss_gb"] == 0.5
+
+
+def test_mem_signal_bad_overrides_warn():
+    from periscope.window_view import mem_signal
+    out = mem_signal({"pid": 1, "rss_kb": 4_400_000, "age_s": 60})
+    assert out["tier"] == "bad"
+    assert out["rss_gb"] == 4.2
