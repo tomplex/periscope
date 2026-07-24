@@ -57,11 +57,15 @@ def tracks_move_tab(track_id: str, body: MoveTabBody):
 @router.post("/api/tracks/{track_id}/dissolve")
 def tracks_dissolve(track_id: str):
     """Archive the track; its tabs survive and fall back to repo-default/loose
-    on the next resolve. Kills nothing."""
+    on the next resolve. Kills nothing. Refuses the loose/repo-default
+    catchalls (409), matching teardown."""
     from periscope import activity
     if track_id == tracks.LOOSE_KEY or activity.get_track(track_id) is None:
         raise HTTPException(404, f"no track {track_id!r}")
-    tracks.dissolve_track(track_id)
+    try:
+        tracks.dissolve_track(track_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
     return activity.get_track(track_id)
 
 

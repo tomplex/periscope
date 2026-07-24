@@ -78,6 +78,21 @@ def track_label(track_id: str) -> str:
     return os.path.basename(track_id.rstrip("/")) or track_id
 
 
+def track_kind(track_id: str) -> str:
+    """"loose" | "repo" | "goal" — which of the two catchalls a track is, or
+    neither. A repo-default track has id == repo (repo_default_track keys the
+    row id on the repo path); goal tracks have id="tk_<slug>" != repo. Both
+    catchalls refuse dissolve/teardown, so the rail hides their action menu —
+    a repo-default row otherwise offered a Tear down that only ever 409'd and
+    a Dissolve that archived a row `repo_default_track` immediately resolves
+    into again (get_track doesn't filter archived), i.e. a silent no-op.
+    An unknown id reads as "repo": hiding a menu is the safe direction."""
+    if track_id == LOOSE_KEY:
+        return "loose"
+    row = activity.get_track(track_id)
+    return "goal" if row and row.get("repo") != track_id else "repo"
+
+
 def create_track(*, name: str, repo: str | None = None) -> Track:
     tid = f"tk_{_slug(name)}"
     base, n = tid, 2
@@ -103,9 +118,16 @@ def move_pane(pane_id: str, track_id: str) -> None:
 
 def dissolve_track(track_id: str) -> None:
     """Remove the track; its tabs fall back to repo-default/loose on next
-    resolve. Nothing is killed. Archived so resolve's stale-tag guard fires."""
+    resolve. Nothing is killed. Archived so resolve's stale-tag guard fires.
+    Refuses a catchall (same guard as teardown_targets): a repo-default's tabs
+    fall back to the repo-default, so archiving it changes nothing visible —
+    `repo_default_track` only inserts when `get_track` is None, and that
+    doesn't filter archived, so the row keeps resolving. Silent no-op + a
+    zombie archived_at."""
     if track_id in (LOOSE_KEY,) or activity.get_track(track_id) is None:
         return
+    if track_kind(track_id) == "repo":
+        raise ValueError("refusing to dissolve a repo-default track")
     activity.archive_track(track_id, ts=int(time.time()))
 
 
@@ -118,11 +140,7 @@ def teardown_targets(track_id: str, windows: list[dict]) -> list[tuple[str, str]
     row = activity.get_track(track_id)
     if row is None:
         raise ValueError(f"no such track: {track_id}")
-    # INVARIANT: a repo-default track has id == repo (repo_default_track keys the
-    # row id on the repo path). Goal tracks have id="tk_<slug>" != repo. So
-    # id == repo uniquely identifies the catchall — never mass-kill it. If
-    # repo_default_track's id scheme ever changes, revisit this guard.
-    if row.get("repo") == track_id:
+    if track_kind(track_id) == "repo":
         raise ValueError("refusing to tear down a repo-default track")
     out: list[tuple[str, str]] = []
     for w in windows:

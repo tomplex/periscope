@@ -31,7 +31,7 @@ from periscope.panes import (
 from periscope.session_status import session_state_for
 from periscope.store import get_window
 from periscope.tmux import capture
-from periscope.tracks import resolve_track_for_window, track_label
+from periscope.tracks import resolve_track_for_window, track_kind, track_label
 from periscope.turns import session_id_for_pane
 from periscope.worktrees import affiliation
 
@@ -215,6 +215,11 @@ def build_window_view(
         # are gone; the frontend groups purely by track_id.)
         "track_id": track_id,
         "track_name": track_label(track_id),
+        # "loose" | "repo" | "goal" — the rail hides lifecycle actions on the
+        # two catchalls. Server-derived: a repo-default's name is
+        # basename(repo), which collides with the goal track a user is most
+        # likely to name after the repo, so the label can't carry this.
+        "track_kind": track_kind(track_id),
         "worktree_affiliation": aff,
     }
     return view, stamp_update

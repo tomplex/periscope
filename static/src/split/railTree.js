@@ -152,6 +152,22 @@ export function trackLabel(trackId, windows, tracks = []) {
   return parts[parts.length - 1] || trackId;
 }
 
+// "loose" | "repo" | "goal" for a track row — mirrors trackLabel's lookup
+// order. The backend ships `track_kind` on every window; an EMPTY track has no
+// window to read from, so it derives from the registry row (a repo-default
+// track has id === repo). Unknown reads as "repo": the rail hides lifecycle
+// actions on the catchalls, and hiding a menu is the safe direction.
+export function trackKind(trackId, windows, tracks = []) {
+  if (trackId === "loose") return "loose";
+  for (const w of (windows || [])) {
+    if (w.track_id === trackId && w.track_kind) return w.track_kind;
+  }
+  for (const t of (tracks || [])) {
+    if (t.id === trackId) return t.repo === t.id ? "repo" : "goal";
+  }
+  return "repo";
+}
+
 // ~-relative path for chips. Pure string transform (the frontend doesn't
 // know $HOME): collapses a leading /Users/<u> or /home/<u>.
 function tildify(p) {

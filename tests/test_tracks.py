@@ -53,6 +53,34 @@ def test_track_label_prefers_row_name_then_basename():
     assert tracks.track_label("/repos/unseen") == "unseen"
 
 
+def test_track_kind(clean_state):
+    """The rail's only signal for which row is a catchall — a repo-default's
+    label is basename(repo), identical to a goal track named after the repo."""
+    activity.insert_track({"id": "tk_myproj", "name": "myproj", "repo": "/repos/myproj",
+                           "created_at": 1, "archived_at": None})
+    tid = tracks.repo_default_track("/repos/myproj")
+    assert tracks.track_label(tid) == tracks.track_label("tk_myproj")  # collide
+    assert tracks.track_kind(tid) == "repo"
+    assert tracks.track_kind("tk_myproj") == "goal"
+    assert tracks.track_kind(tracks.LOOSE_KEY) == "loose"
+    # no row → "repo": the rail hides the menu rather than offering actions
+    # that refuse server-side
+    assert tracks.track_kind("/repos/unseen") == "repo"
+
+
+def test_dissolve_refuses_repo_default(clean_state):
+    """Archiving a repo-default is a silent no-op — repo_default_track only
+    inserts when get_track is None, and get_track doesn't filter archived, so
+    the row keeps resolving. Refuse it instead of leaving a zombie."""
+    tid = tracks.repo_default_track("/repos/myproj")
+    with pytest.raises(ValueError):
+        tracks.dissolve_track(tid)
+    assert activity.get_track(tid)["archived_at"] is None
+    goal = tracks.create_track(name="Ship It", repo="/repos/myproj")
+    tracks.dissolve_track(goal["id"])
+    assert activity.get_track(goal["id"])["archived_at"] is not None
+
+
 def test_teardown_targets_refuses_loose_and_repo_default(monkeypatch):
     monkeypatch.setattr(tracks, "_repo_for_window", lambda w: "/repos/fdy")
     tid = tracks.repo_default_track("/repos/fdy")

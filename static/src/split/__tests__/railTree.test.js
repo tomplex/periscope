@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeLiveAndPrefs, paneChip, trackLabel } from "../railTree.js";
+import { mergeLiveAndPrefs, paneChip, trackKind, trackLabel } from "../railTree.js";
 
 // Window factory. `track_id` is the backend-resolved grouping authority
 // (always present — repo-default fallback guarantees a value). `branch` is
@@ -140,6 +140,27 @@ describe("mergeLiveAndPrefs — empty goal tracks (registry rows)", () => {
       .toBe("live name");
     // no row, no window → basename fallback unchanged
     expect(trackLabel("/dev/myproj", [], [])).toBe("myproj");
+  });
+
+  it("trackKind separates a repo-default from a same-named goal track", () => {
+    // The reported bug: a goal track named after its repo renders the SAME
+    // label as that repo's default track, and both offered dissolve/teardown.
+    const rows = [
+      { id: "/dev/myproj", name: "myproj", repo: "/dev/myproj" },
+      { id: "tk_myproj", name: "myproj", repo: "/dev/myproj" },
+    ];
+    expect(trackLabel("/dev/myproj", [], rows)).toBe(trackLabel("tk_myproj", [], rows));
+    expect(trackKind("/dev/myproj", [], rows)).toBe("repo");
+    expect(trackKind("tk_myproj", [], rows)).toBe("goal");
+  });
+
+  it("trackKind prefers the window's server-derived kind, then the registry", () => {
+    expect(trackKind("tk_fresh", [win({ track_id: "tk_fresh", track_kind: "goal" })], [])).toBe("goal");
+    expect(trackKind("tk_fresh", [], [goal])).toBe("goal");
+    expect(trackKind("loose", [], [])).toBe("loose");
+    // unknown id → "repo", so the rail hides the menu rather than offering
+    // actions that refuse server-side
+    expect(trackKind("/dev/unseen", [], [])).toBe("repo");
   });
 });
 

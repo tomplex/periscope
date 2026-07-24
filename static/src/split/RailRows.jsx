@@ -343,18 +343,27 @@ export function BranchRow({
   );
 }
 
-// Top-level track row (the SOLE grouping primitive — replaces RepoRow). Carries
-// an action menu (▾ toggles a small popover): dissolve [safe default — POSTs
-// /dissolve, tabs survive] and tear down [destructive — the caller confirms
-// against the kill list from /teardown]. Rename POSTs PATCH /api/tracks/{id}.
+// Top-level track row (the SOLE grouping primitive — replaces RepoRow). `kind`
+// is "loose" | "repo" | "goal" (server-derived, see tracks.track_kind): a goal
+// track renders ⧉ and carries an action menu (⋯ toggles a small popover) —
+// dissolve [safe default — POSTs /dissolve, tabs survive] and tear down
+// [destructive — the caller confirms against the kill list from /teardown].
+// The catchalls render 🗀 and carry no menu. Rename POSTs PATCH /api/tracks/{id}.
 export function TrackRow({
-  trackId, label, collapsed, rolledUp, dim, onToggle, onRename, onDissolve, onTeardown, dragProps, dropPos,
+  kind, label, collapsed, rolledUp, dim, onToggle, onRename, onDissolve, onTeardown, dragProps, dropPos,
 }) {
   const chev = collapsed ? "▸" : "▾";
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
   const [menuOpen, setMenuOpen] = useState(false);
-  const isLoose = trackId === "loose";
+  // BOTH catchalls (loose + repo-default) refuse dissolve AND teardown
+  // server-side, so neither gets an action menu. A repo-default row used to
+  // offer both: Tear down 409'd, Dissolve archived a row that
+  // repo_default_track resolves into anyway — a silent no-op.
+  const isCatchall = kind === "loose" || kind === "repo";
+  // A repo-default's label is basename(repo), which is exactly what a goal
+  // track for that repo tends to be named — the icon is the only distinction.
+  const icon = kind === "goal" ? "⧉" : "🗀";
 
   // Close the menu on any outside click / Escape while it's open.
   useEffect(() => {
@@ -378,13 +387,11 @@ export function TrackRow({
       {...dragProps}
     >
       <span class="rail-chev">{chev}</span>
-      <span class="rail-icon icon-effort">⧉</span>
-      <RailLabel label={label} kind="track" renameable={!isLoose} onCommit={onRename} />
+      <span class="rail-icon icon-effort" title={kind === "goal" ? "track" : "project"}>{icon}</span>
+      <RailLabel label={label} kind="track" renameable={kind !== "loose"} onCommit={onRename} />
       <span class="repo-rule" aria-hidden="true"></span>
       <span class={statusDotClass(rolledUp)}></span>
-      {/* Loose is a backend catchall — no lifecycle actions (dissolve/teardown
-          both refuse it server-side), so omit the menu entirely. */}
-      {!isLoose && (
+      {!isCatchall && (
         <span class="track-menu">
           <button
             class="rail-track-menu-btn"

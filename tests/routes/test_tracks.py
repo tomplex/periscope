@@ -108,6 +108,15 @@ def test_teardown_refuses_repo_default_409():
     assert r.status_code == 409
 
 
+def test_dissolve_refuses_repo_default_409():
+    # Dissolving a catchall is a silent no-op (its tabs fall back to it), and
+    # the archived row keeps resolving — 409 instead, matching teardown.
+    from periscope import tracks
+    repo = "fdy-dissolve"
+    tracks.repo_default_track(repo)
+    assert client.post(f"/api/tracks/{repo}/dissolve").status_code == 409
+
+
 def test_teardown_missing_404():
     r = client.post("/api/tracks/tk_nope/teardown", json={"delete_worktrees": False})
     assert r.status_code == 404

@@ -31,7 +31,7 @@ import { apiCall, targetQuery } from "../util.js";
 import { ActivitySection, AttentionTop } from "./AttentionSections.jsx";
 import { railHovered } from "./layoutFreeze.js";
 import { BranchRow, NewTabRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
-import { maxSeverity, mergeLiveAndPrefs, paneChip, trackLabel } from "./railTree.js";
+import { maxSeverity, mergeLiveAndPrefs, paneChip, trackKind, trackLabel } from "./railTree.js";
 import { SectionHeader } from "./SectionHeader.jsx";
 
 // The branch label used in railTree's flat-fallback bucket for a window with no
@@ -443,7 +443,7 @@ export function Rail() {
         return (
           <RailFragment key={trackKeyStr}>
             <TrackRow
-              trackId={trackId}
+              kind={trackKind(trackId, live, allTracks)}
               label={label}
               collapsed={trackCollapsed}
               rolledUp={trackRolledUp}

@@ -64,4 +64,29 @@ describe("<Rail> render smoke", () => {
     const newTabs = html.split("New tab").length - 1;
     expect(newTabs).toBe(2);                 // one per track, incl. the empty one
   });
+
+  it("a repo-default and a same-named goal track differ by icon and menu", () => {
+    // Reproduces the reported rail: two rows both labeled "sts2-seed-finder",
+    // one the repo's catchall and one a goal track. Only the goal track gets
+    // the ⋯ menu — the catchall's dissolve/teardown both fail server-side.
+    projects.value = [];
+    tracks.value = [];
+    const w = (over) => ({
+      pid: "x", session: "managed", index: 0, target: "managed:0", name: "claude",
+      is_claude: true, state: "idle", track_name: "sts2-seed-finder",
+      repo_key: "/dev/sts2", repo_label: "sts2", branch: "master",
+      cwd: "/dev/sts2", worktree_affiliation: aff("at-pin"), pane_id: "%1", ...over,
+    });
+    windows.value = [
+      w({ pid: "aa", track_id: "/dev/sts2", track_kind: "repo", pane_id: "%1" }),
+      w({ pid: "bb", track_id: "tk_sts2", track_kind: "goal", pane_id: "%2", index: 1 }),
+    ];
+
+    const html = render(<Rail />);
+
+    expect(html.split("sts2-seed-finder").length - 1).toBeGreaterThanOrEqual(2);  // labels collide
+    expect(html).toContain('title="project"');   // repo-default icon
+    expect(html).toContain('title="track"');     // goal-track icon
+    expect(html.split("rail-track-menu-btn").length - 1).toBe(1);  // goal track only
+  });
 });
