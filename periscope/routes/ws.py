@@ -158,8 +158,11 @@ async def ws_pane(
         #    can miss those few bytes.
         #    `-S -N` asks for N lines of scrollback; tmux clamps to the
         #    pane's history-limit.
+        # -N preserves trailing spaces; without it capture-pane strips them and
+        # the cursor row renders short while the cursor goes to tmux's true
+        # column, leaving a one-cell gap (see tmux_mirror._fire_reconcile).
         initial = await loop.run_in_executor(None, lambda: tmux(
-            "capture-pane", "-t", target, "-p", "-e", "-S", "-10000"))
+            "capture-pane", "-t", target, "-p", "-e", "-N", "-S", "-10000"))
         # capture-pane separates lines with \n AND appends one more \n
         # after the final line. Strip exactly that final terminator and
         # convert internal \n to \r\n so xterm wraps each line back to

@@ -321,6 +321,25 @@ These are the non-obvious behaviors worth preserving:
    Forgetting the carriage return staircases every line right by the
    previous line's length.
 
+   **Every `capture-pane` that feeds a paint needs `-N`.** By default tmux
+   strips trailing spaces, so a row whose content ends in whitespace renders
+   SHORT while the cursor is still placed at tmux's true column — one empty
+   cell between the text and the cursor. That is most of shell usage: every
+   space typed between words, and every idle prompt (a `PS1` ending `"$ "`).
+   Reported as "the cursor is one ahead of where typing lands, and I have to
+   remember to place it one ahead". Measured on a live pane: `cursor_x=59`
+   against a captured width of 58. `-N` pads to the pane width; the cost is
+   1.0–1.8× on real panes (~10KB), which is worth it. Two call sites:
+   `tmux_mirror._fire_reconcile` and the initial paint in `routes/ws.py`.
+
+   Two things this is NOT, both chased first: it is not a sampling race
+   between the body and cursor captures (that is real, and is why the cursor
+   is sampled first — but a race is intermittent, and this offset is
+   perfectly deterministic), and it is not emoji width (xterm needed the
+   unicode11 provider, see below, but fixing that alone left the gap intact).
+   When an offset is reproducible to the cell, look for an off-by-one in what
+   gets DRAWN, not for a race.
+
 5. **Multi-line input goes via tmux paste-buffer, then Enter via send-keys.**
    `send-keys` silently strips embedded newlines. There's a 100ms sleep
    between paste and Enter so TUIs (especially Claude Code) apply paste

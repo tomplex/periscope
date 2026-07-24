@@ -261,7 +261,7 @@ def test_cursor_is_sampled_before_the_body():
         m._fire_reconcile("%7")
         assert sent[0].startswith("display-message -p -t %7"), \
             "cursor must be sampled BEFORE the body, never after"
-        assert sent[1].startswith("capture-pane -p -e -t %7")
+        assert sent[1].startswith("capture-pane -p -e -N -t %7")
     asyncio.run(drive())
 
 
@@ -476,3 +476,24 @@ def test_two_subscribers_multiplex(monkeypatch):
         asyncio.run(drive())
     finally:
         _t("kill-server")
+
+
+def test_capture_preserves_trailing_spaces():
+    """capture-pane MUST use -N.
+
+    Without it tmux strips trailing spaces, so a row whose content ends in
+    whitespace renders short while the cursor is placed at tmux's true column
+    — one empty cell between the text and the cursor. That is most of shell
+    usage: every space typed between words, and every idle prompt (PS1 ends
+    "$ "). Reported as "the cursor is one ahead of where typing lands".
+    """
+    async def drive():
+        m = _SessionMirror("sess")
+        m._proc = object()
+        sent = []
+        m._send_command = lambda cmd, cb: (sent.append(cmd), m._reply_callbacks.append(cb))
+        m.subscribe("%7")
+        m._fire_reconcile("%7")
+        capture = next(c for c in sent if c.startswith("capture-pane"))
+        assert " -N " in f" {capture} ", f"capture-pane missing -N: {capture!r}"
+    asyncio.run(drive())

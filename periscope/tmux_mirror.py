@@ -422,7 +422,13 @@ class _SessionMirror:
         # with stuttering as it reconciles".
         self._send_command(
             f"display-message -p -t {pane_id} '{DISPLAY_FMT}'", on_display)
-        self._send_command(f"capture-pane -p -e -t {pane_id}", on_capture)
+        # -N preserves trailing spaces. WITHOUT it capture-pane strips them, so
+        # a row whose content ends in whitespace renders SHORT while the cursor
+        # is still placed at tmux's true column — one empty cell between the
+        # text and the cursor, every time. That is most of shell usage: every
+        # space typed between words, and every idle prompt (PS1 ends "$ ").
+        # Reported as "the cursor is one ahead of where typing lands".
+        self._send_command(f"capture-pane -p -e -N -t {pane_id}", on_capture)
 
     # -- teardown --
 
