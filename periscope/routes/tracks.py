@@ -5,6 +5,12 @@ Create / rename / move-tab (re-tag) / dissolve (kills nothing — tabs survive)
 opt-in, removes their git worktrees). The entity lives in periscope.tracks;
 the per-tab tag map lives in periscope.activity (pane_tracks table). Mirrors
 routes/workspaces.py + the destructive bits of routes/cleanup.py.
+
+The track id is a QUERY PARAM (`?id=`), never a path segment — a repo-default
+track's id IS its repo path, and Starlette rejects the %2F-encoded slashes
+before the handler runs. As a path param every write against a repo-default
+track 405'd: move-tab (dragging a tab into a project row), rename, dissolve,
+teardown. Same trap as session names — see CLAUDE.md invariant #6.
 """
 import os
 
@@ -33,7 +39,7 @@ class RenameBody(BaseModel):
     name: str
 
 
-@router.patch("/api/tracks/{track_id}")
+@router.patch("/api/tracks")
 def tracks_rename(track_id: str, body: RenameBody):
     if not tracks.rename_track(track_id, body.name):
         raise HTTPException(404, f"no track {track_id!r}")
@@ -45,7 +51,7 @@ class MoveTabBody(BaseModel):
     pane_id: str
 
 
-@router.post("/api/tracks/{track_id}/move-tab")
+@router.post("/api/tracks/move-tab")
 def tracks_move_tab(track_id: str, body: MoveTabBody):
     from periscope import activity
     if activity.get_track(track_id) is None:
@@ -54,7 +60,7 @@ def tracks_move_tab(track_id: str, body: MoveTabBody):
     return {"ok": True}
 
 
-@router.post("/api/tracks/{track_id}/dissolve")
+@router.post("/api/tracks/dissolve")
 def tracks_dissolve(track_id: str):
     """Archive the track; its tabs survive and fall back to repo-default/loose
     on the next resolve. Kills nothing. Refuses the loose/repo-default
@@ -73,7 +79,7 @@ class TeardownBody(BaseModel):
     delete_worktrees: bool = False
 
 
-@router.post("/api/tracks/{track_id}/teardown")
+@router.post("/api/tracks/teardown")
 def tracks_teardown(track_id: str, body: TeardownBody):
     """Kill every pane resolving to this track (by stable pane_id, reusing
     cleanup's kill path), optionally removing each killed pane's git worktree.
