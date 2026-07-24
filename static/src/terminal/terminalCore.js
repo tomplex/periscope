@@ -382,6 +382,22 @@ export function startLiveTerminal(target) {
   searchAddon = new SearchAddon.SearchAddon();
   term.loadAddon(searchAddon);
 
+  // Unicode 11 widths. xterm's BUILT-IN provider is Unicode 6, whose
+  // wcwidth falls through to 1 for everything above the BMP except the CJK
+  // extension planes — so every emoji is one cell wide. tmux uses a modern
+  // wcwidth and calls them two. Each emoji on a line therefore drifted the
+  // mirrored cursor one column left of where tmux (and the shell) think it
+  // is: with a 🐍 in the prompt, the block cursor rendered one cell past
+  // where typed text actually landed, permanently. Must match tmux, or the
+  // grid coordinates we're handed refer to a different screen than the one
+  // we drew.
+  try {
+    term.loadAddon(new Unicode11Addon.Unicode11Addon());
+    term.unicode.activeVersion = "11";
+  } catch (e) {
+    console.warn("[periscope] Unicode 11 widths unavailable; emoji will offset the cursor:", e);
+  }
+
   // Cmd+click on a `.md` path → add it as a document to the LGTM
   // session for this pane's repo. Path is resolved against the pane's
   // cwd server-side. Plain click on the underlined path does nothing
