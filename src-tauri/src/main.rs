@@ -48,8 +48,14 @@ fn main() {
                 .build()?;
             let view_submenu = SubmenuBuilder::new(handle, "View")
                 .item(
+                    // Shift+Cmd+R, NOT Cmd+R: a native menu accelerator is
+                    // consumed by the menu before the webview sees the key, so
+                    // binding Cmd+R here would make the in-app refresh
+                    // (static/src/keys.js — refresh the focused document or
+                    // repaint the pane mirror) permanently dead in the .app
+                    // while still working in a browser tab.
                     &MenuItemBuilder::with_id("reload", "Reload")
-                        .accelerator("CmdOrCtrl+R")
+                        .accelerator("Shift+CmdOrCtrl+R")
                         .build(handle)?,
                 )
                 .item(
