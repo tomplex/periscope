@@ -186,6 +186,13 @@ html, body {
 .rail-await.wait-stale  { color: var(--s-working); }
 .rail-await.wait-urgent { color: var(--s-danger); animation: await-pulse 1.6s ease-in-out infinite; }
 @keyframes await-pulse { 50% { opacity: .4; } }
+/* Delegation lineage — which pane spawned this one. Quiet by default: it is
+   orientation, not a status. Click reveals the lead. */
+.rail-lineage {
+  flex: 0 1 auto; min-width: 0; font-size: 10px; color: var(--fg-3);
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rail-lineage:hover { color: var(--fg-1); }
 
 /* Fallback single-pill (used when only the JSONL estimator has data). */
 .usage.usage-fallback {

@@ -149,3 +149,42 @@ describe("<Rail> awaiting-reply marker", () => {
     expect(render(<Rail />)).not.toContain("rail-await");
   });
 });
+
+describe("<Rail> delegation lineage", () => {
+  const paneWin = (over = {}) => ({
+    session: "managed", is_claude: true, state: "idle",
+    track_id: "/dev/myproj", track_name: "myproj", repo_key: "/dev/myproj",
+    repo_label: "myproj", branch: "master", cwd: "/dev/myproj",
+    worktree_affiliation: aff("at-pin"), ...over,
+  });
+
+  it("names the spawner on a delegated pane's row", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [
+      paneWin({ pid: "lead1", index: 0, target: "managed:0", name: "world-model-driver", pane_id: "%1" }),
+      paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2", spawned_by: "lead1" }),
+    ];
+    const html = render(<Rail />);
+    expect(html).toContain("rail-lineage");
+    expect(html).toContain("↳world-model-driver");
+  });
+
+  it("shows no lineage chip when the spawner is no longer live", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [
+      paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2", spawned_by: "gone" }),
+    ];
+    expect(render(<Rail />)).not.toContain("rail-lineage");
+  });
+
+  it("shows no lineage chip on a hand-created pane", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [
+      paneWin({ pid: "solo1", index: 0, target: "managed:0", name: "claude", pane_id: "%1" }),
+    ];
+    expect(render(<Rail />)).not.toContain("rail-lineage");
+  });
+});

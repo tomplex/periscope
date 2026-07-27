@@ -138,7 +138,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
 // sizes, so collapsing never loses what a pane is or how it's doing.
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
-  pinned, onTogglePin, awaitingSince,
+  pinned, onTogglePin, awaitingSince, spawnerName, onRevealSpawner,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
@@ -209,6 +209,15 @@ export function PaneRow({
             class={`rail-await wait-${waitTierCls}`}
             title={`asked you something ${relTime(awaitingSince)} ago and has had no reply since`}
           >⚠{relTime(awaitingSince)}</span>
+        )}
+        {/* Lineage: this pane was delegated to by another. stop-prop so the
+            chip reveals the lead instead of just selecting this row (#4). */}
+        {spawnerName && (
+          <span
+            class="rail-lineage"
+            title={`spawned by ${spawnerName} — click to reveal`}
+            onClick={(e) => { e.stopPropagation(); onRevealSpawner?.(); }}
+          >↳{spawnerName}</span>
         )}
         {/* At-rest pinned flag — the hover actions take no width, so this keeps
             the "this tab is pinned" signal visible without one. Hidden on hover

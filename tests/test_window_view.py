@@ -407,3 +407,39 @@ def test_mem_signal_bad_overrides_warn():
     out = mem_signal({"pid": 1, "rss_kb": 4_400_000, "age_s": 60})
     assert out["tier"] == "bad"
     assert out["rss_gb"] == 4.2
+
+
+def test_view_surfaces_spawned_by_lineage(mocker, clean_state):
+    """spawn_claude has recorded spawned_by since the tool shipped, but the
+    payload never carried it — so a chain of delegated sessions rendered as
+    unrelated tabs and the dashboard could not show A's work continuing in B."""
+    from periscope.window_view import build_window_view
+    pid = "d188cde1"
+    clean_state["windows"][pid] = {"spawned_by": "2c453c8c"}
+
+    mocker.patch(
+        "periscope.window_view.parse_pane",
+        return_value={"is_claude": True, "state": "idle", "spinner": None},
+    )
+    _stub_subsystems(mocker, pane_content="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
+
+    view, _ = build_window_view(_window(pid=pid), now_ts=1000)
+    assert view["spawned_by"] == "2c453c8c"
+
+
+def test_view_spawned_by_is_none_for_a_hand_created_pane(mocker, clean_state):
+    """The key must always be present so the client can join on it uniformly."""
+    from periscope.window_view import build_window_view
+    pid = "solo0001"
+    clean_state["windows"][pid] = {}
+
+    mocker.patch(
+        "periscope.window_view.parse_pane",
+        return_value={"is_claude": True, "state": "idle", "spinner": None},
+    )
+    _stub_subsystems(mocker, pane_content="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
+
+    view, _ = build_window_view(_window(pid=pid), now_ts=1000)
+    assert "spawned_by" in view and view["spawned_by"] is None

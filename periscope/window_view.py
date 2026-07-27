@@ -227,6 +227,11 @@ def build_window_view(
         "channel_alerts": channel["alerts"],
         "open_tabs": persisted.get("open_tabs") or [],
         "active_tab": persisted.get("active_tab") or "pane",
+        # Provenance: the handle of the pane that spawned this one (written by
+        # spawn_claude). Recorded since the tool shipped but never surfaced, so
+        # a chain of delegated sessions read as unrelated tabs — the dashboard
+        # could not show that pane A's work is continued by pane B.
+        "spawned_by": persisted.get("spawned_by"),
         "linked_linear": linked_linear,
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,
