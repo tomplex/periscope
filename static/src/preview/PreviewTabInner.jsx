@@ -24,11 +24,16 @@ function paneToken(target) {
 // segment-by-segment so '#' / '?' / spaces don't break URL parsing, but
 // '/' stays intact (the browser needs the real path structure for
 // sibling-asset resolution to work).
-function renderUrl(target, absPath) {
+// `v` is an auto-refresh cache-buster (the file's mtime). It must live in the
+// QUERY, not the path: relative sub-resource refs inside a rendered page strip
+// the query, so they still resolve to real sibling files rather than inheriting
+// a version segment that isn't part of any path.
+function renderUrl(target, absPath, v = null) {
   const encoded = absPath.split("/").map(encodeURIComponent).join("/");
   // absPath starts with '/'; the split produces a leading "" segment, so
   // the joined string already begins with '/' — no double-slash here.
-  return `/api/fs/render/${paneToken(target)}${encoded}`;
+  const base = `/api/fs/render/${paneToken(target)}${encoded}`;
+  return v ? `${base}?v=${encodeURIComponent(v)}` : base;
 }
 
 // Resolve doc-relative URLs (image src, link href) against the directory of
@@ -125,9 +130,26 @@ function languageExt(name) {
   }
 }
 
+// How often a VISIBLE preview tab asks whether its file moved. Only the active
+// tab polls, so this is one request per visible document, not per open tab.
+const STAT_POLL_MS = 2000;
+
 export function PreviewTabInner({ entry, active = true }) {
   const hostRef = useRef(null);
   const editorRef = useRef(null);
+  // Scroll position carried ACROSS a content-driven CodeMirror remount. Without
+  // it every auto-refresh yanks you to the top of a document you are reading —
+  // strictly worse than the manual close-and-reopen this replaces.
+  const scrollMemo = useRef(null);
+  // Last mtime the poller saw. A ref, not state: the first probe merely
+  // ESTABLISHES the baseline, and if that were state it would count as a
+  // change and re-fetch a file we just loaded on every tab open.
+  const seenMtime = useRef(null);
+  // Incremented only when the file actually moves. Drives the re-fetch and
+  // busts the render-URL cache for iframe/image views; 0 is falsy, so a
+  // never-refreshed tab carries no ?v= at all.
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [copied, setCopied] = useState(false);
   const [state, setState] = useState({ loading: true, error: null, content: null, lang: null, resolved: null });
   // Renderable langs (HTML, Markdown) default to "rendered"; everything
   // else goes to source. A `:NN` line jump always wins → source, since
@@ -180,7 +202,45 @@ export function PreviewTabInner({ entry, active = true }) {
     }
     load();
     return () => { alive = false; };
-  }, [entry.path, active]);
+  }, [entry.path, active, refreshTick]);
+
+  // Auto-refresh: while this tab is visible, watch the file's mtime and let a
+  // change drive the fetch effect above. Replaces the close-and-reopen cycle
+  // that a Claude-edited document used to need.
+  //
+  // Polls /api/fs/stat rather than re-reading the body: the probe runs every
+  // couple of seconds forever, and re-downloading a file to discover it is
+  // unchanged is the expensive shape. A failed probe (deleted mid-rewrite,
+  // server blip) is SWALLOWED — holding last-good content beats blanking a
+  // document you are reading over a transient miss.
+  useEffect(() => {
+    if (!active || !target) return undefined;
+    let alive = true;
+    let timer = null;
+    seenMtime.current = null;   // re-baseline when the path or pane changes
+    const [session, indexStr] = target.split(":");
+    const params = new URLSearchParams({ session, index: indexStr, path: entry.path });
+
+    async function probe() {
+      try {
+        const res = await fetch(`/api/fs/stat?${params.toString()}`);
+        if (!alive || !res.ok) return;
+        const data = await res.json();
+        if (!alive || typeof data.mtime !== "number") return;
+        if (seenMtime.current === null) {
+          seenMtime.current = data.mtime;      // baseline only — no refetch
+        } else if (data.mtime > seenMtime.current) {
+          seenMtime.current = data.mtime;
+          setRefreshTick((t) => t + 1);
+        }
+      } catch (_) { /* transient — keep last-good content and retry next tick */ }
+      finally {
+        if (alive) timer = setTimeout(probe, STAT_POLL_MS);
+      }
+    }
+    probe();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [entry.path, active, target]);
 
   // Effective view: non-renderable langs always collapse to source.
   const effectiveView = RENDERABLE.has(state.lang) ? view : "source";
@@ -218,9 +278,24 @@ export function PreviewTabInner({ entry, active = true }) {
           effects: EditorView.scrollIntoView(line.from, { y: "center" }),
         });
       }
+    } else if (scrollMemo.current) {
+      // Restore where the reader was. rAF because CodeMirror has not measured
+      // content height yet on this frame, and a scrollTop past the current
+      // (still zero-ish) scrollHeight clamps to 0 — silently losing the
+      // position we are trying to keep. An explicit line jump outranks this.
+      const want = scrollMemo.current;
+      requestAnimationFrame(() => {
+        if (editorRef.current === editor) editor.scrollDOM.scrollTop = want;
+      });
     }
     editorRef.current = editor;
-    return () => { editorRef.current = null; editor.destroy(); };
+    return () => {
+      // Runs before the next mount's body, so the memo is in place by the time
+      // the replacement editor wants it.
+      scrollMemo.current = editor.scrollDOM.scrollTop;
+      editorRef.current = null;
+      editor.destroy();
+    };
   }, [state.loading, state.error, state.content, state.lang, effectiveView]);
 
   // Line jumps AFTER mount — clicking another hunk for a file that's already
@@ -237,6 +312,19 @@ export function PreviewTabInner({ entry, active = true }) {
     });
   }, [entry.line]);
 
+  // Copy the RESOLVED absolute path, not entry.path: what you opened may have
+  // been relative to the pane's cwd, and a relative path is useless once
+  // pasted into another pane, a commit message, or a message to Claude.
+  // Falls back to entry.path only if resolution never landed (error state).
+  async function copyPath() {
+    const text = state.resolved || entry.path;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch (_) { /* clipboard denied — the path is on screen either way */ }
+  }
+
   async function reveal() {
     if (!target) return;
     const [session, indexStr] = target.split(":");
@@ -248,11 +336,11 @@ export function PreviewTabInner({ entry, active = true }) {
   }
 
   const iframeSrc = effectiveView === "rendered" && state.lang === "html" && state.resolved && target
-    ? renderUrl(target, state.resolved)
+    ? renderUrl(target, state.resolved, refreshTick)
     : null;
 
   const imageSrc = state.lang === "image" && state.resolved && target
-    ? renderUrl(target, state.resolved)
+    ? renderUrl(target, state.resolved, refreshTick)
     : null;
 
   return (
@@ -268,6 +356,11 @@ export function PreviewTabInner({ entry, active = true }) {
             {view === "rendered" ? "Source" : "Rendered"}
           </button>
         )}
+        <button
+          class="preview-btn"
+          title={copied ? "Copied" : "Copy path"}
+          onClick={copyPath}
+        >{copied ? "✓" : "⧉"}</button>
         <button class="preview-btn" title="Reveal in Finder" onClick={reveal}>⌖</button>
       </header>
       <div class="preview-body">
