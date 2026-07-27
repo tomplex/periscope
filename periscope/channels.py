@@ -496,6 +496,16 @@ def dismiss_dev_channels_consent_bg(target: str, max_wait_s: float = 5.0) -> Non
     _bg(f"dismiss-dev-channels-consent[{target}]", _worker)
 
 
+def _spawner_label(parent_pid: str) -> str:
+    """Human-readable name for a spawner handle — its tmux window name, falling
+    back to the bare handle. A name ('world-model-driver') tells the child what
+    it is working under; a hex handle tells it nothing."""
+    for w in list_windows():
+        if w.get("pid_raw") == parent_pid:
+            return w.get("name") or parent_pid
+    return parent_pid
+
+
 async def _do_spawn_claude_tool(pane: str, arguments: dict):
     """Spawn a new tmux window running `claude`, deliver an initial prompt.
 
@@ -657,6 +667,19 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     parent_pid = _resolve_pid_for_pane(pane)
     if parent_pid and pid:
         set_window_fields(pid, spawned_by=parent_pid)
+        # Tell the child it HAS a lead. `report` is in its tool list either way,
+        # but nothing otherwise says the tool applies to it or that returning a
+        # result is expected — so every brief had to hand-write "report to your
+        # spawner" and hope. Pushed rather than prepended to the prompt: the
+        # prompt is the user's brief and stays verbatim.
+        await emit_channel_event(
+            pane_id,
+            f"You were spawned by another Claude ({_spawner_label(parent_pid)}). "
+            "When you finish, are blocked, or hit a decision above your remit, "
+            "call the `report` tool — it routes back to them automatically and "
+            "needs no handle from you.",
+            {"kind": "provenance"},
+        )
 
     # workspace="new": persist the rail placement now that the window is
     # stamped. The item already surfaces from live state (the project is

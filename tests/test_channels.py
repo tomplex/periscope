@@ -526,6 +526,60 @@ def test_spawn_claude_writes_spawned_by(mocker):
     set_fields.assert_any_call("child99", spawned_by="parent11")
 
 
+def test_spawn_claude_tells_the_child_it_has_a_lead(mocker):
+    """`report` is in the child's tool list regardless, but nothing tells it the
+    tool applies to IT — so every brief hand-wrote 'report to your spawner'."""
+    from periscope import channels
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
+    mocker.patch("periscope.channels.set_window_fields")
+    mocker.patch("periscope.channels.tracks.resolve_track_for_window", return_value="tk_x")
+    mocker.patch("periscope.channels.tracks.move_pane")
+    mocker.patch("periscope.channels.list_windows",
+                 return_value=[{"pid_raw": "parent11", "name": "world-model-driver"}])
+    emit = mocker.patch("periscope.channels.emit_channel_event",
+                        new=AsyncMock(return_value=True))
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    emit.assert_awaited_once()
+    text = emit.await_args.args[1]
+    assert "report" in text
+    # Named, not hex: a name says what it is working under; a handle says nothing.
+    assert "world-model-driver" in text
+
+
+def test_spawn_claude_no_parent_sends_no_provenance_push(mocker):
+    """An unparented spawn must not be told to report to nobody."""
+    from periscope import channels
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="")  # no parent
+    mocker.patch("periscope.channels.tracks.resolve_track_for_window", return_value="tk_x")
+    mocker.patch("periscope.channels.tracks.move_pane")
+    emit = mocker.patch("periscope.channels.emit_channel_event",
+                        new=AsyncMock(return_value=True))
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    emit.assert_not_awaited()
+
+
 def test_spawn_claude_no_parent_tolerated(mocker):
     from periscope import channels
     mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
