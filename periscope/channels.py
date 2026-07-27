@@ -1358,7 +1358,12 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "worktree. Pass `workspace_id` to tag the spawned tab "
             "into a goal-scoped periscope workspace. Returns target "
             "/ session / index / pid / pane_id for the spawned pane "
-            "— keep them so you can address it again later."
+            "— keep them so you can address it again later. "
+            "The spawned session can send results back with the "
+            "`report` tool, which routes to you automatically — it "
+            "does NOT need your handle, so don't spend prompt "
+            "budget telling it how to find you. Say what to report "
+            "and when; `report` handles the addressing."
         ),
         "inputSchema": {
             "type": "object",
