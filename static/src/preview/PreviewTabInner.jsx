@@ -11,7 +11,7 @@ import { EditorState } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLineGutter, lineNumbers } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { activeTarget } from "../store.js";
+import { activeTarget, docRefreshNonce } from "../store.js";
 
 // Encode "session:index" as base64url for the /api/fs/render path token.
 // btoa() is bytes-from-string, so the input must be ASCII-safe; tmux
@@ -202,7 +202,9 @@ export function PreviewTabInner({ entry, active = true }) {
     }
     load();
     return () => { alive = false; };
-  }, [entry.path, active, refreshTick]);
+    // docRefreshNonce is ⌘R's explicit "now" pull; refreshTick is the mtime
+    // poller's. Both land here so there is one re-read path, not two.
+  }, [entry.path, active, refreshTick, docRefreshNonce.value]);
 
   // Auto-refresh: while this tab is visible, watch the file's mtime and let a
   // change drive the fetch effect above. Replaces the close-and-reopen cycle

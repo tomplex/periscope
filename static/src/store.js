@@ -50,6 +50,10 @@ export const paneTranscript = signal({});   // { [pid]: { messages, sessionId } 
 // directly and lands here on the next poll.
 export const paneTabs = signal({});         // { [pid]: [{ path, line, target }, ...] }
 export const paneActiveTab = signal({});    // { [pid]: "pane" | "file:<path>" }
+// Bumped by ⌘R to force the visible preview tab to re-read from disk NOW,
+// without waiting for the mtime poll's next tick. A single global counter, not
+// a per-tab key: only the visible tab fetches, so a broadcast costs one read.
+export const docRefreshNonce = signal(0);
 
 // Timestamp of the last optimistic tab mutation. Hydration skips one poll
 // period after a mutation so an /api/state response that was already

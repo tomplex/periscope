@@ -85,6 +85,16 @@ let containerEl = null;          // set by setTerminalContainer() before startLi
 // Whether the viewport is at the live bottom. The detail pane polls this to
 // show its scroll-to-bottom button only when scrolled up. True when there's no
 // terminal (nothing to scroll) or in alt-screen (no scrollback).
+// Ask the server for an authoritative repaint of this pane (⌘R with a terminal
+// focused). The mirror already self-heals on a timer; this is the manual pull
+// for when it has visibly drifted and you don't want to wait for the tick.
+// No-op when no socket is up — there is nothing to repaint.
+export function requestTerminalReconcile() {
+  if (termWs && termWs.readyState === WebSocket.OPEN) {
+    termWs.send(JSON.stringify({ type: "reconcile" }));
+  }
+}
+
 export function isTerminalAtBottom() {
   if (!term) return true;
   const b = term.buffer.active;
@@ -507,6 +517,11 @@ export function startLiveTerminal(target) {
       case "Delete":    sendCtrl("\x0b"); return false;  // Cmd+Delete   = kill line forward (Ctrl+K)
       case "ArrowLeft": sendCtrl("\x01"); return false;  // Cmd+Left     = beginning of line (Ctrl+A)
       case "ArrowRight":sendCtrl("\x05"); return false;  // Cmd+Right    = end of line       (Ctrl+E)
+      // Cmd+R is periscope's refresh chord (keys.js), never the pane's. Return
+      // false so xterm neither consumes it nor emits bytes, and it reaches the
+      // window listener — same passthrough contract Escape already uses.
+      case "r":
+      case "R": return false;
       default: return true;  // Cmd+C/V/etc fall through to xterm's clipboard handling
     }
   });

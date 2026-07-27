@@ -5,6 +5,7 @@ import { Header } from "./chrome/Header.jsx";
 import { DialogHost } from "./overlays/Dialog.jsx";
 import { Overlays } from "./overlays/Overlays.jsx";
 import { Toaster } from "./overlays/Toast.jsx";
+import { installKeys } from "./keys.js";
 import { getLastSelected, loadPrefs } from "./prefs.js";
 import { Split } from "./split/Split.jsx";
 import { railSelection } from "./store.js";
@@ -36,6 +37,10 @@ async function boot() {
   else if (sel?.kind === "review") railSelection.value = `review:${sel.worktree}`;
 
   render(<App />, document.getElementById("app"));
+
+  // ⌘R / ⌘⇧R. Installed after mount so the first keypress can already see a
+  // rendered selection.
+  installKeys();
 
   // PWA installability gate — the service worker is a no-op (see static/sw.js).
   if ("serviceWorker" in navigator) {
