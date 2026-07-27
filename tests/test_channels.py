@@ -838,6 +838,10 @@ def test_list_claudes_filters_and_trims(mocker):
                  return_value={"%2": ("reviewing PR", 123, None)})
     mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
     mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "boss0"})
+    mocker.patch("periscope.git_pr.cached_git_signal", return_value={
+        "toplevel": "/a", "head": "9eab154", "head_subject": "label status",
+        "head_committed_at": 1700000000, "dirty": 6,
+    })
 
     body = _body(asyncio.run(channels._do_list_claudes_tool("%1", {})))
 
@@ -847,12 +851,37 @@ def test_list_claudes_filters_and_trims(mocker):
     assert c == {
         "handle": "p1", "name": "lead", "session": "s", "cwd": "/a",
         "status_line_inferred": "reviewing PR", "attached": True,
-        "spawned_by": "boss0",
+        "spawned_by": "boss0", "head": "9eab154",
+        "head_subject": "label status", "head_committed_at": 1700000000,
+        "dirty": 6,
     }
     assert "pane_id" not in c
     # The `_inferred` suffix is the entire P1 fix — a bare `status_line` reads
     # as the pane's own report and got a correctly-working worker interrupted.
     assert "status_line" not in c
+    # `toplevel` backs cwd_shared_with; it is not itself part of the payload.
+    assert "toplevel" not in c
+
+
+def test_list_claudes_non_git_cwd_has_null_signal(mocker):
+    """A pane outside a repo must still list, with the git fields absent."""
+    from periscope import channels
+    rows = [{"session": "s", "index": 1, "name": "lead", "cwd": "/tmp",
+             "pane_id": "%2", "pid_raw": "p1"}]
+    mocker.patch("periscope.channels.list_windows", return_value=rows)
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids",
+                 side_effect=lambda ws: [w.update(pid=w.pop("pid_raw")) for w in ws])
+    mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
+    mocker.patch("periscope.panes.parse_pane", return_value={"is_claude": True})
+    mocker.patch("periscope.activity.pane_status_lines", return_value={})
+    mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
+    mocker.patch("periscope.channels.get_window", return_value={})
+    mocker.patch("periscope.git_pr.cached_git_signal", return_value=None)
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%1", {})))
+
+    c = body["claudes"][0]
+    assert c["dirty"] is None and c["head"] is None
 
 
 def _peek_msgs(mocker, msgs):

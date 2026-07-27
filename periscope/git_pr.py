@@ -30,7 +30,12 @@ from periscope.tmux import _run
 
 _GIT_TTL = 15.0
 _PR_TTL = 60.0
+# Shorter than _GIT_TTL: the whole point of the signal is catching a worker
+# transition (a commit landing, a dirty count moving), and a supervisor peeking
+# twice in quick succession should see the second change.
+_SIGNAL_TTL = 5.0
 _git_cache: dict[str, tuple[float, dict | None]] = {}
+_signal_cache: dict[str, tuple[float, dict | None]] = {}
 _pr_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 _pr_fetching: set[tuple[str, str]] = set()
 _pr_lock = threading.Lock()
@@ -112,6 +117,62 @@ def cached_git_state(path: str) -> dict | None:
         return cached[1]
     data = git_state_for(path)
     _git_cache[path] = (now, data)
+    return data
+
+
+def git_signal_for(path: str) -> dict | None:
+    """Structured progress signal for a working tree: `{toplevel, head,
+    head_subject, dirty}`. Returns None when `path` isn't in a git repo.
+
+    Deliberately NOT folded into `git_state_for`, which runs on the 3s
+    dashboard poll for every window — these are two extra subprocesses per
+    path serving on-demand MCP callers only.
+
+    `toplevel` is the WORKTREE root, not `resolve_repo`'s repo root: two
+    linked worktrees of one repo share a repo root but have separate build
+    dirs and indexes, so grouping panes by repo root would flag
+    non-contending panes as sharing a tree.
+
+    `dirty` counts `status --porcelain` lines (one per changed or untracked
+    entry, renames included). The count is the signal: it separates a pane
+    reading or stuck (0) from one actively writing (n>0) — reported as the
+    single most useful health signal available during a 3-day autonomous run,
+    for which the only source was a hand-rolled shell poll loop."""
+    if not path or not os.path.isdir(path):
+        return None
+    code, toplevel = _run(["git", "-C", path, "rev-parse", "--show-toplevel"])
+    if code != 0 or not toplevel:
+        return None
+    # An empty repo with no commits yields code!=0, leaving head None rather
+    # than failing the whole signal.
+    code, head_line = _run(["git", "-C", path, "log", "-1", "--format=%h\t%ct\t%s"])
+    sha, ct, subject = "", "", ""
+    if code == 0:
+        sha, _, rest = head_line.partition("\t")
+        ct, _, subject = rest.partition("\t")
+    # %ct is committer time in epoch seconds. Carried so a caller can age HEAD
+    # against the WALL CLOCK: a supervisor counting its own poll cycles
+    # under-counted across machine sleep and raised a "120 minutes without a
+    # commit" alarm on what was really a 10-hour gap.
+    _, porcelain = _run(["git", "-C", path, "status", "--porcelain"])
+    return {
+        "toplevel": os.path.realpath(toplevel),
+        "head": sha or None,
+        "head_subject": subject or None,
+        "head_committed_at": int(ct) if ct.isdigit() else None,
+        "dirty": sum(1 for line in porcelain.splitlines() if line.strip()),
+    }
+
+
+def cached_git_signal(path: str) -> dict | None:
+    if not path:
+        return None
+    now = time.time()
+    cached = _signal_cache.get(path)
+    if cached and now - cached[0] < _SIGNAL_TTL:
+        return cached[1]
+    data = git_signal_for(path)
+    _signal_cache[path] = (now, data)
     return data
 
 

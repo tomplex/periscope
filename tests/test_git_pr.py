@@ -11,7 +11,9 @@ from periscope.git_pr import (
     _git_cache,
     _linked_pr_cache,
     _pr_cache,
+    _signal_cache,
     cached_git_state,
+    git_signal_for,
     git_state_for,
     linked_pr_state_for,
 )
@@ -22,10 +24,12 @@ def _reset_caches():
     _git_cache.clear()
     _pr_cache.clear()
     _linked_pr_cache.clear()
+    _signal_cache.clear()
     yield
     _git_cache.clear()
     _pr_cache.clear()
     _linked_pr_cache.clear()
+    _signal_cache.clear()
 
 
 def test_git_state_for_returns_none_for_non_git_path(tmp_path):
@@ -269,3 +273,66 @@ def test_git_state_includes_repo_key_and_label(tmp_path, mocker):
     out = gp.git_state_for(str(worktree_dir))
     assert out["repo_key"] == str(repo_dir)
     assert out["repo_label"] == "foo"
+
+
+# --- git_signal_for: the progress signal list_claudes carries ---------------
+
+def _mock_signal(mocker, *, toplevel="/w/tree", head="abc1234\t1700000000\tfix thing",
+                 head_code=0, porcelain=""):
+    def fake_run(cmd, cwd=None, timeout=3.0):
+        if "--show-toplevel" in cmd:
+            return (0, toplevel)
+        if "log" in cmd:
+            return (head_code, head)
+        if "status" in cmd:
+            return (0, porcelain)
+        return (0, "")
+    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
+
+
+def test_git_signal_parses_head_and_counts_dirty(tmp_path, mocker):
+    _mock_signal(mocker, porcelain=" M a.rs\n?? b.rs\nR  old.rs -> new.rs\n")
+    out = git_signal_for(str(tmp_path))
+    assert out["head"] == "abc1234"
+    assert out["head_subject"] == "fix thing"
+    assert out["head_committed_at"] == 1700000000
+    # One entry per line — a rename is a single changed file, not two.
+    assert out["dirty"] == 3
+
+
+def test_git_signal_subject_keeps_embedded_tabs(tmp_path, mocker):
+    """%h\\t%ct\\t%s is split twice, not on every tab — a subject containing a
+    tab must survive intact rather than truncating at the first one."""
+    _mock_signal(mocker, head="abc1234\t1700000000\tfix\tthing")
+    assert git_signal_for(str(tmp_path))["head_subject"] == "fix\tthing"
+
+
+def test_git_signal_clean_tree_is_zero_dirty(tmp_path, mocker):
+    _mock_signal(mocker, porcelain="")
+    assert git_signal_for(str(tmp_path))["dirty"] == 0
+
+
+def test_git_signal_empty_repo_has_no_head(tmp_path, mocker):
+    """A repo with no commits yet still reports dirty — losing the whole
+    signal because HEAD doesn't resolve would blind the caller entirely."""
+    _mock_signal(mocker, head="", head_code=128, porcelain="?? a.rs\n")
+    out = git_signal_for(str(tmp_path))
+    assert out["head"] is None and out["head_committed_at"] is None
+    assert out["dirty"] == 1
+
+
+def test_git_signal_non_git_path_is_none(tmp_path, mocker):
+    def fake_run(cmd, cwd=None, timeout=3.0):
+        return (128, "")
+    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
+    assert git_signal_for(str(tmp_path)) is None
+    assert git_signal_for(str(tmp_path / "nope")) is None
+    assert git_signal_for("") is None
+
+
+def test_git_signal_toplevel_is_the_worktree_not_the_repo(tmp_path, mocker):
+    """Grouping by repo root would flag two linked worktrees as sharing a tree
+    when they have separate build dirs and indexes and never contend."""
+    wt = tmp_path / "wt"; wt.mkdir()
+    _mock_signal(mocker, toplevel=str(wt))
+    assert git_signal_for(str(tmp_path))["toplevel"] == str(wt.resolve())

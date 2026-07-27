@@ -1025,6 +1025,7 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
     loop; pid resolution (which writes state.json and is not thread-safe) runs
     in the loop first, mirroring the /api/state route's ordering."""
     from periscope.activity import pane_status_lines
+    from periscope.git_pr import cached_git_signal
     from periscope.panes import parse_pane
     from periscope.tmux import capture
 
@@ -1045,11 +1046,20 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
             pane_id = w.get("pane_id") or ""
             status = statuses.get(pane_id)
             pid = w.get("pid") or ""
+            signal = cached_git_signal(w.get("cwd") or "") or {}
             out.append({
                 "handle": pid,
                 "name": w.get("name"),
                 "session": w.get("session"),
                 "cwd": w.get("cwd"),
+                # Progress signal, absent for a non-git cwd. `dirty` separates
+                # reading/stuck (0) from actively writing (n>0);
+                # head_committed_at is epoch seconds so staleness is judged
+                # against the wall clock rather than a caller's poll count.
+                "head": signal.get("head"),
+                "head_subject": signal.get("head_subject"),
+                "head_committed_at": signal.get("head_committed_at"),
+                "dirty": signal.get("dirty"),
                 # Named `_inferred` because it is a Haiku paraphrase of recent
                 # activity, NOT the pane's own report of what it is doing. Read
                 # as first-person intent it has caused a supervising Claude to
@@ -1536,6 +1546,12 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "it's attached to periscope's channel (messageable via send_to), "
             "and its spawner handle. Use to discover other Claudes before "
             "messaging, peeking, or terminating them. "
+            "For a pane in a git repo it also carries `head` / `head_subject` / "
+            "`head_committed_at` (epoch seconds) and `dirty` (count of changed "
+            "or untracked files) — `dirty` is the best available progress "
+            "signal, separating a pane that is reading or stuck (0) from one "
+            "actively writing (n>0). Age HEAD against the wall clock, not "
+            "against how many times you have polled. "
             "`status_line_inferred` is a MODEL-GENERATED SUMMARY of a pane's "
             "recent activity — not that pane's own report of its intent. It is "
             "routinely wrong about specifics: it has named files and tests a "
