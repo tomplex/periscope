@@ -1,5 +1,7 @@
 """Route tests for /api/fs/read and /api/fs/open. Exercises the
 HTTP surface; the safe-path logic itself is tested in tests/test_fs.py."""
+import os
+
 from fastapi.testclient import TestClient
 
 from periscope.app import app
@@ -169,3 +171,54 @@ def test_fs_render_oversize(tmp_path, monkeypatch):
     token = _pane_token("s:1")
     r = client.get(f"/api/fs/render/{token}{tmp_path}/big.html")
     assert r.status_code == 413
+
+
+# --- /api/fs/stat: the auto-refresh freshness probe ------------------------
+
+def test_fs_stat_returns_mtime_and_size(tmp_path, monkeypatch):
+    f = tmp_path / "doc.html"
+    f.write_text("<h1>v1</h1>")
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: str(tmp_path) + "\n")
+    client = TestClient(app)
+    r = client.get("/api/fs/stat",
+                   params={"session": "s", "index": 1, "path": "doc.html"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["size"] == len("<h1>v1</h1>")
+    assert body["path"].endswith("/doc.html")
+    assert isinstance(body["mtime"], float)
+
+
+def test_fs_stat_mtime_moves_on_rewrite(tmp_path, monkeypatch):
+    """The whole point: a rewrite must be observable. Sub-second precision
+    matters — a generator rewriting twice in one second would be invisible if
+    mtime were truncated to int seconds."""
+    f = tmp_path / "doc.html"
+    f.write_text("<h1>v1</h1>")
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: str(tmp_path) + "\n")
+    client = TestClient(app)
+    p = {"session": "s", "index": 1, "path": "doc.html"}
+    first = client.get("/api/fs/stat", params=p).json()
+    os.utime(f, (first["mtime"] + 5, first["mtime"] + 5))
+    second = client.get("/api/fs/stat", params=p).json()
+    assert second["mtime"] > first["mtime"]
+
+
+def test_fs_stat_missing_is_404(tmp_path, monkeypatch):
+    """A file deleted mid-rewrite must 404 so the client keeps last-good
+    content rather than blanking the tab."""
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: str(tmp_path) + "\n")
+    client = TestClient(app)
+    r = client.get("/api/fs/stat",
+                   params={"session": "s", "index": 1, "path": "gone.html"})
+    assert r.status_code == 404
+
+
+def test_fs_stat_enforces_safe_roots(tmp_path, monkeypatch):
+    """Polled endpoints get the same gating as read — otherwise stat becomes a
+    path-existence oracle outside the pane's roots."""
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: str(tmp_path) + "\n")
+    client = TestClient(app)
+    r = client.get("/api/fs/stat",
+                   params={"session": "s", "index": 1, "path": "../../../etc/passwd"})
+    assert r.status_code in (400, 403, 404)

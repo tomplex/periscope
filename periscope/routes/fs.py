@@ -86,6 +86,30 @@ def fs_read(session: str, index: int, path: str):
     return {"path": resolved, "content": content, "language": _language_for(resolved)}
 
 
+@router.get("/api/fs/stat")
+def fs_stat(session: str, index: int, path: str):
+    """Cheap freshness probe for an open preview tab: `{mtime, size}`.
+
+    Separate from fs_read because it is POLLED. Re-reading a file body every
+    couple of seconds to discover it is unchanged is the wasteful shape; one
+    os.stat is not. Same safe-root gating as every other fs route — resolution
+    goes through safe_resolve_for_pane, so this is not a path-disclosure hole.
+
+    mtime is a float (st_mtime), not an int: editors and generators routinely
+    rewrite a file twice inside one second, and truncating to seconds would
+    silently drop the second write — the exact case an auto-refresh exists to
+    catch.
+    """
+    resolved = fs.safe_resolve_for_pane(f"{session}:{index}", path)
+    try:
+        st = resolved.stat()
+    except OSError as e:
+        # Deleted between open and poll (a regenerated file mid-rewrite is the
+        # common case). 404 so the client holds its last good content.
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    return {"path": str(resolved), "mtime": st.st_mtime, "size": st.st_size}
+
+
 @router.get("/api/fs/render/{token}/{file_path:path}")
 def fs_render(token: str, file_path: str):
     """Stream a file's raw bytes with a Content-Type the browser will render.

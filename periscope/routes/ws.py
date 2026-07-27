@@ -228,6 +228,12 @@ async def ws_pane(
                         ctrl = json.loads(text)
                     except Exception:
                         ctrl = None
+                    # Explicit repaint (⌘R with a terminal focused). The mirror
+                    # already self-heals on a timer; this is the manual pull for
+                    # when it has visibly drifted and you don't want to wait.
+                    if isinstance(ctrl, dict) and ctrl.get("type") == "reconcile":
+                        sub.request_reconcile()
+                        continue
                     if isinstance(ctrl, dict) and ctrl.get("type") == "resize":
                         rc = int(ctrl.get("cols") or 0)
                         rr = int(ctrl.get("rows") or 0)

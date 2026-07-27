@@ -223,3 +223,50 @@ def test_ws_resize_message_triggers_reconcile(client, mocker):
             import time
             time.sleep(0.02)
         assert sub.reconciles == 1
+
+
+def test_ws_reconcile_message_repaints_without_resizing(client, mocker):
+    """⌘R with a terminal focused: an explicit repaint pull. Must NOT resize —
+    the mirror's self-heal is a timer, and this is the manual path for when it
+    has visibly drifted and you don't want to wait for the next tick."""
+    calls = []
+    mocker.patch("periscope.routes.ws.tmux", side_effect=_fake_tmux(calls))
+    sub = _patch_mirror(mocker)
+
+    with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
+        _ = ws.receive_text()   # size
+        _ = ws.receive_text()   # mouse
+        _ = ws.receive_bytes()
+        before = sum(1 for c in calls if "resize-window" in c)
+        ws.send_text(json.dumps({"type": "reconcile"}))
+        for _i in range(50):
+            if sub.reconciles:
+                break
+            import time
+            time.sleep(0.02)
+        assert sub.reconciles == 1
+        assert sum(1 for c in calls if "resize-window" in c) == before
+
+
+def test_ws_reconcile_message_is_not_forwarded_as_keystrokes(client, mocker):
+    """The control message must be swallowed, not typed into the pane — a
+    stray `{"type":"reconcile"}` landing in Claude's prompt would be worse
+    than no repaint at all."""
+    mocker.patch("periscope.routes.ws.tmux", side_effect=_fake_tmux())
+    sub = _patch_mirror(mocker)
+    sent = []
+    mocker.patch("periscope.routes.ws.tmux_input.send",
+                 side_effect=lambda target, data: sent.append(data))
+
+    with client.websocket_connect("/ws/pane?pane_id=%7") as ws:
+        _ = ws.receive_text()
+        _ = ws.receive_text()
+        _ = ws.receive_bytes()
+        ws.send_text(json.dumps({"type": "reconcile"}))
+        for _i in range(50):
+            if sub.reconciles:
+                break
+            import time
+            time.sleep(0.02)
+    assert sub.reconciles == 1
+    assert not any("reconcile" in s for s in sent)
