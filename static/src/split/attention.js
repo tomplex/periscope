@@ -100,6 +100,45 @@ export function needsYouCount(needsYouRows) {
   return needsYouRows.length;
 }
 
+// How long an unanswered question has been waiting, as a severity tier. A
+// question that has sat for an hour is a different event from one raised a
+// minute ago, and rendering them identically is how a blocked pane stays
+// blocked: over a 3-day run a spawned session's request for a scheduling
+// decision was answered twice WITHOUT being read, because nothing about the
+// display changed as it aged. Thresholds are deliberate constants, matching
+// the memHint tiering idiom.
+const WAIT_STALE_S = 600;    // 10 min — past a plausible "just stepped away"
+const WAIT_URGENT_S = 3600;  // 1 hour — this pane has been parked, not paused
+
+export function waitTier(sinceTs, nowS) {
+  const age = (nowS || 0) - (sinceTs || 0);
+  if (age >= WAIT_URGENT_S) return "urgent";
+  if (age >= WAIT_STALE_S) return "stale";
+  return "fresh";
+}
+
+// pid -> ts of the OLDEST unanswered need_human for that pane. Oldest, not
+// newest: a pane that asked three times has been waiting since the first ask,
+// and taking the newest would reset its age on every repeat — exactly the
+// case that most needs escalating.
+//
+// Reuses the same predicate as the NEEDS YOU section (isAcked + dismissals) so
+// the tree marker and the section can never disagree about who is waiting.
+export function awaitingReplyByPid(windows, alertItems, dismissedIds = new Set()) {
+  const byTarget = indexByTarget(windows);
+  const out = new Map();
+  for (const r of alertItems || []) {
+    if (r.kind !== "need_human") continue;
+    if (dismissedIds.has(r.id)) continue;
+    if (isAcked(r, byTarget)) continue;
+    const pid = byTarget[r.target]?.pid;
+    if (!pid) continue;
+    const prev = out.get(pid);
+    if (prev === undefined || r.ts < prev) out.set(pid, r.ts);
+  }
+  return out;
+}
+
 // Live "working" panes, in /api/state order. A pure mirror of pane state —
 // no events, no dismissals: rows appear and disappear with the spinner.
 export function buildRunning(windows) {

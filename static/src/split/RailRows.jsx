@@ -17,6 +17,7 @@
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { memHint, prStateMeta, prUrl, relTime } from "../util.js";
+import { waitTier } from "./attention.js";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
 // quiet) and the one-liner no longer reflects "now".
@@ -137,7 +138,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
 // sizes, so collapsing never loses what a pane is or how it's doing.
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
-  pinned, onTogglePin,
+  pinned, onTogglePin, awaitingSince,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
@@ -152,6 +153,10 @@ export function PaneRow({
   const model = shortModel(w.model);
   const prHref = w.pr ? prUrl(w.repo_slug, w.pr) : null;
   const mh = memHint(w.mem);  // cycle-hint: server sends w.mem only past thresholds
+  // An unanswered question, aged. The tier drives colour so a pane parked for
+  // an hour stops looking like one that just asked.
+  const waitTierCls = awaitingSince
+    ? waitTier(awaitingSince, Math.floor(Date.now() / 1000)) : null;
 
   // PR + Linear as clickable chips, shared between the compact line-2 strip and
   // the expanded footer (the link just relocates as the card grows). stop-prop
@@ -199,6 +204,12 @@ export function PaneRow({
           >🔥</span>
         )}
         {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
+        {waitTierCls && (
+          <span
+            class={`rail-await wait-${waitTierCls}`}
+            title={`asked you something ${relTime(awaitingSince)} ago and has had no reply since`}
+          >⚠{relTime(awaitingSince)}</span>
+        )}
         {/* At-rest pinned flag — the hover actions take no width, so this keeps
             the "this tab is pinned" signal visible without one. Hidden on hover
             (the real toggle is in the action overlay). */}

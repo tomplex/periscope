@@ -7,11 +7,17 @@
 // (loaded:false write guard).
 
 import render from "preact-render-to-string";
-import { describe, expect, it } from "vitest";
-import { projects, tracks, windows } from "../../store.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { alerts, dismissedAlertIds, projects, tracks, windows } from "../../store.js";
 import { Rail } from "../Rail.jsx";
 
 const aff = (kind, label = null) => ({ kind, label });
+
+afterEach(() => {
+  vi.useRealTimers();
+  alerts.value = [];
+  dismissedAlertIds.value = new Set();
+});
 
 describe("<Rail> render smoke", () => {
   it("renders track groups, chips, and single-branch flat tabs", () => {
@@ -88,5 +94,58 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain('title="project"');   // repo-default icon
     expect(html).toContain('title="track"');     // goal-track icon
     expect(html.split("rail-track-menu-btn").length - 1).toBe(1);  // goal track only
+  });
+});
+
+describe("<Rail> awaiting-reply marker", () => {
+  // The pane row must carry the unanswered-question signal on its own, not
+  // only inside the collapsible NEEDS YOU section. Drives the real wiring:
+  // store.alerts -> Rail.jsx awaitingReplyByPid -> PaneRow chip.
+  const paneWin = (over = {}) => ({
+    pid: "aa11", session: "managed", index: 0, target: "managed:0",
+    name: "claude", is_claude: true, state: "idle", track_id: "/dev/myproj",
+    track_name: "myproj", repo_key: "/dev/myproj", repo_label: "myproj",
+    branch: "master", cwd: "/dev/myproj",
+    worktree_affiliation: aff("at-pin"), pane_id: "%1",
+    focused_at: 0, acted_at: 0, ...over,
+  });
+  const ask = (over = {}) => ({
+    id: "al1", kind: "need_human", target: "managed:0", ts: 1000,
+    session: "managed", name: "claude", message: "which branch?", ...over,
+  });
+
+  it("marks a pane with an unanswered need_human, escalating with age", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [paneWin()];
+    dismissedAlertIds.value = new Set();
+
+    // Just asked -> quiet tier.
+    vi.setSystemTime(1000 * 1000);
+    alerts.value = [ask()];
+    expect(render(<Rail />)).toContain("wait-fresh");
+
+    // Over an hour later, same unanswered ask -> urgent.
+    vi.setSystemTime((1000 + 3700) * 1000);
+    expect(render(<Rail />)).toContain("wait-urgent");
+  });
+
+  it("drops the marker once the user has engaged the pane", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [paneWin({ acted_at: 2000 })];
+    dismissedAlertIds.value = new Set();
+    alerts.value = [ask({ ts: 1000 })];
+    vi.setSystemTime(3000 * 1000);
+    expect(render(<Rail />)).not.toContain("rail-await");
+  });
+
+  it("shows no marker when nothing has been asked", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [paneWin()];
+    dismissedAlertIds.value = new Set();
+    alerts.value = [];
+    expect(render(<Rail />)).not.toContain("rail-await");
   });
 });

@@ -178,6 +178,14 @@ html, body {
 .rail-mem { flex: 0 0 auto; font-size: 10px; cursor: help; }
 .rail-mem.mem-warn, .header-mem.mem-warn { color: var(--s-working); }
 .rail-mem.mem-bad, .header-mem.mem-bad { color: var(--s-danger); }
+/* Unanswered need_human, aged (see attention.js waitTier). The tier ramp is
+   the point: a pane parked for an hour must not read like one that just
+   asked. `urgent` pulses because that is the state we most need noticed. */
+.rail-await { flex: 0 0 auto; font-size: 10px; cursor: help; white-space: nowrap; }
+.rail-await.wait-fresh  { color: var(--fg-2); }
+.rail-await.wait-stale  { color: var(--s-working); }
+.rail-await.wait-urgent { color: var(--s-danger); animation: await-pulse 1.6s ease-in-out infinite; }
+@keyframes await-pulse { 50% { opacity: .4; } }
 
 /* Fallback single-pill (used when only the JSONL estimator has data). */
 .usage.usage-fallback {

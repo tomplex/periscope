@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { shortestUniqueSuffix } from "../../util.js";
-import {buildActivity,
+import {awaitingReplyByPid, buildActivity,
   buildNeedsYou, buildReady, buildRunning, 
-  isSoftQuestion, needsYouCount, prunedStateDismissals,resolvePinned, 
+  isSoftQuestion, needsYouCount, prunedStateDismissals,resolvePinned, waitTier,
 } from "../attention.js";
 
 const win = (over = {}) => ({
@@ -205,5 +205,48 @@ describe("shortestUniqueSuffix", () => {
   });
   it("returns single-segment names unchanged", () => {
     expect(shortestUniqueSuffix("periscope", ["periscope", "lgtm"])).toBe("periscope");
+  });
+});
+
+describe("awaitingReplyByPid", () => {
+  it("maps a pane with an unanswered need_human to that question's ts", () => {
+    const w = win({ pid: "p1", target: "a:0" });
+    const m = awaitingReplyByPid([w], [evt({ target: "a:0", ts: 500 })], new Set());
+    expect(m.get("p1")).toBe(500);
+  });
+
+  it("keeps the OLDEST ask, so repeating the question doesn't reset the wait", () => {
+    const w = win({ pid: "p1", target: "a:0" });
+    const asks = [
+      evt({ id: "a1", target: "a:0", ts: 500 }),
+      evt({ id: "a2", target: "a:0", ts: 900 }),
+    ];
+    expect(awaitingReplyByPid([w], asks, new Set()).get("p1")).toBe(500);
+  });
+
+  it("drops a pane the user has since engaged (same predicate as NEEDS YOU)", () => {
+    const w = win({ pid: "p1", target: "a:0", acted_at: 600 });
+    const m = awaitingReplyByPid([w], [evt({ target: "a:0", ts: 500 })], new Set());
+    expect(m.has("p1")).toBe(false);
+  });
+
+  it("drops dismissed asks and ignores non-need_human kinds", () => {
+    const w = win({ pid: "p1", target: "a:0" });
+    expect(awaitingReplyByPid([w], [evt({ id: "x" })], new Set(["x"])).size).toBe(0);
+    expect(awaitingReplyByPid([w], [evt({ kind: "done" })], new Set()).size).toBe(0);
+  });
+
+  it("ignores asks whose pane is no longer live", () => {
+    expect(awaitingReplyByPid([], [evt({ target: "gone:0" })], new Set()).size).toBe(0);
+  });
+});
+
+describe("waitTier", () => {
+  it("escalates fresh -> stale -> urgent at 10min and 1h", () => {
+    expect(waitTier(1000, 1000)).toBe("fresh");
+    expect(waitTier(1000, 1000 + 599)).toBe("fresh");
+    expect(waitTier(1000, 1000 + 600)).toBe("stale");
+    expect(waitTier(1000, 1000 + 3599)).toBe("stale");
+    expect(waitTier(1000, 1000 + 3600)).toBe("urgent");
   });
 });

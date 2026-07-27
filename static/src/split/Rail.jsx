@@ -26,10 +26,12 @@ import { useRef, useState } from "preact/hooks";
 import { passesFilter } from "../filter.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
 import * as prefs from "../prefs.js";
-import { currentFilter, dragState, projects, railSelection, tracks, windows, workspaces } from "../store.js";
+import { currentFilter, dismissedAlertIds, dragState, projects, railSelection, tracks, windows, workspaces } from "../store.js";
 import { track } from "../track.js";
 import { apiCall, targetQuery } from "../util.js";
+import { alertItems } from "./alertFeed.js";
 import { ActivitySection, AttentionTop } from "./AttentionSections.jsx";
+import { awaitingReplyByPid } from "./attention.js";
 import { railHovered } from "./layoutFreeze.js";
 import { BranchRow, NewTabRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
 import { maxSeverity, mergeLiveAndPrefs, paneChip, trackKind, trackLabel } from "./railTree.js";
@@ -213,6 +215,13 @@ export function Rail() {
   // Across-all-windows pid → window map (the flat per-track tab lists).
   const windowsByPid = {};
   for (const w of live) windowsByPid[w.pid] = w;
+  // Panes with an unanswered need_human, so the tree row carries the same
+  // signal the NEEDS YOU section does. Without it a blocked pane looks normal
+  // in the tree, and NEEDS YOU is collapsible — collapse it and the whole
+  // escalation disappears.
+  const awaiting = awaitingReplyByPid(
+    allLive, alertItems.value, dismissedAlertIds.value
+  );
   // Registry rows feed EMPTY goal tracks into the tree; a track-scope lens
   // narrows them the same way scopeWindows narrows the live set.
   const allTracks = tracks.value;
@@ -370,6 +379,7 @@ export function Rail() {
           dropPos={dropPosFor(`pane:${w.pid}`)}
           pinned={prefs.getPinnedPids().includes(w.pid)}
           onTogglePin={() => prefs.togglePin(w.pid)}
+          awaitingSince={awaiting.get(w.pid)}
         />
       ));
   }
