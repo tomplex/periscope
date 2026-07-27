@@ -1094,12 +1094,27 @@ def _do_list_workspaces_tool(pane: str, arguments: dict):
     return _tool_result({"ok": True, "workspaces": out})
 
 
+# A `full` peek inlines every tool input AND result, which measured 52-59KB of
+# single-line JSON for ~20 turns of a real session — once large enough to blow
+# the caller's whole tool budget, leaving it to re-extract the last few turns
+# with a throwaway script. Summary detail and a small default limit are what
+# make peek usable as the "what is this pane ACTUALLY doing" probe that
+# list_claudes' inferred status line points callers at.
+_PEEK_DEFAULT_LIMIT = 10
+_PEEK_MAX_LIMIT = 200
+
+
 def _do_peek_tool(pane: str, arguments: dict):
     """Read another Claude's recent transcript by handle, without messaging it.
     Reads directly off the pane's recorded session id — refuses when there is
     none rather than guessing by cwd (which on a shared cwd would return a
     sibling pane's transcript). Bypasses get_turns_for_pane precisely because
-    that helper re-derives pane_id and has the cwd fallback."""
+    that helper re-derives pane_id and has the cwd fallback.
+
+    `summary` detail reuses history.search.compact_messages — the same reshape
+    the MCP history tools use: text plus one-line tool summaries, results
+    dropped except a Bash head."""
+    from history.search import compact_messages
     from periscope.turns import (
         jsonl_for_session,
         messages_from_jsonl,
@@ -1109,6 +1124,18 @@ def _do_peek_tool(pane: str, arguments: dict):
     handle = str(arguments.get("handle", "")).strip()
     if not handle:
         return _tool_result({"ok": False, "error": "handle is required"})
+    detail = str(arguments.get("detail") or "summary")
+    if detail not in ("summary", "full"):
+        return _tool_result({"ok": False, "error": "detail must be 'summary' or 'full'"})
+    raw_limit = arguments.get("limit")
+    try:
+        # `is None`, not falsiness: `limit: 0` must clamp to 1 rather than
+        # silently widening to the default.
+        limit = _PEEK_DEFAULT_LIMIT if raw_limit is None else int(raw_limit)
+    except (TypeError, ValueError):
+        return _tool_result({"ok": False, "error": "limit must be an integer"})
+    limit = max(1, min(limit, _PEEK_MAX_LIMIT))
+
     _pid, pane_id, _w = _resolve_window_by_pid(handle)
     if not pane_id:
         return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
@@ -1119,7 +1146,15 @@ def _do_peek_tool(pane: str, arguments: dict):
     if jsonl is None:
         return _tool_result({"ok": False, "error": "session transcript not found"})
     messages = messages_from_jsonl(str(jsonl))
-    return _tool_result({"ok": True, "handle": handle, "turns": messages[-20:]})
+    # Compact BEFORE slicing: compact_messages drops turns that carry neither
+    # text nor a non-skipped tool, so slicing first would silently return
+    # fewer than `limit` useful turns.
+    if detail == "summary":
+        messages = compact_messages(messages)
+    return _tool_result({
+        "ok": True, "handle": handle, "detail": detail,
+        "turns": messages[-limit:],
+    })
 
 
 def _do_terminate_tool(pane: str, arguments: dict):
@@ -1527,15 +1562,34 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
     {
         "name": "peek",
         "description": (
-            "Read the recent transcript (last ~20 messages) of another Claude "
-            "pane by its handle, without sending it anything — use to check on "
-            "a delegated worker's progress instead of waiting for a report. "
+            "Read the recent transcript of another Claude pane by its handle, "
+            "without sending it anything — use to check on a delegated "
+            "worker's progress instead of waiting for a report. This is the "
+            "SOURCE OF TRUTH for what a pane is doing; list_claudes' "
+            "status_line_inferred is only a summary and is often wrong about "
+            "specifics. Peek before you interrupt, correct, or terminate. "
             "Refuses if the pane has no recorded session yet."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        f"How many recent turns to return (default "
+                        f"{_PEEK_DEFAULT_LIMIT}, max {_PEEK_MAX_LIMIT})."
+                    ),
+                },
+                "detail": {
+                    "type": "string",
+                    "enum": ["summary", "full"],
+                    "description": (
+                        "summary (default): text plus one-line tool summaries. "
+                        "full: every tool input and result inlined — tens of KB "
+                        "for even a few turns, so pass a small limit with it."
+                    ),
+                },
             },
             "required": ["handle"],
         },

@@ -855,20 +855,75 @@ def test_list_claudes_filters_and_trims(mocker):
     assert "status_line" not in c
 
 
-def test_peek_happy(mocker):
+def _peek_msgs(mocker, msgs):
+    """Wire a peek call down to `msgs` as the pane's parsed transcript."""
     from periscope import channels
     mocker.patch("periscope.channels._resolve_window_by_pid",
                  return_value=("ab12", "%9", {}))
     mocker.patch("periscope.turns.session_id_for_pane", return_value="sess-abc")
     mocker.patch("periscope.turns.jsonl_for_session", return_value="/x/sess-abc.jsonl")
-    msgs = [{"role": "user", "text": str(i)} for i in range(30)]
     mocker.patch("periscope.turns.messages_from_jsonl", return_value=msgs)
+    return channels
+
+
+def test_peek_happy_defaults_to_summary(mocker):
+    msgs = [{"role": "user", "ts_ms": i, "text": str(i)} for i in range(30)]
+    channels = _peek_msgs(mocker, msgs)
 
     body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
 
     assert body["ok"] is True and body["handle"] == "ab12"
-    assert len(body["turns"]) == 20
+    assert body["detail"] == "summary"
+    assert len(body["turns"]) == channels._PEEK_DEFAULT_LIMIT
     assert body["turns"][-1]["text"] == "29"
+
+
+def test_peek_summary_drops_tool_inputs_and_results(mocker):
+    """The 52KB payload was tool inputs + results inlined on every turn."""
+    msgs = [{
+        "role": "assistant", "ts_ms": 1, "text": "reading",
+        "tool_uses": [{"id": "t1", "name": "Read", "input": {"file_path": "/a/b.rs"},
+                       "result": "x" * 50_000}],
+    }]
+    channels = _peek_msgs(mocker, msgs)
+
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12"}))
+
+    tool = body["turns"][0]["tools"][0]
+    assert tool == {"name": "Read", "summary": "/a/b.rs"}
+    assert "x" * 50_000 not in json.dumps(body)
+
+
+def test_peek_full_detail_keeps_raw_turns(mocker):
+    msgs = [{"role": "assistant", "ts_ms": 1, "text": "hi",
+             "tool_uses": [{"id": "t1", "name": "Read",
+                            "input": {"file_path": "/a/b.rs"}, "result": "body"}]}]
+    channels = _peek_msgs(mocker, msgs)
+
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12", "detail": "full"}))
+
+    assert body["detail"] == "full"
+    assert body["turns"][0]["tool_uses"][0]["result"] == "body"
+
+
+def test_peek_limit_is_honoured_and_clamped(mocker):
+    msgs = [{"role": "user", "ts_ms": i, "text": str(i)} for i in range(30)]
+    channels = _peek_msgs(mocker, msgs)
+
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12", "limit": 3}))
+    assert [t["text"] for t in body["turns"]] == ["27", "28", "29"]
+
+    # Clamped up from 0 and down from absurd, never empty and never unbounded.
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12", "limit": 0}))
+    assert len(body["turns"]) == 1
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12", "limit": 99_999}))
+    assert len(body["turns"]) == 30
+
+
+def test_peek_rejects_bad_detail(mocker):
+    channels = _peek_msgs(mocker, [])
+    body = _body(channels._do_peek_tool("%1", {"handle": "ab12", "detail": "brief"}))
+    assert body["ok"] is False and "summary" in body["error"]
 
 
 def test_peek_no_session_refuses_without_transcript_read(mocker):
