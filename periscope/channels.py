@@ -1014,6 +1014,27 @@ async def _do_report_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+def _mark_shared_trees(rows: list[dict], trees: list[str]) -> list[dict]:
+    """Stamp each row with the handles of the OTHER rows sitting in the same
+    working tree. `trees` is parallel to `rows`.
+
+    Two Claudes in one tree is invisible otherwise, and it is not a benign
+    coincidence: a supervisor ran a verification `cargo test` against a tree a
+    worker was mid-edit in, the shared target-dir lock SIGTERM'd the worker's
+    running test binary, and the worker read that death as a hang in its own
+    work — which is what the supervisor then interrupted it over. The gate
+    result was worthless too: a tree someone else is mutating can go green on
+    a half-written state as easily as red."""
+    by_tree: dict[str, list[str]] = {}
+    for row, tree in zip(rows, trees, strict=True):
+        if tree:
+            by_tree.setdefault(tree, []).append(row["handle"])
+    for row, tree in zip(rows, trees, strict=True):
+        peers = [h for h in by_tree.get(tree, []) if h != row["handle"]]
+        row["cwd_shared_with"] = peers
+    return rows
+
+
 async def _do_list_claudes_tool(pane: str, arguments: dict):
     """List all live Claude panes with their handles, so the caller can
     discover, message (send_to), peek, or terminate them. Flat — supports peer
@@ -1035,6 +1056,7 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
 
     def _collect():
         out = []
+        trees: list[str] = []   # parallel to `out`: each row's working tree
         for w in windows:
             target = f"{w['session']}:{w['index']}"
             try:
@@ -1071,7 +1093,11 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
                 "attached": channel_state_for(pane_id)["attached"],
                 "spawned_by": get_window(pid).get("spawned_by"),
             })
-        return out
+            # Worktree root when the cwd is in a repo, else the resolved cwd —
+            # so two panes in different subdirs of one tree still group.
+            trees.append(signal.get("toplevel")
+                         or os.path.realpath(w.get("cwd") or "") or "")
+        return _mark_shared_trees(out, trees)
 
     claudes = await asyncio.to_thread(_collect)
     return _tool_result({"ok": True, "claudes": claudes})
@@ -1552,6 +1578,12 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "signal, separating a pane that is reading or stuck (0) from one "
             "actively writing (n>0). Age HEAD against the wall clock, not "
             "against how many times you have polled. "
+            "`cwd_shared_with` lists other panes in the SAME working tree. "
+            "When it is non-empty, do not run builds, tests, or any command "
+            "that writes to that tree: you will fight the other pane over "
+            "build locks and kill its running processes, and your own result "
+            "is meaningless because the tree is being mutated under you. Wait "
+            "for a clean boundary, or ask that pane first. "
             "`status_line_inferred` is a MODEL-GENERATED SUMMARY of a pane's "
             "recent activity — not that pane's own report of its intent. It is "
             "routinely wrong about specifics: it has named files and tests a "

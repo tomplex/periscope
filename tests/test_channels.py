@@ -853,7 +853,7 @@ def test_list_claudes_filters_and_trims(mocker):
         "status_line_inferred": "reviewing PR", "attached": True,
         "spawned_by": "boss0", "head": "9eab154",
         "head_subject": "label status", "head_committed_at": 1700000000,
-        "dirty": 6,
+        "dirty": 6, "cwd_shared_with": [],
     }
     assert "pane_id" not in c
     # The `_inferred` suffix is the entire P1 fix — a bare `status_line` reads
@@ -861,6 +861,33 @@ def test_list_claudes_filters_and_trims(mocker):
     assert "status_line" not in c
     # `toplevel` backs cwd_shared_with; it is not itself part of the payload.
     assert "toplevel" not in c
+
+
+def test_mark_shared_trees_pairs_panes_in_one_worktree():
+    from periscope.channels import _mark_shared_trees
+    rows = [{"handle": "a"}, {"handle": "b"}, {"handle": "c"}]
+    out = _mark_shared_trees(rows, ["/w/one", "/w/one", "/w/two"])
+    assert out[0]["cwd_shared_with"] == ["b"]
+    assert out[1]["cwd_shared_with"] == ["a"]   # never lists itself
+    assert out[2]["cwd_shared_with"] == []
+
+
+def test_mark_shared_trees_groups_subdirs_of_one_tree():
+    """Two panes in different subdirs of one worktree DO contend — grouping on
+    raw cwd would have missed exactly the pair that collided."""
+    from periscope.channels import _mark_shared_trees
+    rows = [{"handle": "a"}, {"handle": "b"}]
+    out = _mark_shared_trees(rows, ["/w/one", "/w/one"])
+    assert out[0]["cwd_shared_with"] == ["b"]
+
+
+def test_mark_shared_trees_ignores_unresolvable_trees():
+    """An empty tree key must not collapse every such pane into one group."""
+    from periscope.channels import _mark_shared_trees
+    rows = [{"handle": "a"}, {"handle": "b"}]
+    out = _mark_shared_trees(rows, ["", ""])
+    assert out[0]["cwd_shared_with"] == []
+    assert out[1]["cwd_shared_with"] == []
 
 
 def test_list_claudes_non_git_cwd_has_null_signal(mocker):
