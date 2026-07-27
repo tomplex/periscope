@@ -163,20 +163,28 @@ describe("<Rail> delegation lineage", () => {
     tracks.value = [];
     windows.value = [
       paneWin({ pid: "lead1", index: 0, target: "managed:0", name: "world-model-driver", pane_id: "%1" }),
-      paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2", spawned_by: "lead1" }),
+      paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2",
+                spawned_by: "lead1", spawner_name: "world-model-driver" }),
     ];
     const html = render(<Rail />);
     expect(html).toContain("rail-lineage");
     expect(html).toContain("↳world-model-driver");
+    expect(html).not.toContain("lineage-gone");   // live lead stays clickable
   });
 
-  it("shows no lineage chip when the spawner is no longer live", () => {
+  it("still names a spawner that has exited, marked inert", () => {
+    // Leads exit: the only real lineage on the dev box was a 3-link chain
+    // whose MIDDLE pane was already dead. Hiding the chip then erases exactly
+    // the long chain this feature exists to show.
     projects.value = [];
     tracks.value = [];
     windows.value = [
-      paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2", spawned_by: "gone" }),
+      paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2",
+                spawned_by: "gone", spawner_name: "model-migration" }),
     ];
-    expect(render(<Rail />)).not.toContain("rail-lineage");
+    const html = render(<Rail />);
+    expect(html).toContain("↳model-migration");
+    expect(html).toContain("lineage-gone");
   });
 
   it("shows no lineage chip on a hand-created pane", () => {

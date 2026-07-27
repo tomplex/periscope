@@ -193,6 +193,10 @@ html, body {
   cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .rail-lineage:hover { color: var(--fg-1); }
+/* Lead has exited: still worth showing (it names the thread), but there is
+   nothing to reveal. */
+.rail-lineage.lineage-gone { cursor: default; opacity: 0.55; }
+.rail-lineage.lineage-gone:hover { color: var(--fg-3); }
 
 /* Fallback single-pill (used when only the JSONL estimator has data). */
 .usage.usage-fallback {

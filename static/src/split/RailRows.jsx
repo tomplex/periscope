@@ -138,7 +138,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
 // sizes, so collapsing never loses what a pane is or how it's doing.
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
-  pinned, onTogglePin, awaitingSince, spawnerName, onRevealSpawner,
+  pinned, onTogglePin, awaitingSince, spawnerName, spawnerLive, onRevealSpawner,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
@@ -210,13 +210,19 @@ export function PaneRow({
             title={`asked you something ${relTime(awaitingSince)} ago and has had no reply since`}
           >⚠{relTime(awaitingSince)}</span>
         )}
-        {/* Lineage: this pane was delegated to by another. stop-prop so the
-            chip reveals the lead instead of just selecting this row (#4). */}
+        {/* Lineage: this pane was delegated to by another. A dead lead still
+            shows (greyed, inert) — leads exit, and hiding the chip then erases
+            exactly the long chain lineage exists to make legible. stop-prop so
+            a live chip reveals the lead instead of selecting this row (#4). */}
         {spawnerName && (
           <span
-            class="rail-lineage"
-            title={`spawned by ${spawnerName} — click to reveal`}
-            onClick={(e) => { e.stopPropagation(); onRevealSpawner?.(); }}
+            class={`rail-lineage${spawnerLive ? "" : " lineage-gone"}`}
+            title={spawnerLive
+              ? `spawned by ${spawnerName} — click to reveal`
+              : `spawned by ${spawnerName}, which is no longer running`}
+            onClick={spawnerLive
+              ? (e) => { e.stopPropagation(); onRevealSpawner?.(); }
+              : undefined}
           >↳{spawnerName}</span>
         )}
         {/* At-rest pinned flag — the hover actions take no width, so this keeps

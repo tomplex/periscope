@@ -175,6 +175,17 @@ def build_window_view(
 
     channel = channel_state_for(w.get("pane_id") or "")
 
+    # Resolve the spawner's NAME server-side, off the persisted block rather
+    # than the live window list. Leads exit — on this box the only surviving
+    # lineage is a 3-link chain whose middle pane is already dead — so a
+    # live-only join renders nothing for exactly the "chain of four sessions,
+    # three terminated" case lineage exists to make legible. `last_seen.name`
+    # outlives the pane (GC'd at _PID_TTL_S, 30 days).
+    spawned_by = persisted.get("spawned_by")
+    spawner_name = None
+    if spawned_by:
+        spawner_name = (get_window(spawned_by).get("last_seen") or {}).get("name")
+
     # Persisted Claude-driven links (via the link_pr / link_linear MCP
     # tools). `linked_pr` overrides the auto-detected `pr` field — when
     # Claude has explicitly told us "this pane is for PR #N", we trust
@@ -232,6 +243,7 @@ def build_window_view(
         # a chain of delegated sessions read as unrelated tabs — the dashboard
         # could not show that pane A's work is continued by pane B.
         "spawned_by": persisted.get("spawned_by"),
+        "spawner_name": spawner_name,
         "linked_linear": linked_linear,
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,

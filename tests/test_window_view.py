@@ -428,6 +428,31 @@ def test_view_surfaces_spawned_by_lineage(mocker, clean_state):
     assert view["spawned_by"] == "2c453c8c"
 
 
+def test_view_names_a_spawner_that_has_already_exited(mocker, clean_state):
+    """The name is resolved off the PERSISTED block, not the live window list:
+    leads exit, and on a real box the only surviving lineage was a 3-link chain
+    whose middle pane was already dead. A live-only join renders nothing for
+    exactly the long-chain case lineage exists to make legible."""
+    from periscope.window_view import build_window_view
+    pid = "b6bde664"
+    clean_state["windows"][pid] = {"spawned_by": "d188cde1"}
+    # The lead is gone from tmux, but its last_seen name survives (GC'd at 30d).
+    clean_state["windows"]["d188cde1"] = {
+        "last_seen": {"name": "model-migration", "session": "periscope"},
+    }
+
+    mocker.patch(
+        "periscope.window_view.parse_pane",
+        return_value={"is_claude": True, "state": "idle", "spinner": None},
+    )
+    _stub_subsystems(mocker, pane_content="x")
+    mocker.patch("periscope.window_view.capture", return_value="x")
+
+    view, _ = build_window_view(_window(pid=pid), now_ts=1000)
+    assert view["spawned_by"] == "d188cde1"
+    assert view["spawner_name"] == "model-migration"
+
+
 def test_view_spawned_by_is_none_for_a_hand_created_pane(mocker, clean_state):
     """The key must always be present so the client can join on it uniformly."""
     from periscope.window_view import build_window_view

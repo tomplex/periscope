@@ -222,12 +222,10 @@ export function Rail() {
   const awaiting = awaitingReplyByPid(
     allLive, alertItems.value, dismissedAlertIds.value
   );
-  // Spawner handle -> its display name, resolved across ALL live windows (not
-  // the track-scoped set): a lead and its worker routinely sit in different
-  // tracks, and a lineage chip that vanished under a filter would be worse
-  // than none. Only live spawners resolve — a dead lead shows no chip.
-  const nameByPid = {};
-  for (const w of allLive) nameByPid[w.pid] = w.name || "claude";
+  // The spawner's NAME comes from the server (persisted, so it outlives the
+  // lead). Liveness is the client's to know, and decides only whether the chip
+  // can reveal the lead — a dead lead still shows, greyed.
+  const livePids = new Set(allLive.map((w) => w.pid));
   // Registry rows feed EMPTY goal tracks into the tree; a track-scope lens
   // narrows them the same way scopeWindows narrows the live set.
   const allTracks = tracks.value;
@@ -386,7 +384,8 @@ export function Rail() {
           pinned={prefs.getPinnedPids().includes(w.pid)}
           onTogglePin={() => prefs.togglePin(w.pid)}
           awaitingSince={awaiting.get(w.pid)}
-          spawnerName={w.spawned_by ? nameByPid[w.spawned_by] : null}
+          spawnerName={w.spawner_name}
+          spawnerLive={!!w.spawned_by && livePids.has(w.spawned_by)}
           onRevealSpawner={() => selectKey(`pane:${w.spawned_by}`)}
         />
       ));
