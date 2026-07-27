@@ -846,9 +846,13 @@ def test_list_claudes_filters_and_trims(mocker):
     c = body["claudes"][0]
     assert c == {
         "handle": "p1", "name": "lead", "session": "s", "cwd": "/a",
-        "status_line": "reviewing PR", "attached": True, "spawned_by": "boss0",
+        "status_line_inferred": "reviewing PR", "attached": True,
+        "spawned_by": "boss0",
     }
     assert "pane_id" not in c
+    # The `_inferred` suffix is the entire P1 fix — a bare `status_line` reads
+    # as the pane's own report and got a correctly-working worker interrupted.
+    assert "status_line" not in c
 
 
 def test_peek_happy(mocker):

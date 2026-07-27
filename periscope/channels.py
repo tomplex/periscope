@@ -1050,7 +1050,14 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
                 "name": w.get("name"),
                 "session": w.get("session"),
                 "cwd": w.get("cwd"),
-                "status_line": status[0] if status else None,
+                # Named `_inferred` because it is a Haiku paraphrase of recent
+                # activity, NOT the pane's own report of what it is doing. Read
+                # as first-person intent it has caused a supervising Claude to
+                # interrupt and nearly terminate a worker that was working
+                # correctly — the summary named a test the worker had never
+                # touched. The suffix is the whole fix: it travels with the
+                # value into any context that reads this tool's output.
+                "status_line_inferred": status[0] if status else None,
                 "attached": channel_state_for(pane_id)["attached"],
                 "spawned_by": get_window(pid).get("spawned_by"),
             })
@@ -1493,7 +1500,13 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "handle (pid), name, session, cwd, latest status line, whether "
             "it's attached to periscope's channel (messageable via send_to), "
             "and its spawner handle. Use to discover other Claudes before "
-            "messaging, peeking, or terminating them."
+            "messaging, peeking, or terminating them. "
+            "`status_line_inferred` is a MODEL-GENERATED SUMMARY of a pane's "
+            "recent activity — not that pane's own report of its intent. It is "
+            "routinely wrong about specifics: it has named files and tests a "
+            "pane never touched. Never act on it as if the pane said it. Use "
+            "`peek` to find out what a pane is actually doing before you "
+            "interrupt, correct, or terminate it."
         ),
         "inputSchema": {"type": "object", "properties": {}},
         "handler": _do_list_claudes_tool,
