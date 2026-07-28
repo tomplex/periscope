@@ -19,7 +19,7 @@
 // blockWs mocks window.WebSocket for /ws/pane only — the terminal mounts and
 // fits, but no socket connects and no initial paint arrives. That isolates
 // the mount/DOM path from the data path.
-import { getDetailMode, setDetailMode } from "./prefs.js";
+import { getDetailMode, setDetailMode, setLastSelected } from "./prefs.js";
 import { closeFileTab, openFileTab, railSelection, setActiveTab, windows } from "./store.js";
 import { track } from "./track.js";
 
@@ -81,7 +81,8 @@ async function sweep(cfg) {
   const origSel = railSelection.value;
   const origModes = pids.map((p) => getDetailMode(p));
   const mode = cfg.mode || "terminal";
-  for (const p of pids) setDetailMode(p, mode);
+  // realClick keeps each pane's natural detail mode — fidelity to manual use.
+  if (!cfg.realClick) for (const p of pids) setDetailMode(p, mode);
   blockPaneWs = !!cfg.blockWs;
   if (blockPaneWs) patchWs();
   track("memtest.start", { nonce: cfg.nonce, n, mode, blockWs: blockPaneWs, pids });
@@ -91,9 +92,25 @@ async function sweep(cfg) {
   // iframe hosts get display-toggled on every subsequent pane switch.
   const tabPath = cfg.tabPath || null;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // realClick arm: dispatch actual clicks on the rendered rail rows in
+  // up-then-down order — the full click path (setLastSelected → prefs PATCH →
+  // prefs-signal re-render), which the signal-flip path deliberately skips.
+  // Rows are re-queried per click; the rail re-renders on every poll.
+  let clickIdx = 0;
+  let clickDir = 1;
+  function realClickStep() {
+    const rows = document.querySelectorAll(".rail-row.pane-row");
+    if (rows.length < 2) return;
+    const span = Math.min(rows.length, Math.max(2, cfg.poolSize || rows.length));
+    if (clickIdx >= span) clickIdx = span - 1;
+    rows[clickIdx].click();
+    clickIdx += clickDir;
+    if (clickIdx >= span - 1 || clickIdx <= 0) clickDir = -clickDir;
+  }
   for (let i = 1; i <= n; i++) {
     const pid = pids[i % pids.length];
-    railSelection.value = `pane:${pid}`;
+    if (cfg.realClick) realClickStep();
+    else railSelection.value = `pane:${pid}`;
     document.title = `memtest ${i}/${n}`;
     await wait(tabPath ? settle / 3 : settle);
     if (tabPath) {
@@ -106,8 +123,12 @@ async function sweep(cfg) {
   }
   if (tabPath) for (const p of pids) closeFileTab(p, tabPath);
   blockPaneWs = false;
-  for (const [j, p] of pids.entries()) setDetailMode(p, origModes[j] || "terminal");
+  if (!cfg.realClick) for (const [j, p] of pids.entries()) setDetailMode(p, origModes[j] || "terminal");
   railSelection.value = origSel;
+  // realClick's row handlers rewrote last_selected in prefs; put it back.
+  if (cfg.realClick && origSel?.startsWith("pane:")) {
+    setLastSelected({ kind: "pane", pid: origSel.slice("pane:".length) });
+  }
   document.title = origTitle;
   track("memtest.done", { nonce: cfg.nonce, n, mode });
   running = false;
