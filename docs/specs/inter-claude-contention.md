@@ -5,6 +5,16 @@ happening*. Nothing prevents one, and nothing makes the cost of a collision
 visible before it is paid. This spec covers five changes that close that gap,
 in build order.
 
+> **Parked idea — not reviewed.** The measurements and the inventory of what
+> exists today are verified against the code. The proposals are not. Two
+> assumptions in §3 are load-bearing and unchecked: that a `PreToolUse` hook
+> can reliably identify which pane it is running in (`pane_session_hook.py`
+> has to hunt for `TMUX_PANE` on a direct child because inherited env
+> cross-contaminates — a hook may face the same problem), and that "is this
+> file tracked" is cheap enough to evaluate on every `Edit` inside the
+> sub-50ms budget §3 asserts. If either is false, §3's enforcement mechanism
+> needs a different shape. §1 and §2 do not depend on them.
+
 ## Problem
 
 Measured on 2026-07-27, one repo (`fdy`), one campaign (FDY-2637):
