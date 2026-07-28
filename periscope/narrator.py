@@ -50,6 +50,11 @@ Regen = Literal["session_switch", "size_changed", "first_sight"]
 
 # 1-3 lowercase dash-words — the build_rename_prompt taste rules, enforced.
 _NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+){0,2}$")
+# Scaffolding words that appear in tracks, branches, and worktree dirs without
+# naming anything: they must not make a container token set look richer than it
+# is, or an echo slips through ('worktree-world-model' vs 'world-model').
+_ECHO_STOPWORDS = frozenset({"worktree", "worktrees", "wt", "claude", "dev",
+                             "tc", "repo", "main", "master"})
 
 _enabled_checked: bool | None = None  # None = not yet checked
 
@@ -177,9 +182,48 @@ def _fmt_age(seconds: int) -> str:
     return f"{seconds // 3600}h ago"
 
 
+def _tokens(s: str | None) -> set[str]:
+    """Lowercase word tokens of a name/label, minus the noise words that
+    carry no identity ('worktree-world-model' and 'world-model' are the same
+    concept wearing a container prefix)."""
+    if not s:
+        return set()
+    parts = re.split(r"[^a-z0-9]+", s.lower())
+    return {p for p in parts if p and p not in _ECHO_STOPWORDS}
+
+
+def container_tokens(*, track_name: str | None, branch: str | None,
+                     cwd: str | None) -> set[str]:
+    """Every token already visible ABOVE a tab in the rail: its track header,
+    its branch subgroup row, and its worktree directory."""
+    return (_tokens(track_name) | _tokens(branch)
+            | _tokens(os.path.basename(cwd or "")))
+
+
+def siblings_excluding(members: list[tuple[str, str]], pane_id: str) -> list[str]:
+    """Names of the OTHER tabs under a track — self excluded by pane id (not
+    by name; colliding names are exactly the case that matters), deduped,
+    order preserved."""
+    out: list[str] = []
+    for pid, name in members:
+        if pid == pane_id or not name or name in out:
+            continue
+        out.append(name)
+    return out
+
+
+def is_echo(suggestion: str, container: set[str]) -> bool:
+    """True when the name says nothing the rail doesn't already show — every
+    token of it is already in the header, branch, or worktree name above it.
+    A name carrying at least one new token is kept: it distinguishes."""
+    toks = _tokens(suggestion)
+    return bool(toks) and bool(container) and toks <= container
+
+
 def rename_decision(suggestion: str | None, *, current_name: str,
                     row: PaneStatusRow | None, now: int,
-                    locked: bool = False) -> str | None:
+                    locked: bool = False,
+                    container: set[str] | None = None) -> str | None:
     """Code-side guards on the model's rename suggestion. The failure mode
     to fear is name churn, not staleness — every guard errs toward None."""
     if locked:
@@ -187,6 +231,11 @@ def rename_decision(suggestion: str | None, *, current_name: str,
     if not suggestion or suggestion == current_name:
         return None
     if len(suggestion) > 25 or not _NAME_RE.match(suggestion):
+        return None
+    # The prompt already forbids echoing the track/branch/worktree name, and
+    # Haiku still does it — five sibling tabs in one worktree all converged on
+    # 'world-model'. Prompt taste is advisory; this guard is not.
+    if container and is_echo(suggestion, container):
         return None
     if (row is not None and row.renamed_at is not None
             and now - row.renamed_at < RENAME_COOLDOWN_S):
@@ -347,7 +396,11 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
     # Haiku named every tab after its branch.
     from periscope import tracks as tracks_mod
     pane_tracks: dict[str, str] = {}
-    siblings: dict[str, list[str]] = {}
+    # (pane_id, name) pairs, not bare names: a pane must be excluded from its
+    # OWN sibling list by identity. Listing a tab's own name back to it read as
+    # endorsement — with five tabs all called 'world-model', the prompt was
+    # asking Haiku to differentiate from a list that was mostly itself.
+    members: dict[str, list[tuple[str, str]]] = {}
     for w, _parsed in panes:
         pid = w.get("pane_id") or ""
         if not pid:
@@ -358,7 +411,7 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
             log.exception("narrator track resolve failed for %s", pid)
             continue
         pane_tracks[pid] = tid
-        siblings.setdefault(tid, []).append(w.get("name") or "")
+        members.setdefault(tid, []).append((pid, w.get("name") or ""))
     work: dict[str, tuple[dict, str, Path, int, PaneStatusRow | None, Regen]] = {}
     candidates: list[tuple[int, str]] = []
     for w, _parsed in panes:
@@ -389,12 +442,11 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
         w, sid, jsonl, size, row, reason = work[pane_id]
         tid = pane_tracks.get(pane_id)
         track_name = tracks_mod.track_label(tid) if tid else None
-        sibling_names = siblings.get(tid) if tid else None
+        sibs = siblings_excluding(members.get(tid) or [], pane_id) if tid else None
         try:
             _generate(w, pane_id=pane_id, sid=sid, jsonl=jsonl, size=size,
                       row=row, reason=reason, now=now,
-                      track_name=track_name,
-                      sibling_names=sibling_names)
+                      track_name=track_name, sibling_names=sibs)
         except Exception:
             log.exception("narrator generation failed for %s", pane_id)
 
@@ -445,7 +497,10 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     gate_row = replace(row, renamed_at=renamed_at) if row is not None else None
     new_name = rename_decision(suggestion, current_name=current_name,
                                row=gate_row, now=now,
-                               locked=is_spawn_named(w))
+                               locked=is_spawn_named(w),
+                               container=container_tokens(
+                                   track_name=track_name,
+                                   branch=git.get("branch"), cwd=cwd))
     if new_name:
         # current_name and row are snapshots from tick start, and a tick can
         # run many seconds (sequential Haiku calls). Re-read the live window

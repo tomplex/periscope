@@ -382,6 +382,71 @@ def test_prompt_includes_track_and_siblings():
     assert "echo" in p.lower()
 
 
+# ---- the anti-echo post-filter + sibling self-exclusion ----
+#
+# Five tabs in one worktree all converged on 'world-model' (the worktree dir
+# and its track's label) despite the prompt forbidding exactly that. Prompt
+# taste is advisory; these two guards are not.
+
+def test_container_tokens_spans_track_branch_and_worktree_dir():
+    from periscope.narrator import container_tokens
+    c = container_tokens(track_name="worktree-world-model", branch="world-model",
+                         cwd="/Users/tom/dev/x/.claude/worktrees/world-model")
+    # 'worktree' is scaffolding and must not pad the set — otherwise a
+    # 'worktree-*' track label makes its own echo look like a new token.
+    assert c == {"world", "model"}
+
+
+def test_is_echo_blocks_a_pure_container_echo_and_keeps_a_distinguishing_name():
+    from periscope.narrator import container_tokens, is_echo
+    c = container_tokens(track_name="worktree-world-model", branch="world-model",
+                         cwd="/dev/x/.claude/worktrees/world-model")
+    assert is_echo("world-model", c)          # the observed failure
+    assert is_echo("model", c)                # an abbreviation of it
+    for good in ("c2-ancients", "e1-option-slot", "sts2-d2-darv",
+                 "reward-gpu-spec"):          # the spawn names it overwrote
+        assert not is_echo(good, c)
+
+
+def test_is_echo_needs_a_container_to_block_anything():
+    """No track/branch/cwd context => nothing is an echo. The guard must never
+    reject on an empty container, or a pane with no track loses every rename."""
+    from periscope.narrator import is_echo
+    assert not is_echo("world-model", set())
+
+
+def test_rename_decision_rejects_an_echo_of_the_container():
+    from periscope.narrator import rename_decision
+    kw = {"current_name": "c2-ancients", "row": None, "now": 1000}
+    assert rename_decision("world-model", container={"world", "model"}, **kw) is None
+    # …and still allows a name that carries something new.
+    assert rename_decision("ancient-events", container={"world", "model"},
+                           **kw) == "ancient-events"
+
+
+def test_rename_decision_without_a_container_is_unchanged():
+    from periscope.narrator import rename_decision
+    assert rename_decision("world-model", current_name="x", row=None,
+                           now=1000) == "world-model"
+
+
+def test_siblings_excluding_drops_self_by_pane_id_not_by_name():
+    """Colliding names are the case that matters: excluding by name would
+    erase a genuine sibling that happens to share this tab's name."""
+    from periscope.narrator import siblings_excluding
+    members = [("%54", "world-model"), ("%62", "world-model"),
+               ("%66", "world-model-migration")]
+    assert siblings_excluding(members, "%54") == ["world-model",
+                                                  "world-model-migration"]
+    assert siblings_excluding(members, "%66") == ["world-model"]
+
+
+def test_siblings_excluding_dedupes_and_drops_blanks():
+    from periscope.narrator import siblings_excluding
+    members = [("%1", "a"), ("%2", "a"), ("%3", ""), ("%4", "b")]
+    assert siblings_excluding(members, "%9") == ["a", "b"]
+
+
 def test_prompt_without_track_has_no_sibling_block():
     from periscope.narrator import build_narrator_prompt
     p = build_narrator_prompt(
