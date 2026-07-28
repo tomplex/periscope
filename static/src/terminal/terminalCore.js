@@ -307,11 +307,37 @@ function registerRoutingLinkProvider(t) {
   });
 }
 
+// xterm's WebglAddon.dispose() deletes its GL objects and removes the canvas
+// but never loses the CONTEXT (xtermjs/xterm.js#6068, open; PR #6069 is the
+// one-line upstream fix — our vendored bundle has zero occurrences of
+// loseContext). The orphaned context then survives until GC, which WebKit
+// defers indefinitely: measured at ~1.8MB of GPU memory and one graphics VM
+// region leaked per terminal mount, reaching 4.8GB over four days in the Tauri
+// shell (`footprint -p <WebContent pid>`, "Owned physical footprint (unmapped)
+// (graphics)"). It survives a page reload — the surfaces are IOKit-owned.
+// This also matters for correctness, not just memory: WebKit hard-caps live
+// contexts at 16 and evicts the least-recently-ACTIVE one unrecoverably, so
+// enough zombies will blank a terminal that's still on screen.
+// Reaches through private internals (no public accessor exists) — optional
+// chaining throughout so an upgrade that moves them degrades to the old
+// leaky-but-working behavior instead of throwing. Grab `gl` BEFORE dispose:
+// the renderer is torn down by it.
+// Caveat: WebKit #218305 reports loseContext() may still not fully release.
+// Verify with footprint, don't assume.
+function disposeWebglAddon() {
+  if (!webglAddon) return;
+  const gl = webglAddon._renderer?._gl;
+  try { webglAddon.dispose(); } catch (_) {}
+  try { gl?.getExtension("WEBGL_lose_context")?.loseContext(); } catch (_) {}
+  webglAddon = null;
+}
+
 export function startLiveTerminal(target) {
   track("terminal.open", { target });
   // Fresh xterm.js instance per mount. Dispose any leftover from a prior
   // session before creating a new one.
   if (term) {
+    disposeWebglAddon();   // before term.dispose() — see the addon's dispose guard
     try { term.dispose(); } catch (_) {}
     term = null;
   }
@@ -384,16 +410,15 @@ export function startLiveTerminal(target) {
     return false;                          // suppress xterm's arrow/scroll fallback
   });
 
-  // Try WebGL renderer; fall back to canvas on init failure (older Chromes,
-  // headless contexts, GPU-disabled environments). The addon writes to its
-  // own canvas inside xterm's element tree, so failure is silent on success
-  // paths but we log it once for diagnosis.
+  // Try the WebGL renderer. On init failure (GPU-disabled environments, or
+  // Safari <16 — the addon's constructor throws there) xterm keeps its DEFAULT
+  // DOM renderer: there is no automatic canvas fallback, and we don't vendor
+  // @xterm/addon-canvas. Same on dispose — WebglAddon's teardown explicitly
+  // reinstalls the DOM renderer. Failure is silent on the success path, so we
+  // log it once for diagnosis.
   try {
     webglAddon = new WebglAddon.WebglAddon();
-    webglAddon.onContextLoss(() => {
-      try { webglAddon?.dispose(); } catch (_) {}
-      webglAddon = null;
-    });
+    webglAddon.onContextLoss(() => { disposeWebglAddon(); });
     term.loadAddon(webglAddon);
   } catch (e) {
     console.warn("[periscope] WebGL terminal renderer unavailable; falling back to canvas:", e);
@@ -692,10 +717,7 @@ export function stopLiveTerminal() {
     try { termResizeObserver.disconnect(); } catch (_) {}
     termResizeObserver = null;
   }
-  if (webglAddon) {
-    try { webglAddon.dispose(); } catch (_) {}
-    webglAddon = null;
-  }
+  disposeWebglAddon();
   if (searchAddon) {
     try { searchAddon.dispose(); } catch (_) {}
     searchAddon = null;
