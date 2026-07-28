@@ -271,6 +271,16 @@ def test_is_spawn_named_false_without_a_pid(clean_state):
     assert not narrator.is_spawn_named({"pid": "", "name": "claude"})
 
 
+def test_is_spawn_named_reads_pid_raw_from_a_list_windows_shape(clean_state):
+    """The narrator's windows come from `list_windows()`, which carries
+    `pid_raw` and no `pid` — the shape every other test here skips. Keying on
+    `pid` alone silently disabled the lock for every real pane."""
+    from periscope import store
+    store.set_window_fields("p1", spawn_name="sts2-d2-darv")
+    assert narrator.is_spawn_named({"pid_raw": "p1", "name": "sts2-d2-darv"})
+    assert not narrator.is_spawn_named({"pid_raw": "p1", "name": "world-model"})
+
+
 @pytest.mark.parametrize("bad", [
     "a-name-far-too-long-to-accept",   # > 25 chars
     "Has-Uppercase",

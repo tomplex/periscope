@@ -202,8 +202,15 @@ def is_spawn_named(w: dict) -> bool:
     a narrator drift is permanent and silently breaks the lineage chip (which
     labels a spawner by its window name). So it's a lock, not a cooldown.
     Scoped to the name still matching: rename the window and the lock
-    releases, restoring the normal cooldown rules."""
-    pid = w.get("pid") or ""
+    releases, restoring the normal cooldown rules.
+
+    Reads `pid_raw` as well as `pid`: the narrator's windows come straight
+    from `list_windows()`, which carries only the raw `@periscope_id` stamp —
+    `pid` is attached later by `resolve_pids`, which the worker tick never
+    calls (it mints ids and writes state.json, so it can't run in the tick's
+    thread). Keying on `pid` alone made this lock dead in prod while the unit
+    tests, which hand-build `{"pid": ...}` dicts, kept passing."""
+    pid = w.get("pid") or w.get("pid_raw") or ""
     if not pid:
         return False
     return (get_window(pid).get("spawn_name") or "") == (w.get("name") or "")
