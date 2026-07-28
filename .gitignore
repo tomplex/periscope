@@ -11,3 +11,4 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/
 static/memtest.json
+static/memtest-frame.html
