@@ -1922,15 +1922,17 @@ body.modal-open { overflow: hidden; }
    .stale = generated >15 min ago (poll keeps it; the work likely moved on). */
 .rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 2px; }
 .pane-row-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
-/* Line 2 is the cwd chip alone (flex-basis: 100% forces the wrap); line 3 is
-   the PR/Linear chips followed by the narrator status. All three sharing one
-   flex row meant all three ellipsized at rail width — the cwd cut mid-path
-   AND the status cut mid-verb. The cwd is the long one, so it's what gets the
-   dedicated line; the chips are fixed-width and ride the status line rather
-   than taking a fourth. Everything is left-aligned down the same edge — the
-   chips carried a margin-left:auto that pinned them right, which read as
-   floating loose from the row. Indented to align with the label past the icon
-   column. */
+/* The meta block stacks: cwd chip, then narrator status, then PR/Linear
+   chips — each on its own line, left-aligned down a single edge. All three
+   sharing one flex row ellipsized all three at rail width (the cwd cut
+   mid-path AND the status cut mid-verb).
+   Every child carries flex-basis:100% because that is what forces the wrap.
+   Letting them size to content instead makes the layout content-dependent:
+   short status + one chip fit on a shared line while a long status wraps,
+   so the chips land under the cwd on one row and beside the status on the
+   next — the same field at a different height per row, which reads as
+   interleaved rather than as columns. Indented to align with the label past
+   the icon column. */
 .rail-meta {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 6px;
   margin-left: 21px;  /* icon 14px + 7px gap — align with the label */
@@ -1938,7 +1940,7 @@ body.modal-open { overflow: hidden; }
 }
 .rail-meta.stale { opacity: .5; }
 .rail-status {
-  flex: 1 1 auto; min-width: 0;
+  flex: 1 1 100%; min-width: 0;
   font-size: 11px; color: var(--fg-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -2490,7 +2492,7 @@ body.modal-open { overflow: hidden; }
 /* Compact line-2 chip cluster: PR/Linear, right-aligned past the status (which
    truncates first). margin-left:auto right-pins them even when status is
    absent (shells). */
-.rail-chips { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+.rail-chips { display: flex; align-items: center; gap: 5px; flex: 0 1 100%; }
 
 /* At-rest pinned flag on line 1 — gold star, hidden on hover (the toggle lives
    in the action overlay). Keeps the "pinned" signal without reserving width. */
