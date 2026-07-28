@@ -67,7 +67,11 @@ async function sweep(cfg) {
   const n = cfg.switches || 20;
   const wantClaude = (cfg.kind || "claude") === "claude";
   const pool = (windows.value || []).filter((w) => !!w.is_claude === wantClaude && w.pid);
-  const pids = cfg.pids?.length >= 2 ? cfg.pids : pool.slice(0, 2).map((w) => w.pid);
+  // poolSize > 2 cycles through that many distinct panes round-robin — the
+  // manual reproduction switches among MANY panes, and per-unique-pane
+  // allocations (transcript hosts, preview tabs) only show up that way.
+  const take = Math.max(2, cfg.poolSize || (cfg.pids?.length ?? 2));
+  const pids = cfg.pids?.length >= 2 ? cfg.pids : pool.slice(0, take).map((w) => w.pid);
   const origTitle = document.title;
   if (pids.length < 2) {
     track("memtest.abort", { nonce: cfg.nonce, reason: "need 2 pids" });
@@ -82,7 +86,7 @@ async function sweep(cfg) {
   if (blockPaneWs) patchWs();
   track("memtest.start", { nonce: cfg.nonce, n, mode, blockWs: blockPaneWs, pids });
   for (let i = 1; i <= n; i++) {
-    railSelection.value = `pane:${pids[i % 2]}`;
+    railSelection.value = `pane:${pids[i % pids.length]}`;
     document.title = `memtest ${i}/${n}`;
     await new Promise((r) => setTimeout(r, settle));
     if (i % 5 === 0) track("memtest.progress", { nonce: cfg.nonce, i });
