@@ -10,3 +10,4 @@ node_modules/
 # Tauri shell build artifacts
 src-tauri/target/
 src-tauri/gen/
+static/memtest.json
