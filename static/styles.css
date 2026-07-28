@@ -1831,6 +1831,13 @@ body.modal-open { overflow: hidden; }
 .term-scroll-bottom:hover { opacity: 1; background: var(--bg-3); }
 .detail-pane-body { display: grid; grid-template-columns: 1fr 280px; flex: 1; min-height: 0; }
 .detail-xterm { background: var(--bg-term); min-height: 0; overflow: hidden; padding: 2px 8px; font-feature-settings: "liga" 1, "calt" 1; }
+/* The single xterm instance is parked in this host div and moved between mount
+   containers (terminalCore.ensureTerminal), so it sits between the styled
+   container and xterm's own element. It has to be transparent to sizing: the
+   `.xterm { height: 100% }` rules below resolve against it, and FitAddon
+   measures xterm's PARENT — a zero-height host makes fit() compute garbage
+   rows and the terminal renders collapsed. */
+.xterm-host { height: 100%; min-height: 0; }
 .detail-xterm .xterm { height: 100%; }
 .detail-xterm .xterm-viewport { background: var(--bg-term) !important; }
 /* Detail-side reuses the modal's sidebar classes (.modal-side-section,

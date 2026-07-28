@@ -81,6 +81,7 @@ let _lastSentRows = 0;            //   — used to suppress redundant resizes du
 let pinnedCols = 0;
 const WIDTH_PIN_TOLERANCE = 4;   // cols; absorbs scrollbar/rounding wobble, not a real resize
 let containerEl = null;          // set by setTerminalContainer() before startLiveTerminal()
+let xtermHost = null;            // persistent parent for term.open(); moved between mounts
 
 // Whether the viewport is at the live bottom. The detail pane polls this to
 // show its scroll-to-bottom button only when scrolled up. True when there's no
@@ -164,7 +165,6 @@ const REL_PATH_RE = /(?<![:\w./-])(?:\.{1,2}\/[\w./-]+|[\w.-]+(?:\/[\w.-]+)+)\.(
 // all continue to work. The URL just also opens.
 let urlMouseDownHandler = null;
 let urlMouseUpHandler = null;
-let urlClickListenerEl = null;
 let pendingUrlClick = null;     // { url, x, y } across mousedown→mouseup
 
 function urlAtClick(e, t) {
@@ -234,20 +234,11 @@ function installUrlClickHandler(t) {
       t.writeln(`\r\n\x1b[31m[periscope: failed to open ${url}]\x1b[0m`);
     }
   };
+  // No uninstall counterpart: these bind to term.element, which lives inside
+  // the parked host for the page's lifetime, so they're installed exactly once
+  // alongside the terminal itself (see ensureTerminal).
   el.addEventListener("mousedown", urlMouseDownHandler, true);
   el.addEventListener("mouseup", urlMouseUpHandler, true);
-  urlClickListenerEl = el;
-}
-
-function uninstallUrlClickHandler() {
-  if (urlClickListenerEl) {
-    if (urlMouseDownHandler) urlClickListenerEl.removeEventListener("mousedown", urlMouseDownHandler, true);
-    if (urlMouseUpHandler) urlClickListenerEl.removeEventListener("mouseup", urlMouseUpHandler, true);
-  }
-  urlClickListenerEl = null;
-  urlMouseDownHandler = null;
-  urlMouseUpHandler = null;
-  pendingUrlClick = null;
 }
 
 function registerRoutingLinkProvider(t) {
@@ -332,16 +323,26 @@ function disposeWebglAddon() {
   webglAddon = null;
 }
 
-export function startLiveTerminal(target) {
-  track("terminal.open", { target });
-  // Fresh xterm.js instance per mount. Dispose any leftover from a prior
-  // session before creating a new one.
-  if (term) {
-    disposeWebglAddon();   // before term.dispose() — see the addon's dispose guard
-    try { term.dispose(); } catch (_) {}
-    term = null;
-  }
-  containerEl.innerHTML = "";
+// ONE xterm instance per page load, reused for every pane, living in a host
+// div we move between mount containers instead of rebuilding.
+//
+// It used to be a fresh Terminal + WebglAddon per mount, which leaked a WebGL
+// context on every pane switch (see disposeWebglAddon) — and WebKit caps live
+// contexts at 16, evicting the least-recently-active one unrecoverably, so
+// enough churn blanks a terminal that's still on screen. Reusing the instance
+// means we create exactly one context, which is the only fix that doesn't
+// depend on WebKit honouring loseContext() (bugs.webkit.org #218305).
+//
+// Re-parenting MUST move the element xterm already owns: term.open(newParent)
+// silently no-ops after the first call (xtermjs/xterm.js#4978 — it ignores the
+// argument and returns). Same imperative parked-host trick <Detail> uses to
+// keep LGTM iframes from reloading on reconciliation.
+//
+// Nothing disposes this; it intentionally lives for the page's lifetime.
+function ensureTerminal() {
+  if (term) return;
+  xtermHost = document.createElement("div");
+  xtermHost.className = "xterm-host";
 
   term = new Terminal({
     ...XTERM_OPTIONS,
@@ -373,8 +374,7 @@ export function startLiveTerminal(target) {
       },
     },
   });
-  term.open(containerEl);
-  term.focus();
+  term.open(xtermHost);
 
   // Mouse wheel. tmux consumes the app's mouse-mode DECSET (it's a tmux pane
   // flag, `mouse_any_flag`), so the xterm mirror never sees `\e[?1003h` and
@@ -463,36 +463,6 @@ export function startLiveTerminal(target) {
   fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
 
-  // Synchronous initial fit. Reading the container's layout (via fit())
-  // right after term.open() forces a sync layout flush, so we get real
-  // dims here — and we pass them to the WS as a connect-time hint so the
-  // server resizes tmux BEFORE capture-pane. Without that, the initial
-  // blob is at tmux's current pane width (often a real terminal also
-  // attached at 200+ cols) and xterm has to reflow it down, mangling
-  // box-drawing TUIs for the first frame. If fit can't measure for any
-  // reason, leave the hint at zero and the server uses tmux's view.
-  let initialCols = 0;
-  let initialRows = 0;
-  try {
-    fitAddon.fit();
-    // Reuse the session's pinned width unless this is a genuinely different
-    // size (first mount, or a real resize beyond the wobble tolerance). This
-    // is what stops navigation from reflowing tmux at slightly-different
-    // widths. Height always follows the fit — row changes don't reflow.
-    if (pinnedCols <= 0 || Math.abs(term.cols - pinnedCols) > WIDTH_PIN_TOLERANCE) {
-      pinnedCols = term.cols;
-    } else if (term.cols !== pinnedCols) {
-      term.resize(pinnedCols, term.rows);
-    }
-    initialCols = pinnedCols;
-    initialRows = term.rows;
-  } catch (_) {}
-
-  // ResizeObserver: refit + tell tmux when the modal/window changes size.
-  // Debounced so a window-drag doesn't spam tmux with subprocess calls.
-  termResizeObserver = new ResizeObserver(scheduleFit);
-  termResizeObserver.observe(containerEl);
-
   // The browser intercepts Cmd+key combos before xterm sees them. Translate
   // the common ones into readline-style control sequences and forward them
   // to the pane ourselves. Returning false from the handler tells xterm to
@@ -567,6 +537,61 @@ export function startLiveTerminal(target) {
       setTimeout(() => containerEl.classList.remove("bell-pulse"), 400);
     }
   });
+}
+
+export function startLiveTerminal(target) {
+  track("terminal.open", { target });
+  const reused = term !== null;
+  ensureTerminal();
+  // Move the parked host into this mount's container. Preact hands us a fresh
+  // empty div per mount, so this re-parents rather than duplicates.
+  if (containerEl && xtermHost.parentElement !== containerEl) {
+    containerEl.appendChild(xtermHost);
+  }
+  if (reused) {
+    // Drop the previous pane's grid, scrollback and input modes. The server's
+    // capture-pane blob repaints this pane on connect, exactly as it did for a
+    // freshly-created instance — pane switches never preserved scrollback.
+    try { term.reset(); } catch (_) {}
+    mouseReportingOn = false;
+    wheelAccumPx = 0;
+  }
+  term.focus();
+
+  // Synchronous initial fit. Reading the container's layout (via fit())
+  // forces a sync layout flush, so we get real dims here — and we pass them
+  // to the WS as a connect-time hint so the server resizes tmux BEFORE
+  // capture-pane. Without that, the initial blob is at tmux's current pane
+  // width (often a real terminal also attached at 200+ cols) and xterm has to
+  // reflow it down, mangling box-drawing TUIs for the first frame. If fit
+  // can't measure for any reason, leave the hint at zero and the server uses
+  // tmux's view.
+  let initialCols = 0;
+  let initialRows = 0;
+  try {
+    fitAddon.fit();
+    // Reuse the session's pinned width unless this is a genuinely different
+    // size (first mount, or a real resize beyond the wobble tolerance). This
+    // is what stops navigation from reflowing tmux at slightly-different
+    // widths. Height always follows the fit — row changes don't reflow.
+    if (pinnedCols <= 0 || Math.abs(term.cols - pinnedCols) > WIDTH_PIN_TOLERANCE) {
+      pinnedCols = term.cols;
+    } else if (term.cols !== pinnedCols) {
+      term.resize(pinnedCols, term.rows);
+    }
+    initialCols = pinnedCols;
+    initialRows = term.rows;
+  } catch (_) {}
+
+  // ResizeObserver: refit + tell tmux when the modal/window changes size.
+  // Debounced so a window-drag doesn't spam tmux with subprocess calls.
+  // Re-created per mount because it watches the mount's container, not the
+  // parked host.
+  if (termResizeObserver) {
+    try { termResizeObserver.disconnect(); } catch (_) {}
+  }
+  termResizeObserver = new ResizeObserver(scheduleFit);
+  if (containerEl) termResizeObserver.observe(containerEl);
 
   termWsTarget = target;
   termIntentionalClose = false;
@@ -697,11 +722,16 @@ function scheduleFit() {
   }, 80);
 }
 
+// Detach from the current pane WITHOUT destroying the xterm instance: the
+// socket, the resize observer and the pending timers are per-mount, but the
+// terminal, its addons and the parked host outlive every mount (see
+// ensureTerminal — recreating them is what leaked a WebGL context per switch).
+// The url-click handlers are bound to term.element, which is inside the parked
+// host, so they persist with the instance rather than being reinstalled.
 export function stopLiveTerminal() {
   // Suppress the reconnect path before closing — otherwise onclose would
   // schedule a retry against a target whose modal we've just torn down.
   termIntentionalClose = true;
-  uninstallUrlClickHandler();
   termWsTarget = null;
   if (termReconnectTimer) {
     clearTimeout(termReconnectTimer);
@@ -717,20 +747,13 @@ export function stopLiveTerminal() {
     try { termResizeObserver.disconnect(); } catch (_) {}
     termResizeObserver = null;
   }
-  disposeWebglAddon();
-  if (searchAddon) {
-    try { searchAddon.dispose(); } catch (_) {}
-    searchAddon = null;
-  }
-  fitAddon = null;
   if (termWs) {
     try { termWs.close(); } catch (_) {}
     termWs = null;
   }
-  if (term) {
-    try { term.dispose(); } catch (_) {}
-    term = null;
-  }
+  // Park the host outside the DOM so Preact tearing down the mount container
+  // can't take it with it. It goes back in on the next startLiveTerminal().
+  if (xtermHost?.parentElement) xtermHost.remove();
 }
 
 // Modal/Detail use this to surface image-paste errors inline in the terminal.
