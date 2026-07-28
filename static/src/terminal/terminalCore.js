@@ -315,6 +315,12 @@ function registerRoutingLinkProvider(t) {
 // the renderer is torn down by it.
 // Caveat: WebKit #218305 reports loseContext() may still not fully release.
 // Verify with footprint, don't assume.
+// localStorage can throw in restricted contexts; a failed read means "keep the
+// default renderer", never a broken terminal.
+function noWebglRenderer() {
+  try { return localStorage.getItem("periscope.noWebgl") === "1"; } catch (_) { return false; }
+}
+
 function disposeWebglAddon() {
   if (!webglAddon) return;
   const gl = webglAddon._renderer?._gl;
@@ -416,12 +422,22 @@ function ensureTerminal() {
   // @xterm/addon-canvas. Same on dispose — WebglAddon's teardown explicitly
   // reinstalls the DOM renderer. Failure is silent on the success path, so we
   // log it once for diagnosis.
-  try {
-    webglAddon = new WebglAddon.WebglAddon();
-    webglAddon.onContextLoss(() => { disposeWebglAddon(); });
-    term.loadAddon(webglAddon);
-  } catch (e) {
-    console.warn("[periscope] WebGL terminal renderer unavailable; falling back to canvas:", e);
+  // Escape hatch for bisecting GPU-memory growth without a rebuild:
+  //   localStorage.setItem("periscope.noWebgl", "1")  // then reload
+  // GPU-backed memory ("Owned physical footprint (unmapped) (graphics)" in
+  // `footprint -p <WebContent pid>`) grew ~8MB per pane switch even after the
+  // instance became single-use, so the renderer needs to be removable from the
+  // picture to tell atlas/texture churn apart from everything else.
+  if (!noWebglRenderer()) {
+    try {
+      webglAddon = new WebglAddon.WebglAddon();
+      webglAddon.onContextLoss(() => { disposeWebglAddon(); });
+      term.loadAddon(webglAddon);
+    } catch (e) {
+      console.warn("[periscope] WebGL terminal renderer unavailable; using the DOM renderer:", e);
+    }
+  } else {
+    console.warn("[periscope] WebGL renderer disabled via localStorage periscope.noWebgl");
   }
 
   // Search addon: powers the Cmd+F bar (UI in a later task). Exported as
