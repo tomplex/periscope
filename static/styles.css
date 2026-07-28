@@ -1922,17 +1922,20 @@ body.modal-open { overflow: hidden; }
    .stale = generated >15 min ago (poll keeps it; the work likely moved on). */
 .rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 2px; }
 .pane-row-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
-/* Line 2: chip + narrator status share a flex row. The chip truncates first
-   (flex: 0 1 auto + ellipsis); the status verb wins the remaining space
-   (flex: 1 1 auto). Indented to align with the label past the icon column. */
+/* Line 2 is cwd chip + PR/Linear chips; the narrator status takes line 3 to
+   itself (flex-basis: 100% forces the wrap — it must come last in DOM order or
+   it pushes the chips down with it). All three sharing one flex row meant all
+   three ellipsized at rail width: the cwd cut mid-path AND the status cut
+   mid-verb, which is the one field that needs the room. Indented to align with
+   the label past the icon column. */
 .rail-meta {
-  display: flex; align-items: baseline; gap: 6px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 6px;
   margin-left: 21px;  /* icon 14px + 7px gap — align with the label */
   min-width: 0;
 }
 .rail-meta.stale { opacity: .5; }
 .rail-status {
-  flex: 1 1 auto; min-width: 0;
+  flex: 1 1 100%; min-width: 0;
   font-size: 11px; color: var(--fg-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -1964,7 +1967,7 @@ body.modal-open { overflow: hidden; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 11em;
+  max-width: 18em;
   flex: 0 1 auto;
 }
 
