@@ -5,6 +5,7 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuild
 use tauri::Manager;
 
 mod notifications;
+mod recycle;
 mod text_behavior;
 
 fn main() {
@@ -63,6 +64,14 @@ fn main() {
                         .accelerator("Alt+CmdOrCtrl+I")
                         .build(handle)?,
                 )
+                .separator()
+                .item(
+                    // Full WebContent process replacement — the only reset for
+                    // WKWebView's trusted-input graphics-region leak (a plain
+                    // reload reuses the process and frees nothing; see recycle.rs).
+                    &MenuItemBuilder::with_id("recycle", "Recycle Webview")
+                        .build(handle)?,
+                )
                 .build()?;
             let window_submenu = SubmenuBuilder::new(handle, "Window")
                 .minimize()
@@ -72,9 +81,14 @@ fn main() {
                 .items(&[&app_submenu, &edit_submenu, &view_submenu, &window_submenu])
                 .build()?;
             app.set_menu(menu)?;
+            recycle::start_monitor(&handle.clone());
             Ok(())
         })
         .on_menu_event(|app, event| {
+            if event.id().as_ref() == "recycle" {
+                recycle::recycle_now(app);
+                return;
+            }
             let Some(window) = app.get_webview_window("main") else { return };
             match event.id().as_ref() {
                 "reload" => {
@@ -91,6 +105,15 @@ fn main() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // Between destroy and rebuild inside a recycle the app has zero
+            // windows, which macOS/tauri reads as "quit". Veto it.
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                if recycle::RECYCLING.load(std::sync::atomic::Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
