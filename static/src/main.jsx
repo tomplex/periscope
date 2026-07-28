@@ -6,6 +6,7 @@ import { DialogHost } from "./overlays/Dialog.jsx";
 import { Overlays } from "./overlays/Overlays.jsx";
 import { Toaster } from "./overlays/Toast.jsx";
 import { installKeys } from "./keys.js";
+import { startMemtest } from "./memtest.js";
 import { getLastSelected, loadPrefs } from "./prefs.js";
 import { Split } from "./split/Split.jsx";
 import { railSelection } from "./store.js";
@@ -41,6 +42,10 @@ async function boot() {
   // ⌘R / ⌘⇧R. Installed after mount so the first keypress can already see a
   // rendered selection.
   installKeys();
+
+  // Memory-leak sweep driver; dormant unless static/memtest.json exists
+  // (see memtest.js — one boot-time probe, nothing recurring in normal use).
+  startMemtest();
 
   // PWA installability gate — the service worker is a no-op (see static/sw.js).
   if ("serviceWorker" in navigator) {
