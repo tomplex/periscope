@@ -1903,7 +1903,7 @@ body.modal-open { overflow: hidden; }
 
 .rail-row {
   display: flex; align-items: center; gap: 7px;
-  padding: 7px 10px; font-size: 13px; position: relative;
+  padding: 9px 10px; font-size: 13px; position: relative;
   border-left: 2px solid transparent;
 }
 .rail-row.selected { background: var(--bg-1-hi); border-left-color: var(--accent); }
@@ -1920,7 +1920,7 @@ body.modal-open { overflow: hidden; }
    width past the dot gutter — but stays inside the tree-guide indent (the
    row's content box already starts right of the vertical guides).
    .stale = generated >15 min ago (poll keeps it; the work likely moved on). */
-.rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 0; }
+.rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 2px; }
 .pane-row-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
 /* Line 2: chip + narrator status share a flex row. The chip truncates first
    (flex: 0 1 auto + ellipsis); the status verb wins the remaining space
@@ -2079,7 +2079,7 @@ body.modal-open { overflow: hidden; }
    the name line, skewing the tree — so the stub and the terminator pin to
    the name line's center instead: padding-top + half the ~18px name row
    (the 18px close/pin buttons set the line height). */
-.rail-row.child-row { --rail-name-center: 16px; }   /* base: 7px pad + 9px */
+.rail-row.child-row { --rail-name-center: 18px; }   /* base: 9px pad + 9px */
 .rail-row.child-row::before,
 .rail-row.child-row::after {
   content: "";
