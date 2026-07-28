@@ -20,7 +20,7 @@
 // fits, but no socket connects and no initial paint arrives. That isolates
 // the mount/DOM path from the data path.
 import { getDetailMode, setDetailMode } from "./prefs.js";
-import { railSelection, windows } from "./store.js";
+import { closeFileTab, openFileTab, railSelection, setActiveTab, windows } from "./store.js";
 import { track } from "./track.js";
 
 const POLL_MS = 3000;
@@ -85,12 +85,26 @@ async function sweep(cfg) {
   blockPaneWs = !!cfg.blockWs;
   if (blockPaneWs) patchWs();
   track("memtest.start", { nonce: cfg.nonce, n, mode, blockWs: blockPaneWs, pids });
+  // tabPath arm: after each pane lands, open (first visit) or front the HTML
+  // preview tab, then toggle back to the terminal — the manual repro's
+  // "clicking between the term and an HTML file tab" pattern. Kept-mounted
+  // iframe hosts get display-toggled on every subsequent pane switch.
+  const tabPath = cfg.tabPath || null;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 1; i <= n; i++) {
-    railSelection.value = `pane:${pids[i % pids.length]}`;
+    const pid = pids[i % pids.length];
+    railSelection.value = `pane:${pid}`;
     document.title = `memtest ${i}/${n}`;
-    await new Promise((r) => setTimeout(r, settle));
+    await wait(tabPath ? settle / 3 : settle);
+    if (tabPath) {
+      openFileTab({ path: tabPath }); // needs activeTarget — set by the render above
+      await wait(settle / 3);
+      setActiveTab(pid, "pane");
+      await wait(settle / 3);
+    }
     if (i % 5 === 0) track("memtest.progress", { nonce: cfg.nonce, i });
   }
+  if (tabPath) for (const p of pids) closeFileTab(p, tabPath);
   blockPaneWs = false;
   for (const [j, p] of pids.entries()) setDetailMode(p, origModes[j] || "terminal");
   railSelection.value = origSel;
