@@ -85,7 +85,13 @@ async function sweep(cfg) {
   if (!cfg.realClick) for (const p of pids) setDetailMode(p, mode);
   blockPaneWs = !!cfg.blockWs;
   if (blockPaneWs) patchWs();
-  track("memtest.start", { nonce: cfg.nonce, n, mode, blockWs: blockPaneWs, pids });
+  const rail = document.getElementById("rail") || document.querySelector(".rail, #left");
+  track("memtest.start", {
+    nonce: cfg.nonce, n, mode, blockWs: blockPaneWs, pids,
+    realClick: !!cfg.realClick, scrollRail: !!cfg.scrollRail, hoverStorm: !!cfg.hoverStorm,
+    railScroll: rail ? { sh: rail.scrollHeight, ch: rail.clientHeight } : null,
+    noWebgl: (() => { try { return localStorage.getItem("periscope.noWebgl") === "1"; } catch (_) { return null; } })(),
+  });
   // tabPath arm: after each pane lands, open (first visit) or front the HTML
   // preview tab, then toggle back to the terminal — the manual repro's
   // "clicking between the term and an HTML file tab" pattern. Kept-mounted
@@ -103,7 +109,20 @@ async function sweep(cfg) {
     if (rows.length < 2) return;
     const span = Math.min(rows.length, Math.max(2, cfg.poolSize || rows.length));
     if (clickIdx >= span) clickIdx = span - 1;
-    rows[clickIdx].click();
+    const row = rows[clickIdx];
+    // scrollRail: bring the row into view the way a human reaches it — real
+    // smooth scrolling of the rail, churning scroll tiles. element.click()
+    // alone never scrolls, which is the one thing no previous arm did.
+    if (cfg.scrollRail) row.scrollIntoView({ behavior: "smooth", block: "center" });
+    // hoverStorm: sweep mouseover/mouseout across every row between clicks —
+    // closest synthetic stand-in for the pointer traversing the rail.
+    if (cfg.hoverStorm) {
+      for (const r of rows) {
+        r.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+        r.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
+      }
+    }
+    row.click();
     clickIdx += clickDir;
     if (clickIdx >= span - 1 || clickIdx <= 0) clickDir = -clickDir;
   }
