@@ -660,6 +660,13 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     pid = stamp_new_window(target)
     pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
 
+    # An explicit spawn name is the lead's deliberate label for the task it
+    # delegated — recorded so the narrator locks it instead of drifting it
+    # (narrator.is_spawn_named). Only when `name` was passed: without it tmux
+    # auto-names off the command/dir, which carries no intent to protect.
+    if name and pid:
+        set_window_fields(pid, spawn_name=name)
+
     # Provenance breadcrumb: record who spawned this child so report() knows
     # where "back" is. Pure metadata, no ownership — a severed child simply
     # never calls report(). Guard on both ids so a vanished caller doesn't

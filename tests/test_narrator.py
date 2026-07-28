@@ -241,6 +241,36 @@ def test_rename_decision_allows_after_cooldown_expiry():
         "fs-liveness", current_name="claude", row=row, now=NOW) == "fs-liveness"
 
 
+def test_rename_decision_locked_blocks_valid_suggestion():
+    assert narrator.rename_decision(
+        "fs-liveness", current_name="claude", row=_row(), now=NOW,
+        locked=True) is None
+
+
+# ---- is_spawn_named (the spawn-name lock) ----
+
+def test_is_spawn_named_true_while_wearing_the_spawn_name(clean_state):
+    from periscope import store
+    store.set_window_fields("p1", spawn_name="qa-app-design")
+    assert narrator.is_spawn_named({"pid": "p1", "name": "qa-app-design"})
+
+
+def test_is_spawn_named_false_after_a_later_rename(clean_state):
+    """A rename off the spawn name releases the lock — the deliberate label
+    the lead chose is gone, so the normal cooldown rules take over."""
+    from periscope import store
+    store.set_window_fields("p1", spawn_name="qa-app-design")
+    assert not narrator.is_spawn_named({"pid": "p1", "name": "something-else"})
+
+
+def test_is_spawn_named_false_without_a_spawn_name(clean_state):
+    assert not narrator.is_spawn_named({"pid": "p1", "name": "claude"})
+
+
+def test_is_spawn_named_false_without_a_pid(clean_state):
+    assert not narrator.is_spawn_named({"pid": "", "name": "claude"})
+
+
 @pytest.mark.parametrize("bad", [
     "a-name-far-too-long-to-accept",   # > 25 chars
     "Has-Uppercase",

@@ -34,6 +34,7 @@ from periscope.rename_ai import (
     claude_complete,
     transcript_summary_from_path,
 )
+from periscope.store import get_window
 from periscope.tmux import tmux
 from periscope.turns import jsonl_for_session
 
@@ -177,9 +178,12 @@ def _fmt_age(seconds: int) -> str:
 
 
 def rename_decision(suggestion: str | None, *, current_name: str,
-                    row: PaneStatusRow | None, now: int) -> str | None:
+                    row: PaneStatusRow | None, now: int,
+                    locked: bool = False) -> str | None:
     """Code-side guards on the model's rename suggestion. The failure mode
     to fear is name churn, not staleness — every guard errs toward None."""
+    if locked:
+        return None
     if not suggestion or suggestion == current_name:
         return None
     if len(suggestion) > 25 or not _NAME_RE.match(suggestion):
@@ -188,6 +192,21 @@ def rename_decision(suggestion: str | None, *, current_name: str,
             and now - row.renamed_at < RENAME_COOLDOWN_S):
         return None
     return suggestion
+
+
+def is_spawn_named(w: dict) -> bool:
+    """This window still wears the name the Claude that spawned it chose.
+
+    A spawn name is deliberate the way a human rename is, but nothing will
+    re-assert it: the lead names its worker's task and then usually exits, so
+    a narrator drift is permanent and silently breaks the lineage chip (which
+    labels a spawner by its window name). So it's a lock, not a cooldown.
+    Scoped to the name still matching: rename the window and the lock
+    releases, restoring the normal cooldown rules."""
+    pid = w.get("pid") or ""
+    if not pid:
+        return False
+    return (get_window(pid).get("spawn_name") or "") == (w.get("name") or "")
 
 
 def is_external_rename(row: PaneStatusRow, current_name: str) -> bool:
@@ -418,7 +437,8 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
         suggestion = None
     gate_row = replace(row, renamed_at=renamed_at) if row is not None else None
     new_name = rename_decision(suggestion, current_name=current_name,
-                               row=gate_row, now=now)
+                               row=gate_row, now=now,
+                               locked=is_spawn_named(w))
     if new_name:
         # current_name and row are snapshots from tick start, and a tick can
         # run many seconds (sequential Haiku calls). Re-read the live window
