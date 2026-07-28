@@ -1923,12 +1923,14 @@ body.modal-open { overflow: hidden; }
 .rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 2px; }
 .pane-row-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
 /* Line 2 is the cwd chip alone (flex-basis: 100% forces the wrap); line 3 is
-   the narrator status with the PR/Linear chips right-aligned after it. All
-   three sharing one flex row meant all three ellipsized at rail width — the
-   cwd cut mid-path AND the status cut mid-verb. The cwd is the long one, so
-   it's what gets the dedicated line; the chips are fixed-width and ride the
-   status line rather than taking a fourth. Indented to align with the label
-   past the icon column. */
+   the PR/Linear chips followed by the narrator status. All three sharing one
+   flex row meant all three ellipsized at rail width — the cwd cut mid-path
+   AND the status cut mid-verb. The cwd is the long one, so it's what gets the
+   dedicated line; the chips are fixed-width and ride the status line rather
+   than taking a fourth. Everything is left-aligned down the same edge — the
+   chips carried a margin-left:auto that pinned them right, which read as
+   floating loose from the row. Indented to align with the label past the icon
+   column. */
 .rail-meta {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 6px;
   margin-left: 21px;  /* icon 14px + 7px gap — align with the label */
@@ -2488,7 +2490,7 @@ body.modal-open { overflow: hidden; }
 /* Compact line-2 chip cluster: PR/Linear, right-aligned past the status (which
    truncates first). margin-left:auto right-pins them even when status is
    absent (shells). */
-.rail-chips { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; margin-left: auto; }
+.rail-chips { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
 
 /* At-rest pinned flag on line 1 — gold star, hidden on hover (the toggle lives
    in the action overlay). Keeps the "pinned" signal without reserving width. */

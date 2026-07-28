@@ -233,11 +233,11 @@ export function PaneRow({
       {(chip || statusText || (!expanded && (prChip || linChip))) && (
         <div class={`rail-meta${statusStale ? " stale" : ""}`}>
           {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
-          {statusText && (
-            <span class="rail-status" title={w.status_line}>{statusText}</span>
-          )}
           {!expanded && (prChip || linChip) && (
             <span class="rail-chips">{prChip}{linChip}</span>
+          )}
+          {statusText && (
+            <span class="rail-status" title={w.status_line}>{statusText}</span>
           )}
         </div>
       )}
