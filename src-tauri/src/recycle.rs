@@ -184,6 +184,15 @@ pub fn recycle_now(app: &AppHandle) {
                     WebviewUrl::External(DASHBOARD_URL.parse().expect("static url parses")),
                 )
                 .title("Periscope")
+                // tauri.conf.json's window config is read ONLY for the windows
+                // Tauri builds at startup — a WebviewWindowBuilder starts from
+                // WebviewAttributes::default(), where drag_drop_handler_enabled
+                // is TRUE. That handler makes the webview swallow OS drag
+                // events, killing every HTML5 drag-and-drop in the page (309ad35
+                // set dragDropEnabled=false for exactly this). So the first
+                // recycle silently broke rail reordering until the app was
+                // relaunched.
+                .disable_drag_drop_handler()
                 .build();
                 let _ = tx.send(match result {
                     Ok(window) => {
