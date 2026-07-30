@@ -18,9 +18,8 @@ def test_pane_returns_parsed_payload(client, mocker):
 
     _patch(mocker, "tmux", side_effect=fake_tmux)
     _patch(mocker, "pane_meta", return_value=("win-name", "/tmp/proj"))
-    _patch(mocker, "parse_pane", return_value={"is_claude": False, "spinner": None})
-    _patch(mocker, "smooth_spinner", side_effect=lambda t, s: s)
-    _patch(mocker, "smooth_is_claude", side_effect=lambda t, c: c)
+    _patch(mocker, "parse_pane", return_value={"agent": None, "spinner": None})
+    _patch(mocker, "smooth_parsed", side_effect=lambda *, pane_id, parsed: parsed)
     _patch(mocker, "cached_git_state", return_value={"branch": "main"})
     _patch(mocker, "cached_pr_state", return_value={"pr": None})
     _patch(mocker, "cached_pane_activity", return_value=[])

@@ -9,7 +9,7 @@ import * as prefs from "../prefs.js";
 import {dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection,
   windows, 
 } from "../store.js";
-import { relTime, shortestUniqueSuffix, waitLabel } from "../util.js";
+import { AGENT_META, paneLabel, relTime, shortestUniqueSuffix, waitLabel } from "../util.js";
 import { alertItems, revealPane } from "./alertFeed.js";
 import {buildActivity,
   buildNeedsYou, buildReady, buildRunning, 
@@ -19,9 +19,6 @@ import { freezeRows, isStale, railHovered } from "./layoutFreeze.js";
 import { statusDotClass } from "./RailRows.jsx";
 import { SectionHeader } from "./SectionHeader.jsx";
 
-function paneLabel(w) {
-  return w?.name || (w?.is_claude ? "claude" : "shell");
-}
 // `shorten` collapses a long slash-path session to its shortest unique suffix.
 function originLabel(w, fallbackSession, fallbackName, shorten) {
   const session = w?.session || fallbackSession || "";
@@ -246,7 +243,7 @@ export function AttentionTop() {
           {!pinnedCollapsed && pinned.map((w) => (
             <div key={`pin:${w.pid}`} class="rail-row attn-row attn-pinned"
                  onClick={() => selectPane(w)}>
-              <span class="attn-ico">{w.is_claude ? "✻" : "$"}</span>
+              <span class={`attn-ico ${AGENT_META[w.agent]?.className || ""}`}>{AGENT_META[w.agent]?.glyph || "$"}</span>
               <span class="attn-label">{originLabel(w, null, null, shorten)}</span>
               <span class={statusDotClass(w.state)} style="margin-left:auto"></span>
             </div>

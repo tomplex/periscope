@@ -504,7 +504,11 @@ def annotate_hot_panes(views: list[dict]) -> None:
     plan = cached_plan_usage() or {}
     if not ((plan.get("meters") or {}).get("session") or {}).get("hot"):
         return
-    ids = [v["pane_id"] for v in views if v.get("is_claude") and v.get("pane_id")]
+    ids = [
+        v["pane_id"]
+        for v in views
+        if v.get("agent") == "claude" and v.get("pane_id")
+    ]
     rates = pane_burn_rates(ids)
     total = sum(rates.get(i, 0.0) for i in ids)
     if total <= 0:

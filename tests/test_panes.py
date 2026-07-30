@@ -16,19 +16,19 @@ import pytest
 
 from periscope.panes import (
     ACTIVE_OP_RE,
-    CLAUDE_STICKY_S,
+    AGENT_STICKY_S,
     SPINNER_GRACE_S,
     SPINNER_RE,
     _acted_at,
     _active_per_session,
-    _claude_last_seen,
+    _agent_last_seen,
     _focused_at,
     _spinner_last_seen,
     list_windows,
     note_action,
     note_focus,
     parse_pane,
-    smooth_is_claude,
+    smooth_agent,
     smooth_spinner,
     update_focus_from_windows,
 )
@@ -588,13 +588,13 @@ def reset_panes_state():
     _focused_at.clear()
     _acted_at.clear()
     _spinner_last_seen.clear()
-    _claude_last_seen.clear()
+    _agent_last_seen.clear()
     _active_per_session.clear()
     yield
     _focused_at.clear()
     _acted_at.clear()
     _spinner_last_seen.clear()
-    _claude_last_seen.clear()
+    _agent_last_seen.clear()
     _active_per_session.clear()
 
 
@@ -621,26 +621,36 @@ def test_smooth_spinner_returns_none_after_grace_expires(mocker):
     assert out is None
 
 
-def test_smooth_is_claude_true_passes_through():
-    assert smooth_is_claude("foo:0", True) is True
-    assert "foo:0" in _claude_last_seen
+def test_smooth_agent_positive_passes_through():
+    assert smooth_agent("%1", "claude") == "claude"
+    assert "%1" in _agent_last_seen
 
 
-def test_smooth_is_claude_false_after_stickiness_expires(mocker):
+def test_smooth_agent_none_after_stickiness_expires(mocker):
     mocker.patch(
         "periscope.panes.time.time",
-        side_effect=[100.0, 100.0 + CLAUDE_STICKY_S + 1.0],
+        side_effect=[100.0, 100.0 + AGENT_STICKY_S + 1.0],
     )
-    smooth_is_claude("foo:0", True)
-    assert smooth_is_claude("foo:0", False) is False
+    smooth_agent("%1", "claude")
+    assert smooth_agent("%1", None) is None
 
 
-def test_smooth_is_claude_sticky_within_window(mocker):
-    """If we just saw is_claude=True, a momentary False should still
-    return True until the stickiness window expires."""
+def test_smooth_agent_sticky_within_window(mocker):
+    """A momentary missed detection retains the provider."""
     mocker.patch("periscope.panes.time.time", side_effect=[100.0, 100.5])
-    smooth_is_claude("foo:0", True)
-    assert smooth_is_claude("foo:0", False) is True
+    smooth_agent("%1", "claude")
+    assert smooth_agent("%1", None) == "claude"
+
+
+def test_smooth_agent_provider_swap_overwrites_stickiness():
+    smooth_agent("%1", "claude")
+    assert smooth_agent("%1", "codex") == "codex"
+    assert smooth_agent("%1", None) == "codex"
+
+
+def test_smooth_agent_isolated_by_pane_id():
+    smooth_agent("%1", "claude")
+    assert smooth_agent("%2", None) is None
 
 
 def test_note_focus_stamps_now():
@@ -680,6 +690,20 @@ def test_list_windows_parses_tmux_list_output(mocker):
     assert out[0]["pid_raw"] == "1234abcd"
     assert out[0]["pane_id"] == "%5"
     assert out[1]["active"] is False
+    assert out[0]["pane_pid"] == ""
+    assert out[0]["current_command"] == ""
+
+
+def test_list_windows_appends_process_metadata(mocker):
+    sample = (
+        "main\t0\tcodex\t1\t/home/tom/dev/foo\t1234abcd\t%5"
+        "\t1717250000\t@9\t4242\tcodex\n"
+    )
+    mocker.patch("periscope.panes.tmux", return_value=sample)
+    row = list_windows()[0]
+    assert row["window_id"] == "@9"
+    assert row["pane_pid"] == "4242"
+    assert row["current_command"] == "codex"
 
 
 def test_all_pane_ids_parses_and_dedupes(mocker):

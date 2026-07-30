@@ -574,7 +574,7 @@ def tick_env(fresh_activity_db, tmp_path, monkeypatch):
 
 def _pane(pane_id="%1", name="claude", session="s", index=0, cwd="/repo"):
     return ({"pane_id": pane_id, "name": name, "session": session,
-             "index": index, "cwd": cwd}, {"is_claude": True, "state": "idle"})
+             "index": index, "cwd": cwd}, {"agent": "claude", "state": "idle"})
 
 
 def test_tick_feeds_track_label_and_siblings_into_prompt(tick_env):

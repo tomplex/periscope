@@ -44,7 +44,7 @@ def _safe_build(w: dict, now_ts: int) -> tuple[dict, tuple[str, int, int] | None
     except Exception as e:
         target = f"{w['session']}:{w['index']}"
         return (
-            {**w, "target": target, "state": "error", "is_claude": False, "error": str(e)},
+            {**w, "target": target, "state": "error", "agent": None, "error": str(e)},
             None,
         )
 

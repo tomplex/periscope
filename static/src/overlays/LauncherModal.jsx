@@ -40,6 +40,7 @@ const target = signal(null);
 const pickedBranch = signal(null);
 // Non-null once the user opts to create a new branch: the typed name (may be "").
 const newBranchName = signal(null);
+const selectedAgent = signal("claude");
 
 // Catalog payload (GET /api/open/catalog), or null until it loads. Lets the
 // picker offer branches that are NOT currently running — the whole point of
@@ -99,6 +100,7 @@ export function openLauncher(trackId) {
   const bs = trackBranches(trackId, windows.value);
   pickedBranch.value = bs.length ? bs[0].branch : null;
   newBranchName.value = null;
+  selectedAgent.value = "claude";
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.
   catalog.value = null;
@@ -146,8 +148,13 @@ export function LauncherModal() {
 
   async function run(cmd) {
     const exec = cmd?.exec || "";
-    const qs = new URLSearchParams({ session: trackId });
-    if (exec) qs.set("exec", exec);
+    const agentLaunch = selectedAgent.value === "codex";
+    const qs = new URLSearchParams({
+      session: trackId,
+      agent: selectedAgent.value,
+      mode: agentLaunch ? "agent" : "shell",
+    });
+    if (exec && !agentLaunch) qs.set("exec", exec);
     const nb = newBranchName.value;
     if (nb?.trim()) {
       qs.set("branch", nb.trim());
@@ -179,6 +186,20 @@ export function LauncherModal() {
           <button id="launcher-close" title="close" onClick={close}>×</button>
         </header>
         <p class="launcher-modal-sub" id="launcher-session-name">Add to track: {trackLabel(trackId, windows.value, tracks.value)}</p>
+        <div class="launcher-section">
+          <div class="launcher-section-label">Agent</div>
+          <div class="launcher-branches">
+            {["claude", "codex"].map((agent) => (
+              <button
+                key={agent}
+                class={`launcher-branch${selectedAgent.value === agent ? " is-active" : ""}`}
+                onClick={() => { selectedAgent.value = agent; }}
+              >
+                {agent === "claude" ? "Claude" : "Codex"}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {showBranchPicker && (
           <div class="launcher-section">
@@ -221,7 +242,15 @@ export function LauncherModal() {
         <div class="launcher-section">
           {showBranchPicker && <div class="launcher-section-label">Command</div>}
           <div id="launcher-list">
-            {commands.length === 0 ? (
+            {selectedAgent.value === "codex" ? (
+              <button
+                class="launcher-row is-default"
+                data-label="Codex"
+                onClick={() => run(null)}
+              >
+                Codex
+              </button>
+            ) : commands.length === 0 ? (
               <div class="launcher-empty">No commands configured. Use Commands settings to add some.</div>
             ) : (
               commands.map((c, i) => (

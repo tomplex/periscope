@@ -1,0 +1,29 @@
+{
+  "platform": "darwin",
+  "pane": {
+    "pane_id": "%75",
+    "pane_pid": 64898,
+    "pane_current_command": "codex"
+  },
+  "processes": [
+    {
+      "pid": 64898,
+      "ppid": 1,
+      "start": "Wed Jul 29 23:24:23 2026",
+      "executable_basename": "codex"
+    },
+    {
+      "pid": 24594,
+      "ppid": 64898,
+      "start": "Wed Jul 29 23:24:23 2026",
+      "executable_basename": "codex"
+    },
+    {
+      "pid": 25843,
+      "ppid": 24594,
+      "start": "Wed Jul 29 23:24:41 2026",
+      "executable_basename": "codex-code-mode-host"
+    }
+  ],
+  "note": "Synthetic fixture preserving only structural facts from a live macOS pane; PID values are arbitrary fixture identifiers."
+}

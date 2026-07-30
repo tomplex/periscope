@@ -31,7 +31,7 @@ import { Terminal } from "../terminal/Terminal.jsx";
 import { TerminalSearch } from "../terminal/TerminalSearch.jsx";
 import { isTerminalAtBottom, scrollTerminalToBottom, setTerminalFileCallback, writeTerminalLine } from "../terminal/terminalCore.js";
 import { track } from "../track.js";
-import { apiCall, memHint, prStateMeta, prUrl, relTime, rewriteLgtmHost, targetQuery } from "../util.js";
+import { apiCall, memHint, paneLabel, prStateMeta, prUrl, relTime, rewriteLgtmHost, targetQuery } from "../util.js";
 import { TranscriptView } from "./Transcript.jsx";
 
 // Match the modal's /api/pane cadence so the two views feel identical.
@@ -110,8 +110,8 @@ function lookupWindow(pid) {
   return (windows.value || []).find((w) => w.pid === pid) || null;
 }
 
-function computeMode(w) {
-  if (!w?.is_claude) return "terminal";
+export function computeMode(w) {
+  if (w?.agent !== "claude") return "terminal";
   // Default to terminal; per-pid explicit choice (the Transcript/Terminal toggle
   // in the header) is persisted in UI prefs (detail_mode_by_pid) so it survives
   // reloads. We deliberately do NOT auto-flip to transcript once data is seen —
@@ -155,7 +155,7 @@ async function handleDetailPaste(e) {
 // API error · ✨ auto-rename. PR/Linear anchors are real links; they sit
 // inside a non-clickable header so no stopPropagation is needed here (unlike
 // the rail rows).
-function PaneHeader({ w, mode, onMode }) {
+export function PaneHeader({ w, mode, onMode }) {
   const [renaming, setRenaming] = useState(false);
 
   async function autoRename() {
@@ -173,17 +173,22 @@ function PaneHeader({ w, mode, onMode }) {
     }
   }
 
-  const parts = [
-    <button
-      type="button"
-      class={`header-rename${renaming ? " busy" : ""}`}
-      title="ask Claude to rename this window"
-      disabled={renaming}
-      onClick={autoRename}
-    >
-      ✨
-    </button>,
-  ];
+  const parts = [];
+  // Auto-rename spends Claude capacity and relies on Claude-only context.
+  // Codex v1 deliberately has no equivalent provider integration.
+  if (w.agent === "claude") {
+    parts.push(
+      <button
+        type="button"
+        class={`header-rename${renaming ? " busy" : ""}`}
+        title="ask Claude to rename this window"
+        disabled={renaming}
+        onClick={autoRename}
+      >
+        ✨
+      </button>
+    );
+  }
   // Session: shown only when it isn't just the branch repeated (the
   // worktree-pane case — session and branch are literally the same string
   // there, which produced a triple-printed line per the screenshot). For
@@ -255,20 +260,20 @@ function PaneHeader({ w, mode, onMode }) {
   if (w.git && w.git !== "clean") {
     parts.push(<><span class="hsep">·</span><span class="header-git">{w.git}</span></>);
   }
-  if (w.is_claude && w.model) {
+  if (w.agent && w.model) {
     parts.push(<><span class="hsep">·</span><span>{w.model.replace(/\s*\(.*\)/, "")}</span></>);
   }
-  if (w.is_claude && w.context_pct != null) {
+  if (w.agent && w.context_pct != null) {
     parts.push(<><span class="hsep">·</span><span>{w.context_pct}%</span></>);
   }
-  if (w.mem) {
+  if (w.agent === "claude" && w.mem) {
     const mh = memHint(w.mem);
     parts.push(<><span class="hsep">·</span><span class={`header-mem ${mh.cls}`} title={mh.title}>↻ {mh.label}</span></>);
   }
   if (w.api_error) {
     parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);
   }
-  if (w.is_claude) {
+  if (w.agent === "claude") {
     parts.push(
       <span class="detail-mode-toggle">
         <button class={mode === "transcript" ? "is-active" : ""}
@@ -401,7 +406,7 @@ function PaneDetail({ w }) {
   useEffect(() => {
     const wasWorking = prevState.current === "working";
     const isFinished = w.state === "idle" || w.state === "done";
-    if (wasWorking && isFinished && w.is_claude) {
+    if (wasWorking && isFinished && w.agent) {
       const el = document.getElementById("detail-xterm");
       if (el) {
         el.classList.add("bell-pulse");
@@ -409,19 +414,19 @@ function PaneDetail({ w }) {
       }
     }
     prevState.current = w.state;
-  }, [w.state, w.is_claude]);
+  }, [w.state, w.agent]);
 
   const tabs = paneTabs.value[w.pid] || [];
   const activeTab = paneActiveTab.value[w.pid] || "pane";
   const paneTabActive = activeTab === "pane";
   // Label the pane tab with the window name (auto-rename target). Same
   // fallback the rail rows use (RailRows.jsx).
-  const paneLabel = w.name || (w.is_claude ? "claude" : "shell");
+  const label = paneLabel(w);
 
   return (
     <div id="detail-pane" class="detail-pane">
       <PaneHeader w={w} mode={mode} onMode={(next) => { track("view.switch", { view: next }); setDetailMode(w.pid, next); }} />
-      <TabStrip pid={w.pid} paneLabel={paneLabel} />
+      <TabStrip pid={w.pid} paneLabel={label} />
       <div class="detail-pane-body">
         <div class="detail-term-host" style={paneTabActive && mode === "terminal" ? "display:contents" : "display:none"}>
           <Terminal
@@ -619,7 +624,7 @@ export function Detail() {
   // scroll position + expanded segments survive pane switches — same discipline
   // as the review iframes. Pruned to pids still live in /api/state.
   const openedTr = useRef(new Set());
-  if (isPane && paneW?.is_claude) openedTr.current.add(paneW.pid);
+  if (isPane && paneW?.agent === "claude") openedTr.current.add(paneW.pid);
   const livePids = new Set(ws.map((x) => x.pid));
   const selMode = computeMode(paneW);
   for (const pid of [...openedTr.current]) {

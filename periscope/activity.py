@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from periscope import config
+from periscope import config, session_binding_db
 from periscope.git_pr import shared_activity_for
 from periscope.log import _bg, log
 from periscope.panes import _acted_at, list_windows, parse_pane
@@ -120,6 +120,7 @@ def _conn() -> sqlite3.Connection:
         c = sqlite3.connect(str(config.ACTIVITY_DB), check_same_thread=False)
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript(_SCHEMA)
+        session_binding_db.ensure_schema(c)
         # pane_status predates the rail/goal/history columns in live DBs, and
         # CREATE TABLE IF NOT EXISTS won't add them. Guarded ALTER (history/db.py
         # pattern) is provably idempotent, so dev/prod schema skew is harmless.
@@ -247,6 +248,20 @@ def get_pane_session(pane_id: str) -> str | None:
             (pane_id,),
         ).fetchone()
     return row[0] if row else None
+
+
+def get_agent_session(
+    pane_id: str,
+) -> session_binding_db.AgentSessionBinding | None:
+    """The provider-aware session binding for a pane, or None.
+
+    This is intentionally separate from get_pane_session(), whose legacy table
+    and return contract remain Claude-only.
+    """
+    if not pane_id:
+        return None
+    with _LOCK:
+        return session_binding_db.get_binding(_conn(), pane_id)
 
 
 def get_session_base(session_id: str) -> tuple[str, str] | None:
@@ -917,7 +932,7 @@ def _worker_tick(last_ctx: dict) -> None:
             parsed = parse_pane(content)
         except Exception:
             continue
-        if not parsed.get("is_claude"):
+        if parsed.get("agent") != "claude":
             continue
         panes.append((w, parsed))
         _check_reset(w.get("pane_id") or "", w.get("cwd") or "",

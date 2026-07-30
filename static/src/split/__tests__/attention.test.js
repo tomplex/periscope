@@ -128,6 +128,7 @@ describe("buildReady", () => {
   it("excludes panes not in done state", () => {
     expect(buildReady([win({ state: "idle" })], [], new Set())).toHaveLength(0);
     expect(buildReady([win({ state: "working" })], [], new Set())).toHaveLength(0);
+    expect(buildReady([win({ state: "unknown", agent: "codex" })], [], new Set())).toHaveLength(0);
   });
 
   it("hides a dismissed live pid", () => {
@@ -180,6 +181,7 @@ describe("buildRunning", () => {
   it("empty/missing windows → no rows", () => {
     expect(buildRunning([])).toHaveLength(0);
     expect(buildRunning(undefined)).toHaveLength(0);
+    expect(buildRunning([win({ state: "unknown", agent: "codex" })])).toHaveLength(0);
   });
 });
 

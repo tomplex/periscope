@@ -45,6 +45,32 @@ def test_window_new_simple_shell(client, mocker, fresh_activity_db):
     assert fresh_activity_db.get_pane_track("%new") == "untracked"
 
 
+def test_window_new_codex_builds_typed_command(
+    client, mocker, fresh_activity_db, tmp_path
+):
+    cwd = tmp_path / "repo with spaces"
+    cwd.mkdir()
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="3", pane_id="%codex"))
+    _patch(mocker, "_tmux_mutate", return_value=(True, "@9"))
+    _patch(mocker, "_run", return_value=(0, ""))
+    mocker.patch("periscope.config.codex_exec", return_value="/opt/Codex CLI/codex")
+
+    r = client.post("/api/window/new", params={
+        "session": "untracked", "mode": "agent", "agent": "codex",
+        "cwd": str(cwd),
+    })
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["agent"] == "codex"
+    assert body["exec"] == f"'/opt/Codex CLI/codex' -C '{cwd}'"
+
+
+def test_window_new_rejects_invalid_agent(client):
+    r = client.post("/api/window/new?session=untracked&mode=agent&agent=other")
+    assert r.status_code == 422
+
+
 def test_window_new_resume_unknown_session_id(client, mocker):
     # Patch history.search.get_session to return None.
     mocker.patch("history.search.get_session", return_value=None)

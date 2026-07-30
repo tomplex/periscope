@@ -11,12 +11,22 @@ The `resumes` sentinel session is auto-created on first use.
 """
 
 import os
+import shlex
+import sqlite3
 import time
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from periscope import activity, open_ops, tracks
+from periscope import (
+    activity,
+    codex_sessions,
+    config,
+    open_ops,
+    session_binding_db,
+    tracks,
+)
 from periscope.channels import dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC, MANAGED_SESSION
 from periscope.panes import (
@@ -25,6 +35,7 @@ from periscope.panes import (
     _focused_at,
     _resuming,
     drop_target_focus,
+    list_windows,
     note_action,
     note_focus,
 )
@@ -171,6 +182,7 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
 def _window_new_plain(
     track_id: str, exec_cmd: str, mode: str,
     cwd_param: str | None = None, branch: str | None = None,
+    agent: Literal["claude", "codex"] = "claude",
 ) -> dict:
     """Non-resume "+ New tab": open a window in the one shared MANAGED_SESSION
     and tag the new pane into `track_id` (the `session` query param now carries
@@ -244,9 +256,109 @@ def _window_new_plain(
 
     target = f"{MANAGED_SESSION}:{index}"
     cmd = exec_cmd.strip()
+    if mode in {"claude", "codex", "agent"}:
+        cmd = shlex.join(config.build_agent_command(agent, cwd=cwd))
     _send_and_stamp(target, cmd)
     return {"ok": True, "session": MANAGED_SESSION, "index": index,
-            "target": target, "mode": mode, "exec": cmd}
+            "target": target, "mode": mode, "agent": agent, "exec": cmd,
+            "cwd": cwd}
+
+
+def _codex_binding(session_id: str):
+    with sqlite3.connect(str(config.ACTIVITY_DB), timeout=2.0) as conn:
+        session_binding_db.ensure_schema(conn)
+        conn.execute(
+            "DELETE FROM agent_sessions WHERE provider='codex' "
+            "AND evidence='launch-pending' AND updated_at < ?",
+            (int(time.time()) - 30,),
+        )
+        row = conn.execute(
+            "SELECT pane_id FROM agent_sessions "
+            "WHERE provider='codex' AND session_id=? "
+            "AND evidence='resume-explicit'",
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return None
+    pane_id = row[0]
+    live = next(
+        (w for w in list_windows() if w.get("pane_id") == pane_id),
+        None,
+    )
+    return pane_id if live and live.get("agent") == "codex" else None
+
+
+def _write_resume_binding(pane_id: str, session_id: str, path: str) -> None:
+    with sqlite3.connect(str(config.ACTIVITY_DB), timeout=2.0) as conn:
+        session_binding_db.ensure_schema(conn)
+        session_binding_db.upsert_binding(
+            conn,
+            session_binding_db.AgentSessionBinding(
+                pane_id=pane_id,
+                provider="codex",
+                session_id=session_id,
+                session_path=path,
+                updated_at=int(time.time()),
+                evidence="resume-explicit",
+            ),
+        )
+
+
+def _delete_resume_binding(pane_id: str) -> None:
+    with sqlite3.connect(str(config.ACTIVITY_DB), timeout=2.0) as conn:
+        session_binding_db.ensure_schema(conn)
+        current = session_binding_db.get_binding(conn, pane_id)
+        if current and current.evidence == "resume-explicit":
+            session_binding_db.delete_binding(conn, pane_id)
+
+
+def _window_new_codex_resume(
+    track_id: str,
+    resume_id: str | None,
+    cwd_param: str | None,
+    branch: str | None,
+) -> dict:
+    if not resume_id:
+        raise HTTPException(400, "resume_id required for mode=resume")
+    meta = codex_sessions.catalog().get(resume_id)
+    if meta is None:
+        raise HTTPException(404, f"unknown Codex session_id: {resume_id}")
+    if _codex_binding(resume_id):
+        raise HTTPException(409, "Codex session is already live")
+
+    requested = meta.cwd if meta.cwd and os.path.isdir(meta.cwd) else cwd_param
+    result = _window_new_plain(
+        track_id,
+        "",
+        "shell",
+        cwd_param=requested,
+        branch=branch,
+        agent="codex",
+    )
+    pane_id = tmux(
+        "display-message", "-t", result["target"], "-p", "#{pane_id}"
+    ).strip()
+    if not pane_id:
+        raise HTTPException(500, "could not resolve pane for Codex resume")
+    _write_resume_binding(pane_id, resume_id, str(meta.path))
+    cmd = shlex.join(
+        config.build_agent_command("codex", cwd=result["cwd"], resume_id=resume_id)
+    )
+    time.sleep(0.1)
+    ok, message = _tmux_mutate("send-keys", "-t", result["target"], cmd, "Enter")
+    if not ok:
+        _delete_resume_binding(pane_id)
+        raise HTTPException(500, f"failed to launch Codex resume: {message}")
+    note_focus(result["target"])
+    note_action(result["target"])
+    return {
+        **result,
+        "mode": "resume",
+        "agent": "codex",
+        "exec": cmd,
+        "resumed_session_id": resume_id,
+        "cwd_fallback": requested != meta.cwd,
+    }
 
 
 @router.post("/api/window/new")
@@ -257,6 +369,7 @@ def window_new(
     resume_id: str | None = None,
     cwd: str | None = None,
     branch: str | None = None,
+    agent: Literal["claude", "codex"] = "claude",
 ):
     """Spawn a window in `session`. `exec` param sends a command to the new
     window; legacy `mode` maps to `exec` for backwards-compat. `mode=resume`
@@ -271,6 +384,9 @@ def window_new(
     creating one if it has none). See `_window_new_plain`."""
     # Legacy `mode` → exec_cmd mapping for callers still on the old
     # contract. `mode=resume` synthesizes the command from resume_id.
+    if mode == "resume" and agent == "codex":
+        return _window_new_codex_resume(session, resume_id, cwd, branch)
+
     if not exec_cmd:
         if mode in ("claude", "vim", "shell"):
             exec_cmd = {"claude": CLAUDE_EXEC, "vim": "vim", "shell": ""}.get(mode, "")
@@ -278,8 +394,11 @@ def window_new(
             exec_cmd = f"{CLAUDE_EXEC} --resume {resume_id}"
 
     if mode == "resume":
-        return _window_new_resume(session, exec_cmd, resume_id, mode)
-    return _window_new_plain(session, exec_cmd, mode, cwd_param=cwd, branch=branch)
+        result = _window_new_resume(session, exec_cmd, resume_id, mode)
+        return {**result, "agent": "claude"}
+    return _window_new_plain(
+        session, exec_cmd, mode, cwd_param=cwd, branch=branch, agent=agent
+    )
 
 
 @router.post("/api/window/move")

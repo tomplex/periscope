@@ -2,12 +2,13 @@
 
 A live dashboard over your tmux sessions. Every window becomes a card; click
 into a card to open a full live terminal (xterm.js + tmux `pipe-pane` over
-WebSocket), send keystrokes, focus the window in tmux, or rename it. Parses
-Claude Code pane status — branch, PR, CI state, recap, spinner — and surfaces
-what's pending input.
+WebSocket), send keystrokes, focus the window in tmux, or rename it. Identifies
+Claude Code and Codex panes alongside ordinary shells, combines their agent
+state with branch/PR/CI metadata, and surfaces work that is running or ready
+for attention.
 
-Built for the "I have 30 tmux windows across 5 sessions with various Claude
-Code agents running, and I want a single pane of glass" workflow.
+Built for the "I have 30 tmux windows across 5 sessions with coding agents
+running, and I want a single pane of glass" workflow.
 
 ## Requirements
 
@@ -15,6 +16,7 @@ Code agents running, and I want a single pane of glass" workflow.
 - [`uv`](https://docs.astral.sh/uv/) for running the single-file script
 - Node 20+ + `npm` — the frontend is a Vite-built bundle (`static/dist/`)
 - A modern browser (uses WebSockets)
+- Codex CLI 0.146.0 for the initial, macOS-tested Codex integration
 - Optional: `ANTHROPIC_API_KEY` for the ✨ auto-rename feature
 
 ## Run
@@ -30,6 +32,53 @@ WebSocket bridge to the selected pane.
 For the always-on / launchd-managed setup and the prod/dev port split,
 see [CLAUDE.md → Development workflow](./CLAUDE.md#development-workflow-prod--dev-split)
 and `bin/periscope`.
+
+### Agent lifecycle hooks
+
+`bin/periscope install-hook` merges Periscope's Claude and Codex lifecycle
+hooks into their existing user configuration; it does not replace unrelated
+hooks. Provider-specific commands are also available:
+
+```sh
+bin/periscope install-claude-hook
+bin/periscope install-codex-hook
+bin/periscope uninstall-claude-hook
+bin/periscope uninstall-codex-hook
+```
+
+The experimental Codex definition is written atomically to
+`$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`). After installing,
+open `/hooks` in Codex and review/trust the exact Periscope command. Periscope
+does not bypass hook trust. `/api/healthz` reports definitions and observations,
+but cannot infer trust. Codex hook attribution is currently marked
+`verification: "unresolved"` until live root/subagent hook evidence is
+captured; recorded bindings are therefore not authoritative state evidence.
+
+If `/api/healthz` reports the Codex hook as installed but unobserved, first
+confirm `/hooks` trusts that exact command, then start a fresh Codex session and
+submit a prompt. Also check that the server and Codex use the same
+`$CODEX_HOME`; an explicit empty value has not yet been verified and should be
+avoided. Do not use `--dangerously-bypass-hook-trust`.
+
+### Codex launch and state
+
+Choose **Codex** in either launcher to open it in the selected worktree. The
+new-tab route also accepts a Codex resume UUID; Periscope validates it against
+the local rollout catalog, rejects a UUID already bound to a live Codex pane,
+pre-binds the new pane, and runs `codex resume <uuid> -C <cwd>`.
+
+Codex v1 focuses on `working`, `idle`, and the existing derived `done`
+attention state. Missing or contradictory evidence is `unknown` and must not
+produce a completion alert. Codex panes default to the live terminal and do not
+offer transcript mode, Claude channels, Claude plan usage, memory warnings,
+narrator status, context reset, or AI auto-rename.
+
+Lifecycle hooks are intended to provide pane/session identity once the manual
+evidence gate is satisfied. Until then, verified rollout records and the macOS
+process/TUI detector are defensive, conservative fallbacks. Interruption,
+cancellation, approval round trips, Stop continuation, Linux process layouts,
+and root-vs-subagent hook behavior remain manual verification items; ambiguous
+cases stay `unknown`.
 
 ### Frontend HMR (optional)
 

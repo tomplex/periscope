@@ -14,7 +14,14 @@ _STATE_LOCK acquisition for efficiency.
 """
 
 
+from dataclasses import dataclass
+from pathlib import Path
+
+from periscope import activity
+from periscope.agent_processes import codex_process_for_pane
 from periscope.channels import channel_state_for
+from periscope.codex_sessions import codex_home
+from periscope.codex_state import reconcile_codex_state, rollout_edge_for
 from periscope.config import MEM_BAD_RSS_KB, MEM_WARN_AGE_S, MEM_WARN_RSS_KB
 from periscope.git_pr import (
     cached_git_state,
@@ -23,11 +30,13 @@ from periscope.git_pr import (
 )
 from periscope.lgtm import cached_lgtm_state
 from periscope.panes import (
+    clear_agent_state_transition,
+    forget_agent,
     parse_pane,
     recency_stamps_for,
+    record_agent_state_transition,
     record_state_transition,
-    smooth_is_claude,
-    smooth_spinner,
+    smooth_parsed,
 )
 from periscope.session_status import claude_proc_for, session_state_for
 from periscope.store import get_window
@@ -47,13 +56,115 @@ from periscope.worktrees import affiliation
 # between tests.
 #
 # Known minor staleness: a Claude pane that exits to a shell and then goes
-# silent can stay cached as is_claude=True/idle until its next output (the
-# 120s smooth_is_claude expiry only fires on a recapture). The card still
-# shows idle; only the is_claude coloring lags. Accepted — the next real
+# silent can stay cached as agent="claude"/idle until its next output (the
+# 120s smooth_agent expiry only fires on a recapture). The card still
+# shows idle; only the agent coloring lags. Accepted — the next real
 # output recaptures and corrects it.
 _view_cache: dict[tuple[str, str], dict] = {}
 
 _QUIET_STATES = ("idle", "shell")
+CODEX_UNKNOWN_GRACE_S = 5
+_TRUSTED_CODEX_BINDING_EVIDENCE = frozenset(
+    {"resume-explicit", "rollout-fallback", "launch-explicit"}
+)
+
+
+@dataclass(frozen=True)
+class _CodexObservation:
+    state: str
+    session_id: str
+    turn_id: str
+
+
+# pane id -> (last valid observation, observed_at).  This is render-only
+# hysteresis.  The causal completion baseline lives in panes and is updated
+# only for valid observations.
+_codex_last_valid: dict[str, tuple[_CodexObservation, int]] = {}
+_codex_pid_panes: dict[str, str] = {}
+
+
+def _codex_observation(
+    pane_id: str, codex_live: bool | None
+) -> _CodexObservation | None:
+    """Resolve a trusted binding and rollout edge for one live Codex pane."""
+    if codex_live is not True:
+        return None
+    binding = activity.get_agent_session(pane_id)
+    if (
+        binding is None
+        or binding.provider != "codex"
+        or binding.evidence not in _TRUSTED_CODEX_BINDING_EVIDENCE
+        or not binding.session_path
+    ):
+        return None
+    sessions_root = codex_home() / "sessions"
+    edge = rollout_edge_for(
+        Path(binding.session_path),
+        session_id=binding.session_id,
+        sessions_root=sessions_root,
+    )
+    reconciled = reconcile_codex_state(
+        session_id=binding.session_id,
+        process="live",
+        rollout_edge=edge,
+    )
+    if (
+        reconciled is None
+        or reconciled.state not in {"working", "idle"}
+        or edge is None
+    ):
+        return None
+    return _CodexObservation(
+        reconciled.state, binding.session_id, edge.turn_id
+    )
+
+
+def _apply_codex_state(
+    parsed: dict,
+    *,
+    pane_id: str,
+    pid: str,
+    target: str,
+    codex_live: bool | None,
+    now_ts: int,
+) -> bool:
+    """Apply structured Codex state; return whether it was a valid opinion."""
+    prior_pane = _codex_pid_panes.get(pid)
+    if prior_pane is not None and prior_pane != pane_id:
+        clear_agent_state_transition(pid)
+        _codex_last_valid.pop(prior_pane, None)
+    if pid:
+        _codex_pid_panes[pid] = pane_id
+    observation = _codex_observation(pane_id, codex_live)
+    if observation is not None:
+        parsed.update(
+            state=observation.state,
+            needs_input=False,
+            asked_question=False,
+            waiting_for=None,
+        )
+        record_agent_state_transition(
+            pid,
+            target,
+            provider="codex",
+            session_id=observation.session_id,
+            turn_id=observation.turn_id,
+            state=observation.state,
+            now_ts=now_ts,
+        )
+        _codex_last_valid[pane_id] = (observation, now_ts)
+        return True
+
+    # Unknown has no transition opinion.  Briefly retain the last valid render
+    # to avoid flicker, then make uncertainty explicit without manufacturing
+    # idle/done.
+    last = _codex_last_valid.get(pane_id)
+    if last and now_ts - last[1] <= CODEX_UNKNOWN_GRACE_S:
+        parsed["state"] = last[0].state
+    else:
+        parsed["state"] = "unknown"
+    parsed.update(needs_input=False, asked_question=False, waiting_for=None)
+    return False
 
 
 def mem_signal(proc: dict | None) -> dict | None:
@@ -88,13 +199,13 @@ def build_window_view(
     target = f"{w['session']}:{w['index']}"
     pid = w.get("pid") or ""
 
-    activity = w.get("activity", 0)
+    window_activity = w.get("activity", 0)
     cache_key = (target, w.get("pane_id", ""))
     cached = _view_cache.get(cache_key)
     parsed: dict  # unify the cache-hit (dict copy) and capture/error branches
     if (
         cached is not None
-        and cached["activity"] == activity
+        and cached["activity"] == window_activity
         and cached["parsed"].get("state") in _QUIET_STATES
     ):
         # No new output since last poll and the pane is quiet — reuse the
@@ -106,29 +217,34 @@ def build_window_view(
             content = capture(target)
             parsed = parse_pane(content)
         except Exception as e:
-            parsed = {"error": str(e), "state": "error", "is_claude": False}
+            parsed = {"error": str(e), "state": "error", "agent": None}
 
         # Hysteresis: smooth out per-poll detection gaps so cards / modal
         # subtitles don't flicker between "thinking" and idle.
-        parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
-        # is_claude stickiness: dialogs hide the bottom status line; without
-        # this the card would flip to "shell" mid-prompt and lose its state
-        # coloring + needs-input classification.
-        parsed["is_claude"] = smooth_is_claude(target, parsed.get("is_claude", False))
-        if not parsed["is_claude"]:
-            parsed["state"] = "shell"
-        # Spinner hysteresis can promote a momentarily-blank parse back to
-        # "working" — but only if we're not already in a louder state.
-        # needs-input must never be downgraded back to working: the dialog
-        # commonly lingers below a stale spinner glyph in scrollback.
-        if (
-            parsed.get("is_claude")
-            and parsed.get("spinner")
-            and parsed.get("state") not in ("working", "needs-input")
-        ):
-            parsed["state"] = "working"
+        smooth_parsed(pane_id=w.get("pane_id", ""), parsed=parsed)
 
-        _view_cache[cache_key] = {"activity": activity, "parsed": dict(parsed)}
+        _view_cache[cache_key] = {
+            "activity": window_activity,
+            "parsed": dict(parsed),
+        }
+
+    # Process evidence is independent of terminal output, so evaluate it even
+    # on quiet cache hits. Claude's distinctive parser wins for overlapping
+    # synthetic content; otherwise a live Codex executable identifies Codex.
+    codex_live = codex_process_for_pane(
+        w.get("pane_id", ""), w.get("pane_pid")
+    )
+    if codex_live is True and parsed.get("agent") != "claude":
+        parsed["agent"] = "codex"
+        if parsed.get("state") == "shell":
+            parsed["state"] = "idle"
+    elif codex_live is False and parsed.get("agent") == "codex":
+        forget_agent(w.get("pane_id", ""), "codex")
+        clear_agent_state_transition(pid)
+        _codex_last_valid.pop(w.get("pane_id", ""), None)
+        _codex_pid_panes.pop(pid, None)
+        parsed["agent"] = None
+        parsed["state"] = "shell"
 
     # Authoritative state from the session status file (sessions/<pid>.json),
     # which replaces the scraped working/needs-input/idle signal whenever the
@@ -140,7 +256,7 @@ def build_window_view(
     sid = session_id_for_pane(w.get("pane_id", ""))
     sess = session_state_for(sid)
     if sess:
-        parsed["is_claude"] = True
+        parsed["agent"] = "claude"
         parsed["state"] = sess["state"]
         parsed["needs_input"] = sess["state"] == "needs-input"
         parsed["asked_question"] = False
@@ -149,8 +265,19 @@ def build_window_view(
     # done-vs-idle refinement. Uses per-pid stamps (persisted via
     # state.json) so a server restart preserves the "Claude finished
     # something you haven't looked at" signal across the gap.
+    codex_valid = False
+    if parsed.get("agent") == "codex":
+        codex_valid = _apply_codex_state(
+            parsed,
+            pane_id=w.get("pane_id", ""),
+            pid=pid,
+            target=target,
+            codex_live=codex_live,
+            now_ts=now_ts,
+        )
     cur = parsed.get("state")
-    record_state_transition(pid, target, cur, now_ts)
+    if parsed.get("agent") != "codex":
+        record_state_transition(pid, target, cur, now_ts)
 
     # Pull persisted stamps; in-memory may be ahead (just bumped) or
     # behind (fresh process, never observed a transition this run).
@@ -159,7 +286,12 @@ def build_window_view(
     completed = max(stamps["completed_at"], int(persisted.get("completed_at") or 0))
     acked = max(stamps["acted_at"], int(persisted.get("acked_at") or 0))
 
-    if cur == "idle" and parsed.get("is_claude") and completed > acked:
+    if (
+        cur == "idle"
+        and parsed.get("agent")
+        and (parsed.get("agent") != "codex" or codex_valid)
+        and completed > acked
+    ):
         parsed["state"] = "done"
 
     stamp_update: tuple[str, int, int] | None = None
@@ -174,6 +306,10 @@ def build_window_view(
     lgtm = cached_lgtm_state(w.get("cwd", ""))
 
     channel = channel_state_for(w.get("pane_id") or "")
+    if parsed.get("agent") == "codex":
+        # Codex participates in lifecycle attention, not Claude's MCP channel
+        # alert/unread system.
+        channel = {"attached": False, "unread": False, "alerts": []}
 
     # Resolve the spawner's NAME server-side, off the persisted block rather
     # than the live window list. Leads exit — on this box the only surviving
@@ -217,7 +353,6 @@ def build_window_view(
     # None — spans repos, so no worktree affiliation). Source the affiliation
     # chip from the track instead of the retired project registry.
     track_id = resolve_track_for_window(w)
-    from periscope import activity
     track_row = activity.get_track(track_id) or {}
     aff_repo = track_row.get("repo")
     pinned_for_aff = aff_repo if aff_repo else None

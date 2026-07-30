@@ -28,7 +28,7 @@ import { confirmDialog } from "../overlays/Dialog.jsx";
 import * as prefs from "../prefs.js";
 import { currentFilter, dismissedAlertIds, dragState, projects, railSelection, tracks, windows, workspaces } from "../store.js";
 import { track } from "../track.js";
-import { apiCall, targetQuery } from "../util.js";
+import { apiCall, paneLabel, targetQuery } from "../util.js";
 import { alertItems } from "./alertFeed.js";
 import { ActivitySection, AttentionTop } from "./AttentionSections.jsx";
 import { awaitingReplyByPid } from "./attention.js";
@@ -258,7 +258,7 @@ export function Rail() {
   // --- Close / rename actions ----------------------------------------------
   async function closePane(w) {
     const ok = await confirmDialog(
-      `Close tab "${w.name || (w.is_claude ? "claude" : "shell")}"?\n\nThis kills its tmux window.`,
+      `Close tab "${paneLabel(w)}"?\n\nThis kills its tmux window.`,
       { okLabel: "Close", danger: true }
     );
     if (!ok) return;
@@ -295,7 +295,7 @@ export function Rail() {
     const tabs = (tabsByTrack[trackId] || [])
       .map((pid) => windowsByPid[pid])
       .filter(Boolean)
-      .map((w) => w.name || (w.is_claude ? "claude" : "shell"));
+      .map((w) => paneLabel(w));
     const list = tabs.length ? `\n\n• ${tabs.join("\n• ")}` : "";
     const ok = await confirmDialog(
       `Tear down track "${label}"?\n\nThis kills ${tabs.length} tab${tabs.length === 1 ? "" : "s"} (their tmux windows):${list}`,

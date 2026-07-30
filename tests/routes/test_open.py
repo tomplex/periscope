@@ -11,11 +11,12 @@ def test_post_open_path_returns_contract(client, tmp_git_repo, clean_state, tmux
     r = client.post("/api/open", json={"path": repo})
     assert r.status_code == 200
     body = r.json()
-    assert body["repo"] == repo and body["claude_pid"]
-    # claude_pid is the contract the client selects on, so create-or-focus is
+    assert body["repo"] == repo and body["agent_pid"]
+    assert body["agent"] == "claude"
+    # agent_pid is the contract the client selects on, so create-or-focus is
     # visible in both branches; ui carries the TRACK-era rail keys.
     assert repo in body["ui"]["track_order"]        # repo-default track id == repo
-    assert body["claude_pid"] in body["ui"]["tabs_by_track"][repo]
+    assert body["agent_pid"] in body["ui"]["tabs_by_track"][repo]
 
 def test_post_open_non_git_400(client, tmp_path, clean_state):
     r = client.post("/api/open", json={"path": str(tmp_path)})

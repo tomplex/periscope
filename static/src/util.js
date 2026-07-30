@@ -8,6 +8,15 @@
 import { showToast } from "./overlays/Toast.jsx";
 import { track } from "./track.js";
 
+export const AGENT_META = {
+  claude: { label: "Claude", glyph: "✻", className: "icon-claude" },
+  codex: { label: "Codex", glyph: "⬡", className: "icon-codex" },
+};
+
+export function paneLabel(w) {
+  return w?.name || w?.agent || "shell";
+}
+
 export function escapeHtml(s) {
   if (s == null) return "";
   return String(s)

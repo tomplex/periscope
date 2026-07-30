@@ -19,8 +19,10 @@ worktree-integration spec §"Pre-spawn fetch".
 
 import os
 import re
+import shlex
 import time
 from pathlib import Path
+from typing import Literal
 
 from fastapi import HTTPException
 
@@ -211,7 +213,11 @@ def spawn_worktree(
     return result
 
 
-def _layout_two_window(tmux_session: str, pinned_dir: str) -> tuple[str, str]:
+def _layout_two_window(
+    tmux_session: str,
+    pinned_dir: str,
+    agent: Literal["claude", "codex"] = "claude",
+) -> tuple[str, str]:
     """Add the trellis-style 2-window pair (a 'claude' window + a 'shell'
     window) into `tmux_session`, creating the session on first use. The
     session is the single shared `config.MANAGED_SESSION` — many such pairs
@@ -242,17 +248,18 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> tuple[str, str]:
     # the existing one. Either way capture the new window's stable id from
     # `-P -F "#{window_id}"` so subsequent targets can't drift onto a
     # same-named sibling window.
+    agent_name = agent
     if not _tmux_mutate("has-session", "-t", tmux_session)[0]:
         ok, claude_win = _tmux_mutate(
             "new-session", "-d", "-s", tmux_session, "-c", pinned_dir,
-            "-n", "claude", "-P", "-F", "#{window_id}",
+            "-n", agent_name, "-P", "-F", "#{window_id}",
         )
         if not ok:
             raise HTTPException(500, f"tmux new-session failed: {claude_win}")
     else:
         ok, claude_win = _tmux_mutate(
             "new-window", "-t", f"{tmux_session}:", "-c", pinned_dir,
-            "-n", "claude", "-P", "-F", "#{window_id}",
+            "-n", agent_name, "-P", "-F", "#{window_id}",
         )
         if not ok:
             raise HTTPException(500, f"tmux new-window (claude) failed: {claude_win}")
@@ -260,11 +267,11 @@ def _layout_two_window(tmux_session: str, pinned_dir: str) -> tuple[str, str]:
     # Send `claude` into the captured claude window, with the periscope
     # channels flag so the spawned Claude connects to periscope's MCP socket.
     from periscope.channels import dismiss_dev_channels_consent_bg
-    from periscope.config import claude_exec
-    exec_cmd = claude_exec()
+    from periscope.config import build_agent_command
+    exec_cmd = shlex.join(build_agent_command(agent, cwd=pinned_dir))
     time.sleep(0.1)
     _tmux_mutate("send-keys", "-t", claude_win, exec_cmd, "Enter")
-    if "--dangerously-load-development-channels" in exec_cmd:
+    if agent == "claude" and "--dangerously-load-development-channels" in exec_cmd:
         dismiss_dev_channels_consent_bg(claude_win)
 
     # Second window: shell.

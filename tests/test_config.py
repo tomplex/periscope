@@ -52,3 +52,30 @@ def test_is_prod_only_true_on_prod_port_and_not_dev(monkeypatch):
         monkeypatch.setattr(cfg, "PORT", port)
         monkeypatch.setattr(cfg, "DEV", dev)
         assert cfg.is_prod() is expected, f"PORT={port} DEV={dev}"
+import shlex
+
+import pytest
+
+from periscope import config
+
+
+def test_build_codex_command_is_typed_and_shell_safe(monkeypatch):
+    monkeypatch.setenv("PERISCOPE_CODEX_EXEC", "/opt/Codex CLI/codex")
+    cwd = "/tmp/repo with spaces; echo nope"
+    argv = config.build_agent_command("codex", cwd=cwd)
+    assert argv == ["/opt/Codex CLI/codex", "-C", cwd]
+    assert shlex.split(shlex.join(argv)) == argv
+    assert not any("bypass" in part or "sandbox" in part for part in argv)
+
+
+def test_build_codex_resume_command(monkeypatch):
+    monkeypatch.setenv("PERISCOPE_CODEX_EXEC", "codex")
+    sid = "019fb027-5e13-74c3-9ed9-0c69e1914367"
+    assert config.build_agent_command("codex", cwd="/repo", resume_id=sid) == [
+        "codex", "resume", sid, "-C", "/repo",
+    ]
+
+
+def test_build_agent_command_rejects_unknown():
+    with pytest.raises(ValueError):
+        config.build_agent_command("other", cwd="/repo")  # type: ignore[arg-type]

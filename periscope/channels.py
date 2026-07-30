@@ -772,7 +772,8 @@ def _do_open_tool(pane: str, arguments: dict):
     except Exception as e:
         return _tool_result({"ok": False, "error": str(e)})
     return _tool_result({"ok": True, "tmux_session": result.tmux_session,
-                         "repo": result.repo, "pane_id": result.claude_pane_id})
+                         "repo": result.repo, "pane_id":
+                         getattr(result, "agent_pane_id", result.claude_pane_id)})
 
 
 def _do_catalog_tool(pane: str, arguments: dict):
@@ -1070,7 +1071,7 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
     discover, message (send_to), peek, or terminate them. Flat — supports peer
     discovery and handoff, not just a spawn subtree.
 
-    is_claude is probed per pane with a stateless capture+parse_pane — NOT
+    Claude identity is probed per pane with a stateless capture+parse_pane — NOT
     build_window_view, which mutates poll state-transition tracking. The
     capture fan-out is offloaded to a thread so it doesn't block the event
     loop; pid resolution (which writes state.json and is not thread-safe) runs
@@ -1093,7 +1094,7 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
                 parsed = parse_pane(capture(target))
             except Exception:
                 continue
-            if not parsed.get("is_claude"):
+            if parsed.get("agent") != "claude":
                 continue
             pane_id = w.get("pane_id") or ""
             status = statuses.get(pane_id)

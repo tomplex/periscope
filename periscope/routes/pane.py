@@ -19,8 +19,7 @@ from periscope.panes import (
     list_windows,
     note_action,
     parse_pane,
-    smooth_is_claude,
-    smooth_spinner,
+    smooth_parsed,
 )
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.store import get_window
@@ -62,12 +61,6 @@ def pane(session: str, index: int, lines: int = 200):
     # but uses the raw prompt-line color info to filter ghost-text input.
     content = tmux("capture-pane", "-t", target, "-p", "-e", "-S", f"-{lines}")
     parsed = parse_pane(content)
-    parsed["spinner"] = smooth_spinner(target, parsed.get("spinner"))
-    parsed["is_claude"] = smooth_is_claude(target, parsed.get("is_claude", False))
-    if not parsed["is_claude"]:
-        parsed["state"] = "shell"
-    if parsed.get("is_claude") and parsed.get("spinner") and parsed.get("state") not in ("working", "needs-input"):
-        parsed["state"] = "working"
     try:
         window_name, cwd = pane_meta(target)
     except Exception:
@@ -91,6 +84,7 @@ def pane(session: str, index: int, lines: int = 200):
         if w["session"] == session and w["index"] == index:
             pane_id = w.get("pane_id", "")
             break
+    smooth_parsed(pane_id=pane_id, parsed=parsed)
     activity = cached_pane_activity(target, pane_id, cwd, git.get("branch"))
     channel = channel_state_for(pane_id)
     # Persisted links — same override semantics as /api/state.

@@ -1,0 +1,2 @@
+{"timestamp":"2026-07-30T14:05:33.568Z","type":"session_meta","payload":{"session_id":"33333333-3333-4333-8333-333333333333","id":"33333333-3333-4333-8333-333333333333","timestamp":"2026-07-30T14:05:33.568Z","cwd":"/workspace/example","originator":"codex-tui","cli_version":"0.146.0","source":"cli","thread_source":"cli","model_provider":"openai"}}
+{"timestamp":"2026-07-30T14:05:33.660Z","type":"event_msg","payload":{"type":"task_started","turn_id":"44444444-4444-4444-8444-444444444444","started_at":1785381870

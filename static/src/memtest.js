@@ -66,7 +66,7 @@ async function sweep(cfg) {
   const settle = cfg.settleMs || 2000;
   const n = cfg.switches || 20;
   const wantClaude = (cfg.kind || "claude") === "claude";
-  const pool = (windows.value || []).filter((w) => !!w.is_claude === wantClaude && w.pid);
+  const pool = (windows.value || []).filter((w) => (w.agent === "claude") === wantClaude && w.pid);
   // poolSize > 2 cycles through that many distinct panes round-robin — the
   // manual reproduction switches among MANY panes, and per-unique-pane
   // allocations (transcript hosts, preview tabs) only show up that way.

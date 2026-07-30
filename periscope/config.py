@@ -2,8 +2,10 @@
 from any other periscope.* module — keep this a leaf."""
 
 import os
+import shlex
 import shutil
 from pathlib import Path
+from typing import Literal
 
 # Static asset root for FastAPI's app.mount("/", StaticFiles(...)) call.
 # Computed relative to the repo root, NOT to this file — server.py lives at
@@ -51,6 +53,32 @@ MEM_WARN_AGE_S = 3 * 86400         # 3 days
 
 def claude_exec() -> str:
     return os.environ.get("PERISCOPE_CLAUDE_EXEC", CLAUDE_EXEC)
+
+
+def codex_exec() -> str:
+    """Executable used for interactive Codex panes."""
+    return os.environ.get("PERISCOPE_CODEX_EXEC") or shutil.which("codex") or "codex"
+
+
+def build_agent_command(
+    agent: Literal["claude", "codex"],
+    *,
+    cwd: str,
+    resume_id: str | None = None,
+) -> list[str]:
+    """Build a typed agent argv. Shell serialization belongs at the tmux edge."""
+    if agent == "claude":
+        argv = shlex.split(claude_exec())
+        if resume_id:
+            argv.extend(["--resume", resume_id])
+        return argv
+    if agent == "codex":
+        argv = [codex_exec()]
+        if resume_id:
+            argv.extend(["resume", resume_id])
+        argv.extend(["-C", cwd])
+        return argv
+    raise ValueError(f"unsupported agent: {agent}")
 
 # Port the FastAPI server binds. Default 8765 = "prod" (launchd-managed).
 # Override via PERISCOPE_PORT=8766 for a dev instance running alongside

@@ -1,4 +1,6 @@
 """POST /api/open + GET /api/open/catalog — thin shim over open_ops."""
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -12,6 +14,7 @@ class OpenBody(BaseModel):
     repo: str | None = None
     branch: str | None = None
     pr: int | None = None
+    agent: Literal["claude", "codex"] = "claude"
 
 
 def _to_descriptor(b: OpenBody) -> open_ops.Descriptor:
@@ -28,11 +31,12 @@ def _to_descriptor(b: OpenBody) -> open_ops.Descriptor:
 def open_endpoint(body: OpenBody):
     descriptor = _to_descriptor(body)
     try:
-        result = open_ops.open_target(descriptor)
+        result = open_ops.open_target(descriptor, agent=body.agent)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"tmux_session": result.tmux_session, "repo": result.repo,
-            "claude_pid": result.claude_pid, "ui": result.ui}
+            "agent_pid": result.agent_pid, "agent_pane_id": result.agent_pane_id,
+            "agent": result.agent, "ui": result.ui}
 
 
 @router.get("/api/open/catalog")

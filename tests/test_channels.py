@@ -883,11 +883,11 @@ def test_list_claudes_filters_and_trims(mocker):
                 w["pid"] = w.pop("pid_raw")
     mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
 
-    # capture returns the target so parse_pane can tell windows apart; is_claude
+    # capture returns the target so parse_pane can tell windows apart; agent
     # true only for the "s:1" pane. This exercises the real per-pane probe path.
     mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
     mocker.patch("periscope.panes.parse_pane",
-                 side_effect=lambda content: {"is_claude": content == "s:1"})
+                 side_effect=lambda content: {"agent": ("claude" if content == "s:1" else None)})
     mocker.patch("periscope.activity.pane_status_lines",
                  return_value={"%2": ("reviewing PR", 123, None)})
     mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
@@ -953,7 +953,7 @@ def test_list_claudes_non_git_cwd_has_null_signal(mocker):
     mocker.patch("periscope.channels._attach_git_then_resolve_pids",
                  side_effect=lambda ws: [w.update(pid=w.pop("pid_raw")) for w in ws])
     mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
-    mocker.patch("periscope.panes.parse_pane", return_value={"is_claude": True})
+    mocker.patch("periscope.panes.parse_pane", return_value={"agent": "claude"})
     mocker.patch("periscope.activity.pane_status_lines", return_value={})
     mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
     mocker.patch("periscope.channels.get_window", return_value={})

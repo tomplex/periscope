@@ -16,7 +16,7 @@
 // <input>; Enter/blur commit, Escape cancels. A `settled` guard reproduces the
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { memHint, prStateMeta, prUrl, relTime } from "../util.js";
+import { AGENT_META, memHint, paneLabel, prStateMeta, prUrl, relTime } from "../util.js";
 import { waitTier } from "./attention.js";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
@@ -143,10 +143,15 @@ export function PaneRow({
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
   const expanded = sel || w.state === "needs-input";
-  const stateCls = w.is_claude ? (w.state || "idle") : "shell";
+  const stateCls = w.agent ? (w.state || "idle") : "shell";
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
-  const label = w.name || (w.is_claude ? "claude" : "shell");
+  const label = paneLabel(w);
+  // Keep the provider mark visible during a rolling frontend/backend reload.
+  // Pre-agent-discriminator servers still emit `is_claude`; once the server
+  // restarts, `agent` is the only path used. Codex has no legacy equivalent.
+  const displayAgent = w.agent || (w.is_claude ? "claude" : null);
+  const agentMeta = AGENT_META[displayAgent];
   const statusText = w.status_rail || w.status_line;
   const statusStale =
     w.status_at && Math.floor(Date.now() / 1000) - w.status_at > STATUS_STALE_S;
@@ -185,8 +190,8 @@ export function PaneRow({
     >
       <span class="pane-stripe" aria-hidden="true"></span>
       <div class="pane-row-main">
-        {w.is_claude
-          ? <span class="rail-icon icon-claude">✻</span>
+        {agentMeta
+          ? <span class={`rail-icon ${agentMeta.className}`} title={agentMeta.label}>{agentMeta.glyph}</span>
           : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
         {/* Line 1 carries only the name + one quiet metric: model when

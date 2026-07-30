@@ -607,6 +607,19 @@ the only authoritative, current source.
   they self-correct on their next message (Claude loads new hooks live; no
   plugin reload needed).
 
+`install-hook` also invokes the provider-specific Codex installer. It merges
+dedicated Periscope groups for `SessionStart`, `UserPromptSubmit`, `Stop`, and
+`SessionEnd` into `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`) with
+an atomic, mode-preserving write. It never edits other groups or bypasses
+Codex's hook trust; use `/hooks` to review and trust the command. The standalone
+`codex_pane_session_hook.py` is stdlib-only, silent, and records sanitized
+lifecycle metadata in `agent_sessions`/`agent_session_events`. Until Stage-0
+live capture proves `TMUX_PANE` and root-vs-subagent behavior, it accepts only a
+matching `codex-tui` rollout under `CODEX_HOME/sessions`, marks evidence
+`codex-hook-unverified`, and must not be treated as authoritative for status.
+`GET /api/healthz` exposes this as `codex_hook.verification: "unresolved"` and
+reports installation/observation without claiming trust.
+
 Resolution falls back to newest-mtime-in-cwd when a pane has no recorded session
 yet. The earlier `channel_shim.py` recorder was removed — the hook's payload is
 strictly better (current vs spawn-frozen).

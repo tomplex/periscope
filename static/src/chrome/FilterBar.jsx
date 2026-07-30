@@ -19,7 +19,7 @@ const FILTERS = [
   { key: "working", label: "working" },
   { key: "done", label: "done" },
   { key: "idle", label: "idle" },
-  { key: "claude", label: "claude" },
+  { key: "agents", label: "agents" },
   { key: "shell", label: "shells" },
   { key: "ci-bad", label: "CI ✗" },
 ];

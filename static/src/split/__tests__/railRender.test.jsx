@@ -25,20 +25,20 @@ describe("<Rail> render smoke", () => {
     windows.value = [
       // single-branch track: two tabs on the same branch render flat
       { pid: "aa11", session: "managed", index: 0, target: "managed:0", name: "claude",
-        is_claude: true, state: "working", track_id: "/dev/myproj", track_name: "myproj",
+        agent: "claude", state: "working", track_id: "/dev/myproj", track_name: "myproj",
         repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
         cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"), pane_id: "%1" },
       { pid: "bb22", session: "managed", index: 1, target: "managed:1", name: "shell",
-        is_claude: false, state: "shell", track_id: "/dev/myproj", track_name: "myproj",
+        agent: null, state: "shell", track_id: "/dev/myproj", track_name: "myproj",
         repo_key: "/dev/other", repo_label: "other", branch: "master",
         cwd: "/dev/other", worktree_affiliation: aff("off-repo", "other"), pane_id: "%2" },
       // a second track with two distinct branches → branch sub-clusters
       { pid: "cc33", session: "managed", index: 2, target: "managed:2", name: "feat-work",
-        is_claude: true, state: "idle", track_id: "tk_feature", track_name: "Feature",
+        agent: "claude", state: "idle", track_id: "tk_feature", track_name: "Feature",
         repo_key: "/dev/fdy", repo_label: "fdy", branch: "master",
         cwd: "/dev/fdy", worktree_affiliation: aff("no-repo"), pane_id: "%3" },
       { pid: "dd44", session: "managed", index: 3, target: "managed:3", name: "feat-x",
-        is_claude: true, state: "idle", track_id: "tk_feature", track_name: "Feature",
+        agent: "claude", state: "idle", track_id: "tk_feature", track_name: "Feature",
         repo_key: "/dev/fdy", repo_label: "fdy", branch: "feat-x",
         cwd: "/dev/fdy", worktree_affiliation: aff("no-repo"), pane_id: "%4" },
     ];
@@ -51,6 +51,43 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain("master");        // branch sub-cluster label
     expect(html).toContain("feat-x");        // second branch sub-cluster label
     expect(html).toContain("New tab");       // newtab affordance
+    expect(html).toContain('<span class="rail-icon icon-claude" title="Claude">✻</span>');
+  });
+
+  it("shows distinct provider symbols on Claude and Codex panes", () => {
+    projects.value = [];
+    tracks.value = [];
+    const pane = (over) => ({
+      pid: "agent", session: "managed", index: 0, target: "managed:0",
+      state: "idle", track_id: "/dev/myproj", track_name: "myproj",
+      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
+      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"),
+      pane_id: "%1", ...over,
+    });
+    windows.value = [
+      pane({ pid: "claude", name: "claude", agent: "claude" }),
+      pane({ pid: "codex", index: 1, target: "managed:1", name: "codex",
+        agent: "codex", pane_id: "%2" }),
+    ];
+
+    const html = render(<Rail />);
+    expect(html).toContain('<span class="rail-icon icon-claude" title="Claude">✻</span>');
+    expect(html).toContain('<span class="rail-icon icon-codex" title="Codex">⬡</span>');
+  });
+
+  it("keeps the Claude symbol during a frontend-only rolling reload", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [{
+      pid: "legacy", session: "managed", index: 0, target: "managed:0",
+      name: "legacy-claude", is_claude: true, state: "idle",
+      track_id: "/dev/myproj", track_name: "myproj",
+      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
+      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"), pane_id: "%1",
+    }];
+
+    expect(render(<Rail />))
+      .toContain('<span class="rail-icon icon-claude" title="Claude">✻</span>');
   });
 
   it("renders an EMPTY goal track from the registry with its + New tab", () => {
@@ -58,7 +95,7 @@ describe("<Rail> render smoke", () => {
     tracks.value = [{ id: "tk_fresh", name: "Fresh goal", repo: "/dev/fdy" }];
     windows.value = [
       { pid: "aa11", session: "managed", index: 0, target: "managed:0", name: "claude",
-        is_claude: true, state: "working", track_id: "/dev/myproj", track_name: "myproj",
+        agent: "claude", state: "working", track_id: "/dev/myproj", track_name: "myproj",
         repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
         cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"), pane_id: "%1" },
     ];
@@ -79,7 +116,7 @@ describe("<Rail> render smoke", () => {
     tracks.value = [];
     const w = (over) => ({
       pid: "x", session: "managed", index: 0, target: "managed:0", name: "claude",
-      is_claude: true, state: "idle", track_name: "sts2-seed-finder",
+      agent: "claude", state: "idle", track_name: "sts2-seed-finder",
       repo_key: "/dev/sts2", repo_label: "sts2", branch: "master",
       cwd: "/dev/sts2", worktree_affiliation: aff("at-pin"), pane_id: "%1", ...over,
     });
@@ -103,7 +140,7 @@ describe("<Rail> awaiting-reply marker", () => {
   // store.alerts -> Rail.jsx awaitingReplyByPid -> PaneRow chip.
   const paneWin = (over = {}) => ({
     pid: "aa11", session: "managed", index: 0, target: "managed:0",
-    name: "claude", is_claude: true, state: "idle", track_id: "/dev/myproj",
+    name: "claude", agent: "claude", state: "idle", track_id: "/dev/myproj",
     track_name: "myproj", repo_key: "/dev/myproj", repo_label: "myproj",
     branch: "master", cwd: "/dev/myproj",
     worktree_affiliation: aff("at-pin"), pane_id: "%1",
@@ -152,7 +189,7 @@ describe("<Rail> awaiting-reply marker", () => {
 
 describe("<Rail> delegation lineage", () => {
   const paneWin = (over = {}) => ({
-    session: "managed", is_claude: true, state: "idle",
+    session: "managed", agent: "claude", state: "idle",
     track_id: "/dev/myproj", track_name: "myproj", repo_key: "/dev/myproj",
     repo_label: "myproj", branch: "master", cwd: "/dev/myproj",
     worktree_affiliation: aff("at-pin"), ...over,

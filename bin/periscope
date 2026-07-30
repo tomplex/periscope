@@ -82,6 +82,10 @@ EOF
     "$0" uninstall-hook
     ;;
   install-hook)
+    "$0" install-claude-hook
+    "$0" install-codex-hook
+    ;;
+  install-claude-hook)
     # Register pane_session_hook.py on Claude's SessionStart + UserPromptSubmit
     # hooks so each pane records its CURRENT session id (periscope.turns maps
     # pane -> session). SessionStart fires at startup AND on /clear (immediate,
@@ -118,7 +122,14 @@ else:
     print("pane-session hook already installed (SessionStart + UserPromptSubmit)")
 PY
     ;;
+  install-codex-hook)
+    ( cd "$REPO" && exec python3 -m periscope.codex_hook_config install "$REPO" )
+    ;;
   uninstall-hook)
+    "$0" uninstall-claude-hook
+    "$0" uninstall-codex-hook
+    ;;
+  uninstall-claude-hook)
     python3 - <<'PY'
 import json, os
 p = os.path.expanduser("~/.claude/settings.json")
@@ -139,6 +150,9 @@ for ev in ("SessionStart", "UserPromptSubmit"):
 with open(p, "w") as f: json.dump(d, f, indent=2)
 print("removed pane-session hook from SessionStart + UserPromptSubmit")
 PY
+    ;;
+  uninstall-codex-hook)
+    ( cd "$REPO" && exec python3 -m periscope.codex_hook_config uninstall "$REPO" )
     ;;
   resurrect-rewrite)
     # tmux-resurrect post-save-layout hook (save.sh passes the save-file path).
@@ -164,7 +178,7 @@ PY
     tail -F "$LOG"
     ;;
   *)
-    echo "usage: $0 {install|uninstall|install-hook|uninstall-hook|resurrect-rewrite|start|stop|restart|status|tail}"
+    echo "usage: $0 {install|uninstall|install-hook|install-claude-hook|install-codex-hook|uninstall-hook|uninstall-claude-hook|uninstall-codex-hook|resurrect-rewrite|start|stop|restart|status|tail}"
     exit 1
     ;;
 esac

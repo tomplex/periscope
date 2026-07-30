@@ -265,9 +265,9 @@ def test_annotate_hot_panes_flames_majority_burner(monkeypatch):
     monkeypatch.setattr(usage, "pane_burn_rates",
                         lambda ids: {"%1": 900.0, "%2": 100.0})
     views = [
-        {"pane_id": "%1", "is_claude": True},
-        {"pane_id": "%2", "is_claude": True},
-        {"pane_id": "%3", "is_claude": False},
+        {"pane_id": "%1", "agent": "claude"},
+        {"pane_id": "%2", "agent": "claude"},
+        {"pane_id": "%3", "agent": None},
     ]
     usage.annotate_hot_panes(views)
     assert views[0].get("burn_hot") is True
@@ -283,7 +283,7 @@ def test_annotate_hot_panes_noop_when_meter_not_hot(monkeypatch):
     called = []
     monkeypatch.setattr(usage, "pane_burn_rates",
                         lambda ids: called.append(ids) or {})
-    views = [{"pane_id": "%1", "is_claude": True}]
+    views = [{"pane_id": "%1", "agent": "claude"}]
     usage.annotate_hot_panes(views)
     assert not called  # burn never even computed
     assert "burn_hot" not in views[0]

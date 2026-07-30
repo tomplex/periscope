@@ -466,7 +466,7 @@ def test_worker_tick_invokes_narrator_with_claude_panes(monkeypatch):
         {"session": "s", "index": 0, "pane_id": "%1", "cwd": ""}])
     monkeypatch.setattr(activity, "tmux", lambda *a: "pane content")
     monkeypatch.setattr(activity, "parse_pane",
-                        lambda c: {"is_claude": True, "context_pct": None,
+                        lambda c: {"agent": "claude", "context_pct": None,
                                    "state": "idle"})
     activity._worker_tick({})
     assert len(calls) == 1

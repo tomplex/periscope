@@ -23,10 +23,13 @@ def reset_panes_and_channels():
     panes._acted_at.clear()
     panes._completed_at.clear()
     panes._prev_state.clear()
+    panes._agent_transition_baseline.clear()
     panes._spinner_last_seen.clear()
-    panes._claude_last_seen.clear()
+    panes._agent_last_seen.clear()
     from periscope import window_view
     window_view._view_cache.clear()
+    window_view._codex_last_valid.clear()
+    window_view._codex_pid_panes.clear()
     with _CHANNELS_LOCK:
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
@@ -36,10 +39,13 @@ def reset_panes_and_channels():
     panes._acted_at.clear()
     panes._completed_at.clear()
     panes._prev_state.clear()
+    panes._agent_transition_baseline.clear()
     panes._spinner_last_seen.clear()
-    panes._claude_last_seen.clear()
+    panes._agent_last_seen.clear()
     from periscope import window_view
     window_view._view_cache.clear()
+    window_view._codex_last_valid.clear()
+    window_view._codex_pid_panes.clear()
     with _CHANNELS_LOCK:
         _CHANNEL_ALERTS.clear()
         _CHANNEL_UNREAD.clear()
@@ -83,7 +89,7 @@ def test_view_classifies_non_claude_as_shell(mocker, clean_state):
     from periscope.window_view import build_window_view
     _stub_subsystems(mocker, pane_content="$ ls\nREADME.md\n$")
     view, _ = build_window_view(_window(), now_ts=1000)
-    assert view["is_claude"] is False
+    assert view["agent"] is None
     assert view["state"] == "shell"
 
 
@@ -93,11 +99,11 @@ def test_view_promotes_blank_state_to_working_when_spinner_present(mocker, clean
     from periscope.window_view import build_window_view
 
     mocker.patch("periscope.window_view.capture", return_value="claude pane")
-    # parse_pane returns is_claude=True, state=idle, but has a spinner.
+    # parse_pane returns agent="claude", state=idle, but has a spinner.
     mocker.patch(
         "periscope.window_view.parse_pane",
         return_value={
-            "is_claude": True, "state": "idle",
+            "agent": "claude", "state": "idle",
             "spinner": "Envisioning",
         },
     )
@@ -111,7 +117,7 @@ def test_view_promotes_blank_state_to_working_when_spinner_present(mocker, clean
 def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_state):
     """If the previous state was working and current is idle, the
     completed_at stamp bumps. If acked_at < completed_at and the pane
-    is_claude, the state becomes 'done'."""
+    agent identity, the state becomes 'done'."""
     from periscope import panes
     from periscope.window_view import build_window_view
 
@@ -121,7 +127,7 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
     mocker.patch("periscope.window_view.capture", return_value="x")
@@ -131,6 +137,145 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
     assert view["completed_at"] == 5000
     # Stamp update should record the new completed_at for persistence.
     assert stamp == (pid, 5000, 0)
+
+
+def _codex_view_stubs(mocker):
+    _stub_subsystems(mocker, pane_content="")
+    mocker.patch("periscope.window_view.codex_process_for_pane", return_value=True)
+
+
+def test_codex_first_idle_is_baseline_not_done(mocker, clean_state):
+    from periscope import window_view
+
+    _codex_view_stubs(mocker)
+    mocker.patch(
+        "periscope.window_view._codex_observation",
+        return_value=window_view._CodexObservation("idle", "session-a", "turn-a"),
+    )
+
+    view, stamp = window_view.build_window_view(
+        _window(pane_pid="42"), now_ts=1000
+    )
+
+    assert view["agent"] == "codex"
+    assert view["state"] == "idle"
+    assert view["completed_at"] == 0
+    assert stamp is None
+
+
+def test_codex_same_turn_working_to_idle_completes_once(mocker, clean_state):
+    from periscope import window_view
+
+    _codex_view_stubs(mocker)
+    opinion = mocker.patch(
+        "periscope.window_view._codex_observation",
+        side_effect=[
+            window_view._CodexObservation("working", "session-a", "turn-a"),
+            window_view._CodexObservation("idle", "session-a", "turn-a"),
+            window_view._CodexObservation("idle", "session-a", "turn-a"),
+        ],
+    )
+    w = _window(pane_pid="42")
+
+    first, _ = window_view.build_window_view(w, now_ts=1000)
+    second, stamp = window_view.build_window_view(w, now_ts=1001)
+    third, _ = window_view.build_window_view(w, now_ts=1002)
+
+    assert opinion.call_count == 3  # structured state bypasses quiet capture cache
+    assert first["state"] == "working"
+    assert second["state"] == third["state"] == "done"
+    assert second["completed_at"] == third["completed_at"] == 1001
+    assert stamp == ("abc12345", 1001, 0)
+
+
+def test_codex_unknown_is_no_opinion_then_same_turn_idle_completes(
+    mocker, clean_state
+):
+    from periscope import window_view
+
+    _codex_view_stubs(mocker)
+    mocker.patch(
+        "periscope.window_view._codex_observation",
+        side_effect=[
+            window_view._CodexObservation("working", "session-a", "turn-a"),
+            None,
+            window_view._CodexObservation("idle", "session-a", "turn-a"),
+        ],
+    )
+    w = _window(pane_pid="42")
+
+    window_view.build_window_view(w, now_ts=1000)
+    unknown, _ = window_view.build_window_view(w, now_ts=1010)
+    done, _ = window_view.build_window_view(w, now_ts=1011)
+
+    assert unknown["state"] == "unknown"
+    assert unknown["completed_at"] == 0
+    assert done["state"] == "done"
+    assert done["completed_at"] == 1011
+
+
+def test_codex_different_turn_idle_does_not_complete(mocker, clean_state):
+    from periscope import window_view
+
+    _codex_view_stubs(mocker)
+    mocker.patch(
+        "periscope.window_view._codex_observation",
+        side_effect=[
+            window_view._CodexObservation("working", "session-a", "turn-a"),
+            None,
+            window_view._CodexObservation("idle", "session-a", "turn-b"),
+        ],
+    )
+    w = _window(pane_pid="42")
+
+    window_view.build_window_view(w, now_ts=1000)
+    window_view.build_window_view(w, now_ts=1010)
+    view, stamp = window_view.build_window_view(w, now_ts=1011)
+
+    assert view["state"] == "idle"
+    assert view["completed_at"] == 0
+    assert stamp is None
+
+
+def test_codex_unverified_hook_binding_has_no_state_opinion(mocker):
+    from periscope import window_view
+    from periscope.session_binding_db import AgentSessionBinding
+
+    mocker.patch(
+        "periscope.window_view.activity.get_agent_session",
+        return_value=AgentSessionBinding(
+            "%5",
+            "codex",
+            "session-a",
+            "/tmp/rollout.jsonl",
+            1000,
+            "codex-hook-unverified",
+        ),
+    )
+    rollout = mocker.patch("periscope.window_view.rollout_edge_for")
+
+    assert window_view._codex_observation("%5", True) is None
+    rollout.assert_not_called()
+
+
+def test_codex_does_not_surface_claude_channel_attention(mocker, clean_state):
+    from periscope import window_view
+
+    _codex_view_stubs(mocker)
+    mocker.patch(
+        "periscope.window_view._codex_observation",
+        return_value=window_view._CodexObservation("idle", "session-a", "turn-a"),
+    )
+    mocker.patch(
+        "periscope.window_view.channel_state_for",
+        return_value={"attached": True, "unread": True, "alerts": [{"kind": "done"}]},
+    )
+
+    view, _ = window_view.build_window_view(_window(pane_pid="42"), now_ts=1000)
+
+    assert view["channel_attached"] is False
+    assert view["channel_unread"] is False
+    assert view["channel_alerts"] == []
 
 
 def test_view_no_stamp_update_when_persisted_already_current(mocker, clean_state):
@@ -146,7 +291,7 @@ def test_view_no_stamp_update_when_persisted_already_current(mocker, clean_state
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
     mocker.patch("periscope.window_view.capture", return_value="x")
@@ -166,7 +311,7 @@ def test_view_linked_pr_overrides_auto_detected(mocker, clean_state):
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(
         mocker,
@@ -191,7 +336,7 @@ def test_view_linked_pr_merged_carries_state(mocker, clean_state):
     clean_state["windows"][pid] = {"linked_pr": 1234}
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(
         mocker,
@@ -217,7 +362,7 @@ def test_view_surfaces_linked_linear(mocker, clean_state):
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
     mocker.patch("periscope.window_view.capture", return_value="x")
@@ -239,7 +384,7 @@ def test_view_channel_attached_reflects_mcp_session_presence(mocker, clean_state
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
     mocker.patch("periscope.window_view.capture", return_value="x")
@@ -259,7 +404,7 @@ def test_view_handles_capture_exception(mocker, clean_state):
     mocker.patch("periscope.window_view.cached_lgtm_state", return_value=None)
 
     view, _ = build_window_view(_window(), now_ts=1000)
-    assert view["state"] == "shell"  # error → is_claude=False → shell
+    assert view["state"] == "shell"  # error → agent=None → shell
 
 
 def test_view_includes_track_id(mocker, clean_state, fresh_activity_db):
@@ -297,7 +442,7 @@ def test_view_persisted_acked_at_suppresses_done_state(mocker, clean_state):
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
     mocker.patch("periscope.window_view.capture", return_value="x")
@@ -337,13 +482,13 @@ def test_working_pane_always_recaptures_even_if_activity_unchanged(mocker, clean
     cap = mocker.patch(
         "periscope.window_view.capture",
         # Real Claude status block (status line present) so parse_pane returns
-        # is_claude + spinner → working. A bare "⠋ thinking…" line has no status
+        # agent + spinner → working. A bare "⠋ thinking…" line has no status
         # line and parses to shell, which would never exercise the working path.
         return_value=(
             "some output\n⠋ Thinking…\n"
             "  fdy | master | clean\n"
             "  24% | ↑235k ↓479 | $17.04 | Opus 4.7 (1M context)"
-        ),  # parses is_claude + spinner → working
+        ),  # parses agent + spinner → working
     )
     w = _window()
     w["activity"] = 500
@@ -419,7 +564,7 @@ def test_view_surfaces_spawned_by_lineage(mocker, clean_state):
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
     mocker.patch("periscope.window_view.capture", return_value="x")
@@ -443,7 +588,7 @@ def test_view_names_a_spawner_that_has_already_exited(mocker, clean_state):
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
     mocker.patch("periscope.window_view.capture", return_value="x")
@@ -461,7 +606,7 @@ def test_view_spawned_by_is_none_for_a_hand_created_pane(mocker, clean_state):
 
     mocker.patch(
         "periscope.window_view.parse_pane",
-        return_value={"is_claude": True, "state": "idle", "spinner": None},
+        return_value={"agent": "claude", "state": "idle", "spinner": None},
     )
     _stub_subsystems(mocker, pane_content="x")
     mocker.patch("periscope.window_view.capture", return_value="x")

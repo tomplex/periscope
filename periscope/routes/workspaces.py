@@ -5,6 +5,7 @@ untag, and spawn-into-workspace. The entity lives in periscope.workspaces;
 the per-tab tag map lives in periscope.activity (pane_workspaces table).
 """
 import subprocess
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -91,6 +92,7 @@ def workspaces_untag(body: UntagBody):
 class SpawnBody(BaseModel):
     workspace_id: str
     branch: str
+    agent: Literal["claude", "codex"] = "claude"
 
 
 @router.post("/api/workspaces/spawn")
@@ -113,7 +115,10 @@ def workspaces_spawn(body: SpawnBody):
     spawn = worktree_spawn.spawn_worktree(
         base_repo, body.branch, base_branch=base_branch, fetch=False,
     )
-    result = open_ops.open_target(open_ops.PathTarget(path=spawn["path"]))
-    activity.set_pane_workspace(result.claude_pane_id, body.workspace_id)
+    result = open_ops.open_target(
+        open_ops.PathTarget(path=spawn["path"]), agent=body.agent
+    )
+    activity.set_pane_workspace(result.agent_pane_id, body.workspace_id)
     return {"ok": True, "workspace_id": body.workspace_id,
-            "pane_id": result.claude_pane_id, "path": spawn["path"], "ui": result.ui}
+            "pane_id": result.agent_pane_id, "agent": result.agent,
+            "path": spawn["path"], "ui": result.ui}

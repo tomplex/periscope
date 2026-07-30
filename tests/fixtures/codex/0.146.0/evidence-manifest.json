@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.146.0",
+  "verified": [
+    "normal-rollout-task-started-and-task-complete",
+    "rollout-root-vs-subagent-metadata-discriminator",
+    "darwin-direct-launch-process-layout",
+    "hooks-feature-listed-stable-and-enabled"
+  ],
+  "unresolved_hard_gates": [
+    "hook-payload-shapes",
+    "hook-tmux-pane-inheritance",
+    "hook-subagent-firing-and-root-binding-safety"
+  ],
+  "unresolved_cases": [
+    "resume-session-start",
+    "interrupted-turn",
+    "failed-or-cancelled-turn",
+    "approval-roundtrip",
+    "stop-continuation",
+    "session-end-discovery",
+    "hook-trust-invalidation",
+    "empty-codex-home",
+    "linux-process-layout"
+  ]
+}

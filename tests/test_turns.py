@@ -4,6 +4,7 @@ import json
 
 import periscope.activity as activity
 import periscope.turns as turns
+from periscope.session_binding_db import AgentSessionBinding, upsert_binding
 
 
 def _write_jsonl(path, cwd, text="hello transcript"):
@@ -34,6 +35,26 @@ def test_session_id_for_pane_reads_db(fresh_activity_db):
     assert turns.session_id_for_pane("%56") == sid
     assert turns.session_id_for_pane("%999") is None   # no row for that pane
     assert turns.session_id_for_pane("") is None
+
+
+def test_provider_binding_does_not_leak_into_legacy_claude_lookup(
+    fresh_activity_db,
+):
+    binding = AgentSessionBinding(
+        pane_id="%56",
+        provider="codex",
+        session_id="codex-session",
+        session_path="/tmp/rollout.jsonl",
+        updated_at=1,
+        evidence="codex-hook",
+    )
+    upsert_binding(activity._conn(), binding)
+    activity._conn().commit()
+
+    assert activity.get_agent_session("%56") == binding
+    assert activity.get_agent_session("") is None
+    assert activity.get_pane_session("%56") is None
+    assert turns.session_id_for_pane("%56") is None
 
 
 # ── get_turns_for_pane ───────────────────────────────────────────────────

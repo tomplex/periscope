@@ -99,6 +99,7 @@ export function OpenOmnibox() {
   const [selectedJob, setSelectedJob] = useState(null);   // job id whose transcript is open
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [agent, setAgent] = useState("claude");
 
   // Window bridge + global ⌘K/⌘P summon. Registered once; persists while mounted.
   useEffect(() => {
@@ -118,7 +119,7 @@ export function OpenOmnibox() {
 
   useEffect(() => {
     if (!open.value) return;
-    setQuery(""); setDrill(null); setSelectedJob(null); setError("");
+    setQuery(""); setDrill(null); setSelectedJob(null); setError(""); setAgent("claude");
     (async () => {
       const data = await apiCall("open catalog", "/api/open/catalog");
       if (data) setCatalog(data);
@@ -131,7 +132,7 @@ export function OpenOmnibox() {
     setBusy(true); setError("");
     const data = await apiCall("open", "/api/open", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(descriptor),
+      body: JSON.stringify({ ...descriptor, agent }),
     });
     setBusy(false);
     if (!data) { setError("open failed"); return; }
@@ -141,9 +142,9 @@ export function OpenOmnibox() {
     // returns that existing pane's id. Without this the focus branch had no
     // visible effect at all — reported as "I tried to open fdy master
     // multiple times and nothing happened".
-    if (data.claude_pid) {
-      railSelection.value = `pane:${data.claude_pid}`;
-      setLastSelected({ kind: "pane", pid: data.claude_pid });
+    if (data.agent_pid) {
+      railSelection.value = `pane:${data.agent_pid}`;
+      setLastSelected({ kind: "pane", pid: data.agent_pid });
     }
     close();
   }
@@ -195,6 +196,19 @@ export function OpenOmnibox() {
     <div id="open-omnibox" class="open-omnibox-overlay"
          onClick={(e) => { if (e.target.id === "open-omnibox") close(); }}>
       <div class="open-omnibox-card">
+        {!jobsView && (
+          <div class="launcher-branches">
+            {["claude", "codex"].map((name) => (
+              <button
+                key={name}
+                class={`launcher-branch${agent === name ? " is-active" : ""}`}
+                onClick={() => setAgent(name)}
+              >
+                {name === "claude" ? "Claude" : "Codex"}
+              </button>
+            ))}
+          </div>
+        )}
         {!drill && !jobsView && (
           <Palette
             value={query} onInput={setQuery} placeholder="repo, path, #PR…"

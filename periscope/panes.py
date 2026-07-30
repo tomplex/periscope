@@ -1,9 +1,9 @@
 """Pane introspection: tmux window listing + Claude TUI parsing + focus
-tracking + spinner/is_claude smoothing.
+tracking + spinner/agent smoothing.
 
-The smoothing dicts (`_spinner_last_seen`, `_claude_last_seen`) absorb
+The smoothing dicts (`_spinner_last_seen`, `_agent_last_seen`) absorb
 single-frame capture-pane glitches so the dashboard's "thinking"
-indicator and is_claude classification don't flicker. The focus dicts
+indicator and agent classification don't flicker. The focus dicts
 (`_focused_at`, `_acted_at`, etc.) drive the stream view's recency
 ordering.
 
@@ -46,6 +46,12 @@ _completed_at: dict[str, int] = {}
 # idle edge that drives `_completed_at`. Keyed by pid (not target) so a
 # session rename doesn't lose the prior state and refire the transition.
 _prev_state: dict[str, str | None] = {}
+# Structured-agent transition baselines.  Unlike `_prev_state`, these carry
+# session/turn identity so an idle edge from a different turn can never finish
+# stale work.  Values are (provider, session_id, turn_id, state).
+_agent_transition_baseline: dict[
+    str, tuple[str, str, str, str]
+] = {}
 _active_per_session: dict[str, str] = {}
 
 # Active resume operations, keyed by session_id. Each entry tracks where a
@@ -65,8 +71,8 @@ SPINNER_GRACE_S = 4.0
 # matching CC's bottom status line, but CC's interactive dialogs (e.g.
 # AskUserQuestion) take over the screen and temporarily hide that line — we
 # don't want the card to flip back to "shell" while the user is mid-prompt.
-_claude_last_seen: dict[str, float] = {}
-CLAUDE_STICKY_S = 120.0
+_agent_last_seen: dict[str, tuple[str, float]] = {}
+AGENT_STICKY_S = 120.0
 
 
 def smooth_spinner(target: str, current: str | None) -> str | None:
@@ -83,18 +89,44 @@ def smooth_spinner(target: str, current: str | None) -> str | None:
     return None
 
 
-def smooth_is_claude(target: str, current: bool) -> bool:
-    """Side effect: records/expires this target's entry in `_claude_last_seen`
-    for stickiness — not idempotent, repeated same-arg calls can differ."""
+def smooth_agent(pane_id: str, current: str | None) -> str | None:
+    """Smooth transient agent-detection gaps for one stable tmux pane.
+
+    A positive detection always wins, including a provider change. Missing
+    detection retains the last provider briefly while dialogs/redraws hide
+    identifying UI.
+    """
     now = time.time()
     if current:
-        _claude_last_seen[target] = now
-        return True
-    last = _claude_last_seen.get(target, 0)
-    if now - last < CLAUDE_STICKY_S:
-        return True
-    _claude_last_seen.pop(target, None)
-    return False
+        _agent_last_seen[pane_id] = (current, now)
+        return current
+    last = _agent_last_seen.get(pane_id)
+    if last and now - last[1] < AGENT_STICKY_S:
+        return last[0]
+    _agent_last_seen.pop(pane_id, None)
+    return None
+
+
+def forget_agent(pane_id: str, agent: str | None = None) -> None:
+    """Drop sticky identity, optionally only when it belongs to ``agent``."""
+    last = _agent_last_seen.get(pane_id)
+    if last and (agent is None or last[0] == agent):
+        _agent_last_seen.pop(pane_id, None)
+
+
+def smooth_parsed(*, pane_id: str, parsed: dict) -> dict:
+    """Apply the shared pane normalization ladder in-place."""
+    parsed["spinner"] = smooth_spinner(pane_id, parsed.get("spinner"))
+    parsed["agent"] = smooth_agent(pane_id, parsed.get("agent"))
+    if not parsed["agent"]:
+        parsed["state"] = "shell"
+    if (
+        parsed.get("agent")
+        and parsed.get("spinner")
+        and parsed.get("state") not in ("working", "needs-input")
+    ):
+        parsed["state"] = "working"
+    return parsed
 
 
 def note_focus(target: str) -> None:
@@ -147,6 +179,38 @@ def record_state_transition(
     if prev in ("working", "needs-input") and state == "idle":
         _completed_at[target] = now_ts
     _prev_state[pid] = state
+
+
+def record_agent_state_transition(
+    pid: str,
+    target: str,
+    *,
+    provider: str,
+    session_id: str,
+    turn_id: str,
+    state: str,
+    now_ts: int,
+) -> None:
+    """Record a *valid* structured agent observation.
+
+    Completion requires exact provider/session/turn continuity.  Callers must
+    not invoke this for unknown evidence; preserving the last valid baseline
+    across a temporary evidence gap is what permits a later same-turn idle
+    edge without allowing the gap itself to synthesize completion.
+    """
+    if not pid or state not in {"working", "idle"}:
+        return
+    identity = (provider, session_id, turn_id)
+    prev = _agent_transition_baseline.get(pid)
+    if prev and prev[:3] == identity and prev[3] == "working" and state == "idle":
+        _completed_at[target] = now_ts
+    _agent_transition_baseline[pid] = (*identity, state)
+
+
+def clear_agent_state_transition(pid: str) -> None:
+    """Forget structured transition state when pane/agent identity ends."""
+    if pid:
+        _agent_transition_baseline.pop(pid, None)
 
 
 def recency_stamps_for(target: str) -> dict:
@@ -274,7 +338,7 @@ def list_windows() -> list[dict]:
         "list-windows",
         "-a",
         "-F",
-        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{@periscope_id}\t#{pane_id}\t#{window_activity}\t#{window_id}",
+        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{@periscope_id}\t#{pane_id}\t#{window_activity}\t#{window_id}\t#{pane_pid}\t#{pane_current_command}",
     )
     rows = []
     for line in out.strip().split("\n"):
@@ -303,6 +367,8 @@ def list_windows() -> list[dict]:
         # session:index it survives move-window/renumbering, so it is the only
         # safe target for writing @periscope_id back (see pids._resolve_one).
         window_id = parts[8] if len(parts) > 8 else ""
+        pane_pid = parts[9] if len(parts) > 9 else ""
+        current_command = parts[10] if len(parts) > 10 else ""
         rows.append(
             {
                 "session": s,
@@ -314,6 +380,8 @@ def list_windows() -> list[dict]:
                 "pane_id": pane_id,
                 "activity": activity,
                 "window_id": window_id,
+                "pane_pid": pane_pid,
+                "current_command": current_command,
             }
         )
     return rows
@@ -542,7 +610,7 @@ def _detect_api_error(lines: list[str]) -> bool:
 
 
 def _resolve_state(
-    is_claude: bool,
+    agent: str | None,
     needs_input: bool,
     asked_question: bool,
     spinner: str | None,
@@ -552,7 +620,7 @@ def _resolve_state(
     is the parse-level neutral state — /api/state may refine it to `done`
     when there's an unacknowledged completion stamp.
     """
-    if not is_claude:
+    if not agent:
         return "shell"
     if needs_input or asked_question:
         return "needs-input"
@@ -570,7 +638,7 @@ def parse_pane(content: str) -> dict:
     raw_rows, plain_rows, lines = _split_buffers(content)
 
     status = _detect_status(lines)
-    is_claude = status is not None
+    agent = "claude" if status is not None else None
 
     spinner = _detect_spinner(lines)
 
@@ -579,7 +647,7 @@ def parse_pane(content: str) -> dict:
     # Claude even if STATUS_RE missed (the dialog occupies the bottom rows
     # where the status line normally lives).
     if needs_input:
-        is_claude = True
+        agent = "claude"
 
     # `❯ 1.` is the dialog's selection line, not user typing — skip
     # pending-input detection entirely when a dialog is open.
@@ -592,15 +660,15 @@ def parse_pane(content: str) -> dict:
 
     asked_question = (
         _detect_asked_question(lines)
-        if is_claude and not needs_input
+        if agent == "claude" and not needs_input
         else False
     )
-    api_error = _detect_api_error(lines) if is_claude else False
+    api_error = _detect_api_error(lines) if agent == "claude" else False
 
-    state = _resolve_state(is_claude, needs_input, asked_question, spinner)
+    state = _resolve_state(agent, needs_input, asked_question, spinner)
 
     return {
-        "is_claude": is_claude,
+        "agent": agent,
         "state": state,
         "spinner": spinner,
         "needs_input": needs_input or asked_question,

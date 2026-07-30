@@ -63,6 +63,9 @@ const LINK_ASK_PROMPTS = {
 
 function PrCard({ data, onLinkAsk }) {
   if (!data.pr) {
+    // Link requests are delivered through Claude channels. Codex panes retain
+    // linked metadata when present, but do not get a dead Claude-only prompt.
+    if (data.agent !== "claude") return null;
     const attached = !!data.channel_attached;
     const title = attached
       ? "Ask Claude to link the PR for this pane (via link_pr MCP tool)"
@@ -148,6 +151,7 @@ function LinearCard({ data, onLinkAsk }) {
       </div>
     );
   }
+  if (data.agent !== "claude") return null;
   const attached = !!data.channel_attached;
   const title = attached
     ? "Ask Claude to link a Linear ticket for this pane (via link_linear MCP tool)"

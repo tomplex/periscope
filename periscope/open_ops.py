@@ -6,6 +6,7 @@ dispatch function is `open_target`, never `open`.
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from periscope import config, projects, store, tracks, worktrees
 from periscope.gitutil import (
@@ -39,9 +40,19 @@ Descriptor = PathTarget | BranchTarget | PRTarget
 class OpenResult:
     tmux_session: str
     repo: str
-    claude_pid: str          # @periscope_id (pid_raw) of the claude window
-    claude_pane_id: str      # tmux pane_id (%N) of the claude window
+    agent_pid: str
+    agent_pane_id: str
+    agent: Literal["claude", "codex"]
     ui: dict
+
+    @property
+    def claude_pid(self) -> str:
+        """Internal compatibility for callers migrating to agent_pid."""
+        return self.agent_pid
+
+    @property
+    def claude_pane_id(self) -> str:
+        return self.agent_pane_id
 
 
 def worktree_for_branch(repo: str, branch: str) -> str | None:
@@ -89,7 +100,7 @@ def _session_owns_dir(name: str, pinned_dir: str) -> bool:
                for w in list_windows())
 
 
-def _claude_pid_for_dir(session: str, pinned_dir: str) -> str:
+def _agent_pid_for_dir(session: str, pinned_dir: str, agent: str) -> str:
     """The @periscope_id (pid_raw) of the claude window in `session` whose cwd
     is `pinned_dir`. Under one shared session many claude windows coexist, so
     a session-wide "first claude" match is wrong here — filter by realpath'd
@@ -99,8 +110,11 @@ def _claude_pid_for_dir(session: str, pinned_dir: str) -> str:
             and os.path.realpath(w.get("cwd") or "") == pinned_dir]
     if not wins:
         return ""
-    claude = next((w for w in wins if w["name"] == "claude"), wins[0])
-    return claude.get("pid_raw") or ""
+    match = next(
+        (w for w in wins if w.get("agent") == agent or w.get("name") == agent),
+        None,
+    )
+    return (match or {}).get("pid_raw") or ""
 
 
 def _dedupe_name(base: str) -> str:
@@ -163,7 +177,11 @@ def resolve_worktree_session(path: str) -> tuple[str, projects.Project] | None:
     return name, project
 
 
-def ensure_session(project: projects.Project, pinned_dir: str) -> tuple[str, str]:
+def ensure_session(
+    project: projects.Project,
+    pinned_dir: str,
+    agent: Literal["claude", "codex"] = "claude",
+) -> tuple[str, str]:
     """Idempotent create-or-focus into the single shared MANAGED_SESSION.
     `pinned_dir` is the project's key (taken explicitly — Project is a
     TypedDict with no self-key). Returns (tmux_session, claude_pid).
@@ -173,9 +191,14 @@ def ensure_session(project: projects.Project, pinned_dir: str) -> tuple[str, str
     project, which no longer exists. So there's no foreign-name dedupe here."""
     session = config.MANAGED_SESSION
     if _session_live(session) and _session_owns_dir(session, pinned_dir):
-        return session, _claude_pid_for_dir(session, pinned_dir)
-    claude_pid, _ = _layout_two_window(session, pinned_dir)
-    return session, claude_pid
+        existing = _agent_pid_for_dir(session, pinned_dir, agent)
+        if existing:
+            return session, existing
+    if agent == "claude":
+        agent_pid, _ = _layout_two_window(session, pinned_dir)
+    else:
+        agent_pid, _ = _layout_two_window(session, pinned_dir, agent=agent)
+    return session, agent_pid
 
 
 def _discover_repos() -> set[str]:
@@ -194,7 +217,10 @@ def _discover_repos() -> set[str]:
     return repos
 
 
-def _open_path(path: str) -> OpenResult:
+def _open_path(
+    path: str,
+    agent: Literal["claude", "codex"] = "claude",
+) -> OpenResult:
     """Resolve a directory to a live, rail-placed tmux session.
 
     The shared implementation for PathTarget and PR/Branch targets so the
@@ -203,7 +229,7 @@ def _open_path(path: str) -> OpenResult:
     toplevel = _git_toplevel(path)                       # ValueError if non-git
     repo = resolve_repo(toplevel)                        # --git-common-dir → parent
     project = ensure_project(toplevel, repo)
-    session, claude_pid = ensure_session(project, toplevel)
+    session, agent_pid = ensure_session(project, toplevel, agent)
     # Rebuild the full pane list from the now-live session. list_windows()
     # is a live shell-out, so freshly-stamped windows are visible
     # synchronously; pid_raw is the @periscope_id, "" for unmanaged.
@@ -211,12 +237,12 @@ def _open_path(path: str) -> OpenResult:
                  if w["session"] == session and w["pid_raw"]]
     # The membership tag keys on the tmux pane_id (%N), but claude_pid is the
     # @periscope_id — scan for the claude window to recover its pane_id.
-    claude_pane_id = next(
+    agent_pane_id = next(
         (w["pane_id"] for w in list_windows()
-         if w.get("pid_raw") == claude_pid and w.get("pane_id")),
+         if w.get("pid_raw") == agent_pid and w.get("pane_id")),
         "",
     )
-    ui = place_in_rail(session, project, pane_pids or [claude_pid])
+    ui = place_in_rail(session, project, pane_pids or [agent_pid])
     # Tag THIS open's panes into the repo's default track so grouping works off
     # track metadata (the rail groups purely by track_id). Scope is panes at
     # `toplevel` with no existing tag: the shared MANAGED_SESSION holds every
@@ -230,11 +256,14 @@ def _open_path(path: str) -> OpenResult:
                 and os.path.realpath(w.get("cwd") or "") == toplevel
                 and activity.get_pane_track(w["pane_id"]) is None):
             tracks.move_pane(w["pane_id"], tid)
-    return OpenResult(tmux_session=session, repo=repo, claude_pid=claude_pid,
-                      claude_pane_id=claude_pane_id, ui=ui)
+    return OpenResult(tmux_session=session, repo=repo, agent_pid=agent_pid,
+                      agent_pane_id=agent_pane_id, agent=agent, ui=ui)
 
 
-def open_target(descriptor: Descriptor) -> OpenResult:
+def open_target(
+    descriptor: Descriptor,
+    agent: Literal["claude", "codex"] = "claude",
+) -> OpenResult:
     """Resolve a descriptor to a live, rail-placed tmux session.
 
     PathTarget  — git toplevel → ensure_project → ensure_session → place_in_rail.
@@ -244,24 +273,28 @@ def open_target(descriptor: Descriptor) -> OpenResult:
                   Rolls back the worktree if the open fails after the fetch.
     """
     if isinstance(descriptor, PathTarget):
-        return _open_path(descriptor.path)
+        return _open_path(descriptor.path) if agent == "claude" else _open_path(
+            descriptor.path, agent
+        )
 
     if isinstance(descriptor, BranchTarget):
         wt = worktree_for_branch(descriptor.repo, descriptor.branch)
         if wt is None:
             wt = spawn_worktree(descriptor.repo, descriptor.branch)["path"]
-        return _open_path(wt)
+        return _open_path(wt) if agent == "claude" else _open_path(wt, agent)
 
     if isinstance(descriptor, PRTarget):
         prwt = projects.fetch_pr_into_worktree(descriptor.repo, descriptor.pr)
         try:
-            result = _open_path(prwt.path)
+            result = _open_path(prwt.path) if agent == "claude" else _open_path(
+                prwt.path, agent
+            )
         except Exception:
             # Any failure after the worktree exists must roll it back so the
             # caller can retry without hitting a stale orphan. Re-raise unchanged.
             projects._discard_pr_worktree(descriptor.repo, prwt.path, prwt.local_branch)
             raise
-        store.set_window_fields(result.claude_pid, linked_pr=descriptor.pr,
+        store.set_window_fields(result.agent_pid, linked_pr=descriptor.pr,
                                 is_fork=prwt.is_fork)
         return result
 
