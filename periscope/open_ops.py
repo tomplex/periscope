@@ -305,7 +305,16 @@ def build_catalog() -> dict:
     """GET /api/open/catalog payload: {repos:[...], worktrees:[...]}."""
     repos_out, worktrees_out = [], []
     for repo in sorted(_discover_repos()):
-        code, out = _run(["git", "-C", repo, "branch", "--format=%(refname:short)"])
+        # Sorted by commit recency, NOT alphabetically: the launcher shows only
+        # the first handful of branches and hides the rest behind a search, so
+        # the order decides what's reachable without typing. `git branch` sorts
+        # by refname, which made the 100-cap keep the alphabetically-first 100 —
+        # on a repo with 130 branches that silently dropped the ones actually
+        # being worked on.
+        code, out = _run([
+            "git", "-C", repo, "for-each-ref", "--sort=-committerdate",
+            "--format=%(refname:short)", "refs/heads/",
+        ])
         branches = (out.split("\n")[:100] if (code == 0 and out) else [])
         repos_out.append({"repo": repo, "label": os.path.basename(repo),
                           "default_branch": detect_default_branch(repo),

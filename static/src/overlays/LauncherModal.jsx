@@ -40,7 +40,9 @@ const target = signal(null);
 const pickedBranch = signal(null);
 // Non-null once the user opts to create a new branch: the typed name (may be "").
 const newBranchName = signal(null);
-const selectedAgent = signal("claude");
+// Branch search text. Empty → the shortlist; non-empty → matches from the full
+// list. Transient, cleared on every open.
+const branchQuery = signal("");
 
 // Catalog payload (GET /api/open/catalog), or null until it loads. Lets the
 // picker offer branches that are NOT currently running — the whole point of
@@ -87,6 +89,68 @@ export function pickerBranches(trackId, wins, repo, cat) {
   return out;
 }
 
+// The SHORT branch list: the repo's default branch, then whatever is running
+// in this track, then the most recent of the rest, capped at `limit`.
+//
+// The full list is everything `git for-each-ref --sort=-committerdate` returned
+// (up to 100). Rendering all of it was the bug this replaces — a repo with 130
+// branches filled the entire viewport with chips, so the picker was unusable
+// exactly on the repos where it mattered most. Everything not in the shortlist
+// stays reachable through the search box.
+// Pure: exported for unit tests.
+export function shortlistBranches(all, defaultBranch, limit = 5) {
+  const out = [];
+  const taken = new Set();
+  const take = (b) => {
+    if (!b || taken.has(b.branch)) return;
+    taken.add(b.branch);
+    out.push(b);
+  };
+  // The default branch always holds a slot, even if it's stale and nothing is
+  // running on it — it's the one branch you always want one click away.
+  take(all.find((b) => b.branch === defaultBranch));
+  // A branch with a live pane outranks commit recency: it's what you're on
+  // right now, and a long-running pane can sit on an old commit for days.
+  for (const b of all) if (b.live) take(b);
+  for (const b of all) {
+    if (out.length >= limit) break;
+    take(b);
+  }
+  return out;
+}
+
+// Substring match over the full branch list, for the search box. Case- and
+// separator-insensitive so "qa tool" finds "tc/attribute-qa-tooling".
+// Pure: exported for unit tests.
+export function filterBranches(all, query) {
+  const terms = String(query || "").toLowerCase().split(/[\s/]+/).filter(Boolean);
+  if (!terms.length) return [];
+  return all.filter((b) => {
+    const hay = b.branch.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
+}
+
+// The RUN list: the two built-in agents, then the user's configured commands.
+//
+// Agent and command used to be separate sections — an AGENT pill plus a COMMAND
+// list — which read as two decisions but was really one, and picking Codex
+// REPLACED the command list rather than filtering it, so custom commands
+// vanished. They're all just launch targets; a command whose label collides
+// with a built-in is dropped so "claude" doesn't appear twice.
+// Pure: exported for unit tests.
+export function launchTargets(commands) {
+  const builtins = [
+    { id: "claude", label: "Claude", mode: "agent", agent: "claude" },
+    { id: "codex", label: "Codex", mode: "agent", agent: "codex" },
+  ];
+  const reserved = new Set(["claude", "codex"]);
+  const custom = (commands || [])
+    .filter((c) => !reserved.has((c.label || "").trim().toLowerCase()))
+    .map((c) => ({ id: `cmd:${c.label}`, label: c.label, mode: "shell", exec: c.exec || "" }));
+  return [...builtins, ...custom];
+}
+
 const branches = computed(() => pickerBranches(
   target.value, windows.value, trackRepoOf(target.value), catalog.value,
 ));
@@ -95,12 +159,18 @@ function trackRepoOf(trackId) {
   return (tracks.value || []).find((t) => t.id === trackId)?.repo || null;
 }
 
+function trackDefaultBranchOf(trackId) {
+  const repo = trackRepoOf(trackId);
+  if (!repo) return null;
+  return (catalog.value?.repos || []).find((r) => r.repo === repo)?.default_branch || null;
+}
+
 export function openLauncher(trackId) {
   target.value = trackId;
   const bs = trackBranches(trackId, windows.value);
   pickedBranch.value = bs.length ? bs[0].branch : null;
   newBranchName.value = null;
-  selectedAgent.value = "claude";
+  branchQuery.value = "";
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.
   catalog.value = null;
@@ -112,6 +182,7 @@ function close() {
   target.value = null;
   pickedBranch.value = null;
   newBranchName.value = null;
+  branchQuery.value = "";
 }
 
 function pickExisting(branch) {
@@ -146,15 +217,18 @@ export function LauncherModal() {
   const trackRepo = trackRepoOf(trackId);
   const showBranchPicker = bs.length > 0 || newBranchName.value != null || !!trackRepo;
 
-  async function run(cmd) {
-    const exec = cmd?.exec || "";
-    const agentLaunch = selectedAgent.value === "codex";
+  // `t` is a launchTargets() row. mode="agent" lets the server build the argv
+  // via config.build_agent_command(agent) for BOTH agents; mode="shell" carries
+  // a literal exec. Previously Claude went through the shell path with
+  // exec="claude" while only Codex used the agent path — same launch, two
+  // mechanisms.
+  async function run(t) {
     const qs = new URLSearchParams({
       session: trackId,
-      agent: selectedAgent.value,
-      mode: agentLaunch ? "agent" : "shell",
+      agent: t.agent || "claude",
+      mode: t.mode,
     });
-    if (exec && !agentLaunch) qs.set("exec", exec);
+    if (t.mode === "shell" && t.exec) qs.set("exec", t.exec);
     const nb = newBranchName.value;
     if (nb?.trim()) {
       qs.set("branch", nb.trim());
@@ -170,9 +244,20 @@ export function LauncherModal() {
     close();
   }
 
-  // The default command (first in the list — claude by convention); Enter on
-  // the new-branch input launches it.
-  const defaultCmd = commands[0] || null;
+  const targets = launchTargets(commands);
+  // Enter (in the new-branch field or the branch search) launches the first
+  // target — Claude.
+  const defaultTarget = targets[0];
+  const query = branchQuery.value.trim();
+  const shown = query
+    ? filterBranches(bs, query).slice(0, 24)
+    : shortlistBranches(bs, trackDefaultBranchOf(trackId));
+  // A branch picked from search then searched away again would silently drop
+  // out of the rendered set while staying selected — keep it visible.
+  const pinned = pickedBranch.value != null && !shown.some((b) => b.branch === pickedBranch.value)
+    ? bs.find((b) => b.branch === pickedBranch.value)
+    : null;
+  const visible = pinned ? [pinned, ...shown] : shown;
 
   return (
     <div
@@ -186,26 +271,30 @@ export function LauncherModal() {
           <button id="launcher-close" title="close" onClick={close}>×</button>
         </header>
         <p class="launcher-modal-sub" id="launcher-session-name">Add to track: {trackLabel(trackId, windows.value, tracks.value)}</p>
-        <div class="launcher-section">
-          <div class="launcher-section-label">Agent</div>
-          <div class="launcher-branches">
-            {["claude", "codex"].map((agent) => (
-              <button
-                key={agent}
-                class={`launcher-branch${selectedAgent.value === agent ? " is-active" : ""}`}
-                onClick={() => { selectedAgent.value = agent; }}
-              >
-                {agent === "claude" ? "Claude" : "Codex"}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {showBranchPicker && (
           <div class="launcher-section">
-            <div class="launcher-section-label">Branch</div>
+            <div class="launcher-section-head">
+              <div class="launcher-section-label">Branch</div>
+              <input
+                class="launcher-branch-search"
+                type="text"
+                placeholder={bs.length > 1 ? `search ${bs.length} branches…` : "search branches…"}
+                value={branchQuery.value}
+                onInput={(e) => { branchQuery.value = e.target.value; }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && branchQuery.value) {
+                    // Clear the query first; a second Escape closes the modal.
+                    e.stopPropagation();
+                    branchQuery.value = "";
+                  } else if (e.key === "Enter") {
+                    const first = visible[0];
+                    if (first) pickExisting(first.branch);
+                  }
+                }}
+              />
+            </div>
             <div class="launcher-branches">
-              {bs.map((b) => (
+              {visible.map((b) => (
                 <button
                   key={b.branch}
                   class={`launcher-branch${pickedBranch.value === b.branch ? " is-active" : ""}${b.live ? "" : " is-dormant"}`}
@@ -231,39 +320,31 @@ export function LauncherModal() {
                   value={newBranchName.value}
                   onInput={(e) => { newBranchName.value = e.target.value; }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && defaultCmd) run(defaultCmd);
+                    if (e.key === "Enter" && defaultTarget) run(defaultTarget);
                   }}
                 />
               )}
             </div>
+            {query && visible.length === 0 && (
+              <div class="launcher-empty">No branch matches “{query}”.</div>
+            )}
           </div>
         )}
 
         <div class="launcher-section">
-          {showBranchPicker && <div class="launcher-section-label">Command</div>}
+          <div class="launcher-section-label">Run</div>
           <div id="launcher-list">
-            {selectedAgent.value === "codex" ? (
+            {targets.map((t, i) => (
               <button
-                class="launcher-row is-default"
-                data-label="Codex"
-                onClick={() => run(null)}
+                key={t.id}
+                class={`launcher-row${i === 0 ? " is-default" : ""}`}
+                data-label={t.label}
+                onClick={() => run(t)}
               >
-                Codex
+                <span class="launcher-row-label">{t.label}</span>
+                {i === 0 && <span class="launcher-row-hint">⏎</span>}
               </button>
-            ) : commands.length === 0 ? (
-              <div class="launcher-empty">No commands configured. Use Commands settings to add some.</div>
-            ) : (
-              commands.map((c, i) => (
-                <button
-                  key={c.label}
-                  class={`launcher-row${i === 0 ? " is-default" : ""}`}
-                  data-label={c.label}
-                  onClick={() => run(c)}
-                >
-                  {c.label}
-                </button>
-              ))
-            )}
+            ))}
           </div>
         </div>
       </div>

@@ -2285,6 +2285,25 @@ body.modal-open { overflow: hidden; }
 .launcher-branch-input { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--accent, #6c8cff); background: rgba(255,255,255,.04); color: inherit; font-size: 12px; min-width: 160px; }
 .launcher-row.is-default { font-weight: 600; }
 .launcher-row.is-default::before { content: "▸ "; opacity: .6; }
+.launcher-row { display: flex; align-items: baseline; gap: 8px; }
+.launcher-row-label { flex: 1 1 auto; }
+.launcher-row-hint { font-size: 11px; opacity: .4; }
+
+/* Branch search sits inline with the section label: the full branch list runs
+   to 100 entries and only ~5 are rendered at rest, so the box has to be
+   visible without being a section of its own. */
+.launcher-section-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.launcher-section-head .launcher-section-label { margin-bottom: 0; flex: 0 0 auto; }
+.launcher-branch-search {
+  flex: 1 1 auto; min-width: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255,255,255,.15));
+  background: rgba(255,255,255,.04);
+  color: inherit;
+  font-size: 12px;
+}
+.launcher-branch-search:focus { outline: none; border-color: var(--accent, #6c8cff); }
 .newtab-row { opacity: .6; }
 .newtab-row:hover { opacity: .9; }
 
