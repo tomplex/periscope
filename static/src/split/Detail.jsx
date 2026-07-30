@@ -434,6 +434,7 @@ function PaneDetail({ w }) {
             id="detail-xterm"
             class="detail-xterm"
             target={w.pane_id}
+            agent={w.agent}
             onPaste={handleDetailPaste}
           />
         </div>

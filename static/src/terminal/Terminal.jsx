@@ -21,10 +21,10 @@
 import { useEffect, useRef } from "preact/hooks";
 import { mountTerminal, unmountTerminal } from "./terminalCore.js";
 
-export function Terminal({ target, onPaste, class: className = "modal-xterm", id }) {
+export function Terminal({ target, agent, onPaste, class: className = "modal-xterm", id }) {
   const ref = useRef(null);
   useEffect(() => {
-    mountTerminal(ref.current, target, { onPaste });
+    mountTerminal(ref.current, target, { agent, onPaste });
     // mountTerminal self-unmounts the prior mount on its next call, so the
     // single cleanup here is enough — don't double-tear-down.
     return unmountTerminal;

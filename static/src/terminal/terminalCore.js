@@ -54,6 +54,7 @@ let termIntentionalClose = false;   // suppress reconnect when we close on purpo
 let termReconnectTimer = null;
 let termReconnectAttempt = 0;
 let termReconnectedNotified = false; // only print "reconnecting…" once per outage
+let termAgent = null;
 // The pane's app-level mouse reporting state, pushed by the server at attach
 // (tmux eats the DECSET, so xterm can't observe it — see the wheel handler).
 let mouseReportingOn = false;
@@ -71,6 +72,38 @@ let termResizeObserver = null;
 let fitDebounce = null;
 let lastSentCols = 0;            // dims of the most recent resize message sent to the server
 let _lastSentRows = 0;            //   — used to suppress redundant resizes during initial mount
+
+const CODEX_PANEL_BG = "\x1b[48;2;30;30;30m";
+const PERISCOPE_TERM_BG = "\x1b[48;2;40;44;52m";
+const textEncoder = new TextEncoder();
+const codexPanelBgBytes = textEncoder.encode(CODEX_PANEL_BG);
+const periscopeTermBgBytes = textEncoder.encode(PERISCOPE_TERM_BG);
+
+// Codex paints its composer and permission dialogs #1e1e1e with a truecolor
+// escape, bypassing xterm's configurable ANSI palette. Remap only that exact
+// Codex-owned background at the render edge; every other color passes through.
+export function normalizeAgentTerminalData(data, agent) {
+  if (agent !== "codex") return data;
+  if (typeof data === "string") {
+    return data.replaceAll(CODEX_PANEL_BG, PERISCOPE_TERM_BG);
+  }
+  const input = data instanceof Uint8Array ? data : new Uint8Array(data);
+  let output = null;
+  for (let i = 0; i <= input.length - codexPanelBgBytes.length; i += 1) {
+    let match = true;
+    for (let j = 0; j < codexPanelBgBytes.length; j += 1) {
+      if (input[i + j] !== codexPanelBgBytes[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match) continue;
+    if (!output) output = input.slice();
+    output.set(periscopeTermBgBytes, i);
+    i += codexPanelBgBytes.length - 1;
+  }
+  return output || input;
+}
 // Width is pinned for the session. Navigating panes re-runs startLiveTerminal
 // with a FRESH xterm + a fresh fit(); a mount-time measurement that differs by
 // a column or two (scrollbar appearing, layout rounding) would otherwise resize
@@ -653,11 +686,11 @@ function connectTerminalWs(target, hintCols = 0, hintRows = 0) {
         }
       } catch (_) {
         // Not JSON; treat as data
-        term.write(event.data);
+        term.write(normalizeAgentTerminalData(event.data, termAgent));
       }
     } else {
       // Binary terminal bytes
-      term.write(new Uint8Array(event.data));
+      term.write(normalizeAgentTerminalData(new Uint8Array(event.data), termAgent));
     }
   };
 
@@ -825,6 +858,7 @@ let activeContainer = null;
 export function mountTerminal(container, target, opts = {}) {
   unmountTerminal();  // tear down any previous mount
   setTerminalContainer(container);
+  termAgent = opts.agent || null;
   if (opts.onPaste) {
     activePasteHandler = opts.onPaste;
     container.addEventListener("paste", activePasteHandler, true);
