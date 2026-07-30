@@ -318,6 +318,10 @@ export function Rail() {
         e.dataTransfer.setData("text/plain", desc.key);
       },
       onDragOver: (e) => {
+        // A row sits inside its track's card, which is itself a drop zone
+        // (makeCardDropProps). Stop here so the innermost row owns the event
+        // and the card only sees drags over its own empty space.
+        e.stopPropagation();
         const d = drag.current;
         if (!d || d.key === desc.key) { setDropTarget(null); return; }
         if (!isValidDropTarget(d, desc)) { setDropTarget(null); return; }
@@ -329,6 +333,7 @@ export function Rail() {
       },
       onDrop: async (e) => {
         e.preventDefault();
+        e.stopPropagation();   // see onDragOver — the innermost row wins
         const d = drag.current;
         setDropTarget(null);
         dragState.value = null;
@@ -361,6 +366,35 @@ export function Rail() {
 
   function dropPosFor(key) {
     return dropTarget && dropTarget.key === key ? dropTarget.pos : undefined;
+  }
+
+  // The whole track card is a drop zone for a tab: dropping anywhere in it
+  // moves the tab into that track. Previously the ONLY target was the track's
+  // seclabel — a 27px uppercase strip — and an EMPTY track's card (the obvious
+  // "put it here" box, and the only way to give a fresh track its first tab by
+  // drag) had no handler at all, so it rejected every drop with no feedback.
+  // Rows inside the card stopPropagation, so this only fires over empty space.
+  function makeCardDropProps(trackId) {
+    const key = `card:${trackId}`;
+    return {
+      onDragOver: (e) => {
+        const d = drag.current;
+        if (!d || d.kind !== "pane" || d.trackKey === trackId) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setDropTarget({ key, pos: "into" });
+      },
+      onDrop: async (e) => {
+        e.preventDefault();
+        const d = drag.current;
+        setDropTarget(null);
+        dragState.value = null;
+        drag.current = null;
+        if (!d || d.kind !== "pane" || d.trackKey === trackId) return;
+        const w = windowsByPid[d.childKey];
+        if (w) await moveTabToTrack(w, trackId);
+      },
+    };
   }
 
   // Build the pane rows for a flat list of pids (within a track or a branch
@@ -455,7 +489,12 @@ export function Rail() {
         const trackWindows = trackPids.map((pid) => windowsByPid[pid]).filter(Boolean);
         const trackStates = trackWindows.map((w) => w.state || "shell");
         const trackRolledUp = maxSeverity(trackStates);
-        const trackDim = trackWindows.some((w) => passesFilter(w, filter));
+        // `dim` means "matches the filter" (RailRows inverts it). An EMPTY
+        // track has no tab to match, and `[].some()` is false — so a freshly
+        // created track rendered at .35 opacity under EVERY filter, including
+        // `all`, and read as disabled. Emptiness is not a filter miss.
+        const trackDim = trackWindows.length === 0
+          || trackWindows.some((w) => passesFilter(w, filter));
         const review = reviewRowFor(trackId);
 
         return (
@@ -478,7 +517,10 @@ export function Rail() {
                 branch sub-clusters, then the flat pane list, then "+ New tab"
                 — lives inside this single bordered container. */}
             {!trackCollapsed && (
-              <div class="rail-group rail-track-card">
+              <div
+                class={`rail-group rail-track-card${dropPosFor(`card:${trackId}`) ? " drop-into" : ""}`}
+                {...makeCardDropProps(trackId)}
+              >
                 {/* Review row (if any LGTM session is live) sits at the top of
                     the card body, above the branches / panes. */}
                 {review && <div class="rail-group-body rail-review-head">{review}</div>}

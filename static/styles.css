@@ -2239,16 +2239,8 @@ body.modal-open { overflow: hidden; }
 .rail-row:hover .rail-close { opacity: .7; }
 .rail-close:hover { opacity: 1 !important; background: var(--bg-2); color: var(--s-danger); }
 
-/* Drop-indicator line — top or bottom of the row the cursor is over.
-   data-drop-pos="before" → line at top; "after" → line at bottom.
-   Box-shadow (inset) avoids conflicting with the tree-connector
-   ::before/::after pseudos already used on child rows. */
-.rail-row.drop-target[data-drop-pos="before"] {
-  box-shadow: inset 0 2px 0 var(--accent);
-}
-.rail-row.drop-target[data-drop-pos="after"] {
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
+/* Drop-indicator line lives at the END of the rail block (search
+   "Drop-indicator line") — it has to outrank the expanded-pane shadows. */
 .rail-dim { opacity: .35; }
 .rail-row.rail-dim:hover { opacity: .6; }
 
@@ -2396,6 +2388,32 @@ body.modal-open { overflow: hidden; }
 /* Review row parked at the top of the card body, above branches/panes. */
 .rail-review-head { padding-top: 0; padding-bottom: 2px; }
 
+/* Whole-card drop zone (see Rail.jsx makeCardDropProps). Dropping a tab
+   anywhere in the card moves it into that track — the seclabel alone was too
+   small to find, and an empty track's card rejected drops outright. */
+#rail .rail-track-card.drop-into {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+}
+/* An EMPTY track's body has no rows, so the card collapses to the height of
+   its "+ New tab" row and there's nothing to aim a drag at. Give it a labelled
+   landing area — that's the only drag route to a fresh track's first tab. */
+#rail .rail-track-card .rail-group-body:empty {
+  min-height: 30px;
+  border: 1px dashed var(--line-soft);
+  border-radius: var(--r-md);
+  margin: 2px 0;
+}
+#rail .rail-track-card .rail-group-body:empty::before {
+  content: "drop a tab here";
+  display: block;
+  padding: 8px;
+  font-size: 10px;
+  letter-spacing: .06em;
+  color: var(--fg-4);
+}
+#rail .rail-track-card.drop-into .rail-group-body:empty { border-color: var(--accent); }
+
 /* Branch sub-cluster: only appears when a track spans ≥2 branches. A violet
    left-rail (the ⎇ worktree accent) + indent groups the branch's tabs without
    a second full card — the convenience tier the mockup calls a "sub-cluster". */
@@ -2465,6 +2483,22 @@ body.modal-open { overflow: hidden; }
   background: var(--bg-1-hi);
   box-shadow: 0 1px 8px oklch(0 0 0 / .3),
               inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent);
+}
+
+/* Drop-indicator line — top or bottom of the row the cursor is over.
+   data-drop-pos="before" → line at top; "after" → line at bottom.
+   Box-shadow (inset) avoids conflicting with the tree-connector
+   ::before/::after pseudos already used on child rows.
+   MUST sit after the .pane-expanded rules above and carry the #rail prefix:
+   a pane row EXPANDS when selected or needs-input, and those rules set
+   box-shadow at (1,3,0) — an unprefixed .rail-row.drop-target[…] is (0,3,0)
+   and loses, so the row you were most likely aiming at showed no landing
+   line at all. Equal specificity now, decided by source order. */
+#rail .rail-row.drop-target[data-drop-pos="before"] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+#rail .rail-row.drop-target[data-drop-pos="after"] {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 /* Expanded footer: PR/Linear/git on the left, context + age on the right.
