@@ -13,6 +13,7 @@ The dashboard prefers (2) when available, falls back to (1).
 """
 
 import contextlib
+import hashlib
 import json
 import re
 import subprocess
@@ -145,14 +146,30 @@ _PLAN_METERS = [
 ]
 
 
-def _read_oauth_token() -> str | None:
-    """Read Claude Code's OAuth access token from the macOS Keychain.
+def _keychain_item(config_dir: str) -> str:
+    """The keychain item holding an account's OAuth credential.
+
+    Claude Code namespaces the item by config dir — verified live on this
+    machine: the default dir uses the bare name, any other appends the
+    sha256[:8] of the CLAUDE_CONFIG_DIR path ("/Users/tom/.claude-b" ->
+    "-f79ff3dd", which returned account B's meters where the bare item
+    returned account A's). Computing the name means adding a second
+    subscription needs no keychain-discovery step.
+    """
+    if not config_dir:
+        return "Claude Code-credentials"
+    digest = hashlib.sha256(config_dir.encode()).hexdigest()[:8]
+    return f"Claude Code-credentials-{digest}"
+
+
+def _read_oauth_token(config_dir: str = "") -> str | None:
+    """Read one account's OAuth access token from the macOS Keychain.
     Returns None when missing or expired — we never refresh it ourselves;
     any running Claude Code session keeps it fresh."""
     try:
         out = subprocess.run(
             ["security", "find-generic-password",
-             "-s", "Claude Code-credentials", "-w"],
+             "-s", _keychain_item(config_dir), "-w"],
             capture_output=True, text=True, timeout=5,
         )
         creds = json.loads(out.stdout)["claudeAiOauth"]

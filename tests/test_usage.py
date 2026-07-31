@@ -451,3 +451,19 @@ def test_cached_plan_usage_spawns_once_when_due(monkeypatch):
     assert usage.cached_plan_usage() is data
     assert usage.cached_plan_usage() is data
     assert spawned == ["plan-usage"]
+
+
+# --- per-account credentials ---------------------------------------------
+
+def test_keychain_item_default_account_is_bare_name():
+    """The default config dir ("") uses the unsuffixed item name."""
+    from periscope.usage import _keychain_item
+    assert _keychain_item("") == "Claude Code-credentials"
+
+
+def test_keychain_item_named_config_dir_uses_sha256_prefix():
+    """Verified live against the real keychain: ~/.claude-b's credential is
+    stored under the sha256[:8] of the config dir path."""
+    from periscope.usage import _keychain_item
+    assert (_keychain_item("/Users/tom/.claude-b")
+            == "Claude Code-credentials-f79ff3dd")
