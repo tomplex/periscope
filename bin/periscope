@@ -91,35 +91,47 @@ EOF
     # pane -> session). SessionStart fires at startup AND on /clear (immediate,
     # before the first prompt — a fresh pane shows its OWN transcript at once);
     # UserPromptSubmit catches every prompt (migrates pre-hook panes on next
-    # message). Idempotent merge into ~/.claude/settings.json — joins existing
-    # hook groups, preserves everything else.
-    python3 - "$REPO" <<'PY'
+    # message). Idempotent merge — joins existing hook groups, preserves
+    # everything else.
+    #
+    # Runs for EVERY account config dir, not just ~/.claude. Claude reads hooks
+    # from whichever CLAUDE_CONFIG_DIR it was launched under, so a second-account
+    # pane whose settings.json lacks these writes no pane_sessions row — and the
+    # transcript view, the narrator (which has no cwd fallback by design),
+    # per-pane burn, and resurrect's --resume rewrite all go dark for it, with no
+    # error anywhere. Dirs are kept in step with store.py's _DEFAULT_ACCOUNTS;
+    # ones that don't exist on this machine are skipped.
+    python3 - "$REPO" \
+      "$HOME/.claude/settings.json" \
+      "$HOME/.claude-b/settings.json" <<'PY'
 import json, os, sys
 repo = sys.argv[1]
 cmd = f"python3 {repo}/pane_session_hook.py"
-p = os.path.expanduser("~/.claude/settings.json")
-try:
-    with open(p) as f: d = json.load(f)
-except FileNotFoundError:
-    d = {}
-hooks = d.setdefault("hooks", {})
-added = []
-for ev in ("SessionStart", "UserPromptSubmit"):
-    groups = hooks.setdefault(ev, [])
-    if any(h.get("command", "").endswith("pane_session_hook.py")
-           for g in groups for h in g.get("hooks", [])):
-        continue
-    entry = {"type": "command", "command": cmd, "timeout": 5}
-    if groups:
-        groups[0].setdefault("hooks", []).append(entry)   # join an existing group
+for p in sys.argv[2:]:
+    if not os.path.isdir(os.path.dirname(p)):
+        continue          # that account isn't set up on this machine
+    try:
+        with open(p) as f: d = json.load(f)
+    except FileNotFoundError:
+        d = {}
+    hooks = d.setdefault("hooks", {})
+    added = []
+    for ev in ("SessionStart", "UserPromptSubmit"):
+        groups = hooks.setdefault(ev, [])
+        if any(h.get("command", "").endswith("pane_session_hook.py")
+               for g in groups for h in g.get("hooks", [])):
+            continue
+        entry = {"type": "command", "command": cmd, "timeout": 5}
+        if groups:
+            groups[0].setdefault("hooks", []).append(entry)   # join an existing group
+        else:
+            groups.append({"matcher": "", "hooks": [entry]})
+        added.append(ev)
+    if added:
+        with open(p, "w") as f: json.dump(d, f, indent=2)
+        print(f"installed pane-session hook in {p} on: {', '.join(added)}")
     else:
-        groups.append({"matcher": "", "hooks": [entry]})
-    added.append(ev)
-if added:
-    with open(p, "w") as f: json.dump(d, f, indent=2)
-    print(f"installed pane-session hook on: {', '.join(added)}")
-else:
-    print("pane-session hook already installed (SessionStart + UserPromptSubmit)")
+        print(f"pane-session hook already installed in {p}")
 PY
     ;;
   install-codex-hook)
@@ -130,25 +142,28 @@ PY
     "$0" uninstall-codex-hook
     ;;
   uninstall-claude-hook)
-    python3 - <<'PY'
-import json, os
-p = os.path.expanduser("~/.claude/settings.json")
-try:
-    with open(p) as f: d = json.load(f)
-except FileNotFoundError:
-    raise SystemExit(0)
-h = d.get("hooks", {})
-for ev in ("SessionStart", "UserPromptSubmit"):
-    groups = h.get(ev, [])
-    for g in groups:
-        g["hooks"] = [x for x in g.get("hooks", []) if not x.get("command", "").endswith("pane_session_hook.py")]
-    groups = [g for g in groups if g.get("hooks")]
-    if groups:
-        h[ev] = groups
-    else:
-        h.pop(ev, None)
-with open(p, "w") as f: json.dump(d, f, indent=2)
-print("removed pane-session hook from SessionStart + UserPromptSubmit")
+    # Mirrors install-claude-hook: every account config dir, not just ~/.claude,
+    # or uninstall leaves the second account's panes still firing the hook.
+    python3 - "$HOME/.claude/settings.json" \
+             "$HOME/.claude-b/settings.json" <<'PY'
+import json, os, sys
+for p in sys.argv[1:]:
+    try:
+        with open(p) as f: d = json.load(f)
+    except FileNotFoundError:
+        continue
+    h = d.get("hooks", {})
+    for ev in ("SessionStart", "UserPromptSubmit"):
+        groups = h.get(ev, [])
+        for g in groups:
+            g["hooks"] = [x for x in g.get("hooks", []) if not x.get("command", "").endswith("pane_session_hook.py")]
+        groups = [g for g in groups if g.get("hooks")]
+        if groups:
+            h[ev] = groups
+        else:
+            h.pop(ev, None)
+    with open(p, "w") as f: json.dump(d, f, indent=2)
+    print(f"removed pane-session hook from {p}")
 PY
     ;;
   uninstall-codex-hook)

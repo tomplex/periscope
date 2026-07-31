@@ -71,17 +71,20 @@ move without a re-login.
 
 ### settings.json is not merely a copy — it is the hook producer
 
-`bin/periscope:100,135` (`install-claude-hook` / `uninstall-claude-hook`) read
-and write **only** `~/.claude/settings.json`, registering `pane_session_hook.py`
-on `SessionStart`/`UserPromptSubmit` and `history hook` on `SessionEnd`. Under
-`CLAUDE_CONFIG_DIR=~/.claude-b`, Claude reads `~/.claude-b/settings.json`.
+`bin/periscope` (`install-claude-hook` / `uninstall-claude-hook`) registers
+`pane_session_hook.py` on `SessionStart`/`UserPromptSubmit`. It does **not**
+register anything on `SessionEnd` — the `history hook` entry present in this
+machine's settings was added by another route (`history/README.md`), so a second
+config dir does not inherit it and `/history` will not index account-B sessions
+until it is added there by hand. Under `CLAUDE_CONFIG_DIR=~/.claude-b`, Claude
+reads `~/.claude-b/settings.json`.
 
 A copy that omits those hooks writes no `pane_sessions` row for any B pane, and
 everything downstream goes dark: the transcript view (`turns.py`), the narrator
 (which has **no cwd fallback** by design), per-pane burn, and the resurrect
-`--resume` rewrite. Both installers must therefore fan out over every registered
-config dir. A hand-copied settings.json also silently drifts on the next
-`bin/periscope install`.
+`--resume` rewrite. Both installers therefore fan out over every account config
+dir, skipping ones absent on this machine. A hand-copied settings.json would
+otherwise silently drift on the next `bin/periscope install`.
 
 ### Account binding: key on the Claude session id
 
