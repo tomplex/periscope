@@ -59,6 +59,20 @@ export function accountQuery(acct) {
   return !acct || acct === "default" ? null : acct;
 }
 
+// Whether a launch target should carry the account at all.
+//
+// The account binds to the AGENT being launched, not to the window: the server
+// sets it as a tmux `-e` var, so every process in that window inherits it. A
+// SHELL window that carried it ran a hand-typed `claude` on the second
+// subscription silently — and invisibly, because the rail's account chip is
+// derived from a live claude process, which a shell window has none of. Benign
+// while the picker defaulted to "default"; a live trap once it started
+// preselecting the emptiest account. Codex has no Claude subscription.
+// Pure: exported for unit tests.
+export function sendsAccount(t) {
+  return t?.mode === "agent" && (t.agent || "claude") === "claude";
+}
+
 // Catalog payload (GET /api/open/catalog), or null until it loads. Lets the
 // picker offer branches that are NOT currently running — the whole point of
 // the launcher: without it, "existing branches" meant only live ones.
@@ -250,7 +264,7 @@ export function LauncherModal() {
       mode: t.mode,
     });
     if (t.mode === "shell" && t.exec) qs.set("exec", t.exec);
-    const acct = accountQuery(account.value);
+    const acct = sendsAccount(t) ? accountQuery(account.value) : null;
     if (acct) qs.set("account", acct);
     const nb = newBranchName.value;
     if (nb?.trim()) {
