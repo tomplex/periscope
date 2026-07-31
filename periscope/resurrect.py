@@ -33,6 +33,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from collections import deque
 from pathlib import Path
 
 from periscope import config
@@ -158,7 +159,7 @@ def _pane_config_dirs() -> dict[str, str]:
     except (OSError, subprocess.CalledProcessError):
         return {}
     kids, cmds = _proc_table()
-    dirs: dict[str, str] = {}
+    candidates: list[tuple[str, list[int]]] = []
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) != 2:
@@ -168,32 +169,60 @@ def _pane_config_dirs() -> dict[str, str]:
             root = int(pid_raw)
         except ValueError:
             continue
-        # BFS the pane's process subtree; the Claude process is a descendant of
-        # the pane's shell, not the shell itself.
+        # Breadth-first through the pane's process subtree, stopping at the
+        # FIRST claude: that is the pane's own session. Anything claude-ish
+        # below it is a subagent or tool child, which inherits the same env and
+        # so tells us nothing new — while probing all of them costs a fork's
+        # worth of env text each (~60 processes on a busy machine vs ~20 panes).
         seen: set[int] = set()
-        queue = [root]
+        queue = deque([root])
         while queue:
-            pid = queue.pop()
+            pid = queue.popleft()
             if pid in seen:
                 continue
             seen.add(pid)
+            if pid != root and "claude" in cmds.get(pid, ""):
+                candidates.append((pane_id, [pid]))
+                break
             queue.extend(kids.get(pid, ()))
-        seen.discard(root)
-        for pid in sorted(seen):
-            if "claude" not in cmds.get(pid, ""):
-                continue
-            try:
-                env_out = subprocess.run(
-                    ["ps", "eww", "-p", str(pid), "-o", "command="],
-                    capture_output=True, text=True, check=False,
-                ).stdout
-            except OSError:
-                continue
-            cfg = _config_dir_from_ps(cmds[pid], env_out)
+
+    envs = _env_by_pid([pid for _, pids in candidates for pid in pids])
+    dirs: dict[str, str] = {}
+    for pane_id, pids in candidates:
+        for pid in pids:
+            cfg = _config_dir_from_ps(cmds[pid], envs.get(pid, ""))
             if cfg:
                 dirs[pane_id] = cfg
                 break
     return dirs
+
+
+def _env_by_pid(pids: list[int]) -> dict[int, str]:
+    """pid -> its `ps eww` command+environment text, in ONE fork.
+
+    Probing each pid separately costs ~165ms on a machine with ~60 claude
+    processes, and window_view runs this on every /api/state poll — one fork
+    keeps it off the dashboard's hot path.
+    """
+    if not pids:
+        return {}
+    try:
+        out = subprocess.run(
+            ["ps", "eww", "-o", "pid=,command=", "-p", ",".join(str(p) for p in pids)],
+            capture_output=True, text=True, check=False,
+        ).stdout
+    except OSError:
+        return {}
+    envs: dict[int, str] = {}
+    for line in out.splitlines():
+        bits = line.split(maxsplit=1)
+        if len(bits) != 2:
+            continue
+        try:
+            envs[int(bits[0])] = bits[1]
+        except ValueError:
+            continue
+    return envs
 
 
 def _session_map() -> dict[str, str]:
