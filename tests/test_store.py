@@ -344,3 +344,19 @@ def test_dev_state_seed_is_noop_for_prod(tmp_xdg_home, monkeypatch):
     target = cfg / "state.json"
     _seed_dev_state(target)
     assert not target.exists()
+
+
+def test_default_accounts_present(clean_state):
+    import periscope.store as store
+    accts = store.get_accounts()
+    assert [a["id"] for a in accts] == ["default", "b"]
+    assert accts[0]["config_dir"] == ""
+
+
+def test_account_config_dir_resolves(clean_state):
+    import periscope.store as store
+    assert store.account_config_dir("default") == ""
+    assert store.account_config_dir("b").endswith("/.claude-b")
+    # unknown id fails OPEN to the default account, never to a guess
+    assert store.account_config_dir("nope") == ""
+    assert store.account_config_dir(None) == ""

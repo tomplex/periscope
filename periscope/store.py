@@ -306,6 +306,44 @@ if _MIGRATION_RAN_THIS_LOAD:
     with _STATE_LOCK:
         _write_state(_STATE)
 
+class Account(TypedDict, total=False):
+    id: str          # stable key; "default" is the machine's ~/.claude login
+    label: str       # shown in the launcher
+    config_dir: str  # "" for the default account, else an absolute path
+
+
+# Exactly two accounts (see spec "Not doing"). A list, so widening is
+# mechanical. `config_dir` is the de-facto primary key: the Claude credential
+# binds to the PATH, so changing it orphans that account's login.
+_DEFAULT_ACCOUNTS: list[Account] = [
+    {"id": "default", "label": "account A", "config_dir": ""},
+    {"id": "b", "label": "account B", "config_dir": str(Path.home() / ".claude-b")},
+]
+
+
+def get_accounts() -> list[Account]:
+    """Snapshot of the account registry (copies of each entry)."""
+    with _STATE_LOCK:
+        accts = _STATE.get("accounts") or _DEFAULT_ACCOUNTS
+        return [cast(Account, dict(a)) for a in accts]
+
+
+def account_config_dir(account_id: str | None) -> str:
+    """CLAUDE_CONFIG_DIR for an account id, or "" for the default account.
+
+    Fails OPEN to the default account on an unknown id: an unknown id is a
+    periscope bug, and the default is the one account guaranteed to be logged
+    in. A pane that fails to authenticate is recoverable; one silently billing
+    the wrong subscription is not.
+    """
+    if not account_id or account_id == "default":
+        return ""
+    for a in get_accounts():
+        if a.get("id") == account_id:
+            return a.get("config_dir", "")
+    return ""
+
+
 _DEFAULT_COMMANDS = [
     # Seeded entry. The `_channels_migration_v1` rewriter below upgrades
     # any pre-existing user state's `"exec": "claude"` to the channels-
