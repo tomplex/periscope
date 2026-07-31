@@ -283,35 +283,72 @@ def test_prune_ui_events_drops_old_keeps_recent():
 
 def test_usage_samples_roundtrip_oldest_first():
     activity.record_usage_samples([
-        (200, "session", 42.5, 1000),
-        (100, "session", 40.0, 1000),
-        (150, "week_all", 7.0, 2000),
+        (200, "default", "session", 42.5, 1000),
+        (100, "default", "session", 40.0, 1000),
+        (150, "default", "week_all", 7.0, 2000),
     ])
-    out = activity.usage_samples_since("session", 0)
+    out = activity.usage_samples_since("default", "session", 0)
     assert out == [(100, 40.0), (200, 42.5)]
 
 
 def test_usage_samples_since_filters_by_time():
-    activity.record_usage_samples([(100, "session", 1.0, None),
-                                   (200, "session", 2.0, None)])
-    assert activity.usage_samples_since("session", 150) == [(200, 2.0)]
+    activity.record_usage_samples([(100, "default", "session", 1.0, None),
+                                   (200, "default", "session", 2.0, None)])
+    assert activity.usage_samples_since("default", "session", 150) == [(200, 2.0)]
 
 
 def test_usage_samples_duplicate_at_is_ignored():
-    activity.record_usage_samples([(100, "session", 1.0, None)])
-    activity.record_usage_samples([(100, "session", 9.0, None)])
-    assert activity.usage_samples_since("session", 0) == [(100, 1.0)]
+    activity.record_usage_samples([(100, "default", "session", 1.0, None)])
+    activity.record_usage_samples([(100, "default", "session", 9.0, None)])
+    assert activity.usage_samples_since("default", "session", 0) == [(100, 1.0)]
+
+
+def test_usage_samples_are_separated_by_account():
+    """Two accounts sampling the same meter at the same second are distinct
+    series — the whole point of widening the PK to (account, meter, at)."""
+    activity.record_usage_samples([(100, "default", "session", 1.0, None),
+                                   (100, "b", "session", 90.0, None)])
+    assert activity.usage_samples_since("default", "session", 0) == [(100, 1.0)]
+    assert activity.usage_samples_since("b", "session", 0) == [(100, 90.0)]
 
 
 def test_prune_usage_samples_drops_old_rows():
     import time
     now = int(time.time())
     activity.record_usage_samples([
-        (now - 20 * 86400, "session", 1.0, None),
-        (now, "session", 2.0, None),
+        (now - 20 * 86400, "default", "session", 1.0, None),
+        (now, "default", "session", 2.0, None),
     ])
     activity.prune_usage_samples(max_age_days=14)
-    assert activity.usage_samples_since("session", 0) == [(now, 2.0)]
+    assert activity.usage_samples_since("default", "session", 0) == [(now, 2.0)]
+
+
+def test_usage_samples_migration_preserves_preaccount_rows(tmp_path, monkeypatch):
+    """A live DB predating the account column is rebuilt in place, and its
+    history is attributed to the default account rather than dropped."""
+    import sqlite3
+
+    from periscope import config
+    db = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(str(db))
+    legacy.executescript("""
+      CREATE TABLE usage_samples (
+        at        INTEGER NOT NULL,
+        meter     TEXT NOT NULL,
+        percent   REAL NOT NULL,
+        resets_at INTEGER,
+        PRIMARY KEY (meter, at)
+      );
+      INSERT INTO usage_samples VALUES (100, 'session', 40.0, 1000);
+      INSERT INTO usage_samples VALUES (200, 'week_all', 7.5, 2000);
+    """)
+    legacy.commit()
+    legacy.close()
+
+    monkeypatch.setattr(config, "ACTIVITY_DB", db)
+    activity._CONN = None
+    assert activity.usage_samples_since("default", "session", 0) == [(100, 40.0)]
+    assert activity.usage_samples_since("default", "week_all", 0) == [(200, 7.5)]
 
 
 # --- pane_status: narrator storage ---------------------------------------

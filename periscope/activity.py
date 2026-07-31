@@ -76,10 +76,11 @@ CREATE TABLE IF NOT EXISTS pane_tracks (
 );
 CREATE TABLE IF NOT EXISTS usage_samples (
   at        INTEGER NOT NULL,
+  account   TEXT NOT NULL,           -- store.Account id ('default' | 'b' | ...)
   meter     TEXT NOT NULL,           -- 'session' | 'week_all' | 'week_opus' | 'week_sonnet'
   percent   REAL NOT NULL,           -- unrounded utilization
   resets_at INTEGER,
-  PRIMARY KEY (meter, at)
+  PRIMARY KEY (account, meter, at)
 );
 CREATE TABLE IF NOT EXISTS ui_events (
   id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,6 +129,26 @@ def _conn() -> sqlite3.Connection:
         for col in ("rail", "goal", "history"):
             if col not in have:
                 c.execute(f"ALTER TABLE pane_status ADD COLUMN {col} TEXT")
+        # usage_samples predates multi-account and was keyed (meter, at), which
+        # would interleave two subscriptions into one unseparable series. SQLite
+        # can't widen a PK in place, so rebuild — existing rows are all from the
+        # single account that existed then, i.e. the default one.
+        have = {r[1] for r in c.execute("PRAGMA table_info(usage_samples)")}
+        if "account" not in have:
+            c.executescript("""
+              CREATE TABLE usage_samples_new (
+                at        INTEGER NOT NULL,
+                account   TEXT NOT NULL,
+                meter     TEXT NOT NULL,
+                percent   REAL NOT NULL,
+                resets_at INTEGER,
+                PRIMARY KEY (account, meter, at)
+              );
+              INSERT INTO usage_samples_new (at, account, meter, percent, resets_at)
+                SELECT at, 'default', meter, percent, resets_at FROM usage_samples;
+              DROP TABLE usage_samples;
+              ALTER TABLE usage_samples_new RENAME TO usage_samples;
+            """)
         c.commit()
         _CONN = c
     return _CONN
@@ -622,30 +643,36 @@ def prune_pane_status(alive_pane_ids: set[str]) -> int:
 # One row per meter per successful OAuth usage fetch (~5 min cadence, from
 # periscope/usage.py). Stores the unrounded utilization so burn-rate slopes
 # aren't quantized to integer steps. Both prod and a dev instance may write;
-# the (meter, at) PK + INSERT OR IGNORE makes same-second collisions benign.
+# the (account, meter, at) PK + INSERT OR IGNORE makes same-second collisions
+# benign. `account` is in the PK because two subscriptions sample the same
+# meter names on the same cadence — without it their series interleave into
+# one nonsense slope, retroactively unseparable.
 
-def record_usage_samples(rows: list[tuple[int, str, float, int | None]]) -> None:
-    """Bulk-insert (at, meter, percent, resets_at) samples."""
+def record_usage_samples(
+        rows: list[tuple[int, str, str, float, int | None]]) -> None:
+    """Bulk-insert (at, account, meter, percent, resets_at) samples."""
     if not rows:
         return
     with _LOCK:
         c = _conn()
         c.executemany(
-            "INSERT OR IGNORE INTO usage_samples (at, meter, percent, resets_at) "
-            "VALUES (?,?,?,?)",
+            "INSERT OR IGNORE INTO usage_samples "
+            "(at, account, meter, percent, resets_at) VALUES (?,?,?,?,?)",
             rows,
         )
         c.commit()
 
 
-def usage_samples_since(meter: str, since: int) -> list[tuple[int, float]]:
-    """(at, percent) samples for one meter at/after `since`, oldest first."""
+def usage_samples_since(account: str, meter: str,
+                        since: int) -> list[tuple[int, float]]:
+    """(at, percent) samples for one account's meter at/after `since`,
+    oldest first."""
     with _LOCK:
         c = _conn()
         rows = c.execute(
             "SELECT at, percent FROM usage_samples "
-            "WHERE meter=? AND at>=? ORDER BY at",
-            (meter, since),
+            "WHERE account=? AND meter=? AND at>=? ORDER BY at",
+            (account, meter, since),
         ).fetchall()
     return [(int(a), float(p)) for a, p in rows]
 

@@ -312,13 +312,14 @@ _MIN_SLOPE_SPAN_S = {
 }
 
 
-def attach_projections(meters: dict, now: float,
-                       samples_for=None) -> None:
+def attach_projections(meters: dict, now: float, samples_for=None,
+                       account: str = "default") -> None:
     """Annotate each meter dict in place with projected_percent / limit_at.
     samples_for(meter_key, since) -> [(at, percent)] is injectable for tests;
-    defaults to the persisted usage_samples series."""
-    if samples_for is None:
-        samples_for = activity.usage_samples_since
+    defaults to the persisted usage_samples series for `account`. The seam
+    stays account-free so injected fakes don't have to model the registry."""
+    fetch = samples_for or (
+        lambda key, since: activity.usage_samples_since(account, key, since))
     for key, m in meters.items():
         m["projected_percent"] = None
         m["projected_recent"] = None
@@ -338,7 +339,7 @@ def attach_projections(meters: dict, now: float,
         slope_win = _SLOPE_WINDOW_S.get(key, 24 * 3600 if weekly else 3600)
         min_span = _MIN_SLOPE_SPAN_S.get(key, 12 * 3600 if weekly else 600)
         since = int(max(window_start, now - slope_win))
-        samples = samples_for(key, since)
+        samples = fetch(key, since)
         if len(samples) < 2:
             continue
         (t0, p0), (t1, p1) = samples[0], samples[-1]
@@ -386,7 +387,7 @@ def _refresh_plan_usage_into_cache() -> None:
             now = int(time.time())
             result["fetched_at"] = now
             activity.record_usage_samples([
-                (now, k, m["utilization"], m.get("resets_at"))
+                (now, "default", k, m["utilization"], m.get("resets_at"))
                 for k, m in result["meters"].items()
             ])
             attach_projections(result["meters"], now)
