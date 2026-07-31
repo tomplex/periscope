@@ -12,6 +12,11 @@ sessionId to its file. We never enumerate session files and trust pid-liveness
 alone — pids outlive sessions and can recycle — so a file is only honored when
 its pid is a currently-running `claude` process.
 
+The same files answer the reverse question: `live_session_id_for_pane` walks a
+pane's process subtree to its claude pid and reads back the sessionId that
+process reports RIGHT NOW. That is what makes it the authority over the
+recorded pane_sessions row — see the comment on `session_id_for_pane`.
+
 Only busy/waiting/idle are mapped; `shell` and any unknown status return None so
 the caller falls back to scraping. The schema is undocumented Claude Code
 internals (version-tagged), so every read degrades to None on a shape change.
@@ -22,6 +27,7 @@ import contextlib
 import json
 import subprocess
 import time
+from collections import deque
 from pathlib import Path
 
 _SESSIONS_DIR = Path.home() / ".claude" / "sessions"
@@ -34,18 +40,23 @@ _STATE_MAP = {"busy": "working", "waiting": "needs-input", "idle": "idle"}
 # ~3s poll; scanning ~30 tiny files and one `ps` per pane would be wasteful, so
 # both are built once and reused for the brief window a single poll spans.
 _CACHE_TTL_S = 1.0
-_index_cache: tuple[float, dict] | None = None        # (built_at, {sid: file})
+# (built_at, {sid: file}, {pid: file}) — one scan of the directory answers both
+# directions (sessionId -> state, pid -> current sessionId).
+_index_cache: tuple[float, dict, dict] | None = None
 # (built_at, {pid: (rss_kb, age_s)}) — one ps snapshot serves both pid
 # liveness (the key set) and the memory/uptime cycle-hint.
 _claude_procs_cache: tuple[float, dict[int, tuple[int, int]]] | None = None
+_proc_table_cache: tuple[float, tuple[dict[int, list[int]], dict[int, str]]] | None = None
+_pane_pids_cache: tuple[float, dict[str, int]] | None = None
 
 
-def _build_index() -> dict:
-    idx: dict = {}
+def _build_index() -> tuple[dict, dict]:
+    by_sid: dict = {}
+    by_pid: dict = {}
     try:
         files = list(_SESSIONS_DIR.glob("*.json"))
     except OSError:
-        return idx
+        return by_sid, by_pid
     for f in files:
         try:
             d = json.loads(f.read_text())
@@ -53,18 +64,24 @@ def _build_index() -> dict:
             continue
         sid = d.get("sessionId")
         if sid:
-            idx[sid] = d
-    return idx
+            by_sid[sid] = d
+        with contextlib.suppress(TypeError, ValueError):
+            by_pid[int(d.get("pid"))] = d
+    return by_sid, by_pid
 
 
-def _index() -> dict:
+def _indexes() -> tuple[dict, dict]:
     global _index_cache
     now = time.time()
     if _index_cache and now - _index_cache[0] < _CACHE_TTL_S:
-        return _index_cache[1]
-    idx = _build_index()
-    _index_cache = (now, idx)
-    return idx
+        return _index_cache[1], _index_cache[2]
+    by_sid, by_pid = _build_index()
+    _index_cache = (now, by_sid, by_pid)
+    return by_sid, by_pid
+
+
+def _index() -> dict:
+    return _indexes()[0]
 
 
 def parse_etime(s: str) -> int:
@@ -123,6 +140,113 @@ def _claude_procs() -> dict[int, tuple[int, int]]:
 
 def _live_claude_pids() -> set[int]:
     return set(_claude_procs())
+
+
+def proc_table() -> tuple[dict[int, list[int]], dict[int, str]]:
+    """(ppid -> child pids, pid -> command) for every process. Empty on any ps
+    failure. Snapshotted for _CACHE_TTL_S so one poll's worth of subtree walks
+    costs a single fork."""
+    global _proc_table_cache
+    now = time.time()
+    if _proc_table_cache and now - _proc_table_cache[0] < _CACHE_TTL_S:
+        return _proc_table_cache[1]
+    kids: dict[int, list[int]] = {}
+    cmds: dict[int, str] = {}
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,command="],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return kids, cmds   # not cached: a transient ps failure shouldn't stick
+    for line in out.splitlines():
+        bits = line.split(maxsplit=2)
+        if len(bits) < 3:
+            continue
+        try:
+            pid, ppid = int(bits[0]), int(bits[1])
+        except ValueError:
+            continue
+        kids.setdefault(ppid, []).append(pid)
+        cmds[pid] = bits[2]
+    _proc_table_cache = (now, (kids, cmds))
+    return kids, cmds
+
+
+def _tmux_pane_pids() -> dict[str, int]:
+    """tmux pane id -> the pid of the pane's root process (usually its shell).
+    Empty on any tmux failure (no server, tmux not installed)."""
+    try:
+        out = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    panes: dict[str, int] = {}
+    for line in out.splitlines():
+        pane_id, tab, pid_raw = line.partition("\t")
+        if not tab:
+            continue
+        with contextlib.suppress(ValueError):
+            panes[pane_id] = int(pid_raw)
+    return panes
+
+
+def pane_claude_pids() -> dict[str, int]:
+    """tmux pane id -> the pid of the claude running in it. Panes with no
+    claude have no entry.
+
+    Breadth-first through each pane's process subtree, stopping at the FIRST
+    claude: that is the pane's own session. Anything claude-ish below it is a
+    subagent or tool child.
+
+    Cached for _CACHE_TTL_S — the same per-poll window the rest of this module
+    uses. Deliberately NOT the 15s of window_view's account scan: that scan
+    reads process env, which is immutable for a process's lifetime, whereas
+    this map feeds a pane's CURRENT session id — which rotates mid-process —
+    and a pid can be recycled by an unrelated claude. One /api/state poll
+    resolves ~20 panes, so a one-second window already collapses the cost to
+    two forks per poll; a longer one buys nothing but staleness.
+    """
+    global _pane_pids_cache
+    now = time.time()
+    if _pane_pids_cache and now - _pane_pids_cache[0] < _CACHE_TTL_S:
+        return _pane_pids_cache[1]
+    panes = _tmux_pane_pids()
+    if not panes:
+        return {}   # no tmux — don't fork ps, and don't cache the empty answer
+    kids, cmds = proc_table()
+    found: dict[str, int] = {}
+    for pane_id, root in panes.items():
+        seen: set[int] = set()
+        queue = deque([root])
+        while queue:
+            pid = queue.popleft()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            if pid != root and "claude" in cmds.get(pid, ""):
+                found[pane_id] = pid
+                break
+            queue.extend(kids.get(pid, ()))
+    _pane_pids_cache = (now, found)
+    return found
+
+
+def live_session_id_for_pane(pane_id: str) -> str | None:
+    """The sessionId the pane's RUNNING claude reports right now, or None when
+    the pane has no live claude / no session file for it.
+
+    Only honored when the pid is a live claude: a leftover <pid>.json whose pid
+    has been recycled would otherwise hand back an unrelated session."""
+    if not pane_id:
+        return None
+    pid = pane_claude_pids().get(pane_id)
+    if pid is None or pid not in _live_claude_pids():
+        return None
+    d = _indexes()[1].get(pid)
+    return d.get("sessionId") if d else None
 
 
 def claude_proc_for(sid: str | None) -> dict | None:
