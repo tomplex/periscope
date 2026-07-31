@@ -82,6 +82,7 @@ class Settings(TypedDict, total=False):
     worktree_layout_default: str  # "sibling" | "inline"
     worktree_layout_overrides: dict[str, str]  # realpath -> "sibling" | "inline"
     cleanup_idle_days: int
+    bg_account: str  # account id background commander jobs bill; unset => default
 
 
 class Command(TypedDict):

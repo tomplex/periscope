@@ -6,8 +6,8 @@ exits; the session id IS the job id. A `commands` table (in the shared activity
 DB, own schema) tracks each job; status syncs from `claude agents --json --all`.
 prod-only (needs the MCP socket + subscription auth).
 
-Imports only periscope.config / periscope.log + stdlib — never activity (the
-worker tick imports US, one-way, to avoid a cycle).
+Imports only periscope.config / periscope.log / periscope.store + stdlib —
+never activity (the worker tick imports US, one-way, to avoid a cycle).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import cast
 
-from periscope import config
+from periscope import config, store
 from periscope.log import log
 
 ROLE_PROMPT = """\
@@ -164,10 +164,21 @@ def _dispatch_env(*, handle: str) -> dict[str, str]:
     The Anthropic API-key auth vars are STRIPPED: server.py load_dotenv()s
     ANTHROPIC_API_KEY into os.environ (for the narrator/rename SDK calls), and an
     inherited key takes precedence over the claude.ai subscription login — the
-    commander must bill on the subscription, not API credits (a spend leak)."""
+    commander must bill on the subscription, not API credits (a spend leak).
+
+    CLAUDE_CONFIG_DIR picks WHICH subscription — same class of decision, so it
+    lives here too. The launchd env never carries it, so without this every job
+    billed the default account forever. Unset `bg_account` means the default
+    account, which is why the else branch POPS rather than leaving whatever
+    leaked in: a job must never silently run on an account nobody chose."""
     env = {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
     for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         env.pop(k, None)
+    config_dir = store.account_config_dir(store.get_settings().get("bg_account"))
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
     return cast("dict[str, str]", env)
 
 

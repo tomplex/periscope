@@ -139,3 +139,19 @@ def test_sync_jobs_absent_young_stays_running_old_reaped(monkeypatch):
     assert bgc.get_job("young").status == "done"
     assert bgc.get_job("old").status == "done"
     assert stopped == []                           # absent/reaped => no stop call (already gone)
+
+
+# --- dispatch env ---
+
+def test_dispatch_env_sets_account_config_dir(monkeypatch):
+    monkeypatch.setattr("periscope.store.get_settings", lambda: {"bg_account": "b"})
+    env = bgc._dispatch_env(handle="h1")
+    assert env["CLAUDE_CONFIG_DIR"].endswith("/.claude-b")
+
+
+def test_dispatch_env_default_account_unset(monkeypatch):
+    # an inherited CLAUDE_CONFIG_DIR must NOT survive as an implicit account choice
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/leaked")
+    monkeypatch.setattr("periscope.store.get_settings", dict)
+    env = bgc._dispatch_env(handle="h1")
+    assert "CLAUDE_CONFIG_DIR" not in env
