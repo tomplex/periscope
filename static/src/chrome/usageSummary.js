@@ -69,3 +69,21 @@ export function summarizeAccounts(plan, nowSec) {
     };
   });
 }
+
+/** The account with the most headroom, or null when no account has usable data.
+ *
+ * "Most headroom" is the LOWEST headline percent — the headline is whichever
+ * limit binds first, so an account at 8% weekly but 95% session has 95% of
+ * headroom gone, not 8%. Accounts with no meters are skipped rather than
+ * treated as empty: no data must never look like infinite room.
+ *
+ * Ties are broken randomly (injectable for tests) so identical accounts share
+ * load instead of every new tab piling onto whichever sorts first.
+ */
+export function bestAccount(plan, nowSec, rand = Math.random) {
+  const usable = summarizeAccounts(plan, nowSec).filter((a) => a.available && a.headline);
+  if (!usable.length) return null;
+  const low = Math.min(...usable.map((a) => a.headline.m.percent || 0));
+  const tied = usable.filter((a) => (a.headline.m.percent || 0) === low);
+  return tied[Math.floor(rand() * tied.length)].id;
+}

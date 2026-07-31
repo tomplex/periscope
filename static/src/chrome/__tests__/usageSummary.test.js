@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STALE_AFTER_S, summarizeAccounts } from "../usageSummary.js";
+import { bestAccount, STALE_AFTER_S, summarizeAccounts } from "../usageSummary.js";
 
 const NOW = 1_800_000_000;
 
@@ -76,5 +76,38 @@ describe("summarizeAccounts", () => {
   it("labels an unregistered account id with the id itself, sorted after the known two", () => {
     const rows = summarizeAccounts({ zz: acct({ week_all: 5 }), b: acct({ week_all: 2 }) }, NOW);
     expect(rows.map((r) => r.label)).toEqual(["B", "zz"]);
+  });
+});
+
+describe("bestAccount", () => {
+  const plan = (pcts) =>
+    Object.fromEntries(
+      Object.entries(pcts).map(([id, p]) => [
+        id,
+        p === null
+          ? { available: false }
+          : { available: true, meters: { session: { percent: p } }, fetched_at: 1000 },
+      ]),
+    );
+
+  it("picks the account with the most headroom", () => {
+    expect(bestAccount(plan({ default: 100, b: 8 }), 1000)).toBe("b");
+    expect(bestAccount(plan({ default: 3, b: 60 }), 1000)).toBe("default");
+  });
+
+  it("ignores accounts with no usable meters", () => {
+    // b looks emptier only because it has no data — never route work there
+    expect(bestAccount(plan({ default: 90, b: null }), 1000)).toBe("default");
+  });
+
+  it("returns null when nothing is available, so the caller keeps its default", () => {
+    expect(bestAccount(plan({ default: null, b: null }), 1000)).toBe(null);
+    expect(bestAccount(null, 1000)).toBe(null);
+  });
+
+  it("breaks an exact tie randomly rather than always favouring one account", () => {
+    const tied = plan({ default: 20, b: 20 });
+    expect(bestAccount(tied, 1000, () => 0)).toBe("default");
+    expect(bestAccount(tied, 1000, () => 0.99)).toBe("b");
   });
 });

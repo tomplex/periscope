@@ -29,10 +29,11 @@
 import { computed, signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { ACCOUNTS } from "../accounts.js";
+import { bestAccount } from "../chrome/usageSummary.js";
 import { useEscape } from "../hooks/useEscape.js";
 import * as prefs from "../prefs.js";
 import { trackLabel } from "../split/railTree.js";
-import { tracks, windows } from "../store.js";
+import { tracks, usage, windows } from "../store.js";
 import { track } from "../track.js";
 import { apiCall } from "../util.js";
 
@@ -185,9 +186,12 @@ export function openLauncher(trackId) {
   pickedBranch.value = bs.length ? bs[0].branch : null;
   newBranchName.value = null;
   branchQuery.value = "";
-  // Deliberately NOT sticky: account B is the overflow, and silently
-  // defaulting a later launch to it would bill the wrong subscription.
-  account.value = "default";
+  // Preselect whichever subscription has the most headroom, re-derived on
+  // every open rather than remembered: the answer changes as limits burn
+  // down, and a stale sticky value would keep routing work at an account
+  // that filled up since. Falls back to the default account when no usage
+  // has been fetched yet, which is the pre-accounts behaviour.
+  account.value = bestAccount(usage.value?.plan, Date.now() / 1000) || "default";
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.
   catalog.value = null;
