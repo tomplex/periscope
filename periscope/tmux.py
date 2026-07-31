@@ -54,6 +54,32 @@ def _tmux_mutate(*args: str) -> tuple[bool, str]:
     return True, r.stdout.strip()
 
 
+def env_args(config_dir: str | None) -> list[str]:
+    """`-e CLAUDE_CONFIG_DIR=...` args for new-window/new-session, or [].
+
+    Set on the window rather than prefixed onto the command string so the
+    binding lives in the pane's process environment: a user re-running
+    `claude` by hand in that pane stays on the same account, and resurrect
+    reads it back off the live process at save time.
+    """
+    if not config_dir:
+        return []
+    return ["-e", f"CLAUDE_CONFIG_DIR={config_dir}"]
+
+
+def scrub_session_env(session: str) -> None:
+    """Unset CLAUDE_CONFIG_DIR from a SESSION's environment.
+
+    `new-session -e` sets the session env, not just the first window's — so
+    every later window in periscope's single shared session would inherit the
+    first window's account, silently billing account-A panes to account B.
+    The first window's shell has already forked with the value, so scrubbing
+    immediately after creation keeps that pane correct and leaves the session
+    clean for the next one.
+    """
+    _tmux_mutate("set-environment", "-t", f"={session}", "-u", "CLAUDE_CONFIG_DIR")
+
+
 def capture(target: str, lines: int = 100) -> str:
     # -e preserves SGR escapes; parse_pane strips them for content parsing
     # but uses raw prompt-line color info to filter ghost-text input.

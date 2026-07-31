@@ -13,6 +13,7 @@ from periscope.tmux import (
     _tmux_mutate,
     capture,
     deliver_input,
+    env_args,
     tmux,
 )
 
@@ -136,3 +137,14 @@ def test_deliver_input_large_falls_back_to_paste_buffer(mocker):
     second_call = mock_run.call_args_list[1]
     assert second_call.args[0][:2] == ["tmux", "paste-buffer"]
     assert "foo:0" in second_call.args[0]
+
+
+def test_env_args_empty_for_default_account():
+    assert env_args("") == []
+    assert env_args(None) == []
+
+
+def test_env_args_builds_e_flag():
+    assert env_args("/Users/tom/.claude-b") == [
+        "-e", "CLAUDE_CONFIG_DIR=/Users/tom/.claude-b"
+    ]
