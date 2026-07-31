@@ -67,8 +67,8 @@ def env_args(config_dir: str | None) -> list[str]:
     return ["-e", f"CLAUDE_CONFIG_DIR={config_dir}"]
 
 
-def scrub_session_env(session: str) -> None:
-    """Unset CLAUDE_CONFIG_DIR from a SESSION's environment.
+def scrub_session_env(session: str) -> bool:
+    """Unset CLAUDE_CONFIG_DIR from a SESSION's environment. True on success.
 
     `new-session -e` sets the session env, not just the first window's — so
     every later window in periscope's single shared session would inherit the
@@ -76,8 +76,19 @@ def scrub_session_env(session: str) -> None:
     The first window's shell has already forked with the value, so scrubbing
     immediately after creation keeps that pane correct and leaves the session
     clean for the next one.
+
+    A failure here is the exact outcome this feature exists to prevent, and its
+    blast radius is every LATER pane rather than this one — so it must never be
+    silent. `_tmux_mutate` only returns stderr, it does not log, so log here.
     """
-    _tmux_mutate("set-environment", "-t", f"={session}", "-u", "CLAUDE_CONFIG_DIR")
+    ok, msg = _tmux_mutate("set-environment", "-t", f"={session}", "-u", "CLAUDE_CONFIG_DIR")
+    if not ok:
+        from periscope.log import log
+        log.error(
+            "FAILED to scrub CLAUDE_CONFIG_DIR from session %s (%s) — later panes "
+            "in this session may silently run on the wrong account", session, msg,
+        )
+    return ok
 
 
 def capture(target: str, lines: int = 100) -> str:

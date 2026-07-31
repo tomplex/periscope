@@ -142,12 +142,15 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
         except ValueError:
             raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
         target = f"{session}:{index}"
-        # Honour the caller's command — rebuilding it here threw away the
-        # account prefix (CLAUDE_CONFIG_DIR=…) that resume_session attaches,
-        # silently billing the resumed pane to the default account. The
-        # fallback only covers callers that pass nothing at all; the
-        # existing-session branch below deliberately keeps sending nothing
-        # for an empty exec_cmd (channels.py relies on that).
+        # Honour the caller's command. This branch used to rebuild it from
+        # CLAUDE_EXEC, silently discarding whatever the caller passed — while
+        # the existing-session branch below honoured it, so the same call
+        # behaved differently depending on whether the sentinel session
+        # happened to exist yet. Any prefix a caller attaches (an account's
+        # CLAUDE_CONFIG_DIR=… among them) has to survive that. The fallback
+        # only covers callers passing nothing at all; the branch below
+        # deliberately keeps sending nothing for an empty exec_cmd
+        # (channels.py relies on that).
         cmd = exec_cmd.strip() or shlex.join(
             config.build_agent_command("claude", cwd=cwd, resume_id=resume_id)
         )

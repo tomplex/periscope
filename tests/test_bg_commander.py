@@ -155,3 +155,43 @@ def test_dispatch_env_default_account_unset(monkeypatch):
     monkeypatch.setattr("periscope.store.get_settings", dict)
     env = bgc._dispatch_env(handle="h1")
     assert "CLAUDE_CONFIG_DIR" not in env
+
+
+# `claude agents` / `claude stop` are per-config-dir. Dispatching a job under
+# account B while LISTING under the default one makes the job invisible:
+# sync_jobs sees it absent past the grace window, marks it `done` while it is
+# still running, and never calls stop() — an unkillable job reported as
+# finished. Every claude subprocess in the module must agree on the account.
+
+def _capture_run(monkeypatch, stdout=""):
+    seen: dict = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        seen["env"] = kw.get("env")
+        return type("R", (), {"stdout": stdout, "stderr": ""})()
+
+    monkeypatch.setattr(bgc.subprocess, "run", fake_run)
+    return seen
+
+
+def test_read_agents_lists_under_the_job_account(monkeypatch):
+    monkeypatch.setattr("periscope.store.get_settings", lambda: {"bg_account": "b"})
+    seen = _capture_run(monkeypatch, stdout="[]")
+    bgc._read_agents()
+    assert seen["env"]["CLAUDE_CONFIG_DIR"].endswith("/.claude-b")
+
+
+def test_stop_session_stops_under_the_job_account(monkeypatch):
+    monkeypatch.setattr("periscope.store.get_settings", lambda: {"bg_account": "b"})
+    seen = _capture_run(monkeypatch)
+    bgc._stop_session("sess-1")
+    assert seen["env"]["CLAUDE_CONFIG_DIR"].endswith("/.claude-b")
+
+
+def test_read_agents_default_account_carries_no_config_dir(monkeypatch):
+    monkeypatch.setattr("periscope.store.get_settings", dict)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/leaked")
+    seen = _capture_run(monkeypatch, stdout="[]")
+    bgc._read_agents()
+    assert "CLAUDE_CONFIG_DIR" not in seen["env"]

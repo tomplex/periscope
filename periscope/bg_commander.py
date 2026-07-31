@@ -21,7 +21,6 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import cast
 
 from periscope import config, store
 from periscope.log import log
@@ -167,19 +166,34 @@ def _dispatch_env(*, handle: str) -> dict[str, str]:
     commander must bill on the subscription, not API credits (a spend leak).
 
     CLAUDE_CONFIG_DIR picks WHICH subscription — same class of decision, so it
-    lives here too. The launchd env never carries it, so without this every job
-    billed the default account forever. Unset `bg_account` means the default
-    account, which is why the else branch POPS rather than leaving whatever
-    leaked in: a job must never silently run on an account nobody chose."""
-    env = {**os.environ, "PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
+    lives here too (see _account_env)."""
+    env = dict(os.environ) | {"PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
     for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         env.pop(k, None)
+    return _account_env(env)
+
+
+def _account_env(base: dict[str, str]) -> dict[str, str]:
+    """Point a `claude` subprocess at the account background jobs run on.
+
+    EVERY claude subprocess here must agree on the account, not just dispatch:
+    `claude agents` and `claude stop` are per-config-dir, so a job dispatched
+    under account B is invisible to a listing taken under the default one.
+    sync_jobs would then see it absent past the grace window, mark it `done`
+    while it kept running, and never call stop() — an unkillable job the
+    dashboard reports as finished.
+
+    The launchd env never carries CLAUDE_CONFIG_DIR, so without this every job
+    billed the default account forever. Unset `bg_account` POPS rather than
+    leaving whatever leaked in: a job must never silently run on an account
+    nobody chose.
+    """
     config_dir = store.account_config_dir(store.get_settings().get("bg_account"))
     if config_dir:
-        env["CLAUDE_CONFIG_DIR"] = config_dir
+        base["CLAUDE_CONFIG_DIR"] = config_dir
     else:
-        env.pop("CLAUDE_CONFIG_DIR", None)
-    return cast("dict[str, str]", env)
+        base.pop("CLAUDE_CONFIG_DIR", None)
+    return base
 
 
 def _parse_session_id(stdout: str) -> str | None:
@@ -277,6 +291,7 @@ def _read_agents() -> str:
         return subprocess.run(
             [config.claude_bin(), "agents", "--json", "--all"],
             capture_output=True, text=True, timeout=15,
+            env=_account_env(dict(os.environ)),
         ).stdout
     except (subprocess.SubprocessError, OSError) as e:
         log.warning("claude agents read failed: %s", e)
@@ -288,6 +303,7 @@ def _stop_session(session_id: str) -> None:
         subprocess.run(
             [config.claude_bin(), "stop", session_id],
             capture_output=True, text=True, timeout=15,
+            env=_account_env(dict(os.environ)),
         )
     except (subprocess.SubprocessError, OSError) as e:
         log.warning("claude stop %s failed: %s", session_id, e)
