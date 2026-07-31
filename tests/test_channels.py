@@ -784,8 +784,13 @@ def test_resume_session_passes_account_through(mocker):
     assert "--resume abc" in cmd
 
 
-def test_resume_session_default_account_passes_none(mocker):
+def test_resume_session_binds_nothing_when_the_default_account_is_emptiest(mocker):
+    """An omitted account resolves through best_account, which names an id
+    rather than passing None — but naming the DEFAULT must still bind no
+    config dir, so the command stays byte-identical to the pre-accounts one."""
+    from periscope import usage
     from periscope.channels import _do_resume_session_tool
+    mocker.patch.object(usage, "best_account", return_value="default")
     resume = mocker.patch(
         "periscope.routes.sessions._window_new_resume",
         return_value={"ok": True, "target": "resumes:3", "session": "resumes",
@@ -793,7 +798,7 @@ def test_resume_session_default_account_passes_none(mocker):
 
     _body(_do_resume_session_tool("%5", {"session_id": "abc"}))
 
-    assert not resume.call_args.kwargs["account"]
+    assert resume.call_args.kwargs["account"] == "default"
     assert "CLAUDE_CONFIG_DIR" not in resume.call_args[0][1]
 
 
@@ -1302,3 +1307,19 @@ def test_spawn_claude_explicit_account_overrides_the_auto_pick(mocker):
 
     assert not any(str(a).startswith("CLAUDE_CONFIG_DIR=")
                    for a in _created_call(cap))
+
+
+def test_resume_session_auto_picks_the_emptiest_account(mocker):
+    """Resuming is a Claude launch like any other: with no account named it
+    should land where there is room, not on the exhausted default."""
+    from periscope import channels, usage
+    seen = {}
+    mocker.patch.object(usage, "best_account", return_value="b")
+    mocker.patch.object(
+        channels, "_resolve_window_by_pid", return_value=None, create=True)
+    mocker.patch("periscope.routes.sessions._window_new_resume",
+                 side_effect=lambda *a, **kw: seen.update(kw) or {"target": "resumes:1"})
+
+    channels._do_resume_session_tool("%1", {"session_id": "sid-1"})
+
+    assert seen.get("account") == "b"

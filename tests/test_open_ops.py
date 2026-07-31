@@ -349,3 +349,41 @@ def test_open_target_pr_rolls_back_worktree_on_open_failure(tmp_git_repo, clean_
         open_ops.open_target(open_ops.PRTarget(repo=repo, pr=13))
     assert discarded == {"repo": repo, "path": repo, "branch": "pr-13"}
 
+
+
+# --- account auto-selection on the unified-open surface ---------------------
+# ⌘K omnibox / POST /api/open / PR review all land in ensure_session. Without
+# this they pinned every pane to the default subscription — the one that fills
+# up first, and the reason the second account exists.
+
+def _capture_layout(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(open_ops, "_session_live", lambda _s: False)
+    monkeypatch.setattr(open_ops, "_layout_two_window",
+                        lambda *a, **kw: (seen.update(kw) or ("pidA", "pidB")))
+    return seen
+
+
+def test_ensure_session_auto_picks_the_emptiest_account(monkeypatch):
+    from periscope import usage
+    seen = _capture_layout(monkeypatch)
+    monkeypatch.setattr(usage, "best_account", lambda: "b")
+    open_ops.ensure_session({}, "/repo")
+    assert seen.get("account") == "b"
+
+
+def test_ensure_session_explicit_account_wins(monkeypatch):
+    from periscope import usage
+    seen = _capture_layout(monkeypatch)
+    monkeypatch.setattr(usage, "best_account", lambda: "b")
+    open_ops.ensure_session({}, "/repo", account="default")
+    assert seen.get("account") == "default"
+
+
+def test_ensure_session_never_auto_picks_for_codex(monkeypatch):
+    """Codex has no Claude subscription — binding one would be meaningless."""
+    from periscope import usage
+    seen = _capture_layout(monkeypatch)
+    monkeypatch.setattr(usage, "best_account", lambda: "b")
+    open_ops.ensure_session({}, "/repo", agent="codex")
+    assert seen.get("account") in (None, "")

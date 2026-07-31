@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from periscope import config, projects, store, tracks, worktrees
+from periscope import config, projects, store, tracks, usage, worktrees
 from periscope.gitutil import (
     detect_default_branch,
     resolve_repo,
@@ -196,7 +196,15 @@ def ensure_session(
         if existing:
             return session, existing
     if agent == "claude":
-        agent_pid, _ = _layout_two_window(session, pinned_dir, account=account)
+        # No account named -> the subscription with the most headroom. This is
+        # periscope's primary launch path (⌘K omnibox, POST /api/open, PR
+        # review); pinning it to the default account would send every open to
+        # the subscription that fills up first. Codex is excluded below: it has
+        # no Claude subscription to choose between. best_account degrades to
+        # "default" when usage is unknown, so an open never waits on it.
+        agent_pid, _ = _layout_two_window(
+            session, pinned_dir, account=account or usage.best_account()
+        )
     else:
         agent_pid, _ = _layout_two_window(
             session, pinned_dir, agent=agent, account=account

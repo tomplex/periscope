@@ -890,7 +890,10 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     try:
         result = _window_new_resume(
             tmux_session, f"{CLAUDE_EXEC} --resume {session_id}",
-            session_id, "resume", account=arguments.get("account"),
+            session_id, "resume",
+            # Resuming is a Claude launch like any other: unnamed account means
+            # "where there is room", not the exhausted default.
+            account=arguments.get("account") or usage.best_account(),
         )
     except HTTPException as e:
         return _tool_result({"ok": False, "error": str(e.detail)})
@@ -1589,7 +1592,9 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                     "enum": ["default", "b"],
                     "description": (
                         "Which Claude subscription to run the resumed pane on. "
-                        "Omit for the default account."
+                        "OMIT THIS unless the user named an account: omitting "
+                        "picks whichever subscription has the most remaining "
+                        "usage, which is almost always what you want."
                     ),
                 },
             },
