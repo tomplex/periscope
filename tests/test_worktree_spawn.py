@@ -20,6 +20,79 @@ def tmp_worktrees(tmp_path, monkeypatch):
     return root
 
 
+def _patch_layout(monkeypatch, *, has_session: bool = True) -> list[tuple]:
+    """Capture the tmux argv `_layout_two_window` issues, stubbing every real
+    tmux / thread side effect.
+
+    `_tmux_mutate` is patched in BOTH modules: worktree_spawn bound the name at
+    import time, while `tmux.scrub_session_env` calls its own module-level
+    binding — patching one alone lets the scrub reach the real tmux server.
+    """
+    from periscope import channels, pids, worktree_spawn
+    from periscope import tmux as tmux_mod
+    calls: list[tuple] = []
+
+    def fake_mutate(*args):
+        calls.append(args)
+        if args[0] == "has-session":
+            return has_session, ""
+        return True, "@9"
+
+    monkeypatch.setattr(worktree_spawn, "_tmux_mutate", fake_mutate)
+    monkeypatch.setattr(tmux_mod, "_tmux_mutate", fake_mutate)
+    monkeypatch.setattr(worktree_spawn, "tmux", lambda *a, **k: "9")
+    monkeypatch.setattr(pids, "stamp_new_window", lambda target: f"pid{target}")
+    monkeypatch.setattr(channels, "dismiss_dev_channels_consent_bg", lambda *a: None)
+    return calls
+
+
+def _created(calls: list[tuple]) -> list[tuple]:
+    return [c for c in calls if c and c[0] in ("new-window", "new-session")]
+
+
+def test_layout_two_window_passes_account_env(monkeypatch):
+    """The unified-open surface (⌘K omnibox, /api/open, PR review) lands here —
+    without the env every pane it creates is silently on the default account."""
+    from periscope.worktree_spawn import _layout_two_window
+    calls = _patch_layout(monkeypatch)
+
+    _layout_two_window("sess", "/tmp", account="b")
+
+    created = _created(calls)
+    assert created, "no window created"
+    # Both the claude window and its sibling shell window carry the binding, so
+    # a hand-run `claude` in the shell stays on the same account.
+    for call in created:
+        flat = list(call)
+        assert "-e" in flat, flat
+        assert any(a.startswith("CLAUDE_CONFIG_DIR=") and a.endswith("/.claude-b")
+                   for a in flat), flat
+
+
+def test_layout_two_window_default_account_sends_no_env(monkeypatch):
+    from periscope.worktree_spawn import _layout_two_window
+    calls = _patch_layout(monkeypatch)
+
+    _layout_two_window("sess", "/tmp")
+
+    created = _created(calls)
+    assert created
+    assert all("-e" not in list(c) for c in created)
+
+
+def test_layout_two_window_scrubs_new_session_env(monkeypatch):
+    """`new-session -e` sets the SESSION env — every later window in the one
+    shared session would otherwise inherit this account."""
+    from periscope.worktree_spawn import _layout_two_window
+    calls = _patch_layout(monkeypatch, has_session=False)
+
+    _layout_two_window("sess", "/tmp", account="b")
+
+    assert _created(calls) and _created(calls)[0][0] == "new-session"
+    assert any(c[0] == "set-environment" and "-u" in c and "CLAUDE_CONFIG_DIR" in c
+               for c in calls), f"session env never scrubbed: {calls}"
+
+
 @needs_tmux
 def test_layout_two_window_stamps_both_windows(tmp_git_repo, tmux_test_server):
     from periscope import config

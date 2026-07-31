@@ -181,6 +181,7 @@ def ensure_session(
     project: projects.Project,
     pinned_dir: str,
     agent: Literal["claude", "codex"] = "claude",
+    account: str | None = None,
 ) -> tuple[str, str]:
     """Idempotent create-or-focus into the single shared MANAGED_SESSION.
     `pinned_dir` is the project's key (taken explicitly — Project is a
@@ -195,9 +196,11 @@ def ensure_session(
         if existing:
             return session, existing
     if agent == "claude":
-        agent_pid, _ = _layout_two_window(session, pinned_dir)
+        agent_pid, _ = _layout_two_window(session, pinned_dir, account=account)
     else:
-        agent_pid, _ = _layout_two_window(session, pinned_dir, agent=agent)
+        agent_pid, _ = _layout_two_window(
+            session, pinned_dir, agent=agent, account=account
+        )
     return session, agent_pid
 
 

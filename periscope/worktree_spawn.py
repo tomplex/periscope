@@ -26,7 +26,8 @@ from typing import Literal
 
 from fastapi import HTTPException
 
-from periscope import worktrees
+from periscope import store, worktrees
+from periscope import tmux as tmux_mod
 from periscope.gitutil import detect_default_branch
 from periscope.log import log
 from periscope.repo_locks import repo_lock
@@ -217,6 +218,7 @@ def _layout_two_window(
     tmux_session: str,
     pinned_dir: str,
     agent: Literal["claude", "codex"] = "claude",
+    account: str | None = None,
 ) -> tuple[str, str]:
     """Add the trellis-style 2-window pair (a 'claude' window + a 'shell'
     window) into `tmux_session`, creating the session on first use. The
@@ -231,6 +233,12 @@ def _layout_two_window(
     file before `claude` lands (see CLAUDE.md "Key invariants" note 5).
     Without it, `claude` can land mid-rc and either get echoed as text or
     fail silently.
+
+    `account` picks the Claude subscription: its CLAUDE_CONFIG_DIR is set on
+    BOTH windows (see the env note below), so the shell sibling is bound too —
+    running `claude` by hand there is the obvious next thing a user does in a
+    fresh worktree, and an unbound shell would silently land on the default
+    account.
 
     Returns `(claude_pid, shell_pid)` — both windows stamped (by window id).
     Phase 4's PR-review endpoint uses claude_pid to write
@@ -249,16 +257,25 @@ def _layout_two_window(
     # `-P -F "#{window_id}"` so subsequent targets can't drift onto a
     # same-named sibling window.
     agent_name = agent
+    config_dir = store.account_config_dir(account)
     if not _tmux_mutate("has-session", "-t", tmux_session)[0]:
         ok, claude_win = _tmux_mutate(
             "new-session", "-d", "-s", tmux_session, "-c", pinned_dir,
+            *tmux_mod.env_args(config_dir),
             "-n", agent_name, "-P", "-F", "#{window_id}",
         )
         if not ok:
             raise HTTPException(500, f"tmux new-session failed: {claude_win}")
+        # `new-session -e` sets the SESSION env, so without this every later
+        # window in the one shared session inherits this account — silently
+        # billing account-A panes to account B. This window already forked
+        # with the value; `new-window -e` has no such spillover.
+        if config_dir:
+            tmux_mod.scrub_session_env(tmux_session)
     else:
         ok, claude_win = _tmux_mutate(
             "new-window", "-t", f"{tmux_session}:", "-c", pinned_dir,
+            *tmux_mod.env_args(config_dir),
             "-n", agent_name, "-P", "-F", "#{window_id}",
         )
         if not ok:
@@ -277,6 +294,7 @@ def _layout_two_window(
     # Second window: shell.
     ok, shell_win = _tmux_mutate(
         "new-window", "-t", f"{tmux_session}:", "-c", pinned_dir,
+        *tmux_mod.env_args(config_dir),
         "-n", "shell", "-P", "-F", "#{window_id}",
     )
     if not ok:
