@@ -866,3 +866,31 @@ def test_pane_with_only_a_live_session_is_narrated(tick_env, monkeypatch):
     )
     narrator.tick([_pane(pane_id="%9")])
     assert tick_env["haiku_calls"], "pane with a live session was never narrated"
+
+
+def test_echo_guard_yields_to_a_placeholder_name():
+    """An echoing name beats a version string.
+
+    tmux `automatic-rename` labels a window with its running command — for
+    Claude that is the VERSION ("2.1.220"). Every guard here errs toward None
+    on the assumption the current name is worth keeping; against a placeholder
+    that inverts, and a pane whose work genuinely matches its branch (so every
+    good name reads as an echo) stays labelled with a version number forever.
+    """
+    container = {"saved", "searches"}
+    # real name -> the echo guard still protects it
+    assert narrator.rename_decision(
+        "saved-searches", current_name="button-polish", row=None, now=NOW,
+        container=container) is None
+    # placeholder -> take the echo, it carries strictly more information
+    assert narrator.rename_decision(
+        "saved-searches", current_name="2.1.220", row=None, now=NOW,
+        container=container) == "saved-searches"
+
+
+def test_placeholder_name_detection():
+    assert narrator.is_placeholder_name("2.1.220")
+    assert narrator.is_placeholder_name("claude")
+    assert narrator.is_placeholder_name("")
+    assert not narrator.is_placeholder_name("pit-join-migration")
+    assert not narrator.is_placeholder_name("v2-planning")

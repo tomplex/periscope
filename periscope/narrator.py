@@ -220,6 +220,18 @@ def is_echo(suggestion: str, container: set[str]) -> bool:
     return bool(toks) and bool(container) and toks <= container
 
 
+# tmux `automatic-rename` names a window after its running command; for Claude
+# Code that renders as the bare version ("2.1.220"). `claude` is what periscope
+# itself passes to `new-window -n`.
+_PLACEHOLDER_NAME_RE = re.compile(r"^\d+(\.\d+)+$")
+
+
+def is_placeholder_name(name: str | None) -> bool:
+    """This window name says nothing about the work happening in it."""
+    n = (name or "").strip()
+    return not n or n == "claude" or bool(_PLACEHOLDER_NAME_RE.match(n))
+
+
 def rename_decision(suggestion: str | None, *, current_name: str,
                     row: PaneStatusRow | None, now: int,
                     locked: bool = False,
@@ -235,7 +247,12 @@ def rename_decision(suggestion: str | None, *, current_name: str,
     # The prompt already forbids echoing the track/branch/worktree name, and
     # Haiku still does it — five sibling tabs in one worktree all converged on
     # 'world-model'. Prompt taste is advisory; this guard is not.
-    if container and is_echo(suggestion, container):
+    #
+    # Unless the name it would protect says nothing: a pane whose work genuinely
+    # matches its branch has NO non-echoing name available, so the guard fired
+    # every tick and left the window wearing tmux's automatic name — a Claude
+    # version string — indefinitely. An echo beats "2.1.220".
+    if container and not is_placeholder_name(current_name) and is_echo(suggestion, container):
         return None
     if (row is not None and row.renamed_at is not None
             and now - row.renamed_at < RENAME_COOLDOWN_S):
