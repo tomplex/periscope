@@ -24,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-from periscope import activity
+from periscope import activity, store
 from periscope.log import _bg, log
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
@@ -131,9 +131,12 @@ PLAN_USAGE_REFRESH_S = 300.0
 # yesterday's numbers exactly when the user sits down.
 PLAN_USAGE_RETRY_S = 60.0
 _OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-# (next attempt eligible at, last successful data)
-_plan_cache: tuple[float, dict | None] = (0.0, None)
-_plan_in_flight = False
+# account id -> (next attempt eligible at, last successful data). Keyed per
+# account because each subscription has its own credential and its own meters;
+# a single tuple would have whichever account refreshed last overwrite the
+# other's numbers every 5 minutes.
+_plan_cache: dict[str, tuple[float, dict | None]] = {}
+_plan_in_flight: set[str] = set()
 _plan_lock = threading.Lock()
 
 # (response field, meter key, display label) — response fields that are null
@@ -353,14 +356,15 @@ def attach_projections(meters: dict, now: float, samples_for=None,
             m["limit_at"] = int(eta)
 
 
-def fetch_plan_usage() -> dict | None:
+def fetch_plan_usage(config_dir: str = "") -> dict | None:
     # Failures warn rather than pass silently: a broken token or endpoint
     # would otherwise serve stale meters forever with zero log evidence
     # (httpx only logs requests that get a response). Attempt rate is capped
     # by the cache backoff, so this can't spam.
-    token = _read_oauth_token()
+    token = _read_oauth_token(config_dir)
     if not token:
-        log.warning("plan usage: no valid OAuth token in keychain")
+        log.warning("plan usage: no valid OAuth token in keychain (%s)",
+                    _keychain_item(config_dir))
         return None
     try:
         resp = httpx.get(
@@ -379,49 +383,60 @@ def fetch_plan_usage() -> dict | None:
         return None
 
 
-def _refresh_plan_usage_into_cache() -> None:
-    global _plan_cache, _plan_in_flight
+def _refresh_plan_usage_into_cache(account: str, config_dir: str) -> None:
     try:
-        result = fetch_plan_usage()
+        result = fetch_plan_usage(config_dir)
         if result:
             now = int(time.time())
             result["fetched_at"] = now
             activity.record_usage_samples([
-                (now, "default", k, m["utilization"], m.get("resets_at"))
+                (now, account, k, m["utilization"], m.get("resets_at"))
                 for k, m in result["meters"].items()
             ])
-            attach_projections(result["meters"], now)
+            attach_projections(result["meters"], now, account=account)
     except Exception:
         log.exception("plan usage: sample recording/projection failed")
         result = None
     with _plan_lock:
         if result:
-            _plan_cache = (time.time() + PLAN_USAGE_REFRESH_S, result)
+            _plan_cache[account] = (time.time() + PLAN_USAGE_REFRESH_S, result)
         else:
             # Back off even on failure instead of re-hitting the endpoint on
             # every poll (it 429s readily), but at the shorter retry interval.
             # Keep the previously-cached data; the frontend renders its
             # fetched_at as a staleness marker.
-            _plan_cache = (time.time() + PLAN_USAGE_RETRY_S, _plan_cache[1])
-        _plan_in_flight = False
+            prev = _plan_cache.get(account, (0.0, None))[1]
+            _plan_cache[account] = (time.time() + PLAN_USAGE_RETRY_S, prev)
+        _plan_in_flight.discard(account)
 
 
-def cached_plan_usage() -> dict | None:
-    """Stale-while-revalidate: serves the last successful fetch immediately
-    and kicks off a background refresh whenever the next-attempt time has
-    passed (PLAN_USAGE_REFRESH_S after a success, PLAN_USAGE_RETRY_S after a
-    failure). First-ever call returns None; the dashboard's next poll will
-    see the freshly-cached result."""
-    global _plan_in_flight
+def cached_plan_usage() -> dict[str, dict]:
+    """Stale-while-revalidate, per account: {account_id: {available, meters,
+    fetched_at}}. Serves each account's last successful fetch immediately and
+    kicks off that account's background refresh whenever its next-attempt time
+    has passed (PLAN_USAGE_REFRESH_S after a success, PLAN_USAGE_RETRY_S after
+    a failure).
+
+    Every registered account gets an entry every call, so one account's dead
+    credential (missing keychain item, expired token) shows as
+    {"available": False} instead of dropping the key and taking the other
+    account's meters down with it. Before the first successful fetch that same
+    shape stands in; the dashboard's next poll sees the real numbers.
+    """
     now = time.time()
-    with _plan_lock:
-        next_at, data = _plan_cache
-        if now < next_at:
-            return data
-        if not _plan_in_flight:
-            _plan_in_flight = True
-            _bg("plan-usage", _refresh_plan_usage_into_cache)
-        return data
+    out: dict[str, dict] = {}
+    for acct in store.get_accounts():
+        aid = acct.get("id")
+        if not aid:
+            continue
+        with _plan_lock:
+            next_at, data = _plan_cache.get(aid, (0.0, None))
+            if now >= next_at and aid not in _plan_in_flight:
+                _plan_in_flight.add(aid)
+                _bg(f"plan-usage:{aid}", _refresh_plan_usage_into_cache,
+                    aid, acct.get("config_dir", ""))
+        out[aid] = data if data else {"available": False}
+    return out
 
 
 # --- Per-pane burn attribution ---
@@ -519,7 +534,12 @@ def annotate_hot_panes(views: list[dict]) -> None:
     """Stamp burn_hot/burn_wtpm on the pane views eating the quota: only
     while the session meter is hot, and only on panes carrying >=40% of the
     current weighted burn across Claude panes (so at most two flames)."""
-    plan = cached_plan_usage() or {}
+    # Default account only. Burn is measured from activity._PROJECTS_DIR
+    # (~/.claude/projects), which holds the default account's transcripts and
+    # nothing else — a second account's hot meter has no measurable panes here,
+    # so gating on it would flame panes that provably aren't the cause. Widen
+    # this when per-account transcript discovery lands.
+    plan = cached_plan_usage().get("default") or {}
     if not ((plan.get("meters") or {}).get("session") or {}).get("hot"):
         return
     ids = [

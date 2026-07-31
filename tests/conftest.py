@@ -29,16 +29,23 @@ def _no_plan_usage_refresh(monkeypatch):
     fresh_activity_db's connection close (use-after-free → the intermittent
     CPython 3.14 sqlite segfault). It is reachable from any path that builds
     /api/state, so patching one call site (e.g. periscope.app.cached_plan_usage)
-    isn't enough — routes.state holds its own binding. Seeding the cache with a
-    far-future next-attempt time makes cached_plan_usage serve the cache without
-    ever spawning. Tests that exercise the refresh set their own _plan_cache via
-    monkeypatch, which overrides this."""
+    isn't enough — routes.state holds its own binding.
+
+    The guard is neutering usage._bg itself, not seeding the cache: the cache is
+    now per account (account id -> (next_attempt, data)), so a seeded entry only
+    covers the accounts it names — any account the registry grows, or a test
+    that swaps the registry, would still spawn. A no-op _bg closes the hazard by
+    construction for every account and for the sibling pane-burn thread too.
+    Tests that exercise spawning monkeypatch _bg themselves, which overrides
+    this; the fresh cache/in-flight containers keep per-test state from leaking
+    into the module globals."""
     try:
         from periscope import usage
     except ImportError:
         return
-    monkeypatch.setattr(usage, "_plan_cache", (float("inf"), None), raising=False)
-    monkeypatch.setattr(usage, "_plan_in_flight", True, raising=False)
+    monkeypatch.setattr(usage, "_plan_cache", {}, raising=False)
+    monkeypatch.setattr(usage, "_plan_in_flight", set(), raising=False)
+    monkeypatch.setattr(usage, "_bg", lambda *a, **kw: None, raising=False)
 
 
 @pytest.fixture(scope="session", autouse=True)

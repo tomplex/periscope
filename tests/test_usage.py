@@ -261,7 +261,7 @@ def test_annotate_hot_panes_flames_majority_burner(monkeypatch):
     """Session meter hot -> the pane carrying >=40% of burn gets flamed."""
     import periscope.usage as usage
     monkeypatch.setattr(usage, "cached_plan_usage",
-                        lambda: {"meters": {"session": {"hot": True}}})
+                        lambda: {"default": {"meters": {"session": {"hot": True}}}})
     monkeypatch.setattr(usage, "pane_burn_rates",
                         lambda ids: {"%1": 900.0, "%2": 100.0})
     views = [
@@ -279,7 +279,7 @@ def test_annotate_hot_panes_flames_majority_burner(monkeypatch):
 def test_annotate_hot_panes_noop_when_meter_not_hot(monkeypatch):
     import periscope.usage as usage
     monkeypatch.setattr(usage, "cached_plan_usage",
-                        lambda: {"meters": {"session": {"hot": False}}})
+                        lambda: {"default": {"meters": {"session": {"hot": False}}}})
     called = []
     monkeypatch.setattr(usage, "pane_burn_rates",
                         lambda ids: called.append(ids) or {})
@@ -363,7 +363,7 @@ def test_fetch_plan_usage_warns_when_token_missing(caplog, monkeypatch):
     import logging
 
     import periscope.usage as usage
-    monkeypatch.setattr(usage, "_read_oauth_token", lambda: None)
+    monkeypatch.setattr(usage, "_read_oauth_token", lambda cfg: None)
     with caplog.at_level(logging.WARNING):
         assert usage.fetch_plan_usage() is None
     assert any("no valid OAuth token" in r.getMessage() for r in caplog.records)
@@ -379,7 +379,7 @@ def test_fetch_plan_usage_warns_on_http_failure(caplog, monkeypatch):
     def boom(*a, **kw):
         raise RuntimeError("connect timeout")
 
-    monkeypatch.setattr(usage, "_read_oauth_token", lambda: "tok")
+    monkeypatch.setattr(usage, "_read_oauth_token", lambda cfg: "tok")
     monkeypatch.setattr(usage.httpx, "get", boom)
     with caplog.at_level(logging.WARNING):
         assert usage.fetch_plan_usage() is None
@@ -393,17 +393,17 @@ def test_refresh_success_stamps_fetched_at_and_full_backoff(monkeypatch):
 
     import periscope.usage as usage
     monkeypatch.setattr(usage, "fetch_plan_usage",
-                        lambda: {"available": True, "meters": {}})
+                        lambda cfg: {"available": True, "meters": {}})
     monkeypatch.setattr(usage.activity, "record_usage_samples", lambda rows: None)
     monkeypatch.setattr(usage, "attach_projections", lambda *a, **kw: None)
-    monkeypatch.setattr(usage, "_plan_cache", (0.0, None))
-    monkeypatch.setattr(usage, "_plan_in_flight", True)
+    monkeypatch.setattr(usage, "_plan_cache", {})
+    monkeypatch.setattr(usage, "_plan_in_flight", {"default"})
     before = time.time()
-    usage._refresh_plan_usage_into_cache()
-    next_at, data = usage._plan_cache
+    usage._refresh_plan_usage_into_cache("default", "")
+    next_at, data = usage._plan_cache["default"]
     assert data["fetched_at"] >= int(before)
     assert next_at - before >= usage.PLAN_USAGE_REFRESH_S - 1
-    assert usage._plan_in_flight is False
+    assert usage._plan_in_flight == set()
 
 
 def test_refresh_failure_keeps_data_and_retries_sooner(monkeypatch):
@@ -414,43 +414,93 @@ def test_refresh_failure_keeps_data_and_retries_sooner(monkeypatch):
 
     import periscope.usage as usage
     old = {"available": True, "meters": {}, "fetched_at": 123}
-    monkeypatch.setattr(usage, "fetch_plan_usage", lambda: None)
-    monkeypatch.setattr(usage, "_plan_cache", (0.0, old))
-    monkeypatch.setattr(usage, "_plan_in_flight", True)
+    monkeypatch.setattr(usage, "fetch_plan_usage", lambda cfg: None)
+    monkeypatch.setattr(usage, "_plan_cache", {"default": (0.0, old)})
+    monkeypatch.setattr(usage, "_plan_in_flight", {"default"})
     before = time.time()
-    usage._refresh_plan_usage_into_cache()
-    next_at, data = usage._plan_cache
+    usage._refresh_plan_usage_into_cache("default", "")
+    next_at, data = usage._plan_cache["default"]
     assert data is old
     assert usage.PLAN_USAGE_RETRY_S - 1 <= next_at - before < usage.PLAN_USAGE_REFRESH_S
-    assert usage._plan_in_flight is False
+    assert usage._plan_in_flight == set()
+
+
+def _two_accounts(monkeypatch):
+    import periscope.usage as usage
+    monkeypatch.setattr(usage.store, "get_accounts", lambda: [
+        {"id": "default", "label": "A", "config_dir": ""},
+        {"id": "b", "label": "B", "config_dir": "/Users/tom/.claude-b"},
+    ])
+    return usage
 
 
 def test_cached_plan_usage_no_spawn_before_next_attempt(monkeypatch):
-    """Inside the backoff window the cache is served with no refresh spawn."""
-    import time
-
-    import periscope.usage as usage
-    data = {"available": True, "meters": {}}
-    monkeypatch.setattr(usage, "_plan_cache", (time.time() + 100, data))
+    """Inside the backoff window every account is served from cache with no
+    refresh spawn, and each payload keeps its single-account shape."""
+    usage = _two_accounts(monkeypatch)
+    a = {"available": True, "meters": {}, "fetched_at": 1}
+    b = {"available": True, "meters": {}, "fetched_at": 2}
+    monkeypatch.setattr(usage, "_plan_cache",
+                        {"default": (float("inf"), a), "b": (float("inf"), b)})
     monkeypatch.setattr(usage, "_bg", lambda *a: (_ for _ in ()).throw(
         AssertionError("refresh spawned inside backoff window")))
-    assert usage.cached_plan_usage() is data
+    assert usage.cached_plan_usage() == {"default": a, "b": b}
 
 
-def test_cached_plan_usage_spawns_once_when_due(monkeypatch):
-    """Past the next-attempt time: serves stale data immediately and spawns
-    exactly one refresh (in-flight flag dedupes concurrent polls)."""
-    import time
+def test_cached_plan_usage_unfetched_account_reports_unavailable(monkeypatch):
+    """An account with nothing cached yet degrades to available:False rather
+    than None — the meters of the OTHER account must still render."""
+    usage = _two_accounts(monkeypatch)
+    a = {"available": True, "meters": {}, "fetched_at": 1}
+    monkeypatch.setattr(usage, "_plan_cache", {"default": (float("inf"), a)})
+    monkeypatch.setattr(usage, "_plan_in_flight", {"b"})
+    monkeypatch.setattr(usage, "_bg", lambda *a: (_ for _ in ()).throw(
+        AssertionError("refresh spawned while in flight")))
+    assert usage.cached_plan_usage() == {"default": a, "b": {"available": False}}
 
-    import periscope.usage as usage
-    data = {"available": True, "meters": {}}
+
+def test_cached_plan_usage_spawns_one_refresh_per_due_account(monkeypatch):
+    """Past the next-attempt time: one refresh per account, each carrying its
+    own config dir, and the in-flight set dedupes concurrent polls."""
+    usage = _two_accounts(monkeypatch)
     spawned = []
-    monkeypatch.setattr(usage, "_plan_cache", (time.time() - 1, data))
-    monkeypatch.setattr(usage, "_plan_in_flight", False)
-    monkeypatch.setattr(usage, "_bg", lambda name, fn: spawned.append(name))
-    assert usage.cached_plan_usage() is data
-    assert usage.cached_plan_usage() is data
-    assert spawned == ["plan-usage"]
+    monkeypatch.setattr(usage, "_plan_cache", {})
+    monkeypatch.setattr(usage, "_plan_in_flight", set())
+    monkeypatch.setattr(usage, "_bg",
+                        lambda name, fn, *args: spawned.append((name, args)))
+    usage.cached_plan_usage()
+    usage.cached_plan_usage()
+    assert spawned == [("plan-usage:default", ("default", "")),
+                       ("plan-usage:b", ("b", "/Users/tom/.claude-b"))]
+
+
+def test_refresh_records_samples_under_its_own_account(monkeypatch):
+    """Samples land tagged with the account that produced them."""
+    import periscope.usage as usage
+    rows = []
+    monkeypatch.setattr(usage, "fetch_plan_usage", lambda cfg: {
+        "available": True,
+        "meters": {"session": {"utilization": 12.0, "resets_at": 999}},
+    })
+    monkeypatch.setattr(usage.activity, "record_usage_samples", rows.extend)
+    monkeypatch.setattr(usage, "attach_projections", lambda *a, **kw: None)
+    monkeypatch.setattr(usage, "_plan_cache", {})
+    monkeypatch.setattr(usage, "_plan_in_flight", {"b"})
+    usage._refresh_plan_usage_into_cache("b", "/Users/tom/.claude-b")
+    assert [(r[1], r[2], r[3], r[4]) for r in rows] == [("b", "session", 12.0, 999)]
+
+
+def test_missing_token_degrades_only_that_account(monkeypatch):
+    """A dead/absent keychain item for one account leaves the other's cached
+    meters untouched."""
+    usage = _two_accounts(monkeypatch)
+    a = {"available": True, "meters": {}, "fetched_at": 1}
+    monkeypatch.setattr(usage, "_read_oauth_token", lambda cfg: None)
+    monkeypatch.setattr(usage, "_plan_cache", {"default": (float("inf"), a)})
+    monkeypatch.setattr(usage, "_plan_in_flight", {"b"})
+    usage._refresh_plan_usage_into_cache("b", "/Users/tom/.claude-b")
+    monkeypatch.setattr(usage, "_bg", lambda *args: None)
+    assert usage.cached_plan_usage() == {"default": a, "b": {"available": False}}
 
 
 # --- per-account credentials ---------------------------------------------
