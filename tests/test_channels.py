@@ -694,6 +694,105 @@ def test_spawn_branch_without_repo_errors(fresh_activity_db, monkeypatch, mocker
     assert _body(res)["ok"] is False and "repo" in _body(res)["error"].lower()
 
 
+# --- account selection (which Claude subscription a spawn runs on) ---
+
+def _mock_spawn_plumbing(mocker, has_session=True):
+    """Stub every shell-out `_do_spawn_claude_tool` makes. `has_session=False`
+    steers it down the new-session branch (the one with the env spillover)."""
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0 if has_session else 1, ""))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="")
+    mocker.patch("periscope.channels.set_window_fields")
+    mocker.patch("periscope.channels.tracks.resolve_track_for_window", return_value="tk_x")
+    mocker.patch("periscope.channels.tracks.move_pane")
+    return mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+
+
+def _created_call(cap):
+    for c in cap.call_args_list:
+        if c.args and c.args[0] in ("new-window", "new-session"):
+            return c.args
+    raise AssertionError(f"no window created: {cap.call_args_list}")
+
+
+def test_spawn_claude_account_sets_config_dir_env(mocker):
+    from periscope import channels
+    cap = _mock_spawn_plumbing(mocker)
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go", "account": "b"}))
+
+    args = _created_call(cap)
+    env = [a for a in args if str(a).startswith("CLAUDE_CONFIG_DIR=")]
+    assert env and env[0].endswith(".claude-b")
+    assert args[args.index(env[0]) - 1] == "-e"
+
+
+def test_spawn_claude_default_account_sets_no_env(mocker):
+    from periscope import channels
+    cap = _mock_spawn_plumbing(mocker)
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    assert not any(str(a).startswith("CLAUDE_CONFIG_DIR=") for a in _created_call(cap))
+
+
+def test_spawn_claude_new_session_scrubs_session_env(mocker):
+    """`new-session -e` sets the SESSION env, so every later window in that
+    session would inherit this account. Only that branch needs the scrub."""
+    from periscope import channels
+    cap = _mock_spawn_plumbing(mocker, has_session=False)
+    scrub = mocker.patch("periscope.tmux.scrub_session_env")
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go", "account": "b"}))
+
+    assert _created_call(cap)[0] == "new-session"
+    scrub.assert_called_once_with("sess")
+
+
+def test_spawn_claude_new_window_does_not_scrub(mocker):
+    from periscope import channels
+    _mock_spawn_plumbing(mocker, has_session=True)
+    scrub = mocker.patch("periscope.tmux.scrub_session_env")
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go", "account": "b"}))
+
+    scrub.assert_not_called()
+
+
+def test_resume_session_account_prefixes_exec_cmd(mocker):
+    # _window_new_resume owns window creation, so the account rides in on the
+    # command string rather than as a tmux -e arg.
+    from periscope.channels import _do_resume_session_tool
+    resume = mocker.patch(
+        "periscope.routes.sessions._window_new_resume",
+        return_value={"ok": True, "target": "resumes:3", "session": "resumes",
+                      "index": 3, "mode": "resume", "resumed_session_id": "abc"})
+
+    _body(_do_resume_session_tool("%5", {"session_id": "abc", "account": "b"}))
+
+    cmd = resume.call_args[0][1]
+    assert cmd.startswith("CLAUDE_CONFIG_DIR=") and ".claude-b " in cmd
+    assert "--resume abc" in cmd
+
+
+def test_resume_session_default_account_has_no_prefix(mocker):
+    from periscope.channels import _do_resume_session_tool
+    resume = mocker.patch(
+        "periscope.routes.sessions._window_new_resume",
+        return_value={"ok": True, "target": "resumes:3", "session": "resumes",
+                      "index": 3, "mode": "resume", "resumed_session_id": "abc"})
+
+    _body(_do_resume_session_tool("%5", {"session_id": "abc"}))
+
+    assert "CLAUDE_CONFIG_DIR" not in resume.call_args[0][1]
+
+
 def test_spawn_workspace_id_tags_pane_track(fresh_activity_db, mocker):
     # workspace_id is now a TRACK id: the spawned pane must be tagged in
     # pane_tracks (not pane_workspaces).

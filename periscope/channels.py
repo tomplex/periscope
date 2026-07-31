@@ -32,7 +32,8 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TypedDict
 
-from periscope import tracks
+from periscope import store, tracks
+from periscope import tmux as tmux_mod
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
 from periscope.panes import list_windows, note_action, note_focus
@@ -586,16 +587,25 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # paths use `-P -F #{window_index}` so we know the spawned slot — with
     # base-index 1 in tmux.conf, hardcoding :0 would silently target the
     # wrong window (see /api/window/new resume notes).
+    config_dir = store.account_config_dir(arguments.get("account"))
     code, _ = _run(["tmux", "has-session", "-t", session])
     if code != 0:
         ok, msg = _tmux_mutate(
             "new-session", "-d", "-s", session, "-c", cwd,
+            *tmux_mod.env_args(config_dir),
             "-P", "-F", "#{window_index}",
             *(["-n", name] if name else []),
         )
+        # `new-session -e` sets the SESSION env, so without this every later
+        # window spawned into this session inherits this account — silently
+        # billing them to the wrong subscription. This window's shell already
+        # forked with the value; `new-window -e` has no such spillover.
+        if ok and config_dir:
+            tmux_mod.scrub_session_env(session)
     else:
         ok, msg = _tmux_mutate(
             "new-window", "-t", f"{session}:", "-c", cwd,
+            *tmux_mod.env_args(config_dir),
             "-P", "-F", "#{window_index}",
             *(["-n", name] if name else []),
         )
@@ -870,9 +880,14 @@ def _do_resume_session_tool(pane: str, arguments: dict):
 
     from periscope.config import CLAUDE_EXEC
     from periscope.routes.sessions import _window_new_resume
+    # `_window_new_resume` owns window creation, so the account can't ride in as
+    # a tmux `-e` arg — prefix the command instead. It honours the caller's
+    # exec_cmd on both its branches, which is what makes the prefix survive.
+    config_dir = store.account_config_dir(arguments.get("account"))
+    prefix = f"CLAUDE_CONFIG_DIR={config_dir} " if config_dir else ""
     try:
         result = _window_new_resume(
-            tmux_session, f"{CLAUDE_EXEC} --resume {session_id}",
+            tmux_session, f"{prefix}{CLAUDE_EXEC} --resume {session_id}",
             session_id, "resume",
         )
     except HTTPException as e:
@@ -1443,6 +1458,14 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                     "type": "string",
                     "description": "Optional name for the new tmux window.",
                 },
+                "account": {
+                    "type": "string",
+                    "enum": ["default", "b"],
+                    "description": (
+                        "Which Claude subscription to run the spawned pane on. "
+                        "Omit for the default account."
+                    ),
+                },
                 "workspace_id": {
                     "type": "string",
                     "description": (
@@ -1555,6 +1578,14 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                         "the resumed pane into, so it groups under that workspace "
                         "in the rail instead of the default 'dev' bucket. Use this "
                         "when the user names a workspace to resume into."
+                    ),
+                },
+                "account": {
+                    "type": "string",
+                    "enum": ["default", "b"],
+                    "description": (
+                        "Which Claude subscription to run the resumed pane on. "
+                        "Omit for the default account."
                     ),
                 },
             },
