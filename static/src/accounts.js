@@ -17,3 +17,23 @@ export const ACCOUNTS = [
 export function accountLabel(id) {
   return ACCOUNTS.find((a) => a.id === id)?.label || id;
 }
+
+// Where "move this pane to the other subscription" sends it, or null when the
+// action doesn't apply. Pure so the rail row only renders the answer.
+//
+// null in two cases, both deliberate:
+//   - a shell pane has no Claude session to resume;
+//   - `account: "unknown"` is a CLAUDE_CONFIG_DIR no registered account claims,
+//     so we can't say which subscription it's on — and therefore can't say
+//     which one is "the other". Guessing could move it ONTO the exhausted
+//     account, the one outcome this feature exists to avoid.
+//
+// A missing `account` is the default account: /api/state stamps the field on
+// every window, but a rolling reload can paint rows from a pre-account server.
+export function moveAccountTarget(w, accounts = ACCOUNTS) {
+  if (!(w.agent === "claude" || w.is_claude)) return null;
+  const current = w.account || "default";
+  const i = accounts.findIndex((a) => a.id === current);
+  if (i < 0) return null;
+  return accounts[(i + 1) % accounts.length];
+}

@@ -264,6 +264,22 @@ export function Rail() {
     if (!ok) return;
     await apiCall("close tab", `/api/window?${targetQuery(w.target)}`, { method: "DELETE" });
   }
+  // Re-open a pane's Claude session on the other subscription. NOT a migration:
+  // the server spawns a SECOND pane resuming the same transcript under the
+  // target account and leaves this one running, so nothing is lost if the
+  // resume doesn't take. Failures (no recorded session, transcript still live)
+  // surface as apiCall's toast.
+  async function movePaneAccount(w, accountId) {
+    const data = await apiCall("move account",
+      `/api/pane/move-account?pid=${encodeURIComponent(w.pid)}&account=${encodeURIComponent(accountId)}`,
+      { method: "POST" });
+    if (!data?.pid) return;
+    // Select the pane we just made — same reason /api/open does it: a spawn the
+    // user can't see reads as a no-op. It lands in this pane's own track, so
+    // the selection moves one row, not across the rail.
+    railSelection.value = `pane:${data.pid}`;
+    prefs.setLastSelected({ kind: "pane", pid: data.pid });
+  }
   async function renamePane(w, next) {
     if (!w.target) return;
     await apiCall("rename tab", `/api/rename?${targetQuery(w.target)}`, {
@@ -413,6 +429,7 @@ export function Rail() {
           onSelect={selectKey}
           onClose={() => closePane(w)}
           onRename={(next) => renamePane(w, next)}
+          onMoveAccount={(acct) => movePaneAccount(w, acct)}
           dragProps={makeDragProps({ kind: "pane", key: `pane:${w.pid}`, childKey: w.pid, trackKey })}
           dropPos={dropPosFor(`pane:${w.pid}`)}
           pinned={prefs.getPinnedPids().includes(w.pid)}

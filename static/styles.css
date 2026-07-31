@@ -2610,6 +2610,19 @@ body.modal-open { overflow: hidden; }
    rules (need #rail to outrank #rail .child-row .rail-pin / :hover .rail-close). */
 #rail .pane-actions .rail-pin,
 #rail .pane-actions .rail-close { opacity: 1; margin: 0; position: static; }
+/* "→ B": re-open this pane's session on the other subscription. Text, not a
+   glyph, because the destination account is the whole content of the action —
+   an icon would need the tooltip to say anything at all. */
+#rail .pane-actions .rail-move-acct {
+  height: 18px; padding: 0 5px;
+  display: inline-flex; align-items: center;
+  background: transparent; border: 0; border-radius: 3px;
+  color: var(--fg-3);
+  font-family: var(--sans); font-size: 10px; line-height: 1;
+  white-space: nowrap; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+#rail .pane-actions .rail-move-acct:hover { background: var(--bg-2); color: var(--fg-1); }
 
 /* Track seclabel (Model B) — the effort header that sits ABOVE its card.
    Accent ⧉ icon + accent UPPERCASE label + a hairline rule that fills to the

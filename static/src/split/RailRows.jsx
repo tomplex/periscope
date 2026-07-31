@@ -16,6 +16,7 @@
 // <input>; Enter/blur commit, Escape cancels. A `settled` guard reproduces the
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
+import { moveAccountTarget } from "../accounts.js";
 import { AGENT_META, memHint, paneLabel, prStateMeta, prUrl, relTime } from "../util.js";
 import { waitTier } from "./attention.js";
 
@@ -139,6 +140,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
   pinned, onTogglePin, awaitingSince, spawnerName, spawnerLive, onRevealSpawner,
+  onMoveAccount,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
@@ -162,6 +164,10 @@ export function PaneRow({
   // an hour stops looking like one that just asked.
   const waitTierCls = awaitingSince
     ? waitTier(awaitingSince, Math.floor(Date.now() / 1000)) : null;
+  // Capacity pooling: one subscription runs out weeks before the other, and the
+  // work stuck on the exhausted one has to keep going. null on shell panes and
+  // on an unrecognised config dir (see moveAccountTarget).
+  const moveAcct = moveAccountTarget(w);
 
   // PR + Linear as clickable chips, shared between the compact line-2 strip and
   // the expanded footer (the link just relocates as the card grows). stop-prop
@@ -270,6 +276,17 @@ export function PaneRow({
       )}
       {/* Hover-only actions, zero footprint at rest (absolute + faded). */}
       <div class="pane-actions">
+        {/* Re-open this pane's session on the OTHER subscription. Labeled with
+            the destination, never the current account: "→ B" is unambiguous
+            where a bare "move" is not. Hover-only because it's a rare,
+            deliberate act — unlike the account chip, which is orientation. */}
+        {moveAcct && (
+          <button
+            class="rail-move-acct"
+            title={`re-open this session on Claude account ${moveAcct.label} — spawns a resumed pane there and leaves this one running`}
+            onClick={(e) => { e.stopPropagation(); onMoveAccount?.(moveAcct.id); }}
+          >→ {moveAcct.label}</button>
+        )}
         <button
           class={`rail-pin${pinned ? " pinned" : ""}`}
           title={pinned ? "unpin" : "pin"}

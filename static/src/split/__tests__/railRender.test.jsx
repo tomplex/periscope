@@ -96,6 +96,29 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain("@b");
   });
 
+  it("offers the move-account action on Claude panes only, labeled with its destination", () => {
+    projects.value = [];
+    tracks.value = [];
+    const pane = (over) => ({
+      pid: "p", session: "managed", index: 0, target: "managed:0", name: "claude",
+      agent: "claude", state: "idle", track_id: "/dev/myproj", track_name: "myproj",
+      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
+      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"),
+      pane_id: "%1", ...over,
+    });
+    windows.value = [
+      pane({ pid: "onA", account: "default" }),
+      pane({ pid: "onB", index: 1, target: "managed:1", account: "b", pane_id: "%2" }),
+      pane({ pid: "sh", index: 2, target: "managed:2", agent: null, pane_id: "%3" }),
+    ];
+
+    const html = render(<Rail />);
+
+    expect(html.split("rail-move-acct").length - 1).toBe(2);  // not on the shell pane
+    expect(html).toContain("→ B");   // the A pane's destination
+    expect(html).toContain("→ A");   // the B pane's destination
+  });
+
   it("keeps the Claude symbol during a frontend-only rolling reload", () => {
     projects.value = [];
     tracks.value = [];
