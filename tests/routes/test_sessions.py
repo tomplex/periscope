@@ -365,3 +365,180 @@ def test_new_session_env_is_scrubbed(client, mocker, fresh_activity_db):
     assert _created(calls) and _created(calls)[0][0] == "new-session"
     assert any(c[0] == "set-environment" and "-u" in c and "CLAUDE_CONFIG_DIR" in c
                for c in calls), f"session env never scrubbed: {calls}"
+
+
+# --- resume path: account binding + move-account ------------------------------
+
+
+def _patch_resume_path(mocker, calls, has_session=0):
+    """Patch the resume path down to captured tmux argv. Same both-module
+    `_tmux_mutate` patch as `_patch_account_path` — `tmux.scrub_session_env`
+    calls its OWN module-level binding, so patching one alone lets the scrub
+    reach the real tmux server."""
+    def fake_mutate(*args):
+        calls.append(args)
+        return True, "3"
+
+    mocker.patch("history.search.get_session",
+                 return_value={"project_path": "/tmp", "jsonl_path": ""})
+    _patch(mocker, "_run", return_value=(has_session, ""))
+    _patch(mocker, "_tmux_mutate", side_effect=fake_mutate)
+    mocker.patch("periscope.tmux._tmux_mutate", side_effect=fake_mutate)
+    _patch(mocker, "_send_and_stamp")
+    from periscope.routes import sessions
+    mocker.patch.dict(sessions._resuming, clear=True)
+
+
+def test_window_new_resume_passes_account_env_to_tmux(mocker):
+    """A resumed pane must carry CLAUDE_CONFIG_DIR in its process env, not just
+    on the one command line — the user re-running `claude` by hand in that pane
+    has to stay on the same subscription."""
+    from periscope.routes import sessions
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls, has_session=0)  # session exists → new-window
+
+    sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume",
+                                account="b")
+
+    created = [c for c in calls if c and c[0] in ("new-window", "new-session")]
+    assert created, f"no window created: {calls}"
+    flat = list(created[0])
+    assert "-e" in flat
+    assert any(a.startswith("CLAUDE_CONFIG_DIR=") and a.endswith("/.claude-b") for a in flat)
+
+
+def test_window_new_resume_default_account_sends_no_env(mocker):
+    from periscope.routes import sessions
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls, has_session=0)
+
+    sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+
+    created = [c for c in calls if c and c[0] in ("new-window", "new-session")]
+    assert created and "-e" not in list(created[0])
+
+
+def test_window_new_resume_scrubs_new_session_env(mocker):
+    """The sentinel session is created on first use with `-e`, which sets the
+    SESSION env — every later resume into it would inherit this account."""
+    from periscope.routes import sessions
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls, has_session=1)  # no session yet → new-session
+
+    sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume",
+                                account="b")
+
+    created = [c for c in calls if c and c[0] in ("new-window", "new-session")]
+    assert created and created[0][0] == "new-session"
+    assert any(c[0] == "set-environment" and "-u" in c and "CLAUDE_CONFIG_DIR" in c
+               for c in calls), f"session env never scrubbed: {calls}"
+
+
+def test_window_new_resume_falls_back_to_jsonl_on_disk(mocker, tmp_path):
+    """The history index only gains a session at SessionEnd, so a LIVE session
+    — exactly what move-account resumes — has no row in it. Measured on the dev
+    host: 9 of 12 panes with a recorded session were missing from history.db."""
+    import json
+    import os
+    import time
+
+    from periscope.routes import sessions
+    jsonl = tmp_path / "abc.jsonl"
+    jsonl.write_text(
+        json.dumps({"type": "summary"}) + "\n"
+        + json.dumps({"type": "user", "cwd": str(tmp_path)}) + "\n"
+    )
+    os.utime(jsonl, (time.time() - 300, time.time() - 300))  # past the liveness guard
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls)
+    mocker.patch("history.search.get_session", return_value=None)
+    _patch(mocker, "jsonl_for_session", return_value=jsonl)
+
+    result = sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+
+    assert result["ok"] is True
+    created = [c for c in calls if c and c[0] == "new-window"]
+    cwd_idx = list(created[0]).index("-c") + 1
+    assert created[0][cwd_idx] == str(tmp_path), "resume must start in the session's OWN dir"
+
+
+def test_window_new_resume_unknown_everywhere_still_404s(mocker):
+    import pytest
+    from fastapi import HTTPException
+
+    from periscope.routes import sessions
+    mocker.patch("history.search.get_session", return_value=None)
+    _patch(mocker, "jsonl_for_session", return_value=None)
+    with pytest.raises(HTTPException) as e:
+        sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+    assert e.value.status_code == 404
+
+
+def _patch_move_account(mocker, session_id="sess-abc", track="tk_1"):
+    resume = _patch(mocker, "_window_new_resume",
+                    return_value={"ok": True, "session": "resumes", "index": 3,
+                                  "target": "resumes:3", "mode": "resume",
+                                  "resumed_session_id": session_id})
+    _patch(mocker, "_resolve_window_by_pid",
+           return_value=("aa11", "%7", {"pane_id": "%7", "cwd": "/dev/repo"}))
+    _patch(mocker, "session_id_for_pane", return_value=session_id)
+    _patch(mocker, "tmux", return_value="%99")
+    _patch(mocker, "stamp_new_window", return_value="bb22")
+    mocker.patch("periscope.tracks.resolve_track_for_window", return_value=track)
+    move = mocker.patch("periscope.tracks.move_pane")
+    return resume, move
+
+
+def test_move_account_spawns_resume_on_target_account(client, mocker):
+    resume, _move = _patch_move_account(mocker)
+
+    r = client.post("/api/pane/move-account?pid=aa11&account=b")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["pid"] == "bb22"
+    assert resume.call_args.kwargs["account"] == "b"
+    assert "--resume sess-abc" in resume.call_args[0][1]
+
+
+def test_move_account_lands_in_the_original_track(client, mocker):
+    """The `resumes` sentinel tmux session is plumbing; the rail is
+    track-anchored, so without the re-tag the moved pane surfaces in the
+    repo-default bucket instead of beside where it came from."""
+    _resume, move = _patch_move_account(mocker, track="tk_feature")
+
+    r = client.post("/api/pane/move-account?pid=aa11&account=b")
+
+    assert r.status_code == 200, r.text
+    move.assert_called_once_with("%99", "tk_feature")
+
+
+def test_move_account_rejects_unknown_account(client, mocker):
+    """account_config_dir fails OPEN to the default — so an unknown id here
+    would silently 'move' the pane back onto the exhausted subscription."""
+    resume, _move = _patch_move_account(mocker)
+
+    r = client.post("/api/pane/move-account?pid=aa11&account=nope")
+
+    assert r.status_code == 400
+    assert "nope" in r.json()["detail"]
+    resume.assert_not_called()
+
+
+def test_move_account_404s_when_pane_has_no_session(client, mocker):
+    resume, _move = _patch_move_account(mocker)
+    _patch(mocker, "session_id_for_pane", return_value=None)
+
+    r = client.post("/api/pane/move-account?pid=aa11&account=b")
+
+    assert r.status_code == 404
+    resume.assert_not_called()
+
+
+def test_move_account_404s_on_unknown_pid(client, mocker):
+    resume, _move = _patch_move_account(mocker)
+    _patch(mocker, "_resolve_window_by_pid", return_value=("", "", {}))
+
+    r = client.post("/api/pane/move-account?pid=zzzz&account=b")
+
+    assert r.status_code == 404
+    resume.assert_not_called()

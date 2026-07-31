@@ -880,15 +880,10 @@ def _do_resume_session_tool(pane: str, arguments: dict):
 
     from periscope.config import CLAUDE_EXEC
     from periscope.routes.sessions import _window_new_resume
-    # `_window_new_resume` owns window creation, so the account can't ride in as
-    # a tmux `-e` arg — prefix the command instead. It honours the caller's
-    # exec_cmd on both its branches, which is what makes the prefix survive.
-    config_dir = store.account_config_dir(arguments.get("account"))
-    prefix = f"CLAUDE_CONFIG_DIR={config_dir} " if config_dir else ""
     try:
         result = _window_new_resume(
-            tmux_session, f"{prefix}{CLAUDE_EXEC} --resume {session_id}",
-            session_id, "resume",
+            tmux_session, f"{CLAUDE_EXEC} --resume {session_id}",
+            session_id, "resume", account=arguments.get("account"),
         )
     except HTTPException as e:
         return _tool_result({"ok": False, "error": str(e.detail)})

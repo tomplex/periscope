@@ -765,9 +765,11 @@ def test_spawn_claude_new_window_does_not_scrub(mocker):
     scrub.assert_not_called()
 
 
-def test_resume_session_account_prefixes_exec_cmd(mocker):
-    # _window_new_resume owns window creation, so the account rides in on the
-    # command string rather than as a tmux -e arg.
+def test_resume_session_passes_account_through(mocker):
+    # ONE mechanism for account binding: `_window_new_resume` takes the account
+    # and sets tmux `-e CLAUDE_CONFIG_DIR=…` on the window, so the binding lives
+    # in the pane's process env. The command string carries no prefix — a prefix
+    # would bind only the one invocation.
     from periscope.channels import _do_resume_session_tool
     resume = mocker.patch(
         "periscope.routes.sessions._window_new_resume",
@@ -776,12 +778,13 @@ def test_resume_session_account_prefixes_exec_cmd(mocker):
 
     _body(_do_resume_session_tool("%5", {"session_id": "abc", "account": "b"}))
 
+    assert resume.call_args.kwargs["account"] == "b"
     cmd = resume.call_args[0][1]
-    assert cmd.startswith("CLAUDE_CONFIG_DIR=") and ".claude-b " in cmd
+    assert "CLAUDE_CONFIG_DIR" not in cmd
     assert "--resume abc" in cmd
 
 
-def test_resume_session_default_account_has_no_prefix(mocker):
+def test_resume_session_default_account_passes_none(mocker):
     from periscope.channels import _do_resume_session_tool
     resume = mocker.patch(
         "periscope.routes.sessions._window_new_resume",
@@ -790,6 +793,7 @@ def test_resume_session_default_account_has_no_prefix(mocker):
 
     _body(_do_resume_session_tool("%5", {"session_id": "abc"}))
 
+    assert not resume.call_args.kwargs["account"]
     assert "CLAUDE_CONFIG_DIR" not in resume.call_args[0][1]
 
 

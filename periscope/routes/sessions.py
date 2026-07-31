@@ -3,13 +3,22 @@
 POST /api/session/rename
 POST /api/window/new            (incl. mode=resume)
 POST /api/window/move
+POST /api/pane/move-account
 DELETE /api/window
 
 window/new's resume mode looks up the original project_path via the
 history index, then spawns `claude --resume <id>` in that directory.
 The `resumes` sentinel session is auto-created on first use.
+
+/api/pane/move-account lives here rather than in routes/pane.py despite the
+path: it is a window SPAWN (it drives `_window_new_resume` plus the account
+`-e` plumbing that only exists in this module), while routes/pane.py is a
+read-mostly aggregator. Homing it there would add a routes→routes import edge
+for no gain.
 """
 
+import itertools
+import json
 import os
 import shlex
 import sqlite3
@@ -29,7 +38,7 @@ from periscope import (
     tracks,
 )
 from periscope import tmux as tmux_mod
-from periscope.channels import dismiss_dev_channels_consent_bg
+from periscope.channels import _resolve_window_by_pid, dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC, MANAGED_SESSION
 from periscope.panes import (
     _acted_at,
@@ -41,10 +50,17 @@ from periscope.panes import (
     note_action,
     note_focus,
 )
+from periscope.pids import stamp_new_window
 from periscope.tmux import _run, _tmux_mutate, tmux
+from periscope.turns import jsonl_for_session, session_id_for_pane
 from periscope.worktree_spawn import spawn_worktree
 
 router = APIRouter()
+
+# Sentinel tmux session every resumed pane lands in. `_window_new_resume`
+# creates it on first use; the rail never shows it, because membership is
+# track-anchored and every resumed pane is re-tagged into a real track.
+RESUME_SESSION = "resumes"
 
 
 class RenameSessionBody(BaseModel):
@@ -94,16 +110,61 @@ def _send_and_stamp(target: str, cmd: str) -> None:
     note_action(target)
 
 
-def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode: str) -> dict:
+def _session_from_disk(resume_id: str) -> dict | None:
+    """`{"project_path", "jsonl_path"}` read straight off ~/.claude/projects,
+    or None when no transcript with that id exists.
+
+    The history index only gains a session at SessionEnd, so a session that is
+    still LIVE — precisely what "move this pane to the other account" resumes —
+    is normally absent from it (measured on the dev host: 9 of 12 panes with a
+    recorded session had no history row). The JSONL on disk is the source of
+    truth and the index is derived from it, so an index miss falls through to
+    the file rather than 404ing on work that is demonstrably right there.
+
+    project_path is the first `cwd` in the transcript — the same rule
+    history.extract._decode_project_path uses. It has to be the START cwd, not
+    wherever the pane has since cd'd to: `claude --resume` resolves the id
+    against the cwd-encoded project dir, and that encoding is fixed at session
+    start.
+    """
+    path = jsonl_for_session(resume_id)
+    if path is None:
+        return None
+    cwd = ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            # Bounded: cwd rides on the first real event, and an unbounded scan
+            # of a transcript with no cwd at all would read a multi-MB file.
+            for line in itertools.islice(fh, 50):
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and rec.get("cwd"):
+                    cwd = str(rec["cwd"])
+                    break
+    except OSError:
+        return None
+    return {"project_path": cwd, "jsonl_path": str(path)}
+
+
+def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode: str,
+                       account: str | None = None) -> dict:
     """`mode=resume`: look up the original session's project dir via the
     history index and run `claude --resume <id>` there. The sentinel
     `session` is auto-created on first use. Returns the standard
     window-spawn result dict; raises HTTPException on any guard failure.
+
+    `account` binds the pane to a Claude subscription via `-e
+    CLAUDE_CONFIG_DIR=…` on the tmux window (see `tmux.env_args`) — process
+    env, not a command-string prefix, so a user who exits and re-runs `claude`
+    by hand in that pane stays on the same account.
     """
     if not resume_id:
         raise HTTPException(400, "resume_id required for mode=resume")
     from history.search import get_session
-    resume_sess = get_session(resume_id)
+    config_dir = store.account_config_dir(account)
+    resume_sess = get_session(resume_id) or _session_from_disk(resume_id)
     if resume_sess is None:
         raise HTTPException(404, f"unknown session_id: {resume_id}")
     # Liveness guard: refuse if the jsonl was written to in the last 60s
@@ -133,10 +194,17 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
         # launches.
         ok, msg = _tmux_mutate(
             "new-session", "-d", "-s", session, "-c", cwd,
+            *tmux_mod.env_args(config_dir),
             "-P", "-F", "#{window_index}",
         )
         if not ok:
             raise HTTPException(500, f"failed to create session '{session}': {msg}")
+        # `new-session -e` sets the SESSION env, so without this every later
+        # resume into this sentinel inherits this account — silently billing
+        # them to the wrong subscription. This window already forked with the
+        # value; `new-window -e` has no such spillover.
+        if config_dir:
+            tmux_mod.scrub_session_env(session)
         try:
             index = int(msg)
         except ValueError:
@@ -168,6 +236,7 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
     # Session exists — spawn a new window into it.
     ok, msg = _tmux_mutate(
         "new-window", "-t", f"{session}:", "-c", cwd,
+        *tmux_mod.env_args(config_dir),
         "-P", "-F", "#{window_index}",
     )
     if not ok:
@@ -425,6 +494,61 @@ def window_new(
         session, exec_cmd, mode, cwd_param=cwd, branch=branch, agent=agent,
         account=account,
     )
+
+
+@router.post("/api/pane/move-account")
+def pane_move_account(pid: str, account: str):
+    """Re-open this pane's Claude session on another subscription.
+
+    NOT a live migration. `~/.claude-b/projects` symlinks to
+    `~/.claude/projects`, so both accounts read one transcript tree and a
+    session started on A resumes on B. The move spawns a SECOND pane running
+    `claude --resume <id>` under the target account's CLAUDE_CONFIG_DIR and
+    leaves the original running: it is the only fallback if the resume doesn't
+    take, and killing a pane the user hasn't finished reading is unrecoverable.
+
+    Guards that live in `_window_new_resume` still apply — a transcript written
+    to in the last 60s 409s (two concurrent appenders would interleave into the
+    same JSONL), as does a session already resumed elsewhere.
+    """
+    # `store.account_config_dir` fails OPEN to the DEFAULT account on an id no
+    # registered account claims — correct at spawn time (an unauthenticated
+    # pane beats a mis-billed one) and exactly wrong here. This endpoint exists
+    # to move work OFF an exhausted subscription, so a typo silently landing
+    # the pane back on account A is the one outcome it must never produce.
+    if account not in {a["id"] for a in store.get_accounts()}:
+        raise HTTPException(400, f"unknown account: {account!r}")
+    _pid, pane_id, window = _resolve_window_by_pid(pid)
+    if not pane_id:
+        raise HTTPException(404, f"no live pane for pid {pid!r}")
+    session_id = session_id_for_pane(pane_id)
+    if not session_id:
+        # No pane_sessions row: the SessionStart hook hasn't fired for this pane
+        # yet (or isn't installed). There is deliberately no cwd fallback —
+        # panes share a cwd, and resuming the WRONG session onto a second
+        # account is worse than telling the user to try again after a prompt.
+        raise HTTPException(404, f"pane {pid} has no recorded Claude session yet")
+    track_id = tracks.resolve_track_for_window(window)
+
+    result = _window_new_resume(
+        RESUME_SESSION, f"{CLAUDE_EXEC} --resume {session_id}", session_id,
+        "resume", account=account,
+    )
+    target = result["target"]
+    new_pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
+    if new_pane_id:
+        # Land it next to where it came from. `resumes` is plumbing and the rail
+        # is track-anchored, so without the re-tag the moved session shows up in
+        # the repo-default bucket instead of beside the pane it replaced.
+        tracks.move_pane(new_pane_id, track_id)
+    # Mint a guaranteed-unique id rather than resolving: a brand-new window has
+    # no stamp, and resolving one window with an empty taken-set lets the rebind
+    # pass match it to the ORIGINAL pane's entry on (branch, cwd) — which here
+    # is always the same pair — stealing that pid. Same reasoning as
+    # channels._do_spawn_claude_tool.
+    new_pid = stamp_new_window(target)
+    return {**result, "pid": new_pid, "pane_id": new_pane_id,
+            "account": account, "track_id": track_id, "moved_from": pid}
 
 
 @router.post("/api/window/move")
