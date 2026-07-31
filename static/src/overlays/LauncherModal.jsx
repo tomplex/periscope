@@ -16,6 +16,7 @@
 //                      when it doesn't)
 //   - cwd=<path>     → land the tab in a worktree path we already know
 // With neither, the backend uses the track's repo (or ~/dev for a loose track).
+// An optional `account` picks the Claude subscription (see accountQuery).
 //
 // The opener (__periscopeOpenLauncher) takes the track id — the rail's "+ New
 // tab" row calls window.__periscopeOpenLauncher(trackId) (see Rail.jsx).
@@ -43,6 +44,26 @@ const newBranchName = signal(null);
 // Branch search text. Empty → the shortlist; non-empty → matches from the full
 // list. Transient, cleared on every open.
 const branchQuery = signal("");
+
+// Which Claude subscription the new pane runs on ("default" | "b").
+const account = signal("default");
+
+// The two accounts the picker offers. The registry is server-side in
+// store.py (_DEFAULT_ACCOUNTS) and is NOT exposed over HTTP — hardcoded here
+// because there are exactly two. Read it from an endpoint if that ever grows.
+const ACCOUNTS = [
+  { id: "default", label: "A" },
+  { id: "b", label: "B" },
+];
+
+// account id → the `account` query param, or null to omit it entirely.
+// The server fails OPEN on an unknown id (store.account_config_dir), so a
+// param is the risky direction: omitting it keeps the default launch
+// byte-identical to the pre-accounts URL.
+// Pure: exported for unit tests.
+export function accountQuery(acct) {
+  return !acct || acct === "default" ? null : acct;
+}
 
 // Catalog payload (GET /api/open/catalog), or null until it loads. Lets the
 // picker offer branches that are NOT currently running — the whole point of
@@ -171,6 +192,9 @@ export function openLauncher(trackId) {
   pickedBranch.value = bs.length ? bs[0].branch : null;
   newBranchName.value = null;
   branchQuery.value = "";
+  // Deliberately NOT sticky: account B is the overflow, and silently
+  // defaulting a later launch to it would bill the wrong subscription.
+  account.value = "default";
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.
   catalog.value = null;
@@ -229,6 +253,8 @@ export function LauncherModal() {
       mode: t.mode,
     });
     if (t.mode === "shell" && t.exec) qs.set("exec", t.exec);
+    const acct = accountQuery(account.value);
+    if (acct) qs.set("account", acct);
     const nb = newBranchName.value;
     if (nb?.trim()) {
       qs.set("branch", nb.trim());
@@ -330,6 +356,21 @@ export function LauncherModal() {
             )}
           </div>
         )}
+
+        <div class="launcher-section">
+          <div class="launcher-section-label">Account</div>
+          <div class="launcher-branches">
+            {ACCOUNTS.map((a) => (
+              <button
+                key={a.id}
+                class={`launcher-branch${account.value === a.id ? " is-active" : ""}`}
+                onClick={() => { account.value = a.id; }}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div class="launcher-section">
           <div class="launcher-section-label">Run</div>
