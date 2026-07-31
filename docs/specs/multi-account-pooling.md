@@ -186,6 +186,18 @@ dashboard's fallback whenever the OAuth fetch fails.
 - **`/history` has no account attribution.** Both accounts index into one DB.
   Acceptable, arguably desirable; noted so it is not a surprise.
 
+### `.claude.json` carries MCP servers, and cannot be symlinked
+
+`.claude.json` holds the account identity the credential binds to, so it must be
+a real file per config dir — but it ALSO holds `mcpServers`. A fresh second
+account therefore starts with **no** user-level MCP servers, silently: tools just
+aren't there, with no error. Plugin-provided servers are unaffected (`plugins/`
+is symlinked).
+
+Copying the `mcpServers` block across fixes it, but it re-diverges every time a
+server is added to either account. Anything else stored in `.claude.json` and not
+identity-related has the same problem.
+
 ## Open questions
 
 - **Where account B's credential physically lives.** Not `.credentials.json`,
