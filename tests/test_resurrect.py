@@ -85,6 +85,77 @@ def test_no_channels():
     assert out.split("\t")[10] == f":claude --resume {SID}"
 
 
+# --- second-subscription account prefix ---------------------------------
+#
+# resurrect captures commands from ps argv, and a shell-level `VAR=x cmd`
+# prefix never reaches argv — so the config dir is absent from every captured
+# line and must be re-emitted here. Without it a second-subscription pane
+# restores onto the DEFAULT account and bills the wrong subscription silently.
+
+ALT = "/Users/tom/.claude-b"
+
+
+def test_account_prefix_emitted_with_resume():
+    pane_map, sess_map = _maps()
+    line = _pane_line("s", "1", "1", _both_channels())
+    out, changed = resurrect._rewrite_line(line, pane_map, sess_map, {"%56": ALT})
+    assert changed
+    assert out.split("\t")[10] == (
+        f":CLAUDE_CONFIG_DIR={ALT} claude --resume {SID}"
+        " --dangerously-load-development-channels server:lgtm"
+        " --dangerously-load-development-channels server:periscope"
+    )
+
+
+def test_account_prefix_emitted_without_session():
+    """No pane_sessions row: --resume is lost, but the account must NOT be."""
+    line = _pane_line("s", "1", "1", "claude --dangerously-load-development-channels server:periscope")
+    out, changed = resurrect._rewrite_line(line, {"s:1.1": "%56"}, {}, {"%56": ALT})
+    assert changed
+    assert out.split("\t")[10] == (
+        f":CLAUDE_CONFIG_DIR={ALT} claude"
+        " --dangerously-load-development-channels server:periscope"
+    )
+
+
+def test_default_account_gets_no_prefix():
+    pane_map, sess_map = _maps()
+    line = _pane_line("s", "1", "1", "claude")
+    out, changed = resurrect._rewrite_line(line, pane_map, sess_map, {"%99": ALT})
+    assert changed
+    assert out.split("\t")[10] == f":claude --resume {SID}"
+
+
+def test_no_session_and_no_account_still_untouched():
+    line = _pane_line("s", "1", "1", "claude")
+    out, changed = resurrect._rewrite_line(line, {"s:1.1": "%56"}, {}, {})
+    assert not changed
+    assert out == line
+
+
+def test_account_prefix_not_doubled():
+    pane_map, sess_map = _maps()
+    line = _pane_line("s", "1", "1", _both_channels())
+    once, _ = resurrect._rewrite_line(line, pane_map, sess_map, {"%56": ALT})
+    twice, _ = resurrect._rewrite_line(once, pane_map, sess_map, {"%56": ALT})
+    assert twice == once
+    assert twice.count("CLAUDE_CONFIG_DIR") == 1
+
+
+def test_config_dir_from_ps_reads_only_the_env_tail():
+    """`ps eww` concatenates command and env with no delimiter. A process whose
+    COMMAND merely mentions the variable must not be read as setting it."""
+    cmd = "grep -o :CLAUDE_CONFIG_DIR=[^\\011]*|:claude"
+    # command mentions it, environment does not
+    assert resurrect._config_dir_from_ps(cmd, f"{cmd} PATH=/usr/bin SHELL=/bin/zsh") is None
+    # genuine env value is found
+    assert resurrect._config_dir_from_ps(
+        "claude --resume x", f"claude --resume x PATH=/usr/bin CLAUDE_CONFIG_DIR={ALT} TERM=xterm"
+    ) == ALT
+    # command prefix mismatch (ps raced / truncated) yields nothing rather than a guess
+    assert resurrect._config_dir_from_ps("claude", f"something-else CLAUDE_CONFIG_DIR={ALT}") is None
+
+
 def test_non_claude_untouched():
     pane_map, sess_map = _maps()
     for cmd in ("nvim /tmp/foo.md", "zsh", ""):

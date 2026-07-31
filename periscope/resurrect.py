@@ -14,6 +14,14 @@ restarts, so at restore time there is nothing left to map. The save file is the
 one artifact that survives the reboot pairing each pane (by session:window.pane
 position) with its command.
 
+A pane running on a second Claude subscription (`CLAUDE_CONFIG_DIR=<dir> claude`)
+gets that prefix re-emitted here too. resurrect captures commands from ps argv,
+and a shell-level env prefix never reaches argv — so without this the pane
+restores onto the DEFAULT account and quietly bills the wrong subscription.
+Emitting the prefix requires `@resurrect-processes '~claude'` (substring match)
+in tmux.conf; a bare `'claude'` anchors at the start of the command and a
+prefixed line would not be restored at all.
+
 Import discipline: stdlib only, plus `periscope.config` (a stdlib-only leaf).
 Never import `periscope.activity` — its imports pull in the Anthropic SDK and
 other non-stdlib deps, which would break the plain-`python3` hook invocation.
@@ -36,6 +44,7 @@ from periscope import config
 _PANE_FIELDS = 11
 
 _CHANNEL_RE = re.compile(r"--dangerously-load-development-channels (\S+)")
+_CONFIG_DIR_RE = re.compile(r"\bCLAUDE_CONFIG_DIR=(\S+)")
 
 _CONTINUUM_SAVE_SH = (
     Path.home() / ".tmux/plugins/tmux-continuum/scripts/continuum_save.sh"
@@ -86,6 +95,107 @@ def _live_pane_map() -> dict[str, str]:
     return m
 
 
+def _proc_table() -> tuple[dict[int, list[int]], dict[int, str]]:
+    """(ppid -> child pids, pid -> command). Empty on any ps failure."""
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,command="],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return {}, {}
+    kids: dict[int, list[int]] = {}
+    cmds: dict[int, str] = {}
+    for line in out.splitlines():
+        bits = line.split(maxsplit=2)
+        if len(bits) < 3:
+            continue
+        try:
+            pid, ppid = int(bits[0]), int(bits[1])
+        except ValueError:
+            continue
+        kids.setdefault(ppid, []).append(pid)
+        cmds[pid] = bits[2]
+    return kids, cmds
+
+
+def _config_dir_from_ps(cmd_only: str, with_env: str) -> str | None:
+    """Extract CLAUDE_CONFIG_DIR from `ps eww` output.
+
+    `ps eww` prints the command and the environment concatenated with no
+    delimiter, so searching the whole string matches any process whose COMMAND
+    merely mentions the variable (observed: a grep pattern containing the name
+    was picked up as if it were a real value). Strip the command — obtained
+    without `e` for the same pid — and search only the environment tail.
+    """
+    cmd_only, with_env = cmd_only.strip(), with_env.strip()
+    if not with_env.startswith(cmd_only):
+        return None
+    env_tail = with_env[len(cmd_only):]
+    m = _CONFIG_DIR_RE.search(env_tail)
+    return m.group(1) if m else None
+
+
+def _pane_config_dirs() -> dict[str, str]:
+    """tmux pane id -> the CLAUDE_CONFIG_DIR its live Claude runs under.
+
+    Read from the running process's environment rather than from any stored
+    binding: env is what the process is actually using, and it needs no state to
+    stay in sync. Panes on the default account have no entry.
+
+    Only correct at SAVE time, while the panes are alive — which is when this
+    module runs. A shell-level `VAR=x cmd` prefix is consumed by the shell and
+    never reaches argv, so the config dir is absent from the command resurrect
+    captures via ps; without this lookup every account-B pane silently restores
+    onto the default account.
+    """
+    fmt = "#{pane_id}\t#{pane_pid}"
+    try:
+        out = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", fmt],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return {}
+    kids, cmds = _proc_table()
+    dirs: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2:
+            continue
+        pane_id, pid_raw = parts
+        try:
+            root = int(pid_raw)
+        except ValueError:
+            continue
+        # BFS the pane's process subtree; the Claude process is a descendant of
+        # the pane's shell, not the shell itself.
+        seen: set[int] = set()
+        queue = [root]
+        while queue:
+            pid = queue.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            queue.extend(kids.get(pid, ()))
+        seen.discard(root)
+        for pid in sorted(seen):
+            if "claude" not in cmds.get(pid, ""):
+                continue
+            try:
+                env_out = subprocess.run(
+                    ["ps", "eww", "-p", str(pid), "-o", "command="],
+                    capture_output=True, text=True, check=False,
+                ).stdout
+            except OSError:
+                continue
+            cfg = _config_dir_from_ps(cmds[pid], env_out)
+            if cfg:
+                dirs[pane_id] = cfg
+                break
+    return dirs
+
+
 def _session_map() -> dict[str, str]:
     """tmux pane id -> Claude session id, from the pane_sessions table in
     periscope.db. Empty if the DB or table is absent (degrades to all-fresh)."""
@@ -102,9 +212,15 @@ def _session_map() -> dict[str, str]:
     return dict(rows)
 
 
-def _rewrite_line(line: str, pane_map: dict[str, str], session_map: dict[str, str]) -> tuple[str, bool]:
+def _rewrite_line(
+    line: str,
+    pane_map: dict[str, str],
+    session_map: dict[str, str],
+    config_dirs: dict[str, str] | None = None,
+) -> tuple[str, bool]:
     """Rewrite one save-file line. Returns (line, rewritten?). Non-claude lines,
-    non-pane lines, and panes with no resolvable session are returned unchanged."""
+    non-pane lines, and panes with neither a resolvable session nor a non-default
+    account are returned unchanged."""
     parts = line.split("\t", _PANE_FIELDS - 1)
     if parts[0] != "pane" or len(parts) != _PANE_FIELDS:
         return line, False
@@ -117,15 +233,25 @@ def _rewrite_line(line: str, pane_map: dict[str, str], session_map: dict[str, st
 
     pane_id = pane_map.get(f"{parts[1]}:{parts[2]}.{parts[5]}")
     uuid = session_map.get(pane_id) if pane_id else None
-    if not uuid:
+    cfg = (config_dirs or {}).get(pane_id) if pane_id else None
+    # The account prefix must be emitted even when the session is unresolvable
+    # (no pane_sessions row). Returning early there would restore a non-default
+    # pane onto the DEFAULT account — burning the wrong subscription silently,
+    # which is worse than losing --resume.
+    if not uuid and not cfg:
         return line, False
+
+    prefix = f"CLAUDE_CONFIG_DIR={cfg} " if cfg else ""
+    if not uuid:
+        parts[10] = ":" + prefix + cmd
+        return "\t".join(parts), True
 
     # Rebuild the command from scratch: `claude --resume <uuid>` followed by the
     # original channel flags in their on-disk order. Rebuilding (not editing in
     # place) inherently drops the stale --system-prompt and any pre-existing
     # --resume without needing to match them explicitly.
     channels = _CHANNEL_RE.findall(cmd)
-    new_cmd = f"claude --resume {uuid}"
+    new_cmd = f"{prefix}claude --resume {uuid}"
     for ch in channels:
         new_cmd += f" --dangerously-load-development-channels {ch}"
     parts[10] = ":" + new_cmd
@@ -138,13 +264,14 @@ def rewrite_save_file(save_path: Path) -> int:
     save_path = Path(save_path)
     pane_map = _live_pane_map()
     session_map = _session_map()
+    config_dirs = _pane_config_dirs()
 
     out_lines: list[str] = []
     rewritten = 0
     with save_path.open() as f:
         for raw in f:
             stripped = raw.rstrip("\n")
-            new, changed = _rewrite_line(stripped, pane_map, session_map)
+            new, changed = _rewrite_line(stripped, pane_map, session_map, config_dirs)
             rewritten += changed
             out_lines.append(new)
 
