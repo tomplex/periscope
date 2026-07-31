@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TypedDict
 
-from periscope import store, tracks
+from periscope import store, tracks, usage
 from periscope import tmux as tmux_mod
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
@@ -587,7 +587,14 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # paths use `-P -F #{window_index}` so we know the spawned slot — with
     # base-index 1 in tmux.conf, hardcoding :0 would silently target the
     # wrong window (see /api/window/new resume notes).
-    config_dir = store.account_config_dir(arguments.get("account"))
+    # An omitted account means "wherever there is room", not "the default": a
+    # spawning Claude cannot see either subscription's limits, and the second
+    # one exists precisely so work lands where the first has none left.
+    # best_account degrades to "default" when usage is unknown, so a spawn is
+    # never blocked or delayed on it.
+    config_dir = store.account_config_dir(
+        arguments.get("account") or usage.best_account()
+    )
     code, _ = _run(["tmux", "has-session", "-t", session])
     if code != 0:
         ok, msg = _tmux_mutate(
@@ -1458,7 +1465,9 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                     "enum": ["default", "b"],
                     "description": (
                         "Which Claude subscription to run the spawned pane on. "
-                        "Omit for the default account."
+                        "OMIT THIS unless the user named an account: omitting "
+                        "picks whichever subscription has the most remaining "
+                        "usage, which is almost always what you want."
                     ),
                 },
                 "workspace_id": {

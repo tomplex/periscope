@@ -15,10 +15,12 @@ The dashboard prefers (2) when available, falls back to (1).
 import contextlib
 import hashlib
 import json
+import random
 import re
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -564,3 +566,34 @@ def annotate_hot_panes(views: list[dict]) -> None:
         if r / total >= _HOT_PANE_SHARE:
             v["burn_hot"] = True
             v["burn_wtpm"] = round(r)
+
+
+def best_account(*, rand: Callable[[], float] = random.random) -> str:
+    """The account id a new pane should land on: the one with the most headroom.
+
+    Headroom is measured by each account's BINDING meter — the highest-percent
+    one — because that is the limit that stops work first: an account at 2% for
+    the week but 96% of its 5-hour window has no room right now.
+
+    An account with no usable meters is skipped rather than treated as empty;
+    no data must never read as infinite room. With nothing known at all this
+    returns "default", so a spawn never fails or stalls on usage being
+    unavailable — the caller gets the same account it would have had before.
+
+    Ties are broken randomly so two equally-free accounts share load instead of
+    every spawn stacking onto whichever sorts first.
+    """
+    best: list[str] = []
+    low: float | None = None
+    for aid, payload in (cached_plan_usage() or {}).items():
+        meters = payload.get("meters") or {}
+        if not payload.get("available") or not meters:
+            continue
+        binding = max((m.get("percent") or 0) for m in meters.values())
+        if low is None or binding < low:
+            low, best = binding, [aid]
+        elif binding == low:
+            best.append(aid)
+    if not best:
+        return "default"
+    return best[int(rand() * len(best))]

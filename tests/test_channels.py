@@ -1273,3 +1273,32 @@ def test_catalog_tool(monkeypatch):
     monkeypatch.setattr(open_ops, "build_catalog", lambda: {"repos": [], "worktrees": []})
     res = channels._do_catalog_tool("%1", {})
     assert _body(res)["ok"] is True
+
+
+def test_spawn_claude_auto_picks_the_emptiest_account(mocker):
+    """Omitting `account` means "wherever there is room", not "default".
+
+    A spawning Claude cannot see either subscription's limits; the second
+    account exists so work lands where the first has none left.
+    """
+    from periscope import channels, usage
+    cap = _mock_spawn_plumbing(mocker)
+    mocker.patch.object(usage, "best_account", return_value="b")
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    args = _created_call(cap)
+    env = [a for a in args if str(a).startswith("CLAUDE_CONFIG_DIR=")]
+    assert env and env[0].endswith(".claude-b"), args
+
+
+def test_spawn_claude_explicit_account_overrides_the_auto_pick(mocker):
+    from periscope import channels, usage
+    cap = _mock_spawn_plumbing(mocker)
+    mocker.patch.object(usage, "best_account", return_value="b")
+
+    asyncio.run(channels._do_spawn_claude_tool(
+        "%1", {"prompt": "go", "account": "default"}))
+
+    assert not any(str(a).startswith("CLAUDE_CONFIG_DIR=")
+                   for a in _created_call(cap))
