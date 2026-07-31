@@ -48,6 +48,27 @@ def _no_plan_usage_refresh(monkeypatch):
     monkeypatch.setattr(usage, "_bg", lambda *a, **kw: None, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_session_scan(monkeypatch):
+    """Keep turns.session_id_for_pane's live lookup off the real machine.
+
+    It resolves a pane to its running claude by walking the process tree
+    (`tmux list-panes` + `ps`), and it runs on every /api/state poll — so any
+    test that builds a window view would otherwise fork against the developer's
+    real tmux server and read their real ~/.claude/sessions. Stubbing the tmux
+    seam makes pane_claude_pids() return {} by its own no-panes path (no ps
+    fork either), so every test falls back to the pane_sessions row unless it
+    opts in. Tests of the live path patch these same seams themselves, which
+    overrides this."""
+    try:
+        from periscope import session_status
+    except ImportError:
+        return
+    monkeypatch.setattr(session_status, "_tmux_pane_pids", dict, raising=False)
+    monkeypatch.setattr(session_status, "_pane_pids_cache", None, raising=False)
+    monkeypatch.setattr(session_status, "_proc_table_cache", None, raising=False)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _session_activity_db_guard(tmp_path_factory):
     """Session-wide floor that the real periscope.db is NEVER the active
