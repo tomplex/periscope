@@ -79,6 +79,29 @@ def test_window_new_resume_unknown_session_id(client, mocker):
     assert "unknown session_id" in r.json()["detail"]
 
 
+def test_window_new_resume_honours_caller_exec_cmd(mocker):
+    """The create-session branch used to rebuild the command from scratch and
+    throw the caller's away — so a resume carrying a CLAUDE_CONFIG_DIR= prefix
+    silently landed on the default account, on exactly the branch that runs
+    after a tmux restart."""
+    from periscope.routes import sessions
+    sent: list[str] = []
+
+    # get_session is a function-local import — patch it at its source module.
+    mocker.patch("history.search.get_session",
+                 return_value={"project_path": "/tmp", "jsonl_path": ""})
+    _patch(mocker, "_run", return_value=(1, ""))  # nonzero code → no session → create branch
+    _patch(mocker, "_tmux_mutate", return_value=(True, "0"))
+    _patch(mocker, "_send_and_stamp",
+           side_effect=lambda target, cmd: sent.append(cmd))
+    mocker.patch.dict(sessions._resuming, clear=True)
+
+    sessions._window_new_resume("resumes", "PFX=1 claude --resume abc", "abc", "resume")
+
+    assert sent, "nothing sent"
+    assert sent[0].startswith("PFX=1 "), f"caller command was discarded: {sent[0]!r}"
+
+
 def test_window_move(client, mocker):
     # display-message → window_id "@42"; list-windows → "@42 5"
     def fake_tmux(*args):

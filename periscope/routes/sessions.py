@@ -142,7 +142,16 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
         except ValueError:
             raise HTTPException(500, f"tmux returned unexpected index: {msg!r}") from None
         target = f"{session}:{index}"
-        _send_and_stamp(target, f"{CLAUDE_EXEC} --resume {resume_id}")
+        # Honour the caller's command — rebuilding it here threw away the
+        # account prefix (CLAUDE_CONFIG_DIR=…) that resume_session attaches,
+        # silently billing the resumed pane to the default account. The
+        # fallback only covers callers that pass nothing at all; the
+        # existing-session branch below deliberately keeps sending nothing
+        # for an empty exec_cmd (channels.py relies on that).
+        cmd = exec_cmd.strip() or shlex.join(
+            config.build_agent_command("claude", cwd=cwd, resume_id=resume_id)
+        )
+        _send_and_stamp(target, cmd)
         _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
         return {
             "ok": True,
