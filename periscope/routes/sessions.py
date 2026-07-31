@@ -214,9 +214,10 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
         # CLAUDE_EXEC, silently discarding whatever the caller passed — while
         # the existing-session branch below honoured it, so the same call
         # behaved differently depending on whether the sentinel session
-        # happened to exist yet. Any prefix a caller attaches (an account's
-        # CLAUDE_CONFIG_DIR=… among them) has to survive that. The fallback
-        # only covers callers passing nothing at all; the branch below
+        # happened to exist yet — flags and resume ids a caller composed were
+        # silently dropped on exactly the branch that runs after a tmux
+        # restart. The fallback only covers callers passing nothing at all;
+        # the branch below
         # deliberately keeps sending nothing for an empty exec_cmd
         # (channels.py relies on that).
         cmd = exec_cmd.strip() or shlex.join(

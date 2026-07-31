@@ -81,9 +81,9 @@ def test_window_new_resume_unknown_session_id(client, mocker):
 
 def test_window_new_resume_honours_caller_exec_cmd(mocker):
     """The create-session branch used to rebuild the command from scratch and
-    throw the caller's away — so a resume carrying a CLAUDE_CONFIG_DIR= prefix
-    silently landed on the default account, on exactly the branch that runs
-    after a tmux restart."""
+    throw the caller's away — silently dropping whatever flags the caller
+    composed, on exactly the branch that runs after a tmux restart. (The
+    account no longer rides on the command string; it is a tmux `-e` arg.)"""
     from periscope.routes import sessions
     sent: list[str] = []
 
