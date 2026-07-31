@@ -14,10 +14,12 @@ _STATE_LOCK acquisition for efficiency.
 """
 
 
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from periscope import activity
+from periscope import activity, resurrect
 from periscope.agent_processes import codex_process_for_pane
 from periscope.channels import channel_state_for
 from periscope.codex_sessions import codex_home
@@ -39,7 +41,7 @@ from periscope.panes import (
     smooth_parsed,
 )
 from periscope.session_status import claude_proc_for, session_state_for
-from periscope.store import get_window
+from periscope.store import get_accounts, get_window
 from periscope.tmux import capture
 from periscope.tracks import resolve_track_for_window, track_kind, track_label
 from periscope.turns import session_id_for_pane
@@ -165,6 +167,55 @@ def _apply_codex_state(
         parsed["state"] = "unknown"
     parsed.update(needs_input=False, asked_question=False, waiting_for=None)
     return False
+
+
+# One account scan per POLL, not per window. `_pane_config_dirs` forks `ps`
+# once for the process table plus once more per candidate claude;
+# build_window_view runs across ~20 windows on a 32-thread fan-out every 3s, so
+# per-window would be hundreds of forks a poll. Same TTL-snapshot shape as
+# session_status._claude_procs, plus a lock — without one the fan-out's cold
+# start stampedes 32 concurrent scans instead of 31 waiting on the first.
+_ACCOUNTS_TTL_S = 1.0
+_pane_accounts_lock = threading.Lock()
+_pane_accounts_cache: tuple[float, dict[str, str]] | None = None
+
+
+def _pane_accounts() -> dict[str, str]:
+    """tmux pane id -> account id, for panes NOT on the default account.
+
+    Derived live from each Claude process's CLAUDE_CONFIG_DIR via
+    `resurrect._pane_config_dirs` — reused rather than reimplemented because it
+    encodes the `ps eww` trap (command and environment are concatenated with no
+    delimiter, so a naive regex matches the variable NAME appearing inside some
+    other process's command text).
+
+    Never persisted. tmux recycles pane ids across a server restart, so a stored
+    pane->account row would eventually be inherited by an unrelated later pane
+    and mislabel which subscription it bills; the process environment is the one
+    reading that cannot go stale.
+
+    A config dir no registry entry claims reports "unknown", not the default:
+    such a pane demonstrably is NOT on the default account (whose config_dir is
+    ""), and reporting default would hide the chip — asserting the opposite of
+    what is true, which is the exact mislabel the chip exists to prevent.
+    """
+    global _pane_accounts_cache
+    now = time.time()
+    with _pane_accounts_lock:
+        cached = _pane_accounts_cache
+        if cached is not None and now - cached[0] < _ACCOUNTS_TTL_S:
+            return cached[1]
+        by_dir: dict[str, str] = {}
+        for a in get_accounts():
+            cfg, aid = a.get("config_dir"), a.get("id")
+            if cfg and aid:
+                by_dir[cfg] = aid
+        accounts = {
+            pane_id: by_dir.get(cfg, "unknown")
+            for pane_id, cfg in resurrect._pane_config_dirs().items()
+        }
+        _pane_accounts_cache = (now, accounts)
+        return accounts
 
 
 def mem_signal(proc: dict | None) -> dict | None:
@@ -394,5 +445,10 @@ def build_window_view(
         # likely to name after the repo, so the label can't carry this.
         "track_kind": track_kind(track_id),
         "worktree_affiliation": aff,
+        # Which Claude subscription this pane bills. The whole point of pooling
+        # two accounts is balancing work across two weekly limits, and nothing
+        # else on the card says which one a pane is spending. Snapshot lookup —
+        # the scan behind it runs once per poll (see _pane_accounts).
+        "account": _pane_accounts().get(w.get("pane_id") or "", "default"),
     }
     return view, stamp_update

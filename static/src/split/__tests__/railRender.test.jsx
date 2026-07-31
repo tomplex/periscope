@@ -75,6 +75,27 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain('<span class="rail-icon icon-codex" title="Codex">⬡</span>');
   });
 
+  it("chips the account only on panes off the default subscription", () => {
+    projects.value = [];
+    tracks.value = [];
+    const pane = (over) => ({
+      pid: "p", session: "managed", index: 0, target: "managed:0", name: "claude",
+      agent: "claude", state: "idle", track_id: "/dev/myproj", track_name: "myproj",
+      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
+      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"),
+      pane_id: "%1", ...over,
+    });
+    windows.value = [
+      pane({ pid: "onb", account: "b" }),
+      pane({ pid: "ondefault", index: 1, target: "managed:1", account: "default", pane_id: "%2" }),
+    ];
+
+    const html = render(<Rail />);
+    expect(html).toContain('class="rail-account"');
+    expect(html.split('class="rail-account"').length - 1).toBe(1);
+    expect(html).toContain("@b");
+  });
+
   it("keeps the Claude symbol during a frontend-only rolling reload", () => {
     projects.value = [];
     tracks.value = [];

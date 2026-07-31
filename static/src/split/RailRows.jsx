@@ -208,6 +208,16 @@ export function PaneRow({
             title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
           >🔥</span>
         )}
+        {/* Which subscription this pane bills. Only for non-default accounts:
+            pooling exists to balance two weekly limits, and a chip on every
+            pane would say nothing. "unknown" = a CLAUDE_CONFIG_DIR no
+            registered account claims — still not the default, so still shown. */}
+        {w.account && w.account !== "default" && (
+          <span
+            class="rail-account"
+            title={`running on Claude account ${w.account} — its usage bills that subscription`}
+          >@{w.account}</span>
+        )}
         {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
         {waitTierCls && (
           <span

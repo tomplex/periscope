@@ -6,13 +6,23 @@ function mutates panes._completed_at and _prev_state as a side effect;
 tests assert against those mutations directly when relevant.
 """
 
+from pathlib import Path
+
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def reset_panes_and_channels():
-    """Clear in-memory pane + channel state between tests."""
-    from periscope import panes
+def reset_panes_and_channels(monkeypatch):
+    """Clear in-memory pane + channel state between tests.
+
+    Also neutralizes the account scan: the real `_pane_config_dirs` shells out
+    to the developer's live tmux server plus one `ps` per claude it finds, so an
+    unpatched view build would fork dozens of processes per test. Tests that
+    care re-patch it with their own map.
+    """
+    from periscope import panes, resurrect, window_view
+    monkeypatch.setattr(resurrect, "_pane_config_dirs", dict)
+    window_view._pane_accounts_cache = None
     from periscope.channels import (
         _CHANNEL_ALERTS,
         _CHANNEL_UNREAD,
@@ -35,6 +45,7 @@ def reset_panes_and_channels():
         _CHANNEL_UNREAD.clear()
         _MCP_SESSIONS.clear()
     yield
+    window_view._pane_accounts_cache = None
     panes._focused_at.clear()
     panes._acted_at.clear()
     panes._completed_at.clear()
@@ -137,6 +148,72 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
     assert view["completed_at"] == 5000
     # Stamp update should record the new completed_at for persistence.
     assert stamp == (pid, 5000, 0)
+
+
+# --- account attribution ---------------------------------------------------
+
+_ACCOUNT_B_DIR = str(Path.home() / ".claude-b")
+
+
+def test_view_reports_account_for_second_subscription_pane(
+    mocker, clean_state, monkeypatch,
+):
+    from periscope import resurrect, window_view
+
+    _stub_subsystems(mocker)
+    monkeypatch.setattr(
+        resurrect, "_pane_config_dirs", lambda: {"%5": _ACCOUNT_B_DIR},
+    )
+    view, _ = window_view.build_window_view(_window(), now_ts=1000)
+    assert view["account"] == "b"
+
+
+def test_view_default_account_pane_reports_default(mocker, clean_state):
+    """No entry in the scan == default account == no chip."""
+    from periscope import window_view
+
+    _stub_subsystems(mocker)
+    view, _ = window_view.build_window_view(_window(), now_ts=1000)
+    assert view["account"] == "default"
+
+
+def test_view_unregistered_config_dir_is_unknown_not_default(
+    mocker, clean_state, monkeypatch,
+):
+    """A config dir no account claims must NOT read as the default account:
+    the pane demonstrably isn't on it (default's config_dir is ""), and a
+    missing chip would assert the opposite."""
+    from periscope import resurrect, window_view
+
+    _stub_subsystems(mocker)
+    monkeypatch.setattr(
+        resurrect, "_pane_config_dirs", lambda: {"%5": "/Users/tom/.claude-zzz"},
+    )
+    view, _ = window_view.build_window_view(_window(), now_ts=1000)
+    assert view["account"] == "unknown"
+
+
+def test_account_scan_runs_once_per_poll_not_once_per_window(
+    mocker, clean_state, monkeypatch,
+):
+    """`_pane_config_dirs` forks ps once for the table plus once per candidate
+    claude; ~20 windows a poll would be hundreds of forks every 3s."""
+    from periscope import resurrect, window_view
+
+    _stub_subsystems(mocker)
+    calls = []
+
+    def _scan():
+        calls.append(1)
+        return {"%5": _ACCOUNT_B_DIR}
+
+    monkeypatch.setattr(resurrect, "_pane_config_dirs", _scan)
+    for i in range(5):
+        view, _ = window_view.build_window_view(
+            _window(index=i, pid=f"pid{i}"), now_ts=1000,
+        )
+        assert view["account"] == "b"
+    assert len(calls) == 1
 
 
 def _codex_view_stubs(mocker):

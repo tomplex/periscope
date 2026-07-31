@@ -174,6 +174,9 @@ html, body {
 /* Pane card flame: this pane carries >=40% of the current token burn while
    the session meter is hot. */
 .rail-burn { flex: 0 0 auto; font-size: 10px; cursor: help; }
+/* Which subscription a pane bills; absent on the default account. Quiet like
+   the lineage chip — orientation, not a status. */
+.rail-account { flex: 0 0 auto; font-size: 10px; cursor: help; color: var(--fg-3); }
 /* Claude cycle-hint (memory/uptime past thresholds — see config.MEM_*) */
 .rail-mem { flex: 0 0 auto; font-size: 10px; cursor: help; }
 .rail-mem.mem-warn, .header-mem.mem-warn { color: var(--s-working); }
