@@ -58,3 +58,24 @@ def test_patch_overrides_replaces_wholesale(client, mocker):
     })
     assert r.status_code == 200
     update_spy.assert_called_once_with({"worktree_layout_overrides": {"/foo": "sibling"}})
+
+
+def test_patch_bg_account_accepts_known_id(client, mocker):
+    update_spy = mocker.patch("periscope.routes.settings.update_settings")
+    mocker.patch("periscope.routes.settings.get_settings", return_value={})
+    r = client.patch("/api/settings", json={"bg_account": "b"})
+    assert r.status_code == 200
+    update_spy.assert_called_once_with({"bg_account": "b"})
+
+
+def test_patch_bg_account_rejects_unknown_id(client, mocker):
+    r = client.patch("/api/settings", json={"bg_account": "nope"})
+    assert r.status_code == 400
+
+
+def test_patch_bg_account_null_clears(client, mocker):
+    update_spy = mocker.patch("periscope.routes.settings.update_settings")
+    mocker.patch("periscope.routes.settings.get_settings", return_value={})
+    r = client.patch("/api/settings", json={"bg_account": None})
+    assert r.status_code == 200
+    update_spy.assert_called_once_with({"bg_account": None})

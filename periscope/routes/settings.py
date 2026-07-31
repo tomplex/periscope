@@ -5,7 +5,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from periscope.store import get_settings, update_settings
+from periscope.store import get_accounts, get_settings, update_settings
 
 router = APIRouter()
 
@@ -24,6 +24,7 @@ class SettingsPatch(BaseModel):
     worktree_layout_default: str | None = None
     worktree_layout_overrides: dict[str, str] | None = None
     cleanup_idle_days: int | None = None
+    bg_account: str | None = None
 
 
 @router.patch("/api/settings")
@@ -62,6 +63,17 @@ def settings_patch(body: SettingsPatch):
             patch["cleanup_idle_days"] = v
         else:
             raise HTTPException(400, "cleanup_idle_days must be a positive integer")
+
+    if "bg_account" in sent:
+        v = body.bg_account
+        # Reject an unknown id rather than letting account_config_dir fail open
+        # to the default: at the write boundary a typo'd id is a user error worth
+        # reporting, and silently billing the wrong account is the one outcome
+        # this whole feature exists to prevent.
+        if v is None or any(a.get("id") == v for a in get_accounts()):
+            patch["bg_account"] = v
+        else:
+            raise HTTPException(400, f"unknown account id {v!r}")
 
     update_settings(patch)
     return {"ok": True, "settings": get_settings()}
