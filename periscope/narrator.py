@@ -36,7 +36,7 @@ from periscope.rename_ai import (
 )
 from periscope.store import get_window
 from periscope.tmux import tmux
-from periscope.turns import jsonl_for_session
+from periscope.turns import jsonl_for_session, session_id_for_pane
 
 MIN_INTERVAL_S = 90
 MAX_PER_TICK = 5
@@ -419,11 +419,14 @@ def tick(panes: list[tuple[dict, dict]]) -> None:
         if not pane_id:
             continue
         try:
-            sid = activity.get_pane_session(pane_id)
+            sid = session_id_for_pane(pane_id)
             if not sid:
-                # No hook-recorded session. Deliberately NO cwd fallback:
-                # on a shared cwd a wrong-session status is worse than no
-                # status, and the hook self-corrects on the next prompt.
+                # Resolver order is live-claude-first, hook-recorded row as
+                # fallback: Claude rotates the session id on resume/compaction
+                # and the hook does not always record the successor, which left
+                # such panes permanently unnarrated when this read the row
+                # directly. Still NO cwd fallback — on a shared cwd a
+                # wrong-session status is worse than no status.
                 continue
             jsonl = jsonl_for_session(sid)
             if jsonl is None:

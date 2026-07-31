@@ -850,3 +850,19 @@ def test_tick_disabled_makes_no_calls(tick_env, monkeypatch):
     monkeypatch.setattr(narrator, "_enabled_checked", None)
     narrator.tick([_pane()])
     assert tick_env["haiku_calls"] == []
+
+
+def test_pane_with_only_a_live_session_is_narrated(tick_env, monkeypatch):
+    """A pane with a live claude but NO pane_sessions row still gets a status.
+
+    Claude mints a new session id on resume/compaction and the hook does not
+    always record the successor, so the row is the FALLBACK, not the authority
+    (same defect that made move-account resume an 18h-stale transcript).
+    Reading the row directly left such panes permanently unnarrated.
+    """
+    monkeypatch.setattr(
+        "periscope.session_status.live_session_id_for_pane",
+        lambda pane_id: "sid-a" if pane_id == "%9" else None,
+    )
+    narrator.tick([_pane(pane_id="%9")])
+    assert tick_env["haiku_calls"], "pane with a live session was never narrated"
