@@ -589,6 +589,17 @@ encoding). Lifespan runs a one-shot import from the legacy
 `~/.config/periscope/pane_sessions/` directory layout (`migrate_legacy_pane_sessions`)
 and prunes rows for tmux pane ids that no longer exist.
 
+**The recorded row is the FALLBACK, not the authority.** Claude mints a new
+session id when a conversation is resumed or compacted, and the hook does not
+always fire for the successor — a pane then points at a superseded transcript
+(cost a real conversation: `move-account` resumed the pre-rotation id and landed
+~18h back). `turns.session_id_for_pane` therefore asks
+`session_status.live_session_id_for_pane` first: the pane's process subtree is
+walked to its claude pid (`session_status.pane_claude_pids`, the one
+implementation — `resurrect._pane_config_dirs` uses it too) and
+`~/.claude/sessions/<pid>.json` is read for the sessionId that process reports
+*now*. `pane_sessions` answers only when there is no live claude.
+
 The producer is **`pane_session_hook.py`**, registered on Claude's
 `SessionStart` *and* `UserPromptSubmit` events by `bin/periscope install-hook`
 (run from `install`; removed by `uninstall-hook`). It reads `session_id` from the

@@ -22,9 +22,10 @@ Emitting the prefix requires `@resurrect-processes '~claude'` (substring match)
 in tmux.conf; a bare `'claude'` anchors at the start of the command and a
 prefixed line would not be restored at all.
 
-Import discipline: stdlib only, plus `periscope.config` (a stdlib-only leaf).
-Never import `periscope.activity` — its imports pull in the Anthropic SDK and
-other non-stdlib deps, which would break the plain-`python3` hook invocation.
+Import discipline: stdlib only, plus `periscope.config` and
+`periscope.session_status` (both stdlib-only leaves). Never import
+`periscope.activity` — its imports pull in the Anthropic SDK and other
+non-stdlib deps, which would break the plain-`python3` hook invocation.
 This module opens its own read connection to the session DB, the same
 out-of-process pattern `pane_session_hook.py` uses as the writer.
 """
@@ -33,10 +34,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from collections import deque
 from pathlib import Path
 
-from periscope import config
+from periscope import config, session_status
 
 # resurrect pane-line field layout (tab-separated):
 #   0 'pane'  1 session  2 window_index  3 window_active  4 window_flags
@@ -96,30 +96,6 @@ def _live_pane_map() -> dict[str, str]:
     return m
 
 
-def _proc_table() -> tuple[dict[int, list[int]], dict[int, str]]:
-    """(ppid -> child pids, pid -> command). Empty on any ps failure."""
-    try:
-        out = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,command="],
-            capture_output=True, text=True, check=True,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError):
-        return {}, {}
-    kids: dict[int, list[int]] = {}
-    cmds: dict[int, str] = {}
-    for line in out.splitlines():
-        bits = line.split(maxsplit=2)
-        if len(bits) < 3:
-            continue
-        try:
-            pid, ppid = int(bits[0]), int(bits[1])
-        except ValueError:
-            continue
-        kids.setdefault(ppid, []).append(pid)
-        cmds[pid] = bits[2]
-    return kids, cmds
-
-
 def _config_dir_from_ps(cmd_only: str, with_env: str) -> str | None:
     """Extract CLAUDE_CONFIG_DIR from `ps eww` output.
 
@@ -149,51 +125,28 @@ def _pane_config_dirs() -> dict[str, str]:
     never reaches argv, so the config dir is absent from the command resurrect
     captures via ps; without this lookup every account-B pane silently restores
     onto the default account.
-    """
-    fmt = "#{pane_id}\t#{pane_pid}"
-    try:
-        out = subprocess.run(
-            ["tmux", "list-panes", "-a", "-F", fmt],
-            capture_output=True, text=True, check=True,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError):
-        return {}
-    kids, cmds = _proc_table()
-    candidates: list[tuple[str, list[int]]] = []
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 2:
-            continue
-        pane_id, pid_raw = parts
-        try:
-            root = int(pid_raw)
-        except ValueError:
-            continue
-        # Breadth-first through the pane's process subtree, stopping at the
-        # FIRST claude: that is the pane's own session. Anything claude-ish
-        # below it is a subagent or tool child, which inherits the same env and
-        # so tells us nothing new — while probing all of them costs a fork's
-        # worth of env text each (~60 processes on a busy machine vs ~20 panes).
-        seen: set[int] = set()
-        queue = deque([root])
-        while queue:
-            pid = queue.popleft()
-            if pid in seen:
-                continue
-            seen.add(pid)
-            if pid != root and "claude" in cmds.get(pid, ""):
-                candidates.append((pane_id, [pid]))
-                break
-            queue.extend(kids.get(pid, ()))
 
-    envs = _env_by_pid([pid for _, pids in candidates for pid in pids])
+    The pane -> claude pid walk itself lives in session_status (one
+    implementation, shared with the live session-id lookup); only reading the
+    env off that pid is this module's business.
+    """
+    pane_pids = session_status.pane_claude_pids()
+    if not pane_pids:
+        return {}
+    _, cmds = session_status.proc_table()
+    envs = _env_by_pid(list(pane_pids.values()))
     dirs: dict[str, str] = {}
-    for pane_id, pids in candidates:
-        for pid in pids:
-            cfg = _config_dir_from_ps(cmds[pid], envs.get(pid, ""))
-            if cfg:
-                dirs[pane_id] = cfg
-                break
+    for pane_id, pid in pane_pids.items():
+        # A pid missing from the command table (process exited between the two
+        # snapshots) is skipped rather than passed as "": an empty command
+        # makes _config_dir_from_ps search the whole `ps eww` string, which is
+        # the false-positive it exists to prevent.
+        cmd = cmds.get(pid)
+        if cmd is None:
+            continue
+        cfg = _config_dir_from_ps(cmd, envs.get(pid, ""))
+        if cfg:
+            dirs[pane_id] = cfg
     return dirs
 
 

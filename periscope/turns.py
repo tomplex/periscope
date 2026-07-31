@@ -3,22 +3,39 @@ session running in it, then parses that session's JSONL into turn messages.
 
 cwd alone can't identify the session: many panes share one cwd (several Claude
 sessions in the same repo), so newest-mtime-in-cwd returns the same transcript
-for all of them. The pane -> session id mapping is published by pane_session_hook.py
-into the pane_sessions table in periscope.db — the hook reads session_id from
-Claude's hook payload (current + authoritative, unlike inherited env which
-cross-contaminates from tool/subagent subprocesses). Falls back to
-newest-mtime-in-cwd when a pane has no recorded session (hook not yet
-installed, or the pane predates the first SessionStart firing).
+for all of them. Resolution is live-first (session_status reads the running
+claude's own ~/.claude/sessions/<pid>.json — see session_id_for_pane for why),
+then the pane_sessions row published by pane_session_hook.py into periscope.db —
+the hook reads session_id from Claude's hook payload (current + authoritative,
+unlike inherited env which cross-contaminates from tool/subagent subprocesses).
+Falls back to newest-mtime-in-cwd when neither knows the pane's session (hook
+not yet installed, or the pane predates the first SessionStart firing).
 
 Imports only periscope.* / history.* — never `from server import`."""
 import periscope.activity as activity
+import periscope.session_status as session_status
 from history.search import messages_from_jsonl
 from periscope.tmux import tmux
 
 
 def session_id_for_pane(pane_id: str) -> str | None:
-    """The pane's Claude session id, or None if no row in pane_sessions."""
-    return activity.get_pane_session(pane_id)
+    """The pane's Claude session id, or None when nothing knows it.
+
+    The LIVE session file (~/.claude/sessions/<pid>.json, read via
+    session_status) wins over the recorded pane_sessions row, because the row
+    goes stale by design: Claude mints a NEW session id when a conversation is
+    resumed or compacted, carrying the history into a fresh transcript, and the
+    hook that records it does not always fire for the successor. A pane left
+    pointing at its superseded id cost a real conversation — `move-account`
+    resumed the pre-rotation transcript and landed ~18h back, 35 user turns
+    behind the live one (2026-07-30/31). Don't "simplify" this back to a single
+    DB read: the running process is the only source that can't lag a rotation.
+
+    The row remains the fallback for panes with no live claude (exited, no
+    session file, pid not a live claude) — that is the only reason it is still
+    consulted."""
+    return (session_status.live_session_id_for_pane(pane_id)
+            or activity.get_pane_session(pane_id))
 
 
 def jsonl_for_session(session_id: str):

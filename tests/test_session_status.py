@@ -14,6 +14,8 @@ def _reset_caches(monkeypatch):
     # caches so state doesn't leak between tests.
     monkeypatch.setattr(ss, "_index_cache", None)
     monkeypatch.setattr(ss, "_claude_procs_cache", None)
+    monkeypatch.setattr(ss, "_proc_table_cache", None)
+    monkeypatch.setattr(ss, "_pane_pids_cache", None)
 
 
 def _seed(tmp_path, monkeypatch, *sessions, live_pids=None):
@@ -179,3 +181,74 @@ def test_claude_proc_for_unmapped_none(tmp_path, monkeypatch):
     _seed_procs(tmp_path, monkeypatch, _sess(302, "sid-k", "busy"), {302: (1, 1)})
     assert ss.claude_proc_for("sid-nope") is None
     assert ss.claude_proc_for(None) is None
+
+
+# ── pane -> claude pid walk ──────────────────────────────────────────────
+
+def _seed_walk(monkeypatch, panes, kids, cmds):
+    monkeypatch.setattr(ss, "_tmux_pane_pids", lambda: panes)
+    monkeypatch.setattr(ss, "proc_table", lambda: (kids, cmds))
+
+
+def test_pane_claude_pids_finds_first_claude_descendant(monkeypatch):
+    # %1: shell(10) -> claude(11); %2: shell(20) -> node(21) -> claude(22)
+    _seed_walk(
+        monkeypatch,
+        {"%1": 10, "%2": 20},
+        {10: [11], 20: [21], 21: [22]},
+        {10: "-zsh", 11: "/Users/tom/.local/bin/claude", 20: "-zsh",
+         21: "node script.js", 22: "/Users/tom/.local/bin/claude"},
+    )
+    assert ss.pane_claude_pids() == {"%1": 11, "%2": 22}
+
+
+def test_pane_claude_pids_stops_at_first_claude(monkeypatch):
+    # A subagent/tool child below the pane's own claude must not win.
+    _seed_walk(
+        monkeypatch,
+        {"%1": 10},
+        {10: [11], 11: [12]},
+        {10: "-zsh", 11: "claude", 12: "claude --subagent"},
+    )
+    assert ss.pane_claude_pids() == {"%1": 11}
+
+
+def test_pane_claude_pids_skips_shell_only_panes(monkeypatch):
+    _seed_walk(monkeypatch, {"%1": 10}, {10: [11]}, {10: "-zsh", 11: "vim"})
+    assert ss.pane_claude_pids() == {}
+
+
+def test_pane_claude_pids_empty_without_tmux(monkeypatch):
+    monkeypatch.setattr(ss, "_tmux_pane_pids", dict)
+    monkeypatch.setattr(ss, "proc_table", lambda: (_ for _ in ()).throw(
+        AssertionError("proc_table must not fork when there are no panes")))
+    assert ss.pane_claude_pids() == {}
+
+
+# ── live_session_id_for_pane: the pane's CURRENT session id ──────────────
+
+def test_live_session_id_for_pane(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, _sess(400, "sid-live", "busy"))
+    monkeypatch.setattr(ss, "pane_claude_pids", lambda: {"%7": 400})
+    assert ss.live_session_id_for_pane("%7") == "sid-live"
+
+
+def test_live_session_id_for_pane_unknown_pane(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, _sess(401, "sid-live", "busy"))
+    monkeypatch.setattr(ss, "pane_claude_pids", lambda: {"%7": 401})
+    assert ss.live_session_id_for_pane("%9") is None
+    assert ss.live_session_id_for_pane("") is None
+
+
+def test_live_session_id_for_pane_no_file(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, live_pids={402})
+    monkeypatch.setattr(ss, "pane_claude_pids", lambda: {"%7": 402})
+    assert ss.live_session_id_for_pane("%7") is None
+
+
+def test_live_session_id_for_pane_ignores_dead_pid(tmp_path, monkeypatch):
+    # Stale <pid>.json left by an exited claude whose pid has been recycled:
+    # the file is present but the pid is not a live claude.
+    _seed(tmp_path, monkeypatch, _sess(403, "sid-stale", "busy"), live_pids=set())
+    monkeypatch.setattr(ss, "pane_claude_pids", lambda: {"%7": 403})
+    assert ss.live_session_id_for_pane("%7") is None

@@ -3,6 +3,7 @@ pane_session_hook producer that records the pane -> session mapping."""
 import json
 
 import periscope.activity as activity
+import periscope.session_status as session_status
 import periscope.turns as turns
 from periscope.session_binding_db import AgentSessionBinding, upsert_binding
 
@@ -21,6 +22,42 @@ def _seed_projects(tmp_path, monkeypatch, cwd):
     enc.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)
     return enc
+
+
+# ── session_id_for_pane: live session file beats the recorded row ────────
+
+def _live(monkeypatch, mapping):
+    monkeypatch.setattr(session_status, "live_session_id_for_pane",
+                        lambda pane_id: mapping.get(pane_id))
+
+
+def _record(pane_id, sid):
+    activity._conn().execute(
+        "INSERT INTO pane_sessions (pane_id, session_id, updated_at) VALUES (?,?,?)",
+        (pane_id, sid, 1),
+    )
+    activity._conn().commit()
+
+
+def test_live_session_wins_over_stale_row(fresh_activity_db, monkeypatch):
+    """The production data-loss case: claude rotated its session id on resume,
+    the hook never recorded the successor, and the row still names the
+    superseded transcript."""
+    _record("%56", "e88132ff-0000-0000-0000-000000000000")
+    _live(monkeypatch, {"%56": "a01fde77-0000-0000-0000-000000000000"})
+    assert turns.session_id_for_pane("%56") == "a01fde77-0000-0000-0000-000000000000"
+
+
+def test_falls_back_to_row_without_live_answer(fresh_activity_db, monkeypatch):
+    # Pane not running claude / no session file / pid not a live claude.
+    _record("%56", "recorded-sid")
+    _live(monkeypatch, {})
+    assert turns.session_id_for_pane("%56") == "recorded-sid"
+
+
+def test_none_when_neither_source_knows(fresh_activity_db, monkeypatch):
+    _live(monkeypatch, {})
+    assert turns.session_id_for_pane("%56") is None
 
 
 # ── session_id_for_pane reads pane_sessions ──────────────────────────────
