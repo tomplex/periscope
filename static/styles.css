@@ -113,11 +113,32 @@ html, body {
 
 .usage {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 6px 16px;
   flex: 1;
   min-width: 0;
+  cursor: pointer;
 }
 .usage:empty { display: none; }
+
+/* One row per Claude subscription. Collapsed each shows only its binding
+   meter, so "A is full, B has room" reads without a click; expanded gives
+   every meter, one account per line (the meters no longer fit side by side). */
+.usage-acct {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.usage.is-expanded .usage-acct { flex: 1 0 100%; }
+.usage-acct-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+  letter-spacing: 0.04em;
+}
+/* No usable credential — say so, because an empty row reads as "0% used". */
+.usage-acct-off { font-size: 11px; color: var(--fg-3); cursor: help; }
 
 .usage-item {
   display: inline-flex;
@@ -167,9 +188,11 @@ html, body {
 .usage-item-proj.blow { color: var(--s-danger); }
 .usage-item-hot { cursor: help; }
 /* Plan fetch hasn't succeeded in >2 refresh intervals: the percentages
-   describe the past (e.g. yesterday, pre-sleep). Grey out + flag. */
-.usage.usage-stale { opacity: 0.55; }
-.usage.usage-stale .usage-item-fill { background: var(--fg-3); }
+   describe the past (e.g. yesterday, pre-sleep). Grey out + flag. Scoped to
+   the account whose fetch is stale — one dead credential must not make the
+   other subscription's live numbers look untrustworthy. */
+.usage-acct.is-stale { opacity: 0.55; }
+.usage-acct.is-stale .usage-item-fill { background: var(--fg-3); }
 .usage-stale-mark { cursor: help; }
 /* Pane card flame: this pane carries >=40% of the current token burn while
    the session meter is hot. */

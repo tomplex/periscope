@@ -6,14 +6,19 @@
 // tone) are shared with the original usage-pill styling.
 //
 // Reads the `usage` signal, which the poll loop writes as
-// { plan: data.usage_plan, fallback: data.usage }.
+// { plan: data.usage_plan, fallback: data.usage } — `plan` being a mapping of
+// account id → that subscription's meters.
+//
+// COLLAPSED IS THE POINT. Two subscriptions exist because one keeps hitting
+// its weekly wall, so the pill's job is "which account has room?", answerable
+// without a click: one row per account, letter-labelled A/B to match the
+// launcher's picker, showing only that account's BINDING meter (highest
+// percent) with the existing ok/warn/danger tone. A pinned red bar next to a
+// near-empty one reads at a glance. Click expands to every meter per account.
+import { useState } from "preact/hooks";
 import { usage } from "../store.js";
 import { relTime } from "../util.js";
-
-// Stale once the fetch is two refresh intervals old (server refreshes every
-// 5 min on success) — beyond that the server is failing to fetch, not just
-// between refreshes, and the percentages describe the past.
-const STALE_AFTER_S = 600;
+import { summarizeAccounts } from "./usageSummary.js";
 
 function fmtTokens(n) {
   if (!n) return "0";
@@ -99,55 +104,66 @@ function MeterBar({ label, m, resets, pace }) {
   );
 }
 
-export function UsagePill() {
-  const u = usage.value || {};
-  const plan = u.plan;
-  const fallback = u.fallback;
+// Every meter of one account, as the tooltip text for that account's row.
+// Collapsing to the binding meter hides the rest from sight, not from reach.
+// Carried on the row rather than the pill because each MeterBar's own title
+// wins on hover — the row's only reliably-hoverable area is its letter.
+function acctTitle(a, expanded) {
+  const lines = a.meters.map(({ m }) =>
+    [`${m.label}: ${m.percent}% used`, fmtReset(m.resets_at), ...paceLines(m)]
+      .filter(Boolean)
+      .join("\n  "),
+  );
+  if (a.stale) lines.push(`⚠ stale — last updated ${relTime(a.fetchedAt)} ago`);
+  lines.push(expanded ? "(click to collapse)" : "(click to show every meter)");
+  return [`account ${a.label}`, ...lines].join("\n\n");
+}
 
-  // Prefer the server-fetched plan percentages. Fall back to the
-  // JSONL-derived 5h pill when the first fetch hasn't completed yet or the
-  // OAuth endpoint is unreachable.
-  if (plan?.available && plan.meters) {
-    const m = plan.meters;
-    const known = ["session", "week_all", "week_opus", "week_sonnet"];
-    // Scoped per-model meters (week_fable, ...) are keyed dynamically by the
-    // server — append any we don't know about, in a stable order.
-    const extra = Object.keys(m).filter((k) => !known.includes(k)).sort();
-    const order = [...known, ...extra];
-    const compactLabels = {
-      session: "session",
-      week_all: "week",
-      week_opus: "opus",
-      week_sonnet: "sonnet",
-    };
-    const labelFor = (k) => compactLabels[k] || k.replace(/^week_/, "");
-    const present = order.filter((k) => m[k]);
-    const stale =
-      plan.fetched_at &&
-      Math.floor(Date.now() / 1000) - plan.fetched_at > STALE_AFTER_S;
-    const staleLine = stale
-      ? `⚠ stale — last updated ${relTime(plan.fetched_at)} ago`
-      : null;
-    const title = present
-      .map((k) =>
-        [`${m[k].label}: ${m[k].percent}% used`, fmtReset(m[k].resets_at), ...paceLines(m[k])]
-          .filter(Boolean)
-          .join("\n  "),
-      )
-      .concat(staleLine ? [staleLine] : [])
-      .join("\n\n");
+export function UsagePill() {
+  // Expansion is view-only and deliberately unpersisted: the collapsed answer
+  // is the one worth having on every load.
+  const [expanded, setExpanded] = useState(false);
+  const u = usage.value || {};
+  const fallback = u.fallback;
+  const accounts = summarizeAccounts(u.plan, Math.floor(Date.now() / 1000));
+
+  // Prefer the server-fetched plan percentages. Fall back to the JSONL-derived
+  // 5h pill only when NO account has meters — before the first fetch completes,
+  // or with every OAuth credential dead. One live account still beats the
+  // estimate, so a single dead credential must not trigger the fallback.
+  if (accounts.some((a) => a.available)) {
     return (
-      <div id="usage" class={`usage${stale ? " usage-stale" : ""}`} title={title}>
-        {present.map((k) => (
-          <MeterBar
-            key={k}
-            label={labelFor(k)}
-            m={m[k]}
-            resets={fmtReset(m[k].resets_at)}
-            pace={paceLines(m[k])}
-          />
+      <div
+        id="usage"
+        class={`usage${expanded ? " is-expanded" : ""}`}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        {accounts.map((a) => (
+          <div
+            key={a.id}
+            class={`usage-acct${a.stale ? " is-stale" : ""}`}
+            title={acctTitle(a, expanded)}
+          >
+            <span class="usage-acct-label">{a.label}</span>
+            {a.available ? (
+              (expanded ? a.meters : [a.headline]).map(({ key, label, m }) => (
+                <MeterBar
+                  key={key}
+                  label={label}
+                  m={m}
+                  resets={fmtReset(m.resets_at)}
+                  pace={paceLines(m)}
+                />
+              ))
+            ) : (
+              // A blank row would read as "0% used" — the opposite of the truth.
+              <span class="usage-acct-off" title="no usable credential for this account">
+                no data
+              </span>
+            )}
+            {a.stale && <span class="usage-stale-mark">⚠</span>}
+          </div>
         ))}
-        {stale && <span class="usage-stale-mark">⚠</span>}
       </div>
     );
   }

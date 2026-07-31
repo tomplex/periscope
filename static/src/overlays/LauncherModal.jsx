@@ -28,6 +28,7 @@
 // added in styles.css.
 import { computed, signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
+import { ACCOUNTS } from "../accounts.js";
 import { useEscape } from "../hooks/useEscape.js";
 import * as prefs from "../prefs.js";
 import { trackLabel } from "../split/railTree.js";
@@ -47,14 +48,6 @@ const branchQuery = signal("");
 
 // Which Claude subscription the new pane runs on ("default" | "b").
 const account = signal("default");
-
-// The two accounts the picker offers. The registry is server-side in
-// store.py (_DEFAULT_ACCOUNTS) and is NOT exposed over HTTP — hardcoded here
-// because there are exactly two. Read it from an endpoint if that ever grows.
-const ACCOUNTS = [
-  { id: "default", label: "A" },
-  { id: "b", label: "B" },
-];
 
 // account id → the `account` query param, or null to omit it entirely.
 // The server fails OPEN on an unknown id (store.account_config_dir), so a
