@@ -278,3 +278,67 @@ def test_window_new_branch_reuses_an_existing_worktree(client, mocker, fresh_act
     call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
     cwd_idx = list(call.args).index("-c") + 1
     assert call.args[cwd_idx] == "/Users/foo/dev/worktrees/myproj/tc-old"
+
+
+def _patch_account_path(mocker, calls, has_session=0):
+    """Patch the plain-window path down to captured tmux argv.
+
+    `_run` (the `tmux has-session` probe) MUST be patched: unpatched it shells
+    out to the real tmux, and whether prod's session exists then decides which
+    branch runs. `_tmux_mutate` is patched in BOTH modules — routes.sessions
+    bound the name at import time, while `tmux.scrub_session_env` calls its own
+    module-level binding, so patching one alone lets the scrub reach real tmux.
+    """
+    def fake_mutate(*args):
+        calls.append(args)
+        return True, "@9"
+
+    _patch(mocker, "_run", return_value=(has_session, ""))
+    _patch(mocker, "_tmux_mutate", side_effect=fake_mutate)
+    mocker.patch("periscope.tmux._tmux_mutate", side_effect=fake_mutate)
+    _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="9", pane_id="%99"))
+    _patch(mocker, "_send_and_stamp")
+    mocker.patch("periscope.tracks.move_pane")
+
+
+def _created(calls):
+    return [c for c in calls if c and c[0] in ("new-window", "new-session")]
+
+
+def test_window_new_passes_account_env_to_tmux(client, mocker, fresh_activity_db):
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&account=b")
+
+    assert r.status_code == 200, r.text
+    created = _created(calls)
+    assert created, "no window created"
+    flat = list(created[0])
+    assert "-e" in flat
+    assert any(a.startswith("CLAUDE_CONFIG_DIR=") and a.endswith("/.claude-b") for a in flat)
+
+
+def test_window_new_default_account_sends_no_env(client, mocker, fresh_activity_db):
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+
+    r = client.post("/api/window/new?session=/repo&mode=claude")
+
+    assert r.status_code == 200, r.text
+    created = _created(calls)
+    assert created
+    assert "-e" not in list(created[0])
+
+
+def test_new_session_env_is_scrubbed(client, mocker, fresh_activity_db):
+    """Otherwise every later window inherits the first window's account."""
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls, has_session=1)  # no session yet → new-session
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&account=b")
+
+    assert r.status_code == 200, r.text
+    assert _created(calls) and _created(calls)[0][0] == "new-session"
+    assert any(c[0] == "set-environment" and "-u" in c and "CLAUDE_CONFIG_DIR" in c
+               for c in calls), f"session env never scrubbed: {calls}"

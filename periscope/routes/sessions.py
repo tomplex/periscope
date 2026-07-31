@@ -25,8 +25,10 @@ from periscope import (
     config,
     open_ops,
     session_binding_db,
+    store,
     tracks,
 )
+from periscope import tmux as tmux_mod
 from periscope.channels import dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC, MANAGED_SESSION
 from periscope.panes import (
@@ -63,10 +65,10 @@ def session_rename(session: str, body: RenameSessionBody):
     # session's history doesn't get orphaned by the rename.
     old_prefix = f"{session}:"
     new_prefix = f"{name}:"
-    for store in (_focused_at, _acted_at):
-        for old_t in list(store.keys()):
+    for stamps in (_focused_at, _acted_at):
+        for old_t in list(stamps.keys()):
             if old_t.startswith(old_prefix):
-                store[new_prefix + old_t[len(old_prefix):]] = store.pop(old_t)
+                stamps[new_prefix + old_t[len(old_prefix):]] = stamps.pop(old_t)
     if session in _active_per_session:
         _active_per_session[name] = _active_per_session.pop(session)
     return {"ok": True, "session": name}
@@ -183,6 +185,7 @@ def _window_new_plain(
     track_id: str, exec_cmd: str, mode: str,
     cwd_param: str | None = None, branch: str | None = None,
     agent: Literal["claude", "codex"] = "claude",
+    account: str | None = None,
 ) -> dict:
     """Non-resume "+ New tab": open a window in the one shared MANAGED_SESSION
     and tag the new pane into `track_id` (the `session` query param now carries
@@ -201,6 +204,7 @@ def _window_new_plain(
     """
     row = activity.get_track(track_id)
     repo = row["repo"] if row and row.get("repo") else None
+    config_dir = store.account_config_dir(account)
 
     branch = (branch or "").strip()
     if branch and repo:
@@ -228,13 +232,21 @@ def _window_new_plain(
     if code != 0:
         ok, msg = _tmux_mutate(
             "new-session", "-d", "-s", MANAGED_SESSION, "-c", cwd,
+            *tmux_mod.env_args(config_dir),
             "-P", "-F", "#{window_id}",
         )
         if not ok:
             raise HTTPException(500, f"failed to create session '{MANAGED_SESSION}': {msg}")
+        # `new-session -e` sets the SESSION env, so without this every later
+        # window in the one shared session inherits this account — silently
+        # billing account-A panes to account B. This window already forked
+        # with the value; `new-window -e` has no such spillover.
+        if config_dir:
+            tmux_mod.scrub_session_env(MANAGED_SESSION)
     else:
         ok, msg = _tmux_mutate(
             "new-window", "-t", f"={MANAGED_SESSION}:", "-c", cwd,
+            *tmux_mod.env_args(config_dir),
             "-P", "-F", "#{window_id}",
         )
         if not ok:
@@ -370,6 +382,7 @@ def window_new(
     cwd: str | None = None,
     branch: str | None = None,
     agent: Literal["claude", "codex"] = "claude",
+    account: str | None = None,
 ):
     """Spawn a window in `session`. `exec` param sends a command to the new
     window; legacy `mode` maps to `exec` for backwards-compat. `mode=resume`
@@ -397,7 +410,8 @@ def window_new(
         result = _window_new_resume(session, exec_cmd, resume_id, mode)
         return {**result, "agent": "claude"}
     return _window_new_plain(
-        session, exec_cmd, mode, cwd_param=cwd, branch=branch, agent=agent
+        session, exec_cmd, mode, cwd_param=cwd, branch=branch, agent=agent,
+        account=account,
     )
 
 
