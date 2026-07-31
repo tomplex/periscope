@@ -364,6 +364,9 @@ def test_fetch_plan_usage_warns_when_token_missing(caplog, monkeypatch):
 
     import periscope.usage as usage
     monkeypatch.setattr(usage, "_read_oauth_token", lambda cfg: None)
+    # The warning dedupes per keychain item across the process, so an earlier
+    # test that hit the same item would otherwise silence this one.
+    monkeypatch.setattr(usage, "_warned_missing_token", set())
     with caplog.at_level(logging.WARNING):
         assert usage.fetch_plan_usage() is None
     assert any("no valid OAuth token" in r.getMessage() for r in caplog.records)
@@ -517,3 +520,20 @@ def test_keychain_item_named_config_dir_uses_sha256_prefix():
     from periscope.usage import _keychain_item
     assert (_keychain_item("/Users/tom/.claude-b")
             == "Claude Code-credentials-f79ff3dd")
+
+
+def test_missing_token_warns_once_per_account(caplog, monkeypatch):
+    """A second subscription that was never logged in has no keychain item at
+    all, and the retry cadence is 60s — warning on every attempt would put
+    ~1400 identical lines a day in the log. Once per item is enough evidence."""
+    import logging
+
+    import periscope.usage as usage
+    monkeypatch.setattr(usage, "_read_oauth_token", lambda cfg: None)
+    monkeypatch.setattr(usage, "_warned_missing_token", set())
+    with caplog.at_level(logging.WARNING):
+        assert usage.fetch_plan_usage("/Users/tom/.claude-b") is None
+        assert usage.fetch_plan_usage("/Users/tom/.claude-b") is None
+        assert usage.fetch_plan_usage("") is None
+    msgs = [r.getMessage() for r in caplog.records if "no valid OAuth token" in r.getMessage()]
+    assert len(msgs) == 2  # one per distinct keychain item, not per attempt

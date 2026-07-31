@@ -205,6 +205,9 @@ def _claude_user_agent() -> str:
 
 _KNOWN_USAGE_FIELDS = {f for f, _, _ in _PLAN_METERS} | {"extra_usage"}
 _warned_unknown_fields: set[str] = set()
+# Keychain items already reported as tokenless, so the warning stays evidence
+# rather than becoming per-minute noise (see fetch_plan_usage).
+_warned_missing_token: set[str] = set()
 
 
 def parse_plan_usage(data: dict) -> dict:
@@ -363,8 +366,13 @@ def fetch_plan_usage(config_dir: str = "") -> dict | None:
     # by the cache backoff, so this can't spam.
     token = _read_oauth_token(config_dir)
     if not token:
-        log.warning("plan usage: no valid OAuth token in keychain (%s)",
-                    _keychain_item(config_dir))
+        # Once per item, not once per attempt: a registered account that was
+        # never logged in has no keychain item at all, and it re-attempts every
+        # PLAN_USAGE_RETRY_S — ~1400 identical lines a day otherwise.
+        item = _keychain_item(config_dir)
+        if item not in _warned_missing_token:
+            _warned_missing_token.add(item)
+            log.warning("plan usage: no valid OAuth token in keychain (%s)", item)
         return None
     try:
         resp = httpx.get(
