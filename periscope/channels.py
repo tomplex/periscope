@@ -321,6 +321,18 @@ def _resolve_pid_for_pane(pane_id: str) -> str:
     return pid
 
 
+def _stale_handle_error(handle: str) -> str:
+    """Error text for an unresolvable handle. Names the recovery, because the
+    bare 'no live window' was read as 'the agent is dead': one session
+    respawned a duplicate worker onto a task the original was still doing."""
+    return (
+        f"no live window for handle {handle} — this usually means the handle "
+        "changed, NOT that the pane exited. Call list_claudes to re-resolve it "
+        "(match on name/cwd), or pass the pane id (%N) as the handle, which is "
+        "stable. Verify with peek before concluding anything died."
+    )
+
+
 def _resolve_window_by_pid(handle: str) -> tuple[str, str, dict]:
     """Resolve an @periscope_id handle to (pid, pane_id, window).
 
@@ -328,14 +340,29 @@ def _resolve_window_by_pid(handle: str) -> tuple[str, str, dict]:
     row — BEFORE resolution, because resolution attaches `pid` only after a
     match (raw rows carry pid_raw, not pid). peek/terminate read
     session/index off the returned window dict. Returns ("", "", {}) when no
-    live window matches."""
+    live window matches.
+
+    Also accepts a tmux pane id (`%N`) as the handle. A pid can change under a
+    pane — re-mint, or a rebind that misses after a tmux server restart — and
+    the observed failure was always the same shape: `spawn_claude` returned a
+    pid, minutes later `send_to` said "no live window" while the pane was alive
+    at the SAME pane_id under a new pid. Callers already hold that pane_id
+    (spawn_claude and list_claudes both return it), so accepting it turns a
+    dead end into a working address. One session read the dead handle as death
+    and spawned a duplicate agent onto the same task."""
     if not handle:
         return "", "", {}
-    for w in list_windows():
-        if w.get("pid_raw") == handle:
-            _attach_git_then_resolve_pids([w])
-            return w.get("pid") or "", w.get("pane_id") or "", w
-    return "", "", {}
+    wins = list_windows()
+    match = next((w for w in wins if w.get("pid_raw") == handle), None)
+    if match is None and handle.startswith("%"):
+        match = next((w for w in wins if w.get("pane_id") == handle), None)
+    if match is None:
+        return "", "", {}
+    # Resolve against the FULL window list, never just the match: a
+    # single-window pass has an incomplete `carried` set, so an unstamped
+    # window could rebind onto an id another live window is still wearing.
+    _attach_git_then_resolve_pids(wins)
+    return match.get("pid") or "", match.get("pane_id") or "", match
 
 
 def _do_link_pr_tool(pane: str, arguments: dict):
@@ -1070,7 +1097,10 @@ async def _deliver(pane_id: str, message: str, caller_pane: str) -> dict:
     # success here is a lie the sender acts on — it waits for a reply that can
     # never come, or assumes a delegated instruction was received. Refuse
     # BEFORE sending, and say what the operator has to do about it.
-    if pane_channel_ready(pane_id) is False:
+    # to_thread: the readiness probe forks `ps`/`tmux` on a cache miss, and
+    # this runs on the event loop — a blocking call here stalls every pane
+    # mirror and MCP connection for the duration.
+    if await asyncio.to_thread(pane_channel_ready, pane_id) is False:
         return {"ok": False, "error": (
             "target Claude was started without periscope's channel flag, so it "
             "cannot receive messages — it must be restarted in a FRESH shell "
@@ -1094,7 +1124,7 @@ async def _do_send_to_tool(pane: str, arguments: dict):
         return _tool_result({"ok": False, "error": "message is required"})
     _pid, pane_id, _w = _resolve_window_by_pid(handle)
     if not pane_id:
-        return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
+        return _tool_result({"ok": False, "error": _stale_handle_error(handle)})
     body = await _deliver(pane_id, message, pane)
     if body.get("ok"):
         body = {"ok": True, "handle": handle, "pane_id": pane_id}
@@ -1302,7 +1332,7 @@ def _do_peek_tool(pane: str, arguments: dict):
 
     _pid, pane_id, _w = _resolve_window_by_pid(handle)
     if not pane_id:
-        return _tool_result({"ok": False, "error": f"no live window for handle {handle}"})
+        return _tool_result({"ok": False, "error": _stale_handle_error(handle)})
     sid = session_id_for_pane(pane_id)
     if sid is None:
         return _tool_result({"ok": False, "error": f"no recorded session for handle {handle}"})
@@ -1692,7 +1722,11 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+                "handle": {"type": "string", "description": (
+                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
+                    "id (%N) also works and is stabler — prefer it if you have "
+                    "one, and fall back to it if a pid stops resolving."
+                )},
                 "message": {"type": "string", "description": "Message to deliver."},
             },
             "required": ["handle", "message"],
@@ -1776,7 +1810,11 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+                "handle": {"type": "string", "description": (
+                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
+                    "id (%N) also works and is stabler — prefer it if you have "
+                    "one, and fall back to it if a pid stops resolving."
+                )},
                 "limit": {
                     "type": "integer",
                     "description": (
@@ -1809,7 +1847,11 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "handle": {"type": "string", "description": "Target pid (from spawn_claude/list_claudes)."},
+                "handle": {"type": "string", "description": (
+                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
+                    "id (%N) also works and is stabler — prefer it if you have "
+                    "one, and fall back to it if a pid stops resolving."
+                )},
             },
             "required": ["handle"],
         },
