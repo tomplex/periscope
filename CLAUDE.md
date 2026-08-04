@@ -392,6 +392,45 @@ These are the non-obvious behaviors worth preserving:
     Both passes are collision-prone by construction now that `session` is
     a constant — the TTL is what keeps them honest.
 
+13. **Rebind must never hand out an id a live window still carries.**
+    `resolve_pids` builds `taken` incrementally, so a window resolved LATER
+    in the pass was an eligible rebind candidate — its entry was refreshed
+    seconds ago, well inside `_REBIND_TTL_S`. An unstamped window sitting
+    earlier in the list therefore matched a LIVE window on (session, name),
+    or on the `(branch, cwd)` fallback that a spawn into the caller's own
+    worktree hits by construction, and stole its identity. That was the
+    duplicate FACTORY; the dedup gate in `_resolve_one` only cleans up
+    afterwards, re-minting the victim. `resolve_pids` now pre-computes
+    `carried` (every well-formed `pid_raw` in the pass) and excludes it from
+    rebind. `spawn_claude` already worked around this locally with
+    `stamp_new_window`; every other creation path was exposed. Regression
+    signal is unchanged: `grep -c re-minting` on the log.
+
+14. **A pane can be `attached` and still deaf.** Claude registers for
+    `notifications/claude/channel` only when the server is named in its
+    channel flags, so a Claude started WITHOUT `config.CHANNEL_FLAG`
+    connects the shim (populating `_MCP_SESSIONS`, so `attached` is true)
+    and then discards every push. `send_to` / `report` returned `ok: true`
+    for messages nothing could receive. `channels.pane_channel_ready`
+    reads the flag out of the pane's claude argv and `_deliver` refuses
+    up front. The usual way to land flagless: `claude` is a zsh function
+    resolved at shell startup, so a long-lived shell keeps a stale copy —
+    periscope-spawned panes use `CLAUDE_EXEC` and are always ready.
+    `list_claudes` exposes this as `channel_ready`, distinct from
+    `attached`.
+
+15. **`_MCP_SESSIONS` deregistration is identity-checked.** The registry is
+    keyed by pane and the shim reconnects on the same pane after a restart,
+    so an unconditional `pop` in the connection teardown let a dying
+    connection evict the live successor that had already replaced it.
+
+16. **`report` always lands.** A lead that exits before its worker finishes
+    is the norm, not an edge case. Hard-failing destroyed the result — the
+    worker had done the work and fell back to hand-writing a file. When no
+    spawner is recorded, or it has exited or is deaf, the report is recorded
+    as a user-facing alert on the worker's own pane; `delivered_to` says
+    which happened.
+
 ## Status-line parsing
 
 Claude Code renders a two-line block at the very bottom of its pane:
