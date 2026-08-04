@@ -1016,6 +1016,9 @@ def test_list_claudes_filters_and_trims(mocker):
         "spawned_by": "boss0", "head": "9eab154",
         "head_subject": "label status", "head_committed_at": 1700000000,
         "dirty": 6, "cwd_shared_with": [],
+        # None = no claude process resolved for the pane, so no assertion
+        # either way about whether it registered the channel.
+        "channel_ready": None,
     }
     assert "pane_id" not in c
     # The `_inferred` suffix is the entire P1 fix — a bare `status_line` reads
@@ -1323,3 +1326,126 @@ def test_resume_session_auto_picks_the_emptiest_account(mocker):
     channels._do_resume_session_tool("%1", {"session_id": "sid-1"})
 
     assert seen.get("account") == "b"
+
+
+# --- MCP session registry: reconnect must not be evicted by its predecessor ---
+
+def test_connection_teardown_does_not_evict_a_successor_session(mocker):
+    """The shim reconnects on the SAME pane after a periscope restart, so two
+    connections briefly overlap. The dying one must deregister only the session
+    it registered — an unconditional pop evicts the live successor, and the
+    pane then reads attached=False while its Claude is in fact connected, so
+    every inbound push (send_to, report, provenance) is refused.
+    """
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock
+
+    from periscope import channels
+
+    old_sess, new_sess = object(), object()
+
+    async def fake_run(reader, writer, pane, registered=None):
+        # Connection A registers itself...
+        with channels._CHANNELS_LOCK:
+            channels._MCP_SESSIONS[pane] = old_sess
+            if registered is not None:
+                registered["sess"] = old_sess
+        # ...then the shim reconnects and connection B replaces it, before
+        # A's teardown runs.
+        with channels._CHANNELS_LOCK:
+            channels._MCP_SESSIONS[pane] = new_sess
+
+    mocker.patch.object(channels, "_run_mcp_for_pane", side_effect=fake_run)
+    reader, writer = mocker.MagicMock(), mocker.MagicMock()
+    reader.readline = AsyncMock(return_value=(json.dumps({"pane": "%7"}) + "\n").encode())
+    writer.wait_closed = AsyncMock()
+
+    channels._MCP_SESSIONS.pop("%7", None)
+    try:
+        asyncio.run(channels._handle_mcp_connection(reader, writer))
+        assert channels._MCP_SESSIONS.get("%7") is new_sess, (
+            "predecessor's teardown evicted the live successor session"
+        )
+    finally:
+        channels._MCP_SESSIONS.pop("%7", None)
+
+
+def test_connection_teardown_deregisters_its_own_session(mocker):
+    """The normal case still cleans up: when no successor replaced it, the
+    connection's own session is removed so `attached` goes false."""
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock
+
+    from periscope import channels
+
+    sess = object()
+
+    async def fake_run(reader, writer, pane, registered=None):
+        with channels._CHANNELS_LOCK:
+            channels._MCP_SESSIONS[pane] = sess
+            if registered is not None:
+                registered["sess"] = sess
+
+    mocker.patch.object(channels, "_run_mcp_for_pane", side_effect=fake_run)
+    reader, writer = mocker.MagicMock(), mocker.MagicMock()
+    reader.readline = AsyncMock(return_value=(json.dumps({"pane": "%8"}) + "\n").encode())
+    writer.wait_closed = AsyncMock()
+
+    channels._MCP_SESSIONS.pop("%8", None)
+    try:
+        asyncio.run(channels._handle_mcp_connection(reader, writer))
+        assert "%8" not in channels._MCP_SESSIONS
+    finally:
+        channels._MCP_SESSIONS.pop("%8", None)
+
+
+# --- delivery refuses a target that cannot receive pushes ---
+
+def test_deliver_refuses_a_flagless_target_instead_of_reporting_success(mocker):
+    """A Claude started without the channel flag accepts the push and discards
+    it, so `{"ok": true}` is a lie the sender acts on — it waits for a reply
+    that can never come. Refuse before sending, and never emit."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from periscope import channels
+
+    mocker.patch.object(channels, "pane_channel_ready", return_value=False)
+    emit = mocker.patch.object(channels, "emit_channel_event", new=AsyncMock(return_value=True))
+
+    body = asyncio.run(channels._deliver("%9", "hello", "%1"))
+    assert body["ok"] is False
+    assert "FRESH shell" in body["error"]
+    emit.assert_not_awaited()
+
+
+def test_deliver_sends_when_the_target_is_channel_ready(mocker):
+    """Ready target: unchanged behaviour."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from periscope import channels
+
+    mocker.patch.object(channels, "pane_channel_ready", return_value=True)
+    emit = mocker.patch.object(channels, "emit_channel_event", new=AsyncMock(return_value=True))
+
+    assert asyncio.run(channels._deliver("%9", "hello", "%1")) == {"ok": True}
+    emit.assert_awaited_once()
+
+
+def test_deliver_still_sends_when_readiness_is_unknown(mocker):
+    """None means we couldn't resolve a claude for the pane — that is not
+    evidence of deafness, so it must not become a refusal (a commander handle
+    has no pane process at all)."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from periscope import channels
+
+    mocker.patch.object(channels, "pane_channel_ready", return_value=None)
+    emit = mocker.patch.object(channels, "emit_channel_event", new=AsyncMock(return_value=True))
+
+    assert asyncio.run(channels._deliver("%9", "hello", "%1")) == {"ok": True}
+    emit.assert_awaited_once()

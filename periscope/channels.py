@@ -983,6 +983,9 @@ async def _handle_mcp_connection(
     """Per-connection MCP handler: read hello frame, dispatch to
     _run_mcp_for_pane, clean up session registry on close."""
     pane = ""
+    # Filled in by _run_mcp_for_pane when it registers this connection's
+    # session; read back in the finally to deregister only our own.
+    registered: dict[str, Any] = {}
     try:
         # Hello frame: a single JSON line {"pane": <handle>}. The "pane" key is a
         # private wire-contract name — the value is an opaque caller handle, either
@@ -999,18 +1002,55 @@ async def _handle_mcp_connection(
         if not (pane.startswith(("%", "cmdr:"))):
             return
 
-        await _run_mcp_for_pane(reader, writer, pane)
+        await _run_mcp_for_pane(reader, writer, pane, registered)
     except Exception as e:
         log.warning("MCP connection %s failed: %s", pane or "<no-pane>", e)
     finally:
         if pane:
             with _CHANNELS_LOCK:
-                _MCP_SESSIONS.pop(pane, None)
+                # Deregister ONLY the session this connection registered.
+                # `_MCP_SESSIONS` is keyed by pane, and the shim reconnects on
+                # the same pane after a periscope restart — so an unconditional
+                # pop lets a dying connection evict the live successor that
+                # already replaced it. The pane then reads attached=False and
+                # every inbound push (send_to, report, provenance) is refused
+                # for a Claude that is in fact connected.
+                if _MCP_SESSIONS.get(pane) is registered.get("sess"):
+                    _MCP_SESSIONS.pop(pane, None)
         try:
             writer.close()
             await writer.wait_closed()
         except Exception:
             pass
+
+
+def pane_channel_ready(pane_id: str) -> bool | None:
+    """Whether the claude in `pane_id` can actually RECEIVE inbound pushes.
+    None when no claude resolves for the pane (nothing to assert).
+
+    Registering for `notifications/claude/channel` is gated client-side on the
+    server being named in the session's channel flags, so a Claude started
+    WITHOUT `config.CHANNEL_FLAG` drops every push while still connecting the
+    shim — which leaves `_MCP_SESSIONS` populated and `attached` true. Periscope
+    can't learn that from the notification (notifications have no response), but
+    the flag is right there in the process's argv.
+
+    The common way to land flagless: `claude` is a zsh function resolved at
+    shell startup, so a long-lived shell keeps a stale copy and re-running
+    `claude` in it launches without the flag no matter how recently. Panes
+    periscope spawned go through `config.CLAUDE_EXEC` and are always ready.
+    """
+    if is_commander(pane_id):
+        return None
+    from periscope import config, session_status
+    pid = session_status.pane_claude_pids().get(pane_id)
+    if pid is None:
+        return None
+    _kids, cmds = session_status.proc_table()
+    cmd = cmds.get(pid)
+    if cmd is None:
+        return None
+    return config.CHANNEL_FLAG in cmd
 
 
 async def _deliver(pane_id: str, message: str, caller_pane: str) -> dict:
@@ -1019,6 +1059,17 @@ async def _deliver(pane_id: str, message: str, caller_pane: str) -> dict:
     success with their own fields)."""
     if pane_id == caller_pane:
         return {"ok": False, "error": "refusing to send to your own pane"}
+    # A flagless target accepts the push and silently discards it, so reporting
+    # success here is a lie the sender acts on — it waits for a reply that can
+    # never come, or assumes a delegated instruction was received. Refuse
+    # BEFORE sending, and say what the operator has to do about it.
+    if pane_channel_ready(pane_id) is False:
+        return {"ok": False, "error": (
+            "target Claude was started without periscope's channel flag, so it "
+            "cannot receive messages — it must be restarted in a FRESH shell "
+            "(its current shell holds a stale `claude` wrapper). Reach it by "
+            "another route, or ask the user to restart that pane."
+        )}
     sent = await emit_channel_event(pane_id, message)
     if not sent:
         return {"ok": False, "error": "target not attached to periscope channel"}
@@ -1142,6 +1193,12 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
                 # value into any context that reads this tool's output.
                 "status_line_inferred": status[0] if status else None,
                 "attached": channel_state_for(pane_id)["attached"],
+                # `attached` (a shim is connected) and `channel_ready` (that
+                # Claude registered for inbound pushes) are DIFFERENT states,
+                # and a pane can be attached-but-deaf. False here means send_to
+                # and report will refuse — pick another route rather than
+                # delegating into a hole.
+                "channel_ready": pane_channel_ready(pane_id),
                 "spawned_by": get_window(pid).get("spawned_by"),
             })
             # Worktree root when the cwd is in a repo, else the resolved cwd —
@@ -1771,7 +1828,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
 
 
 async def _run_mcp_for_pane(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, pane: str
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    pane: str,
+    registered: dict[str, Any] | None = None,
 ) -> None:
     """Run a per-pane MCP Server over the given asyncio socket streams.
 
@@ -1797,6 +1857,8 @@ async def _run_mcp_for_pane(
             sess = server.request_context.session  # type: ignore[attr-defined]
             with _CHANNELS_LOCK:
                 _MCP_SESSIONS[pane] = sess
+                if registered is not None:
+                    registered["sess"] = sess
         except LookupError:
             pass
         return [

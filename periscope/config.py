@@ -40,7 +40,8 @@ MANAGED_SESSION = "periscope"
 # pull request` etc. all silently no-op for that pane. Every code path that
 # spawns Claude must use this constant; new hardcoded `"claude"` strings
 # reintroduce the channel-less-spawn bug.
-CLAUDE_EXEC = "claude --dangerously-load-development-channels server:periscope"
+CHANNEL_FLAG = "--dangerously-load-development-channels"
+CLAUDE_EXEC = f"claude {CHANNEL_FLAG} server:periscope"
 
 # Claude cycle-hint thresholds (rail ↻ chip): red when a pane's claude RSS
 # crosses BAD, amber at WARN rss or WARN age. Healthy claudes idle around
