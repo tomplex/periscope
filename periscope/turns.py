@@ -56,6 +56,46 @@ def jsonl_for_session_prefix(prefix: str):
     return matches[0] if matches else None
 
 
+# Delivered channel pushes render into the recipient's context as a meta user
+# turn opening with this marker (see channels.emit_channel_event).
+CHANNEL_MARKER = '<channel source="periscope"'
+
+
+def channel_messages_from_jsonl(path: str) -> list[dict]:
+    """The periscope channel pushes that ACTUALLY landed in this transcript.
+
+    `messages_from_jsonl` drops every `isMeta` event, and a delivered channel
+    push is exactly that — so the one thing a sender peeks to verify is
+    invisible to peek by construction. A sender saw no channel block, concluded
+    `send_to` was silently dropping, spent 40 minutes on it, filed a wrong bug,
+    and re-sent the same directive four times. This surfaces them instead.
+
+    Presence here is the delivery RECEIPT: the block is written by the
+    recipient's own Claude when it processes the notification, so it cannot
+    appear unless the message was received.
+    """
+    from history.jsonl import parse_jsonl
+
+    out: list[dict] = []
+    try:
+        events = list(parse_jsonl(path))
+    except OSError:
+        # Rotated or removed between resolution and read. The transcript is the
+        # caller's real payload — degrade to "no receipts" rather than failing
+        # the whole peek over the receipt annotation.
+        return out
+    for ev in events:
+        if ev.raw.get("isMeta") is not True or ev.type != "user":
+            continue
+        text = ev.user_text or ""
+        if not text.startswith(CHANNEL_MARKER):
+            continue
+        out.append({
+            "role": "channel", "uuid": ev.uuid, "ts_ms": ev.ts_ms, "text": text,
+        })
+    return out
+
+
 def get_turns_for_pane(session: str, index: int) -> dict | None:
     """Resolve a pane (session:index) to its transcript messages.
 

@@ -888,7 +888,10 @@ def test_send_to_happy(mocker):
     body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "ab12", "message": "hi"})))
 
     emit.assert_awaited_once_with("%9", "hi")
-    assert body == {"ok": True, "handle": "ab12", "pane_id": "%9"}
+    assert body["ok"] is True
+    assert (body["handle"], body["pane_id"]) == ("ab12", "%9")
+    # Queued, not delivered — see test_send_to_reports_queued_not_delivered.
+    assert body["delivery"] == "queued"
 
 
 def test_send_to_no_window(mocker):
@@ -1507,3 +1510,77 @@ def test_stale_handle_error_names_the_recovery():
     msg = channels._stale_handle_error("3dc7686a")
     assert "NOT that the pane exited" in msg
     assert "list_claudes" in msg and "peek" in msg
+
+
+# --- peek surfaces delivered channel pushes (the delivery receipt) ---
+
+def _write_jsonl(tmp_path, rows):
+    import json
+    p = tmp_path / "sess.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in rows))
+    return p
+
+
+def test_channel_messages_from_jsonl_extracts_only_periscope_blocks(tmp_path):
+    """A delivered push is a meta user turn opening with the channel marker.
+    Ordinary meta turns and normal turns must not be mistaken for one."""
+    from periscope.turns import channel_messages_from_jsonl
+    p = _write_jsonl(tmp_path, [
+        {"type": "user", "uuid": "u1", "timestamp": "2026-08-03T10:00:00.000Z",
+         "isMeta": True,
+         "message": {"role": "user", "content":
+                     '<channel source="periscope" kind="message">\nping'}},
+        {"type": "user", "uuid": "u2", "timestamp": "2026-08-03T10:00:01.000Z",
+         "isMeta": True,
+         "message": {"role": "user", "content": "<system-reminder>noise"}},
+        {"type": "user", "uuid": "u3", "timestamp": "2026-08-03T10:00:02.000Z",
+         "message": {"role": "user", "content": "a real user turn"}},
+    ])
+    out = channel_messages_from_jsonl(str(p))
+    assert [m["uuid"] for m in out] == ["u1"]
+    assert out[0]["role"] == "channel"
+    assert "ping" in out[0]["text"]
+
+
+def test_peek_surfaces_channel_messages_merged_in_time_order(mocker, tmp_path):
+    """messages_from_jsonl drops every isMeta event, so a delivered push was
+    invisible to the exact tool reached for to confirm delivery — a sender read
+    that as 'my message vanished' and re-sent the same directive four times."""
+    from periscope import channels
+    p = _write_jsonl(tmp_path, [
+        {"type": "user", "uuid": "u0", "timestamp": "2026-08-03T10:00:00.000Z",
+         "message": {"role": "user", "content": "earlier real turn"}},
+        {"type": "user", "uuid": "c1", "timestamp": "2026-08-03T10:00:05.000Z",
+         "isMeta": True,
+         "message": {"role": "user", "content":
+                     '<channel source="periscope" kind="message">\nthe brief'}},
+    ])
+    mocker.patch.object(channels, "_resolve_window_by_pid",
+                        return_value=("h1", "%5", {}))
+    mocker.patch("periscope.turns.session_id_for_pane", return_value="sess")
+    mocker.patch("periscope.turns.jsonl_for_session", return_value=p)
+
+    body = _body(channels._do_peek_tool("%1", {"handle": "h1", "detail": "full"}))
+    assert body["ok"] is True
+    assert body["channel_messages_seen"] == 1
+    roles = [t["role"] for t in body["turns"]]
+    assert "channel" in roles, f"channel push missing from peek: {roles}"
+    # Time order: the real turn precedes the push that followed it.
+    assert roles.index("user") < roles.index("channel")
+
+
+def test_send_to_reports_queued_not_delivered(mocker):
+    """ok:true was read as delivered-and-read. It means queued — the recipient
+    surfaces it on its next turn."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from periscope import channels
+    mocker.patch.object(channels, "_resolve_window_by_pid",
+                        return_value=("h1", "%5", {}))
+    mocker.patch.object(channels, "pane_channel_ready", return_value=True)
+    mocker.patch.object(channels, "emit_channel_event", new=AsyncMock(return_value=True))
+    body = _body(asyncio.run(channels._do_send_to_tool("%1", {"handle": "h1", "message": "x"})))
+    assert body["ok"] is True
+    assert body["delivery"] == "queued"
+    assert "peek" in body["verify"]

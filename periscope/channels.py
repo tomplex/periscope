@@ -1127,7 +1127,19 @@ async def _do_send_to_tool(pane: str, arguments: dict):
         return _tool_result({"ok": False, "error": _stale_handle_error(handle)})
     body = await _deliver(pane_id, message, pane)
     if body.get("ok"):
-        body = {"ok": True, "handle": handle, "pane_id": pane_id}
+        # "queued", never "delivered": the recipient only surfaces a channel
+        # notification on its NEXT turn, so a busy pane can take minutes. The
+        # old bare ok:true was read as delivered-and-read, and when the target
+        # didn't react the sender re-sent the same directive four times.
+        body = {
+            "ok": True, "handle": handle, "pane_id": pane_id,
+            "delivery": "queued",
+            "verify": ("peek(handle) — your message appears as a turn with "
+                       "role 'channel' once the target actually processes it. "
+                       "That block is written by the recipient's own Claude, "
+                       "so it is proof of receipt. Give a busy pane time "
+                       "before concluding anything."),
+        }
     return _tool_result(body)
 
 
@@ -1310,6 +1322,7 @@ def _do_peek_tool(pane: str, arguments: dict):
     dropped except a Bash head."""
     from history.search import compact_messages
     from periscope.turns import (
+        channel_messages_from_jsonl,
         jsonl_for_session,
         messages_from_jsonl,
         session_id_for_pane,
@@ -1345,8 +1358,19 @@ def _do_peek_tool(pane: str, arguments: dict):
     # fewer than `limit` useful turns.
     if detail == "summary":
         messages = compact_messages(messages)
+    # Merge in the channel pushes that landed. Both parsers drop them (they are
+    # meta events), which made peek useless as the delivery check it is reached
+    # for: the sender sees no block and reads that as "my message vanished".
+    # Merged by timestamp so a reply reads in order against what prompted it.
+    inbound = channel_messages_from_jsonl(str(jsonl))
+    if inbound:
+        messages = sorted([*messages, *inbound], key=lambda m: m.get("ts_ms") or 0)
     return _tool_result({
         "ok": True, "handle": handle, "detail": detail,
+        "session_id": sid,
+        # The receipt: a channel block exists only because the recipient's own
+        # Claude processed the notification. Absent = not delivered (yet).
+        "channel_messages_seen": len(inbound),
         "turns": messages[-limit:],
     })
 
@@ -1717,7 +1741,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "wakes the recipient and arrives as a channel block it acts on. "
             "Use to delegate a task to, or nudge, another Claude. Errors if "
             "the handle resolves to no live window or the target isn't "
-            "attached to periscope's channel."
+            "attached to periscope's channel. Success means QUEUED, not read: "
+            "the recipient surfaces it on its next turn, which for a busy pane "
+            "can be minutes. Confirm with peek (the message shows up there as "
+            "a role 'channel' turn) rather than re-sending."
         ),
         "inputSchema": {
             "type": "object",
@@ -1805,7 +1832,14 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "SOURCE OF TRUTH for what a pane is doing; list_claudes' "
             "status_line_inferred is only a summary and is often wrong about "
             "specifics. Peek before you interrupt, correct, or terminate. "
-            "Refuses if the pane has no recorded session yet."
+            "Refuses if the pane has no recorded session yet. "
+            "This is ALSO the delivery check for send_to: a message you sent "
+            "appears here as a turn with role 'channel' once the target "
+            "processes it, and `channel_messages_seen` counts them. That block "
+            "is written by the recipient's own Claude, so its presence is "
+            "proof of receipt and its absence means not-yet-delivered — do "
+            "NOT re-send on a first miss, a busy pane surfaces a notification "
+            "only on its next turn."
         ),
         "inputSchema": {
             "type": "object",

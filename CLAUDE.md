@@ -431,6 +431,25 @@ These are the non-obvious behaviors worth preserving:
     as a user-facing alert on the worker's own pane; `delivered_to` says
     which happened.
 
+17. **A delivered channel push is a META turn, and peek must show it.** It
+    lands in the recipient's transcript as an `isMeta` user turn opening
+    `<channel source="periscope"` — and `messages_from_jsonl` drops every
+    `isMeta` event, so the one thing a sender peeks to confirm was invisible
+    to peek by construction. A sender saw no block, concluded `send_to` was
+    silently dropping, spent 40 minutes on it, filed a bug that had to be
+    retracted, and re-sent the same directive four times.
+    `turns.channel_messages_from_jsonl` extracts them and peek merges them by
+    timestamp. That block is written by the RECIPIENT'S own Claude, so its
+    presence is the delivery receipt; `send_to` reports `delivery: "queued"`
+    (never "delivered") because a notification surfaces only on the target's
+    next turn.
+
+    Corollary, worth knowing before diagnosing: the incident above was NOT
+    peek staleness. That pane's Claude had been started without the channel
+    flag (invariant 14) and genuinely received nothing — peek was the only
+    tool telling the truth, and the retraction was itself wrong. The work
+    landed because Tom pasted it in by hand.
+
 ## Status-line parsing
 
 Claude Code renders a two-line block at the very bottom of its pane:
