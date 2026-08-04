@@ -31,6 +31,11 @@ def _mint_pid() -> str:
     return uuid.uuid4().hex[:8]
 
 
+def _is_pid(raw: str) -> bool:
+    """True for a well-formed minted id (8 lowercase hex chars)."""
+    return len(raw) == 8 and all(c in "0123456789abcdef" for c in raw)
+
+
 def _stamp_pid(target: str, pid: str) -> None:
     """Fire-and-forget set-option. If it fails (window gone, tmux racy),
     the next poll repeats the attempt. Uses the project's read-style
@@ -111,7 +116,9 @@ _IMMUNITY_FIELDS = (
 )
 
 
-def _resolve_one(w: dict, wblock: dict, taken: set[str], now_ts: int) -> bool:
+def _resolve_one(
+    w: dict, wblock: dict, taken: set[str], carried: set[str], now_ts: int
+) -> bool:
     """Resolve one window's pid in place and refresh its `last_seen`.
 
     Picks a pid (reuse @periscope_id / rebind / mint), stamps tmux when the
@@ -125,7 +132,7 @@ def _resolve_one(w: dict, wblock: dict, taken: set[str], now_ts: int) -> bool:
     target = f"{w['session']}:{w['index']}"
     pid_raw = (w.get("pid_raw") or "").strip()
     pid: str | None = None
-    if pid_raw and len(pid_raw) == 8 and all(c in "0123456789abcdef" for c in pid_raw):
+    if _is_pid(pid_raw):
         # Reject a pid_raw already claimed earlier in this pass —
         # tmux occasionally ends up with the same @periscope_id on
         # multiple windows (session-copy, swap-window, set-option
@@ -146,13 +153,24 @@ def _resolve_one(w: dict, wblock: dict, taken: set[str], now_ts: int) -> bool:
                 "duplicate @periscope_id %s on %s — re-minting", pid_raw, target
             )
     if pid is None:
+        # Exclude `carried` as well as `taken`: a pid that ANY window in this
+        # pass still has stamped in tmux is not an orphan, even though this
+        # pass hasn't reached that window yet. `taken` alone grows
+        # incrementally, so a window resolved later was an eligible rebind
+        # candidate — and a brand-new window sitting earlier in the list would
+        # match it on (session, name), or on the (branch, cwd) fallback that a
+        # spawn into the caller's own worktree hits by construction, and steal
+        # a LIVE window's identity. That is what manufactured the duplicates
+        # the gate above only cleans up after the fact: the victim silently
+        # re-mints on the next poll, detaching pid-keyed UI state and orphaning
+        # the `spawned_by` breadcrumb `report()` routes on.
         pid = _rebind_pid(
             wblock,
             session=w["session"],
             name=w["name"],
             branch=w.get("branch"),
             cwd=w.get("cwd"),
-            taken_pids=taken,
+            taken_pids=taken | carried,
         )
     if pid is None:
         pid = _mint_pid()
@@ -286,10 +304,13 @@ def resolve_pids(windows: list[dict]) -> None:
     with _store._STATE_LOCK:
         wblock = _store._STATE.setdefault("windows", {})
         taken: set[str] = set()
+        # Every id tmux currently has stamped, gathered BEFORE the pass so
+        # rebind can't hand out an id a live window is still wearing.
+        carried = {p for w in windows if _is_pid(p := (w.get("pid_raw") or "").strip())}
         dirty = False
         # Phase 1: per-window pid resolution + last_seen refresh.
         for w in windows:
-            if _resolve_one(w, wblock, taken, now_ts):
+            if _resolve_one(w, wblock, taken, carried, now_ts):
                 dirty = True
         # Phase 2: window-entry GC.
         if _gc_windows(wblock, taken, now_ts):

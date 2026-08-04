@@ -293,3 +293,46 @@ def test_resolve_pids_re_mints_when_two_windows_share_periscope_id(
     stamped_targets = {call.args[0] for call in mock_stamp.call_args_list}
     assert stamped_targets == {"@12", "@13"}
     assert "lgtm:2" not in stamped_targets
+
+
+def test_rebind_never_steals_a_pid_a_live_window_still_carries(clean_state, mocker):
+    """An unstamped window must NOT rebind onto a pid that another window in
+    the SAME pass is still carrying in tmux.
+
+    `taken` is built incrementally, so a window resolved LATER in the pass is
+    an eligible rebind candidate: its state entry was refreshed 3s ago and is
+    well inside `_REBIND_TTL_S`. A freshly-created window sitting earlier in
+    the list therefore matches the live window's entry — on (session, name),
+    or on the (branch, cwd) fallback that a spawn into the caller's own
+    worktree hits by construction — and gets that live pid stamped onto it.
+
+    That is the duplicate FACTORY. The dedup gate in `_resolve_one` only
+    cleans up afterwards: on the next poll one of the two windows is re-minted
+    and silently changes identity, detaching pid-keyed UI state and orphaning
+    the `spawned_by` breadcrumb that `report()` routes on.
+    """
+    mocker.patch("periscope.pids._stamp_pid")
+    mocker.patch("periscope.pids._mint_pid", side_effect=[f"fresh{i:03x}" for i in range(10)])
+    from periscope import store as _store
+
+    now = int(time.time())
+    _store._STATE["windows"] = {
+        "beef0001": {
+            "last_seen": {"session": "periscope", "name": "claude",
+                          "branch": "main", "cwd": "/repo", "ts": now},
+            "linked_pr": 1234,
+        },
+    }
+    windows = [
+        # Brand-new spawn, not yet stamped, sharing the caller's worktree.
+        {"session": "periscope", "index": 1, "name": "claude",
+         "branch": "main", "cwd": "/repo", "pid_raw": "", "window_id": "@20"},
+        # The live window that actually owns livepid0.
+        {"session": "periscope", "index": 2, "name": "claude",
+         "branch": "main", "cwd": "/repo", "pid_raw": "beef0001", "window_id": "@21"},
+    ]
+    resolve_pids(windows)
+    assert windows[1]["pid"] == "beef0001", (
+        f"live window lost its identity to a rebind steal: {windows[1]['pid']}"
+    )
+    assert windows[0]["pid"] != "beef0001"
