@@ -210,13 +210,13 @@ def _channel_gc(known_pane_ids: set[str]) -> None:
                 d.pop(stale, None)
 
 
-def _do_notify_tool(pane: str, arguments: dict):
-    """Tool implementation for `notify` — appends to the per-pane alert log
-    and bumps the unread count. Surfaces in periscope's UI on next poll."""
-    message = arguments["message"]
-    kind = arguments.get("kind", "info")
-    severity = arguments.get("severity", "info")
+def _record_alert(pane: str, message: str, kind: str = "info",
+                  severity: str = "info") -> dict:
+    """Append an alert to `pane`'s feed: write-through cache, durable mirror,
+    and a hub kick so it lands on the dashboard now. Returns the entry.
 
+    Shared by `notify` and by `report`'s fallback — a delegated result whose
+    lead is gone still has to reach the user somehow."""
     entry = {
         "id": uuid.uuid4().hex,
         "message": message,
@@ -245,9 +245,16 @@ def _do_notify_tool(pane: str, arguments: dict):
     # next steady tick. That immediacy is the whole point of an alert.
     from periscope import state_hub
     state_hub.kick()
+    return entry
 
-    body = {"ok": True, "kind": kind, "severity": severity}
-    return _tool_result(body)
+
+def _do_notify_tool(pane: str, arguments: dict):
+    """Tool implementation for `notify` — appends to the per-pane alert log
+    and bumps the unread count. Surfaces in periscope's UI on next poll."""
+    kind = arguments.get("kind", "info")
+    severity = arguments.get("severity", "info")
+    _record_alert(pane, arguments["message"], kind, severity)
+    return _tool_result({"ok": True, "kind": kind, "severity": severity})
 
 
 def rehydrate_alerts_from_events(max_age_s: int = 86400) -> int:
@@ -1102,18 +1109,31 @@ async def _do_report_tool(pane: str, arguments: dict):
     if not message:
         return _tool_result({"ok": False, "error": "message is required"})
     caller_pid = _resolve_pid_for_pane(pane)
-    if not caller_pid:
-        return _tool_result({"ok": False, "error": f"could not resolve pid for pane {pane}"})
-    spawned_by = get_window(caller_pid).get("spawned_by")
+    spawned_by = get_window(caller_pid).get("spawned_by") if caller_pid else None
     if not spawned_by:
-        return _tool_result({"ok": False, "error": "this pane has no spawner to report to"})
-    _pid, pane_id, _w = _resolve_window_by_pid(spawned_by)
-    if not pane_id:
-        return _tool_result({"ok": False, "error": "spawner is no longer live"})
-    body = await _deliver(pane_id, message, pane)
-    if body.get("ok"):
-        body = {"ok": True, "to": spawned_by}
-    return _tool_result(body)
+        reason = "this pane has no recorded spawner"
+    else:
+        _pid, pane_id, _w = _resolve_window_by_pid(spawned_by)
+        if not pane_id:
+            reason = f"spawner {spawned_by} is no longer live"
+        else:
+            body = await _deliver(pane_id, message, pane)
+            if body.get("ok"):
+                return _tool_result({"ok": True, "delivered_to": spawned_by})
+            reason = str(body.get("error"))
+
+    # A lead that exits before its worker finishes is the NORM, not an edge
+    # case — leads routinely delegate and quit. Hard-failing here destroyed the
+    # result: the worker had done the work, had nowhere to put it, and fell
+    # back to hand-writing a file or messaging a pane it guessed at. Surface it
+    # to the user instead, so a report always lands somewhere.
+    _record_alert(pane, message, kind="done")
+    return _tool_result({
+        "ok": True, "delivered_to": "user", "reason": reason,
+        "note": ("Could not reach a spawner, so your report was surfaced to the "
+                 "user as an alert on this pane instead. It was NOT lost, and "
+                 "no further action is needed."),
+    })
 
 
 def _mark_shared_trees(rows: list[dict], trees: list[str]) -> list[dict]:
@@ -1684,9 +1704,11 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
         "description": (
             "Report a message back to the Claude that spawned this pane. Use "
             "when you were delegated a task and want to return your result to "
-            "your lead — it wakes them with your message. Errors if this pane "
-            "has no recorded spawner (it was hand-created or its spawner has "
-            "exited)."
+            "your lead — it wakes them with your message. Always lands: if this "
+            "pane has no recorded spawner, or the spawner has exited or cannot "
+            "receive messages, the report is surfaced to the USER as an alert "
+            "on this pane instead. The result field `delivered_to` says which "
+            "happened — a spawner handle, or \"user\"."
         ),
         "inputSchema": {
             "type": "object",

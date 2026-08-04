@@ -934,7 +934,7 @@ def test_report_routes_to_spawner(mocker):
     body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
 
     emit.assert_awaited_once_with("%2", "done")
-    assert body == {"ok": True, "to": "parent11"}
+    assert body == {"ok": True, "delivered_to": "parent11"}
 
 
 def test_emit_channel_event_records_full_text_into_activity(fresh_activity_db):
@@ -960,21 +960,50 @@ def test_emit_channel_event_unattached_records_nothing(fresh_activity_db):
     assert activity.events_for("%nope", None, None) == []
 
 
-def test_report_no_spawner_errors(mocker):
+def test_report_without_a_spawner_surfaces_to_the_user(mocker):
+    """No recorded spawner must not destroy the result. A pane whose
+    provenance was lost (or that was hand-created) still has work to hand
+    back — it lands as an alert on its own card instead."""
     from periscope import channels
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
     mocker.patch("periscope.channels.get_window", return_value={})  # no spawned_by
+    alert = mocker.patch("periscope.channels._record_alert")
     body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
-    assert body["ok"] is False and "no spawner" in body["error"]
+    assert body["ok"] is True
+    assert body["delivered_to"] == "user"
+    assert "no recorded spawner" in body["reason"]
+    alert.assert_called_once_with("%9", "done", kind="done")
 
 
-def test_report_spawner_gone(mocker):
+def test_report_to_an_exited_spawner_surfaces_to_the_user(mocker):
+    """A lead that exits before its worker finishes is the NORM — leads
+    delegate and quit. The worker's result must survive that."""
     from periscope import channels
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
     mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "parent11"})
     mocker.patch("periscope.channels._resolve_window_by_pid", return_value=("", "", {}))
+    alert = mocker.patch("periscope.channels._record_alert")
     body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
-    assert body["ok"] is False and "no longer live" in body["error"]
+    assert body["ok"] is True
+    assert body["delivered_to"] == "user"
+    assert "no longer live" in body["reason"]
+    alert.assert_called_once_with("%9", "done", kind="done")
+
+
+def test_report_to_a_deaf_spawner_surfaces_to_the_user(mocker):
+    """The spawner is live but was started without the channel flag, so the
+    push would be discarded. Fall back rather than lose the report."""
+    from periscope import channels
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="child99")
+    mocker.patch("periscope.channels.get_window", return_value={"spawned_by": "parent11"})
+    mocker.patch("periscope.channels._resolve_window_by_pid",
+                 return_value=("parent11", "%2", {}))
+    mocker.patch("periscope.channels.pane_channel_ready", return_value=False)
+    alert = mocker.patch("periscope.channels._record_alert")
+    body = _body(asyncio.run(channels._do_report_tool("%9", {"message": "done"})))
+    assert body["ok"] is True
+    assert body["delivered_to"] == "user"
+    alert.assert_called_once_with("%9", "done", kind="done")
 
 
 def test_list_claudes_filters_and_trims(mocker):
