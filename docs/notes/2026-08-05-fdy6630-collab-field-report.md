@@ -118,3 +118,19 @@ The mechanics have rough edges at identity and delivery; the collaboration
 itself — peer-grade review, ruling arbitration, durable-doc fallback — was
 the best multi-session engineering I've been part of, and periscope is what
 made the convention stack cheap enough to sustain for a full program day.
+
+## Addendum (same evening): full identity merge, observed live
+
+Sequence, ~30 minutes after filing the above: `open_document` returned another
+pane's pid → a peer's pane-addressed message was delivered to my channel →
+`send_to` that peer bounced with "refusing to send to your own pane" →
+`list_claudes` no longer lists me at all, and the peer's entry now carries a
+status line describing *my* recent activity. Periscope's registry folded two
+same-worktree sessions into one record after an account-swap restart; the
+survivor identity was the *other* pane's. Net effect: the arbitration hub went
+channel-mute while a dependent pane held dispatch on its ruling — resolved via
+the durable-doc fallback (ruling written into the canonical design doc, which
+every pane polls) plus a human nudge. Two upgrades to the earlier proposals:
+pane identity should key on something that survives restarts (session id, not
+tmux pane occupancy), and the durable-doc fallback isn't a nice-to-have — it
+was the only channel left standing, twice in one day.
