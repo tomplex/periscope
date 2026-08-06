@@ -133,10 +133,7 @@ def _no_track_maintenance(monkeypatch):
     list_claudes) order-dependent. Pin it True here so maintenance never fires
     unless a test opts in by setting it False itself; monkeypatch restores the
     import-time default afterward."""
-    try:
-        from periscope import pids
-    except ImportError:
-        return
+    from periscope import pids
     monkeypatch.setattr(pids, "_TRACKS_MAINTAINED", True, raising=False)
 
 

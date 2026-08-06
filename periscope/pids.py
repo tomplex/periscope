@@ -32,7 +32,9 @@ _REBIND_TTL_S = 15 * 60  # 15 minutes
 # before one, and never from a partial pass: post-tmux-restart the live-pid
 # set is unknowable until rebind runs, and resolve_pids is also called with
 # single windows (channel tools, pane routes) whose one-pid taken set would
-# prune every other live pane's rows.
+# prune every other live pane's rows. And never again until the next boot —
+# dead pid rows accumulate between boots, accepted (they're tens of bytes and
+# invisible to the rail).
 _TRACKS_MAINTAINED = False
 
 
@@ -329,6 +331,93 @@ def _gc_workspaces(workspaces: dict, now_ts: int) -> bool:
     return dirty
 
 
+def _arbitrate_duplicates(windows: list[dict], wblock: dict,
+                          hints: dict[str, dict]) -> None:
+    """Phase 0: duplicate arbitration. The same @periscope_id stamped on
+    two windows used to be resolved by list order — which is not stable
+    across polls, so the identity ping-ponged between the windows
+    (observed 2026-08-05, periscope:4 ↔ resumes:4). Evidence beats
+    order: the keeper is the window whose live sid matches the entry's
+    recorded sid; everyone else (its `pid_raw` cleared here) resolves
+    fresh in phase 1.
+
+    Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
+    """
+    by_raw: dict[str, list[dict]] = {}
+    for w in windows:
+        raw = (w.get("pid_raw") or "").strip()
+        if _is_pid(raw):
+            by_raw.setdefault(raw, []).append(w)
+    for raw, group in by_raw.items():
+        if len(group) < 2:
+            continue
+        recorded_sid = ((wblock.get(raw) or {}).get("last_seen") or {}).get("sid")
+        keeper = None
+        if recorded_sid:
+            for w in group:
+                hint = hints.get(w.get("pane_id") or "", {})
+                if hint.get("sid") == recorded_sid:
+                    keeper = w
+                    break
+        # Three distinct stories, kept apart for incident grep: the sid
+        # named the keeper; the entry never recorded a sid; or a sid IS
+        # recorded but no on-screen window carries it — rotation/dead-pane
+        # territory, a very different investigation from "no evidence".
+        reason = ("sid evidence" if keeper is not None
+                  else "no recorded sid" if not recorded_sid
+                  else "recorded sid not on screen — first-in-list")
+        if keeper is None:
+            keeper = group[0]   # no evidence → status quo, but logged
+        losers = [w for w in group if w is not keeper]
+        for w in losers:
+            w["pid_raw"] = ""
+        # Name the demoted windows too: their phase-1 mints are silent, so
+        # without this the victims leave no trace in the log — and they're
+        # exactly what an incident hunt is looking for.
+        log.info("duplicate @periscope_id %s on %d windows — keeper %s:%s (%s); demoted %s",
+                 raw, len(group), keeper["session"], keeper["index"], reason,
+                 ", ".join(f"{w['session']}:{w['index']}" for w in losers))
+
+
+def _maintain_track_rows(windows: list[dict], taken: set[str]) -> None:
+    """Phase 5 (one-shot per boot): pane_tracks maintenance. The caller gates
+    on `full_roster` — only a pass that saw every live window has a
+    trustworthy `taken` set; this owns the `_TRACKS_MAINTAINED` half of the
+    gate. Live DBs still hold pre-re-key %N-keyed rows; migrate each live
+    window's legacy tag onto its resolved pid (never clobbering a pid row a
+    user move already wrote), then sweep dead % rows and prune dead pid rows.
+    Safe under _STATE_LOCK: activity's _LOCK has no path back to _STATE_LOCK,
+    and this is a handful of small sqlite statements.
+
+    A mid-maintenance sqlite failure aborts the caller's whole pass and
+    leaves the flag False, so the next full-roster pass retries — idempotent
+    by construction: each migration writes the pid row BEFORE deleting its
+    % row, so a partial run only leaves already-migrated pairs behind.
+
+    Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
+    """
+    global _TRACKS_MAINTAINED
+    if _TRACKS_MAINTAINED:
+        return
+    tag_map = activity.pane_track_map()
+    live_pane_ids = {p for w in windows if (p := w.get("pane_id"))}
+    for w in windows:
+        pane_id, pid = w.get("pane_id"), w.get("pid")
+        if not pane_id or not pid:
+            continue
+        legacy_tid = tag_map.get(pane_id)
+        if legacy_tid is None:
+            continue
+        if pid not in tag_map:
+            activity.set_pane_track(pid, legacy_tid)
+            log.info("pane_tracks: migrated %s -> %s (%s)",
+                     pane_id, pid, legacy_tid)
+        activity.set_pane_track(pane_id, None)   # delete the % row
+    activity.sweep_legacy_pane_track_rows(live_pane_ids)
+    activity.prune_pane_tracks(taken)
+    _TRACKS_MAINTAINED = True
+
+
 def resolve_pids(windows: list[dict],
                  session_hints: dict[str, dict] | None = None,
                  full_roster: bool = False) -> None:
@@ -379,46 +468,8 @@ def resolve_pids(windows: list[dict],
         # keeps the reasoning simple.
         carried = {p for w in windows if _is_pid(p := (w.get("pid_raw") or "").strip())}
         dirty = False
-        # Phase 0: duplicate arbitration. The same @periscope_id stamped on
-        # two windows used to be resolved by list order — which is not stable
-        # across polls, so the identity ping-ponged between the windows
-        # (observed 2026-08-05, periscope:4 ↔ resumes:4). Evidence beats
-        # order: the keeper is the window whose live sid matches the entry's
-        # recorded sid; everyone else resolves fresh in phase 1.
-        by_raw: dict[str, list[dict]] = {}
-        for w in windows:
-            raw = (w.get("pid_raw") or "").strip()
-            if _is_pid(raw):
-                by_raw.setdefault(raw, []).append(w)
-        for raw, group in by_raw.items():
-            if len(group) < 2:
-                continue
-            recorded_sid = ((wblock.get(raw) or {}).get("last_seen") or {}).get("sid")
-            keeper = None
-            if recorded_sid:
-                for w in group:
-                    hint = hints.get(w.get("pane_id") or "", {})
-                    if hint.get("sid") == recorded_sid:
-                        keeper = w
-                        break
-            # Three distinct stories, kept apart for incident grep: the sid
-            # named the keeper; the entry never recorded a sid; or a sid IS
-            # recorded but no on-screen window carries it — rotation/dead-pane
-            # territory, a very different investigation from "no evidence".
-            reason = ("sid evidence" if keeper is not None
-                      else "no recorded sid" if not recorded_sid
-                      else "recorded sid not on screen — first-in-list")
-            if keeper is None:
-                keeper = group[0]   # no evidence → status quo, but logged
-            losers = [w for w in group if w is not keeper]
-            for w in losers:
-                w["pid_raw"] = ""
-            # Name the demoted windows too: their phase-1 mints are silent, so
-            # without this the victims leave no trace in the log — and they're
-            # exactly what an incident hunt is looking for.
-            log.info("duplicate @periscope_id %s on %d windows — keeper %s:%s (%s); demoted %s",
-                     raw, len(group), keeper["session"], keeper["index"], reason,
-                     ", ".join(f"{w['session']}:{w['index']}" for w in losers))
+        # Phase 0: duplicate arbitration (sid evidence beats list order).
+        _arbitrate_duplicates(windows, wblock, hints)
         # Phase 1: per-window pid resolution + last_seen refresh.
         for w in windows:
             if _resolve_one(w, wblock, taken, carried, now_ts,
@@ -439,31 +490,9 @@ def resolve_pids(windows: list[dict],
             _store._write_state(_store._STATE)
         # Phase 5 (one-shot per boot): pane_tracks maintenance, gated on the
         # first completed full-roster pass — the only moment the live-pid set
-        # (`taken`) is trustworthy. Live DBs still hold pre-re-key %N-keyed
-        # rows; migrate each live window's legacy tag onto its resolved pid
-        # (never clobbering a pid row a user move already wrote), then sweep
-        # dead % rows and prune dead pid rows. Safe under _STATE_LOCK:
-        # activity's _LOCK has no path back to _STATE_LOCK, and this is a
-        # handful of small sqlite statements.
-        global _TRACKS_MAINTAINED
-        if full_roster and not _TRACKS_MAINTAINED:
-            tag_map = activity.pane_track_map()
-            live_pane_ids = {p for w in windows if (p := w.get("pane_id"))}
-            for w in windows:
-                pane_id, pid = w.get("pane_id"), w.get("pid")
-                if not pane_id or not pid:
-                    continue
-                legacy_tid = tag_map.get(pane_id)
-                if legacy_tid is None:
-                    continue
-                if pid not in tag_map:
-                    activity.set_pane_track(pid, legacy_tid)
-                    log.info("pane_tracks: migrated %s -> %s (%s)",
-                             pane_id, pid, legacy_tid)
-                activity.set_pane_track(pane_id, None)   # delete the % row
-            activity.sweep_legacy_pane_track_rows(live_pane_ids)
-            activity.prune_pane_tracks(taken)
-            _TRACKS_MAINTAINED = True
+        # (`taken`) is trustworthy.
+        if full_roster:
+            _maintain_track_rows(windows, taken)
 
 
 def _attach_git_then_resolve_pids(windows: list[dict],

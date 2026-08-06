@@ -920,12 +920,13 @@ def test_spawn_same_inherits_callers_track_by_pid(mocker):
     from periscope import channels
     resolve, move = _mock_same_mode_spawn(mocker)
 
-    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+    res = asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
     # First resolve is the caller's track (the tag); the result body triggers a
     # second resolve for the spawned pane's final track.
     assert resolve.call_args_list[0].args == ({"pid": "parent11", "cwd": "/home/tom"},)
     move.assert_called_once_with("child99", "tk_caller")
+    assert _body(res)["track"]["id"] == "tk_caller"
 
 
 def test_spawn_same_vanished_caller_falls_to_cwd_default(mocker, caplog):
