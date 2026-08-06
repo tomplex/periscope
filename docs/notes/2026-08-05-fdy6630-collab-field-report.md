@@ -95,6 +95,19 @@ observed usage; proposals are marked as such.
    trust-annotation for panes the user has explicitly wired together
    might square it.
 
+7. **Stacked branches across worktrees have no single rebase owner.**
+   (2026-08-06, GitHub's new stacked-PRs flow via `gh-stack`.) With each
+   pane owning its branch in its own worktree — the natural periscope
+   topology — `gh stack rebase` fails on any branch checked out in another
+   pane's worktree, and its partial-failure behavior is sharp-edged (it
+   proceeded to push after the failed checkout; the push happened to be
+   safe, but verifying that cost a nervous minute). Workable division of
+   labor once understood: the base's owner pushes, each upper layer's
+   owner rebases their own branch. But nothing surfaced *which pane owns
+   which branch* — `list_claudes` shows head SHA and cwd, not the
+   checked-out branch name, so branch ownership was reconstructed by
+   matching commit subjects.
+
 ## Proposals (marked as such)
 
 - **Name-based `send_to`.** Names survived every restart; handles and pane
@@ -111,6 +124,10 @@ observed usage; proposals are marked as such.
 - **Doc-ownership hint.** A per-file "owner pane" registration periscope
   surfaces on the card; purely advisory, but it makes the convention we
   hand-rolled visible instead of tribal.
+- **Branch name in `list_claudes`.** Head SHA is there; the checked-out
+  branch name isn't. For stacked-PR workflows (friction #7) branch→pane
+  ownership is the routing table, and today it's inferred from commit
+  subjects.
 
 ## One-line verdict
 
