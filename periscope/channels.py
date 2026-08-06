@@ -754,21 +754,26 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # ("new") path tags the repo-default track for the worktree's repo; else
     # ("same") the spawn nests under the CALLER's track so a fan-out from a
     # promoted tab inherits that tab's track rather than falling back to the
-    # repo-default. Every tag guards on a non-empty spawned pane_id.
+    # repo-default. Every tag keys on the just-stamped @periscope_id, never
+    # the rotating %N.
     tagged_workspace = None
     ws_id = str(arguments.get("workspace_id") or "").strip()
-    if pane_id and ws_id:
+    if pid and ws_id:
         # workspace_id is a track id: validate it exists and isn't archived.
         row = activity.get_track(ws_id)
         if row and not row.get("archived_at"):
-            tracks.move_pane(pane_id, ws_id)
+            tracks.move_pane(pid, ws_id)
             tagged_workspace = ws_id
-    elif pane_id and anchored:
-        tracks.move_pane(pane_id, tracks.repo_default_track(project["repo"]))
-    elif pane_id and not commander_caller:
-        # "same" mode, a real pane: inherit the caller's track.
-        tracks.move_pane(pane_id, tracks.resolve_track_for_window(
-            {"pane_id": pane, "cwd": caller_cwd}))
+    elif pid and anchored:
+        tracks.move_pane(pid, tracks.repo_default_track(project["repo"]))
+    elif pid and not commander_caller:
+        # "same" mode: inherit the caller's track. parent_pid can be "" when
+        # the caller vanished — resolve falls through to the cwd's
+        # repo-default, logged so a mis-bucketed spawn is diagnosable.
+        if not parent_pid:
+            log.info("spawn tag: caller pid unresolved, %s falls to repo-default", pid)
+        tracks.move_pane(pid, tracks.resolve_track_for_window(
+            {"pid": parent_pid, "cwd": caller_cwd}))
 
     body = {
         "ok": True,
@@ -934,17 +939,17 @@ def _do_resume_session_tool(pane: str, arguments: dict):
 
     # Tag the resumed pane into a track (the grouping authority) so it surfaces
     # under that group instead of the default "dev" bucket — the same tagging
-    # spawn_claude does. workspace_id is a track id now. The resume result carries
-    # session:index; resolve the pane id from it (pane_tracks is keyed on %N).
+    # spawn_claude does. workspace_id is a track id now. pane_tracks keys on the
+    # @periscope_id, so stamp the brand-new window first (mint-fresh, no rebind
+    # — same reasoning as _do_spawn_claude_tool) and tag by the returned pid.
     if ws_id:
         from periscope import activity
         row = activity.get_track(ws_id)
         if row and not row.get("archived_at"):
             target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
-            pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
-            if pane_id:
-                tracks.move_pane(pane_id, ws_id)
-                result = {**result, "workspace_id": ws_id}
+            new_pid = stamp_new_window(target)
+            tracks.move_pane(new_pid, ws_id)
+            result = {**result, "workspace_id": ws_id, "pid": new_pid}
     return _tool_result(result)
 
 
@@ -1281,10 +1286,13 @@ def _do_list_workspaces_tool(pane: str, arguments: dict):
     Response key stays `workspaces` for arg compatibility."""
     from periscope.activity import all_tracks, pane_track_map
 
-    live_panes = {w.get("pane_id") for w in list_windows() if w.get("pane_id")}
+    # pane_tracks keys on @periscope_id — liveness intersects the stamped ids
+    # of live windows, not %N pane ids.
+    live_pids = {p for w in list_windows()
+                 if (p := (w.get("pid_raw") or "").strip())}
     counts: dict[str, int] = {}
-    for pane_id, tid in pane_track_map().items():
-        if pane_id in live_panes:
+    for pid, tid in pane_track_map().items():
+        if pid in live_pids:
             counts[tid] = counts.get(tid, 0) + 1
 
     out = [

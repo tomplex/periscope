@@ -55,9 +55,11 @@ def repo_default_track(repo: str | None) -> str:
 
 
 def resolve_track_for_window(window: dict) -> str:
-    pane_id = window.get("pane_id")
-    if pane_id:
-        tagged = activity.get_pane_track(pane_id)
+    # pid on resolved rows, pid_raw on raw list_windows() rows — track
+    # membership keys on the durable @periscope_id, never the rotating %N.
+    pid = window.get("pid") or window.get("pid_raw")
+    if pid:
+        tagged = activity.get_pane_track(pid)
         if tagged:
             row = activity.get_track(tagged)
             if row is not None and not row.get("archived_at"):
@@ -112,8 +114,8 @@ def rename_track(track_id: str, name: str) -> bool:
     return True
 
 
-def move_pane(pane_id: str, track_id: str) -> None:
-    activity.set_pane_track(pane_id, track_id)
+def move_pane(pid: str, track_id: str) -> None:
+    activity.set_pane_track(pid, track_id)
 
 
 def dissolve_track(track_id: str) -> None:
@@ -152,14 +154,16 @@ def teardown_targets(track_id: str, windows: list[dict]) -> list[tuple[str, str]
 
 def seed_tracks(windows: list[dict]) -> int:
     """Migration seed: tag every managed pane with its resolved track. Idempotent
-    — skips already-tagged panes."""
+    — skips already-tagged panes. Keys on the @periscope_id; an unstamped window
+    has no durable identity to tag yet, so it is skipped (it resolves lazily to
+    its repo-default until stamped)."""
     existing = activity.pane_track_map()
     written = 0
     for w in windows:
-        pane_id = w.get("pane_id")
-        if not pane_id or pane_id in existing:
+        pid = w.get("pid") or w.get("pid_raw")
+        if not pid or pid in existing:
             continue
-        activity.set_pane_track(pane_id, resolve_track_for_window(w))
+        activity.set_pane_track(pid, resolve_track_for_window(w))
         written += 1
     return written
 
@@ -185,13 +189,21 @@ def migrate_workspaces_to_tracks() -> int:
             activity.insert_track({"id": ws_id, "name": ws.get("name") or ws_id,
                                    "repo": ws.get("base_repo"),
                                    "created_at": int(time.time()), "archived_at": None})
+    # pane_workspace_map is %N-keyed legacy data; pane_tracks keys on the
+    # durable @periscope_id, so convert through a live %N → pid_raw map.
+    from periscope.panes import list_windows
+    pane_to_pid = {w["pane_id"]: w["pid_raw"] for w in list_windows()
+                   if w.get("pane_id") and w.get("pid_raw")}
     already = activity.pane_track_map()
     written = 0
     for pane_id, ws_id in activity.pane_workspace_map().items():
         ws = rows.get(ws_id)
         if not ws or ws.get("archived_at"):
             continue
-        cur = already.get(pane_id)
+        pid = pane_to_pid.get(pane_id)
+        if not pid:
+            continue  # pane gone or unstamped — would repo-default anyway
+        cur = already.get(pid)
         if cur is not None and cur != ws_id:
             # The pane already carries a track tag. Workspace membership
             # OVERRIDES a repo-default tag (id == repo path — just the lazy
@@ -203,6 +215,6 @@ def migrate_workspaces_to_tracks() -> int:
                 continue  # user moved it to another goal track → leave it
         elif cur == ws_id:
             continue  # already in this workspace's track → no-op
-        activity.set_pane_track(pane_id, ws_id)
+        activity.set_pane_track(pid, ws_id)
         written += 1
     return written

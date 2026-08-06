@@ -491,9 +491,10 @@ def test_view_includes_track_id(mocker, clean_state, fresh_activity_db):
 
     activity.insert_track({"id": "tk_x", "name": "X", "repo": None,
                            "created_at": 1, "archived_at": None})
-    activity.set_pane_track("%42", "tk_x")
+    # pane_tracks keys on the @periscope_id (the window's `pid`), not %N.
+    activity.set_pane_track("abc12345", "tk_x")
     _stub_subsystems(mocker)
-    view, _ = build_window_view(_window(pane_id="%42"), now_ts=1000)
+    view, _ = build_window_view(_window(pid="abc12345"), now_ts=1000)
     assert view["track_id"] == "tk_x"
     # The rail labels off track_name (no separate /api/state tracks payload).
     assert view["track_name"] == "X"

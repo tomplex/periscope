@@ -246,8 +246,8 @@ def _open_path(
     # synchronously; pid_raw is the @periscope_id, "" for unmanaged.
     pane_pids = [w["pid_raw"] for w in list_windows()
                  if w["session"] == session and w["pid_raw"]]
-    # The membership tag keys on the tmux pane_id (%N), but claude_pid is the
-    # @periscope_id — scan for the claude window to recover its pane_id.
+    # Recover the claude window's tmux pane_id (%N) for the result payload —
+    # the terminal WS targets panes by %N even though identity keys on the pid.
     agent_pane_id = next(
         (w["pane_id"] for w in list_windows()
          if w.get("pid_raw") == agent_pid and w.get("pane_id")),
@@ -263,10 +263,13 @@ def _open_path(
     from periscope import activity, tracks
     tid = tracks.repo_default_track(repo)
     for w in list_windows():
-        if (w.get("session") == session and w.get("pane_id")
+        # Membership keys on the stamped @periscope_id (pid_raw on raw rows);
+        # unstamped windows have no durable identity to tag yet — skip them.
+        p = (w.get("pid_raw") or "").strip()
+        if (p and w.get("session") == session
                 and os.path.realpath(w.get("cwd") or "") == toplevel
-                and activity.get_pane_track(w["pane_id"]) is None):
-            tracks.move_pane(w["pane_id"], tid)
+                and activity.get_pane_track(p) is None):
+            tracks.move_pane(p, tid)
     return OpenResult(tmux_session=session, repo=repo, agent_pid=agent_pid,
                       agent_pane_id=agent_pane_id, agent=agent, ui=ui)
 

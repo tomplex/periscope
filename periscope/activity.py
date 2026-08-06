@@ -131,8 +131,7 @@ def _conn() -> sqlite3.Connection:
             if col not in have:
                 c.execute(f"ALTER TABLE pane_status ADD COLUMN {col} TEXT")
         # pane_tracks was keyed on tmux %N, which rotates on every restart —
-        # the column is renamed so any call site still writing pane ids fails
-        # loudly instead of silently re-minting unstable rows.
+        # renamed so any raw-SQL regression against pane_id fails loudly.
         pt_cols = {r[1] for r in c.execute("PRAGMA table_info(pane_tracks)")}
         if "pane_id" in pt_cols:
             c.execute("ALTER TABLE pane_tracks RENAME COLUMN pane_id TO pid")

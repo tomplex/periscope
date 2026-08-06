@@ -449,13 +449,17 @@ def test_resume_session_tool_tags_pane_track(fresh_activity_db, mocker):
         "periscope.routes.sessions._window_new_resume",
         return_value={"ok": True, "target": "resumes:3", "session": "resumes",
                       "index": 3, "mode": "resume", "resumed_session_id": "abc"})
-    mocker.patch("periscope.channels.tmux", return_value="%88")  # display-message #{pane_id}
+    # The tag keys on the @periscope_id stamped onto the brand-new window,
+    # never a %N pane id.
+    stamp = mocker.patch("periscope.channels.stamp_new_window", return_value="resu8888")
 
     body = _body(_do_resume_session_tool(
         "%5", {"session_id": "abc", "workspace_id": tk["id"]}))
 
     assert body["ok"] is True and body["workspace_id"] == tk["id"]
-    assert activity.get_pane_track("%88") == tk["id"]
+    assert body["pid"] == "resu8888"
+    stamp.assert_called_once_with("resumes:3")
+    assert activity.get_pane_track("resu8888") == tk["id"]
 
 
 # --- inter-claude management tools ---
@@ -826,7 +830,8 @@ def test_spawn_workspace_id_tags_pane_track(fresh_activity_db, mocker):
 
     assert res["ok"] is True
     assert res["workspace_id"] == tk["id"]
-    assert activity.get_pane_track("%77") == tk["id"]
+    # Tagged by the stamped @periscope_id (the stamp_new_window return).
+    assert activity.get_pane_track("child99") == tk["id"]
 
 
 def test_spawn_workspace_id_unknown_track_skips_tag(fresh_activity_db, mocker):
@@ -847,7 +852,7 @@ def test_spawn_workspace_id_unknown_track_skips_tag(fresh_activity_db, mocker):
         channels._do_spawn_claude_tool("%1", {"prompt": "go", "workspace_id": "tk_nope"})))
 
     assert res["ok"] is True and res["workspace_id"] is None
-    assert activity.get_pane_track("%77") is None
+    assert activity.get_pane_track("child99") is None
 
 
 def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, mocker):
@@ -874,8 +879,9 @@ def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, 
         "%1", {"prompt": "go", "cwd": "/r", "workspace": "new"})))
 
     assert res["ok"] is True
-    # repo_default_track keys the track id on the repo path.
-    assert activity.get_pane_track("%77") == tracks.repo_default_track("/r")
+    # repo_default_track keys the track id on the repo path; the tag keys on
+    # the stamped @periscope_id.
+    assert activity.get_pane_track("child99") == tracks.repo_default_track("/r")
 
 
 def test_send_to_happy(mocker):
@@ -1254,11 +1260,11 @@ def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_act
     from periscope import activity, tracks
     from periscope.channels import _do_list_workspaces_tool
     tk = tracks.create_track(name="Auth", repo="/d/fdy")
-    activity.set_pane_track("%1", tk["id"])
-    activity.set_pane_track("%99", tk["id"])   # dead pane — excluded from count
-    # LOOSE catchall must never surface in the list.
-    activity.set_pane_track("%1", tk["id"])
-    mocker.patch("periscope.channels.list_windows", return_value=[{"pane_id": "%1"}])
+    # Tags key on the @periscope_id; liveness intersects live windows' pid_raw.
+    activity.set_pane_track("aaaa0001", tk["id"])
+    activity.set_pane_track("aaaa0099", tk["id"])   # dead pane — excluded from count
+    mocker.patch("periscope.channels.list_windows",
+                 return_value=[{"pane_id": "%1", "pid_raw": "aaaa0001"}])
     r = _body(_do_list_workspaces_tool("%1", {}))
     assert r["ok"] is True
     rows = {w["id"]: w for w in r["workspaces"]}
@@ -1266,7 +1272,7 @@ def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_act
     assert tk["id"] in rows
     assert rows[tk["id"]]["name"] == "Auth"
     assert rows[tk["id"]]["base_repo"] == "/d/fdy"   # track.repo mapped to base_repo
-    assert rows[tk["id"]]["tagged_tabs"] == 1        # %99 dead, not counted
+    assert rows[tk["id"]]["tagged_tabs"] == 1        # aaaa0099 dead, not counted
 
 
 def test_list_workspaces_tool_excludes_archived(clean_state, fresh_activity_db, mocker):

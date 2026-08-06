@@ -74,13 +74,15 @@ def test_dissolve_missing_404():
 def test_teardown_returns_kill_list(mocker):
     tid = client.post("/api/tracks", json={"name": "T"}).json()["id"]
     from periscope import activity
-    activity.set_pane_track("%1", tid)
-    activity.set_pane_track("%2", tid)
+    # Tags key on @periscope_id (pid_raw on the raw rows); the kill list still
+    # reports stable %N pane ids.
+    activity.set_pane_track("aaaa0001", tid)
+    activity.set_pane_track("aaaa0002", tid)
     mocker.patch(
         "periscope.routes.tracks.list_windows",
         return_value=[
-            {"session": "s", "index": 0, "pane_id": "%1", "cwd": "/x"},
-            {"session": "s", "index": 1, "pane_id": "%2", "cwd": "/x"},
+            {"session": "s", "index": 0, "pane_id": "%1", "pid_raw": "aaaa0001", "cwd": "/x"},
+            {"session": "s", "index": 1, "pane_id": "%2", "pid_raw": "aaaa0002", "cwd": "/x"},
         ],
     )
     mutate = mocker.patch("periscope.routes.tracks._tmux_mutate")

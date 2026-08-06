@@ -338,15 +338,16 @@ def _window_new_plain(
         raise HTTPException(500, f"tmux returned unexpected window id: {msg!r}")
 
     # Resolve the new window's index (for the recency stamp, which is keyed by
-    # session:index in window_view) and its pane id (for the track tag).
+    # session:index in window_view).
     index_s = tmux("display-message", "-t", window_id, "-p", "#{window_index}").strip()
     try:
         index = int(index_s)
     except ValueError:
         raise HTTPException(500, f"tmux returned unexpected index: {index_s!r}") from None
-    pane_id = tmux("display-message", "-t", window_id, "-p", "#{pane_id}").strip()
-    if pane_id:
-        tracks.move_pane(pane_id, track_id)
+    # Tag by the durable @periscope_id — stamp the brand-new window now rather
+    # than waiting for the next poll's resolve_pids.
+    new_pid = stamp_new_window(window_id)
+    tracks.move_pane(new_pid, track_id)
 
     target = f"{MANAGED_SESSION}:{index}"
     cmd = exec_cmd.strip()
@@ -537,17 +538,17 @@ def pane_move_account(pid: str, account: str):
     )
     target = result["target"]
     new_pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
-    if new_pane_id:
-        # Land it next to where it came from. `resumes` is plumbing and the rail
-        # is track-anchored, so without the re-tag the moved session shows up in
-        # the repo-default bucket instead of beside the pane it replaced.
-        tracks.move_pane(new_pane_id, track_id)
     # Mint a guaranteed-unique id rather than resolving: a brand-new window has
     # no stamp, and resolving one window with an empty taken-set lets the rebind
     # pass match it to the ORIGINAL pane's entry on (branch, cwd) — which here
     # is always the same pair — stealing that pid. Same reasoning as
     # channels._do_spawn_claude_tool.
     new_pid = stamp_new_window(target)
+    if new_pid:
+        # Land it next to where it came from. `resumes` is plumbing and the rail
+        # is track-anchored, so without the re-tag the moved session shows up in
+        # the repo-default bucket instead of beside the pane it replaced.
+        tracks.move_pane(new_pid, track_id)
     return {**result, "pid": new_pid, "pane_id": new_pane_id,
             "account": account, "track_id": track_id, "moved_from": pid}
 
