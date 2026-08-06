@@ -16,6 +16,7 @@ def _reset_caches(monkeypatch):
     monkeypatch.setattr(ss, "_claude_procs_cache", None)
     monkeypatch.setattr(ss, "_proc_table_cache", None)
     monkeypatch.setattr(ss, "_pane_pids_cache", None)
+    monkeypatch.setattr(ss, "_config_dirs_cache", None, raising=False)
 
 
 def _seed(tmp_path, monkeypatch, *sessions, live_pids=None):
@@ -223,6 +224,39 @@ def test_pane_claude_pids_empty_without_tmux(monkeypatch):
     monkeypatch.setattr(ss, "proc_table", lambda: (_ for _ in ()).throw(
         AssertionError("proc_table must not fork when there are no panes")))
     assert ss.pane_claude_pids() == {}
+
+
+# ── pane -> CLAUDE_CONFIG_DIR scan (moved from resurrect) ────────────────
+
+def test_pane_config_dirs_cached_at_15s(mocker):
+    """pane_config_dirs snapshots once per 15s window: env is immutable for a
+    process lifetime, so a 1s TTL would add a fork/s for nothing."""
+    ss._config_dirs_cache = None
+    mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
+    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude"}))
+    envs = mocker.patch.object(
+        ss, "_env_by_pid",
+        return_value={111: "claude CLAUDE_CONFIG_DIR=/Users/t/.claude-b PATH=/x"})
+    first = ss.pane_config_dirs()
+    second = ss.pane_config_dirs()
+    assert first == {"%1": "/Users/t/.claude-b"}
+    assert second == first
+    assert envs.call_count == 1  # second call served from cache
+
+
+def test_config_dir_from_ps_reads_only_the_env_tail():
+    """`ps eww` concatenates command and env with no delimiter. A process whose
+    COMMAND merely mentions the variable must not be read as setting it."""
+    alt = "/Users/tom/.claude-b"
+    cmd = "grep -o :CLAUDE_CONFIG_DIR=[^\\011]*|:claude"
+    # command mentions it, environment does not
+    assert ss._config_dir_from_ps(cmd, f"{cmd} PATH=/usr/bin SHELL=/bin/zsh") is None
+    # genuine env value is found
+    assert ss._config_dir_from_ps(
+        "claude --resume x", f"claude --resume x PATH=/usr/bin CLAUDE_CONFIG_DIR={alt} TERM=xterm"
+    ) == alt
+    # command prefix mismatch (ps raced / truncated) yields nothing rather than a guess
+    assert ss._config_dir_from_ps("claude", f"something-else CLAUDE_CONFIG_DIR={alt}") is None
 
 
 # ── live_session_id_for_pane: the pane's CURRENT session id ──────────────

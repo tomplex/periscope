@@ -25,6 +25,7 @@ Imports only stdlib — no periscope.* — so it stays a leaf the resolver layer
 (turns.py / window_view.py) can depend on freely."""
 import contextlib
 import json
+import re
 import subprocess
 import time
 from collections import deque
@@ -48,6 +49,13 @@ _index_cache: tuple[float, dict, dict] | None = None
 _claude_procs_cache: tuple[float, dict[int, tuple[int, int]]] | None = None
 _proc_table_cache: tuple[float, tuple[dict[int, list[int]], dict[int, str]]] | None = None
 _pane_pids_cache: tuple[float, dict[str, int]] | None = None
+
+_CONFIG_DIR_RE = re.compile(r"\bCLAUDE_CONFIG_DIR=(\S+)")
+# Config dirs are read from process env, which is immutable for a process's
+# lifetime — a short TTL would re-fork `ps eww` for an answer that cannot
+# change. 15s matches the cadence window_view already used.
+_CONFIG_DIRS_TTL_S = 15.0
+_config_dirs_cache: tuple[float, dict[str, str]] | None = None
 
 
 def _build_index() -> tuple[dict, dict]:
@@ -232,6 +240,89 @@ def pane_claude_pids() -> dict[str, int]:
             queue.extend(kids.get(pid, ()))
     _pane_pids_cache = (now, found)
     return found
+
+
+def _env_by_pid(pids: list[int]) -> dict[int, str]:
+    """pid -> its `ps eww` command+environment text, in ONE fork.
+
+    Probing each pid separately costs ~165ms on a machine with ~60 claude
+    processes, and window_view runs this on every /api/state poll — one fork
+    keeps it off the dashboard's hot path.
+    """
+    if not pids:
+        return {}
+    try:
+        out = subprocess.run(
+            ["ps", "eww", "-o", "pid=,command=", "-p", ",".join(str(p) for p in pids)],
+            capture_output=True, text=True, check=False,
+        ).stdout
+    except OSError:
+        return {}
+    envs: dict[int, str] = {}
+    for line in out.splitlines():
+        bits = line.split(maxsplit=1)
+        if len(bits) != 2:
+            continue
+        try:
+            envs[int(bits[0])] = bits[1]
+        except ValueError:
+            continue
+    return envs
+
+
+def _config_dir_from_ps(cmd_only: str, with_env: str) -> str | None:
+    """Extract CLAUDE_CONFIG_DIR from `ps eww` output.
+
+    `ps eww` prints the command and the environment concatenated with no
+    delimiter, so searching the whole string matches any process whose COMMAND
+    merely mentions the variable (observed: a grep pattern containing the name
+    was picked up as if it were a real value). Strip the command — obtained
+    without `e` for the same pid — and search only the environment tail.
+    """
+    cmd_only, with_env = cmd_only.strip(), with_env.strip()
+    if not with_env.startswith(cmd_only):
+        return None
+    env_tail = with_env[len(cmd_only):]
+    m = _CONFIG_DIR_RE.search(env_tail)
+    return m.group(1) if m else None
+
+
+def pane_config_dirs() -> dict[str, str]:
+    """tmux pane id -> the CLAUDE_CONFIG_DIR its live Claude runs under.
+
+    Read from the running process's environment rather than from any stored
+    binding: env is what the process is actually using, and it needs no state to
+    stay in sync. Panes on the default account have no entry.
+
+    Consumed live by window_view's account attribution and at SAVE time by
+    resurrect's save-file rewrite — a shell-level `VAR=x cmd` prefix is
+    consumed by the shell and never reaches argv, so the config dir is absent
+    from the command resurrect captures via ps; without this lookup every
+    account-B pane silently restores onto the default account.
+    """
+    global _config_dirs_cache
+    now = time.time()
+    if _config_dirs_cache and now - _config_dirs_cache[0] < _CONFIG_DIRS_TTL_S:
+        return _config_dirs_cache[1]
+    pane_pids = pane_claude_pids()
+    if not pane_pids:
+        return {}   # no tmux/claudes — don't cache the empty answer
+    _, cmds = proc_table()
+    envs = _env_by_pid(list(pane_pids.values()))
+    dirs: dict[str, str] = {}
+    for pane_id, pid in pane_pids.items():
+        # A pid missing from the command table (process exited between the two
+        # snapshots) is skipped rather than passed as "": an empty command
+        # makes _config_dir_from_ps search the whole `ps eww` string, which is
+        # the false-positive it exists to prevent.
+        cmd = cmds.get(pid)
+        if cmd is None:
+            continue
+        cfg = _config_dir_from_ps(cmd, envs.get(pid, ""))
+        if cfg:
+            dirs[pane_id] = cfg
+    _config_dirs_cache = (now, dirs)
+    return dirs
 
 
 def live_session_id_for_pane(pane_id: str) -> str | None:

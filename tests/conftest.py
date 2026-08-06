@@ -67,6 +67,9 @@ def _no_live_session_scan(monkeypatch):
     monkeypatch.setattr(session_status, "_tmux_pane_pids", dict, raising=False)
     monkeypatch.setattr(session_status, "_pane_pids_cache", None, raising=False)
     monkeypatch.setattr(session_status, "_proc_table_cache", None, raising=False)
+    # pane_config_dirs' 15s TTL outlives a test — a populated cache would bleed
+    # one test's pane->config-dir map into every later view build.
+    monkeypatch.setattr(session_status, "_config_dirs_cache", None, raising=False)
 
 
 @pytest.fixture(scope="session", autouse=True)

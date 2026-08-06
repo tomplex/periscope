@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from periscope import activity, resurrect
+from periscope import activity, session_status
 from periscope.agent_processes import codex_process_for_pane
 from periscope.channels import channel_state_for
 from periscope.codex_sessions import codex_home
@@ -169,7 +169,7 @@ def _apply_codex_state(
     return False
 
 
-# One account scan per POLL, not per window. `_pane_config_dirs` forks `ps`
+# One account scan per POLL, not per window. `pane_config_dirs` forks `ps`
 # once for the process table plus once more per candidate claude;
 # build_window_view runs across ~20 windows on a 32-thread fan-out every 3s, so
 # per-window would be hundreds of forks a poll. Same TTL-snapshot shape as
@@ -190,7 +190,7 @@ def _pane_accounts() -> dict[str, str]:
     """tmux pane id -> account id, for panes NOT on the default account.
 
     Derived live from each Claude process's CLAUDE_CONFIG_DIR via
-    `resurrect._pane_config_dirs` — reused rather than reimplemented because it
+    `session_status.pane_config_dirs` — reused rather than reimplemented because it
     encodes the `ps eww` trap (command and environment are concatenated with no
     delimiter, so a naive regex matches the variable NAME appearing inside some
     other process's command text).
@@ -218,7 +218,7 @@ def _pane_accounts() -> dict[str, str]:
                 by_dir[cfg] = aid
         accounts = {
             pane_id: by_dir.get(cfg, "unknown")
-            for pane_id, cfg in resurrect._pane_config_dirs().items()
+            for pane_id, cfg in session_status.pane_config_dirs().items()
         }
         _pane_accounts_cache = (now, accounts)
         return accounts
