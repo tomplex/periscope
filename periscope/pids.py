@@ -34,7 +34,10 @@ _REBIND_TTL_S = 15 * 60  # 15 minutes
 # single windows (channel tools, pane routes) whose one-pid taken set would
 # prune every other live pane's rows. And never again until the next boot —
 # dead pid rows accumulate between boots, accepted (they're tens of bytes and
-# invisible to the rail).
+# invisible to the rail). Accepted residual: a full-roster pass landing
+# mid-tmux-resurrect-restore prunes rows for panes not yet restored, even
+# though rebind would have reattached their pids moments later — narrow
+# window, no worse than the boot-time prune this replaced.
 _TRACKS_MAINTAINED = False
 
 

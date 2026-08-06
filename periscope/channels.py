@@ -946,26 +946,28 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     except HTTPException as e:
         return _tool_result({"ok": False, "error": str(e.detail)})
 
+    # Stamp the brand-new window unconditionally (mint-fresh, no rebind — same
+    # reasoning as _do_spawn_claude_tool) so the caller gets the durable handle
+    # and its track without a follow-up list_claudes, tagged or not.
+    target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
+    new_pid = stamp_new_window(target)
     # Tag the resumed pane into a track (the grouping authority) so it surfaces
     # under that group instead of the default "dev" bucket — the same tagging
-    # spawn_claude does. workspace_id is a track id now. pane_tracks keys on the
-    # @periscope_id, so stamp the brand-new window first (mint-fresh, no rebind
-    # — same reasoning as _do_spawn_claude_tool) and tag by the returned pid.
+    # spawn_claude does. workspace_id is a track id; pane_tracks keys on the
+    # @periscope_id.
     if ws_id:
         from periscope import activity
         row = activity.get_track(ws_id)
         if row and not row.get("archived_at"):
-            target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
-            new_pid = stamp_new_window(target)
             tracks.move_pane(new_pid, ws_id)
-            # Resolve rather than echo ws_id: the tag row just written is the
-            # authority (no cwd in scope here — with a tagged pid, cwd is only
-            # the fallback), and resolving keeps the result honest if the tag
-            # ever races an archive.
-            tid = tracks.resolve_track_for_window({"pid": new_pid})
-            result = {**result, "workspace_id": ws_id, "pid": new_pid,
-                      "track": {"id": tid, "label": tracks.track_label(tid),
-                                "kind": tracks.track_kind(tid)}}
+            result = {**result, "workspace_id": ws_id}
+    # Resolve rather than echo ws_id: the tag row (when written) is the
+    # authority, the repo-default/loose fallback covers the untagged path, and
+    # resolving keeps the result honest if the tag ever races an archive.
+    tid = tracks.resolve_track_for_window({"pid": new_pid, "cwd": result.get("cwd")})
+    result = {**result, "pid": new_pid,
+              "track": {"id": tid, "label": tracks.track_label(tid),
+                        "kind": tracks.track_kind(tid)}}
     return _tool_result(result)
 
 
@@ -1808,9 +1810,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "type": "object",
             "properties": {
                 "handle": {"type": "string", "description": (
-                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
-                    "id (%N) also works and is stabler — prefer it if you have "
-                    "one, and fall back to it if a pid stops resolving."
+                    "Target pid (from spawn_claude/list_claudes) — the durable "
+                    "handle; it survives restarts and account swaps. A tmux "
+                    "pane id (%N) also works as a fallback, but %N rotates "
+                    "on every restart — do not store it."
                 )},
                 "message": {"type": "string", "description": "Message to deliver."},
             },
@@ -1920,9 +1923,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "type": "object",
             "properties": {
                 "handle": {"type": "string", "description": (
-                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
-                    "id (%N) also works and is stabler — prefer it if you have "
-                    "one, and fall back to it if a pid stops resolving."
+                    "Target pid (from spawn_claude/list_claudes) — the durable "
+                    "handle; it survives restarts and account swaps. A tmux "
+                    "pane id (%N) also works as a fallback, but %N rotates "
+                    "on every restart — do not store it."
                 )},
                 "limit": {
                     "type": "integer",
@@ -1957,9 +1961,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "type": "object",
             "properties": {
                 "handle": {"type": "string", "description": (
-                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
-                    "id (%N) also works and is stabler — prefer it if you have "
-                    "one, and fall back to it if a pid stops resolving."
+                    "Target pid (from spawn_claude/list_claudes) — the durable "
+                    "handle; it survives restarts and account swaps. A tmux "
+                    "pane id (%N) also works as a fallback, but %N rotates "
+                    "on every restart — do not store it."
                 )},
             },
             "required": ["handle"],

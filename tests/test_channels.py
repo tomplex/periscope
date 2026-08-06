@@ -409,11 +409,18 @@ def test_resume_session_tool_wraps_window_new_resume(mocker):
         return_value={"ok": True, "target": "resumes:3", "session": "resumes",
                       "index": 3, "mode": "resume",
                       "resumed_session_id": "abc123"})
+    stamp = mocker.patch("periscope.channels.stamp_new_window",
+                         return_value="beef4242")
 
     body = _body(_do_resume_session_tool("%5", {"session_id": "abc123"}))
 
     assert body["ok"] is True
     assert body["target"] == "resumes:3"
+    # Untagged resumes stamp too: the caller gets the durable handle and its
+    # (repo-default/loose) track without a follow-up list_claudes.
+    stamp.assert_called_once_with("resumes:3")
+    assert body["pid"] == "beef4242"
+    assert body["track"]["kind"] == "loose"      # no cwd in the result → loose
     args = resume.call_args[0]
     assert args[0] == "resumes"                  # default sentinel session
     assert "--resume abc123" in args[1]

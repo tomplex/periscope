@@ -358,3 +358,11 @@ every restart (the `pane_tracks` rotation). It ships last.
 - **Migration deletes a live tag**: only `%`-keyed rows whose pane no longer
   appears in any poll are swept, and only on the boot after the migration
   poll — a live pane's row converts on first sight instead.
+- **Duplicate recorded sids across entries** (e.g. move-account leaves the
+  killed window's entry carrying the sid its successor also records): a
+  TTL-exempt pass-0 rebind picks among them in dict order for up to the GC
+  horizon. Accepted — the competing entries carry near-identical identity
+  fields, so the practical difference is which notes/links reattach.
+- **§6 deviation, deliberate**: the workspace="same"-inherits-track note
+  landed on `spawn_claude`'s description only — `send_to` doesn't spawn, so
+  the sentence had nothing to attach to there.
