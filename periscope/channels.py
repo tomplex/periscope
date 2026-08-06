@@ -768,10 +768,12 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         tracks.move_pane(pid, tracks.repo_default_track(project["repo"]))
     elif pid and not commander_caller:
         # "same" mode: inherit the caller's track. parent_pid can be "" when
-        # the caller vanished — resolve falls through to the cwd's
-        # repo-default, logged so a mis-bucketed spawn is diagnosable.
+        # the caller vanished — resolve falls through to the cwd's default
+        # (repo-default, or LOOSE for a non-git cwd), logged so a mis-bucketed
+        # spawn is diagnosable.
         if not parent_pid:
-            log.info("spawn tag: caller pid unresolved, %s falls to repo-default", pid)
+            log.info("spawn tag: caller pid unresolved (pane %s, cwd %s), "
+                     "%s falls to cwd default", pane, caller_cwd, pid)
         tracks.move_pane(pid, tracks.resolve_track_for_window(
             {"pid": parent_pid, "cwd": caller_cwd}))
 

@@ -175,10 +175,14 @@ def migrate_workspaces_to_tracks() -> int:
     pane_workspaces members are tagged into it.
 
     Skips a pane that ALREADY carries an explicit pane_tracks tag, so a later
-    user move/re-tag wins and a second run is a no-op. Goes fully inert once
-    pane_workspaces is emptied/dropped (the entity fold in T14b). Returns the
-    number of panes newly tagged. Run BEFORE seed_tracks so workspace panes get
-    their goal track and only the rest fall to repo-default."""
+    user move/re-tag wins and a second run is a no-op. Every handled row is
+    DELETED (folded, preserved, or unresolvable): this runs on every boot and
+    tmux restarts reuse %N, so a lingering "%1 → ws" row would later match an
+    unrelated brand-new pane that drew the same %N and drag it into the old
+    workspace's track. Goes fully inert once pane_workspaces is emptied/dropped
+    (the entity fold in T14b). Returns the number of panes newly tagged. Run
+    BEFORE seed_tracks so workspace panes get their goal track and only the
+    rest fall to repo-default."""
     from periscope import workspaces as _ws
 
     rows = _ws.all_workspaces()  # {ws_id: Workspace}
@@ -202,7 +206,12 @@ def migrate_workspaces_to_tracks() -> int:
             continue
         pid = pane_to_pid.get(pane_id)
         if not pid:
-            continue  # pane gone or unstamped — would repo-default anyway
+            # Pane gone or unstamped: the row is unrecoverable, and skipping it
+            # forever is the hazard — tmux restarts reuse %N, so a lingering
+            # row would later match an unrelated brand-new pane that drew the
+            # same %N and drag it into this workspace's track. Delete it.
+            activity.set_pane_workspace(pane_id, None)
+            continue
         cur = already.get(pid)
         if cur is not None and cur != ws_id:
             # The pane already carries a track tag. Workspace membership
@@ -212,9 +221,14 @@ def migrate_workspaces_to_tracks() -> int:
             cur_row = activity.get_track(cur)
             is_repo_default = bool(cur_row and cur_row.get("repo") == cur)
             if not is_repo_default:
-                continue  # user moved it to another goal track → leave it
+                # User moved it to another goal track → leave the tag, but the
+                # legacy row is consumed (same %N-reuse hazard as above).
+                activity.set_pane_workspace(pane_id, None)
+                continue
         elif cur == ws_id:
-            continue  # already in this workspace's track → no-op
+            activity.set_pane_workspace(pane_id, None)
+            continue  # already in this workspace's track → row consumed
         activity.set_pane_track(pid, ws_id)
+        activity.set_pane_workspace(pane_id, None)
         written += 1
     return written

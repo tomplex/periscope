@@ -136,6 +136,10 @@ def test_migrate_workspaces_to_tracks(clean_state, monkeypatch):
     assert row and row["name"] == "Auth" and row["repo"] == "/r/fdy"
     assert activity.get_pane_track("aaaa0001") == ws["id"]
     assert activity.get_pane_track("aaaa0002") == "tk_other"  # move preserved
+    # Every handled row is CONSUMED — folded (%1), preserved (%2), and
+    # unresolvable (%9) alike. Left behind, a %N-keyed row would match an
+    # unrelated future pane that drew the same %N after a tmux restart.
+    assert activity.pane_workspace_map() == {}
     assert tracks.migrate_workspaces_to_tracks() == 0  # idempotent
 
 
@@ -148,6 +152,9 @@ def test_migrate_workspaces_skips_archived(clean_state, monkeypatch):
     assert tracks.migrate_workspaces_to_tracks() == 0
     assert activity.get_track(ws["id"]) is None
     assert activity.get_pane_track("aaaa0009") is None
+    # Archived-workspace rows are skipped, not consumed — they never write a
+    # tag, so lingering is harmless (unlike live-workspace rows).
+    assert activity.pane_workspace_map() == {"%9": ws["id"]}
 
 
 def test_migrate_workspaces_overrides_repo_default(clean_state, monkeypatch):

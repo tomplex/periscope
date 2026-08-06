@@ -884,6 +884,57 @@ def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, 
     assert activity.get_pane_track("child99") == tracks.repo_default_track("/r")
 
 
+def _mock_same_mode_spawn(mocker, parent_pid="parent11"):
+    """Stub the spawn shell-outs for the "same"-mode tag-branch tests."""
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value=parent_pid)
+    mocker.patch("periscope.channels.set_window_fields")
+    mocker.patch("periscope.channels.list_windows", return_value=[])
+    mocker.patch("periscope.channels.emit_channel_event",
+                 new=AsyncMock(return_value=True))
+    resolve = mocker.patch("periscope.channels.tracks.resolve_track_for_window",
+                           return_value="tk_caller")
+    move = mocker.patch("periscope.channels.tracks.move_pane")
+    return resolve, move
+
+
+def test_spawn_same_inherits_callers_track_by_pid(mocker):
+    """The "same" branch resolves the CALLER's track by its resolved pid (the
+    re-keyed input contract — never the %N pane id) and tags the SPAWNED
+    window's stamped pid into the result."""
+    from periscope import channels
+    resolve, move = _mock_same_mode_spawn(mocker)
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    resolve.assert_called_once_with({"pid": "parent11", "cwd": "/home/tom"})
+    move.assert_called_once_with("child99", "tk_caller")
+
+
+def test_spawn_same_vanished_caller_falls_to_cwd_default(mocker, caplog):
+    """Empty parent_pid (caller vanished): resolve gets pid="" and falls
+    through to the cwd's default, and the fallback is logged."""
+    import logging
+
+    from periscope import channels
+    resolve, move = _mock_same_mode_spawn(mocker, parent_pid="")
+
+    with caplog.at_level(logging.INFO, logger="periscope"):
+        asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    resolve.assert_called_once_with({"pid": "", "cwd": "/home/tom"})
+    move.assert_called_once_with("child99", "tk_caller")
+    assert "caller pid unresolved" in caplog.text
+
+
 def test_send_to_happy(mocker):
     from periscope import channels
     mocker.patch("periscope.channels._resolve_window_by_pid",
