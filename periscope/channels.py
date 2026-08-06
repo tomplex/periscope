@@ -777,6 +777,11 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         tracks.move_pane(pid, tracks.resolve_track_for_window(
             {"pid": parent_pid, "cwd": caller_cwd}))
 
+    # The FINAL track the spawn landed in, after the precedence above played
+    # out — resolved (tagged pid short-circuits; untagged falls to the spawn
+    # cwd's default) rather than re-deriving the branches, so the result always
+    # names the pane's real roster group for list_claudes(track="mine").
+    final_tid = tracks.resolve_track_for_window({"pid": pid, "cwd": cwd})
     body = {
         "ok": True,
         "target": target,
@@ -785,6 +790,8 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         "pid": pid,
         "pane_id": pane_id,
         "workspace_id": tagged_workspace,
+        "track": {"id": final_tid, "label": tracks.track_label(final_tid),
+                  "kind": tracks.track_kind(final_tid)},
     }
     return _tool_result(body)
 
@@ -951,7 +958,14 @@ def _do_resume_session_tool(pane: str, arguments: dict):
             target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
             new_pid = stamp_new_window(target)
             tracks.move_pane(new_pid, ws_id)
-            result = {**result, "workspace_id": ws_id, "pid": new_pid}
+            # Resolve rather than echo ws_id: the tag row just written is the
+            # authority (no cwd in scope here — with a tagged pid, cwd is only
+            # the fallback), and resolving keeps the result honest if the tag
+            # ever races an archive.
+            tid = tracks.resolve_track_for_window({"pid": new_pid})
+            result = {**result, "workspace_id": ws_id, "pid": new_pid,
+                      "track": {"id": tid, "label": tracks.track_label(tid),
+                                "kind": tracks.track_kind(tid)}}
     return _tool_result(result)
 
 
@@ -1225,6 +1239,14 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
     _attach_git_then_resolve_pids(windows, full_roster=True)  # attaches pid, strips pid_raw (not thread-safe)
     statuses = pane_status_lines()
 
+    def _track_info(w):
+        # The pane's rail group. LOOSE resolves to {"loose","loose","loose"}
+        # (verified: track_label/track_kind both special-case LOOSE_KEY), so
+        # same-track comparisons never need a null-guard.
+        tid = tracks.resolve_track_for_window(w)
+        return {"id": tid, "label": tracks.track_label(tid),
+                "kind": tracks.track_kind(tid)}
+
     def _collect():
         out = []
         trees: list[str] = []   # parallel to `out`: each row's working tree
@@ -1269,15 +1291,38 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
                 # delegating into a hole.
                 "channel_ready": pane_channel_ready(pane_id),
                 "spawned_by": get_window(pid).get("spawned_by"),
+                "track": _track_info(w),
             })
             # Worktree root when the cwd is in a repo, else the resolved cwd —
             # so two panes in different subdirs of one tree still group.
             trees.append(signal.get("toplevel")
                          or os.path.realpath(w.get("cwd") or "") or "")
-        return _mark_shared_trees(out, trees)
+        # Self-identification: which of these windows is the CALLER. Resolved
+        # here (in the thread) rather than after the await — a track resolve
+        # can miss the git-state cache and shell out, which is exactly what
+        # this offload exists to keep off the event loop. Scans all windows,
+        # not just claude rows, so a caller whose capture/parse hiccuped still
+        # resolves.
+        you = None
+        for w in windows:
+            if w.get("pane_id") == pane:
+                you = {"handle": w.get("pid") or "", "track": _track_info(w)}
+                break
+        return _mark_shared_trees(out, trees), you
 
-    claudes = await asyncio.to_thread(_collect)
-    return _tool_result({"ok": True, "claudes": claudes})
+    claudes, you = await asyncio.to_thread(_collect)
+    want = str(arguments.get("track") or "").strip()
+    if want == "mine":
+        if you is None:
+            # Only the active pane per window is visible to list_windows — a
+            # background split pane can't resolve itself. Refuse loudly.
+            return _tool_result({"ok": False, "error":
+                "cannot resolve your own pane to a track (background split "
+                "pane?) — call without the track filter"})
+        want = you["track"]["id"]
+    if want:
+        claudes = [c for c in claudes if c.get("track", {}).get("id") == want]
+    return _tool_result({"ok": True, "you": you, "claudes": claudes})
 
 
 def _do_list_workspaces_tool(pane: str, arguments: dict):
@@ -1555,7 +1600,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "`report` tool, which routes to you automatically — it "
             "does NOT need your handle, so don't spend prompt "
             "budget telling it how to find you. Say what to report "
-            "and when; `report` handles the addressing."
+            "and when; `report` handles the addressing. "
+            "workspace=\"same\" (default) also tags the spawn into "
+            "YOUR track, so your spawns are your roster in "
+            "list_claudes(track=\"mine\")."
         ),
         "inputSchema": {
             "type": "object",
@@ -1815,9 +1863,26 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "routinely wrong about specifics: it has named files and tests a "
             "pane never touched. Never act on it as if the pane said it. Use "
             "`peek` to find out what a pane is actually doing before you "
-            "interrupt, correct, or terminate it."
+            "interrupt, correct, or terminate it. "
+            "Each row carries `track` ({id,label,kind} — the rail group the "
+            "pane belongs to). The response carries `you` (your own handle "
+            "and track; null when your pane can't be resolved — e.g. a "
+            "background split pane). Pass `track: \"mine\"` to list only "
+            "your own track's panes — your program's roster — or an explicit "
+            "track id."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "track": {
+                    "type": "string",
+                    "description": (
+                        "Filter to one track: \"mine\" for the caller's own, "
+                        "or a track id from a previous call."
+                    ),
+                },
+            },
+        },
         "handler": _do_list_claudes_tool,
     },
     {

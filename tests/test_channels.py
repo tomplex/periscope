@@ -460,6 +460,8 @@ def test_resume_session_tool_tags_pane_track(fresh_activity_db, mocker):
     assert body["pid"] == "resu8888"
     stamp.assert_called_once_with("resumes:3")
     assert activity.get_pane_track("resu8888") == tk["id"]
+    # The result names the track the resumed pane joined (its roster group).
+    assert body["track"] == {"id": tk["id"], "label": "Auth", "kind": "goal"}
 
 
 # --- inter-claude management tools ---
@@ -832,6 +834,8 @@ def test_spawn_workspace_id_tags_pane_track(fresh_activity_db, mocker):
     assert res["workspace_id"] == tk["id"]
     # Tagged by the stamped @periscope_id (the stamp_new_window return).
     assert activity.get_pane_track("child99") == tk["id"]
+    # The result names the FINAL track the spawn landed in — the roster group.
+    assert res["track"] == {"id": tk["id"], "label": "Auth", "kind": "goal"}
 
 
 def test_spawn_workspace_id_unknown_track_skips_tag(fresh_activity_db, mocker):
@@ -847,6 +851,9 @@ def test_spawn_workspace_id_unknown_track_skips_tag(fresh_activity_db, mocker):
     mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
+    # The result's final-track resolve falls through the (skipped) tag to the
+    # cwd default — keep it off real git.
+    mocker.patch("periscope.git_pr.cached_git_state", return_value=None)
 
     res = _body(asyncio.run(
         channels._do_spawn_claude_tool("%1", {"prompt": "go", "workspace_id": "tk_nope"})))
@@ -915,7 +922,9 @@ def test_spawn_same_inherits_callers_track_by_pid(mocker):
 
     asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
-    resolve.assert_called_once_with({"pid": "parent11", "cwd": "/home/tom"})
+    # First resolve is the caller's track (the tag); the result body triggers a
+    # second resolve for the spawned pane's final track.
+    assert resolve.call_args_list[0].args == ({"pid": "parent11", "cwd": "/home/tom"},)
     move.assert_called_once_with("child99", "tk_caller")
 
 
@@ -930,7 +939,7 @@ def test_spawn_same_vanished_caller_falls_to_cwd_default(mocker, caplog):
     with caplog.at_level(logging.INFO, logger="periscope"):
         asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
-    resolve.assert_called_once_with({"pid": "", "cwd": "/home/tom"})
+    assert resolve.call_args_list[0].args == ({"pid": "", "cwd": "/home/tom"},)
     move.assert_called_once_with("child99", "tk_caller")
     assert "caller pid unresolved" in caplog.text
 
@@ -1093,10 +1102,16 @@ def test_list_claudes_filters_and_trims(mocker):
         "toplevel": "/a", "head": "9eab154", "head_subject": "label status",
         "head_committed_at": 1700000000, "dirty": 6,
     })
+    # Untagged pid + mocked-out repo resolution → the LOOSE catchall, so the
+    # exact-dict assertion stays hermetic (no real git run on the fake cwd).
+    mocker.patch("periscope.git_pr.cached_git_state", return_value=None)
 
     body = _body(asyncio.run(channels._do_list_claudes_tool("%1", {})))
 
     assert body["ok"] is True
+    # Caller pane %1 isn't in the window list, so the tool can't say who "you"
+    # are — null, not a guess.
+    assert body["you"] is None
     assert len(body["claudes"]) == 1
     c = body["claudes"][0]
     assert c == {
@@ -1105,6 +1120,7 @@ def test_list_claudes_filters_and_trims(mocker):
         "spawned_by": "boss0", "head": "9eab154",
         "head_subject": "label status", "head_committed_at": 1700000000,
         "dirty": 6, "cwd_shared_with": [],
+        "track": {"id": "loose", "label": "loose", "kind": "loose"},
         # None = no claude process resolved for the pane, so no assertion
         # either way about whether it registered the channel.
         "channel_ready": None,
@@ -1158,11 +1174,98 @@ def test_list_claudes_non_git_cwd_has_null_signal(mocker):
     mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
     mocker.patch("periscope.channels.get_window", return_value={})
     mocker.patch("periscope.git_pr.cached_git_signal", return_value=None)
+    mocker.patch("periscope.git_pr.cached_git_state", return_value=None)
 
     body = _body(asyncio.run(channels._do_list_claudes_tool("%1", {})))
 
     c = body["claudes"][0]
     assert c["dirty"] is None and c["head"] is None
+
+
+def _mock_list_claudes_roster(mocker):
+    """Two-claude roster for the track tests: window A (%2/pa) and B (%3/pb),
+    both parsing as claude, git state mocked out so an untagged pane falls
+    deterministically to LOOSE instead of shelling git on a fake cwd."""
+    from periscope import channels
+    rows = [
+        {"session": "s", "index": 1, "name": "lead", "cwd": "/a", "pane_id": "%2", "pid_raw": "pa"},
+        {"session": "s", "index": 2, "name": "peer", "cwd": "/b", "pane_id": "%3", "pid_raw": "pb"},
+    ]
+    mocker.patch("periscope.channels.list_windows", return_value=rows)
+
+    def _attach(ws, **kw):
+        for w in ws:
+            if "pid_raw" in w:
+                w["pid"] = w.pop("pid_raw")
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
+    mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
+    mocker.patch("periscope.panes.parse_pane", return_value={"agent": "claude"})
+    mocker.patch("periscope.activity.pane_status_lines", return_value={})
+    mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
+    mocker.patch("periscope.channels.get_window", return_value={})
+    mocker.patch("periscope.git_pr.cached_git_signal", return_value=None)
+    mocker.patch("periscope.git_pr.cached_git_state", return_value=None)
+    return channels
+
+
+def test_list_claudes_rows_carry_track_and_you(fresh_activity_db, mocker):
+    """Each row carries its rail group; the response says who the CALLER is
+    (handle + track) so `track: "mine"` and roster reasoning need no guessing."""
+    from periscope import activity, tracks
+    channels = _mock_list_claudes_roster(mocker)
+    tk = tracks.create_track(name="Goal")
+    activity.set_pane_track("pa", tk["id"])
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%2", {})))
+
+    assert body["ok"] is True
+    by_handle = {c["handle"]: c for c in body["claudes"]}
+    assert by_handle["pa"]["track"] == {"id": tk["id"], "label": "Goal", "kind": "goal"}
+    # Untagged, non-git cwd → the LOOSE bucket, surfaced as a full track dict
+    # so same-track comparisons never need a null-guard.
+    assert by_handle["pb"]["track"] == {"id": "loose", "label": "loose", "kind": "loose"}
+    assert body["you"] == {"handle": "pa",
+                           "track": {"id": tk["id"], "label": "Goal", "kind": "goal"}}
+
+
+def test_list_claudes_track_mine_filters(fresh_activity_db, mocker):
+    from periscope import activity, tracks
+    channels = _mock_list_claudes_roster(mocker)
+    tk = tracks.create_track(name="Goal")
+    activity.set_pane_track("pa", tk["id"])
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%2", {"track": "mine"})))
+
+    assert body["ok"] is True
+    assert [c["handle"] for c in body["claudes"]] == ["pa"]
+
+
+def test_list_claudes_track_explicit_id_filters(fresh_activity_db, mocker):
+    """An explicit track id filters regardless of which track the caller is in."""
+    from periscope import activity, tracks
+    channels = _mock_list_claudes_roster(mocker)
+    tk = tracks.create_track(name="Goal")
+    activity.set_pane_track("pa", tk["id"])
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%3", {"track": tk["id"]})))
+
+    assert body["ok"] is True
+    assert [c["handle"] for c in body["claudes"]] == ["pa"]
+    assert body["you"]["handle"] == "pb"
+    assert body["you"]["track"]["kind"] == "loose"
+
+
+def test_list_claudes_track_mine_refused_without_you(fresh_activity_db, mocker):
+    """Only the active pane per window is visible to list_windows — a caller in
+    a background split pane can't resolve itself, so "mine" must refuse loudly
+    instead of silently returning everything (or nothing)."""
+    channels = _mock_list_claudes_roster(mocker)
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%9", {"track": "mine"})))
+
+    assert body["ok"] is False
+    assert "cannot resolve your own pane" in body["error"]
+    assert "without the track filter" in body["error"]
 
 
 def _peek_msgs(mocker, msgs):
