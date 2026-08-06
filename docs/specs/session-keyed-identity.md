@@ -154,7 +154,19 @@ Inside the pass, per window:
   `last_seen.sid` against that uuid. Today this is usually redundant (resume
   preserves the id — see §"What exists today"), but it is the documented
   rotation case's safety net: if a resume ever mints a fresh sid, the argv
-  still names the lineage. Same TTL exemption, same exclusions.
+  still names the lineage. Same TTL exemption, same exclusions — **plus cwd
+  corroboration**: the entry's `last_seen.cwd` must equal the window's cwd.
+  The resume hint is a regex over `ps` argv, which flattens the whole command
+  line INCLUDING any first-message prompt — without the gate, a fresh pane
+  whose prompt merely mentions `claude --resume <uuid>` inherits a dead
+  session's identity. The genuine cases (resurrect restore, move-account,
+  resume tool) all resume in the transcript's own cwd, so the gate costs
+  them nothing. Two residuals, accepted: a prompt quoting the uuid from
+  *inside the same cwd* still matches (narrow, and the entry must also be
+  orphaned); and any 0b match overwrites the entry's recorded sid with the
+  new live sid — right for genuine rotation, lineage-destroying on a false
+  match, and the two cases are indistinguishable, so don't "fix" the
+  overwrite in either direction.
 - Passes 1 and 2 are unchanged and remain the fallback for panes with no live
   claude (shells, codex panes, mid-restart gaps).
 - Passes 0/0b still exclude `taken | carried`. Two live windows reporting the
