@@ -50,12 +50,15 @@ def test_move_tab_retags():
     assert activity.get_pane_track("beef0007") == tid
 
 
-def test_move_tab_takes_pid():
+def test_move_tab_rejects_pane_id_field():
+    """The old %N-keyed field must 422, not be leniently aliased — a silently
+    accepted pane_id would key rows on the rotating tmux id again (the exact
+    bug the pid re-key removed)."""
     tid = client.post("/api/tracks", json={"name": "T"}).json()["id"]
-    r = client.post(f"/api/tracks/move-tab?track_id={tid}", json={"pid": "cafe0001"})
-    assert r.status_code == 200
+    r = client.post(f"/api/tracks/move-tab?track_id={tid}", json={"pane_id": "%7"})
+    assert r.status_code == 422
     from periscope import activity
-    assert activity.get_pane_track("cafe0001") == tid
+    assert activity.get_pane_track("%7") is None
 
 
 def test_move_tab_missing_track_404():
