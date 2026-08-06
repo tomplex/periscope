@@ -343,6 +343,64 @@ def test_rebind_pass0_ignores_rebind_ttl(clean_state, mocker):
     assert w["pid"] == "cccc3333"
 
 
+def test_rebind_pass0_sid_beats_session_name(clean_state, mocker):
+    """Pass 0 outranks pass 1 too: an occupancy match on (session, name) is
+    circumstantial, the sid names the actual conversation."""
+    mocker.patch("periscope.pids._stamp_pid")
+    now = int(time.time())
+    from periscope import store
+    store._STATE["windows"] = {
+        "ffff6666": {"last_seen": {"session": "periscope", "name": "fresh",
+                                   "branch": "b1", "cwd": "/other",
+                                   "ts": now - 30, "sid": "sid-OTHER",
+                                   "pane_id": "%92"}},
+        "abcd7777": {"last_seen": {"session": "old", "name": "elsewhere",
+                                   "branch": "b2", "cwd": "/wt", "ts": now - 60,
+                                   "sid": "sid-MINE", "pane_id": "%93"}},
+    }
+    w = _mkwin(session="periscope", name="fresh", branch="b1", cwd="/wt",
+               pane_id="%9")
+    resolve_pids([w], session_hints={"%9": {"sid": "sid-MINE", "resume": None}})
+    assert w["pid"] == "abcd7777"
+
+
+def test_rebind_pass0_never_steals_a_carried_pid(clean_state, mocker):
+    """The taken|carried exclusion applies to pass 0 as well: a sid hint
+    pointing at an entry whose pid a live window in the SAME pass still
+    carries must not hand that pid to an unstamped window — same duplicate
+    factory as the (session, name) / (branch, cwd) steal, just via sid."""
+    mocker.patch("periscope.pids._stamp_pid")
+    mocker.patch("periscope.pids._mint_pid",
+                 side_effect=[f"fresh{i:03x}" for i in range(10)])
+    from periscope import store
+
+    now = int(time.time())
+    store._STATE["windows"] = {
+        "beef0002": {
+            "last_seen": {"session": "periscope", "name": "claude",
+                          "branch": "main", "cwd": "/repo", "ts": now,
+                          "sid": "sid-LIVE", "pane_id": "%40"},
+            "linked_pr": 4321,
+        },
+    }
+    windows = [
+        # Unstamped window whose (stale/argv-derived) sid hint points at the
+        # live window's entry.
+        _mkwin(index=1, name="claude", pane_id="%41", window_id="@30"),
+        # The live window that actually owns beef0002.
+        _mkwin(index=2, name="claude", pane_id="%40", window_id="@31",
+               pid_raw="beef0002"),
+    ]
+    resolve_pids(windows, session_hints={
+        "%41": {"sid": "sid-LIVE", "resume": None},
+        "%40": {"sid": "sid-LIVE", "resume": None},
+    })
+    assert windows[1]["pid"] == "beef0002", (
+        f"live window lost its identity: {windows[1]['pid']}"
+    )
+    assert windows[0]["pid"] != "beef0002"
+
+
 def test_rebind_pass0b_resume_lineage_with_cwd_corroboration(clean_state, mocker):
     """Live sid matches nothing (rotation case) but argv's --resume uuid names
     the lineage — honored only when the window sits in the entry's own cwd."""
