@@ -2,6 +2,7 @@
 ~/.claude/sessions/<pid>.json, replacing TUI scraping for the
 working/needs-input/idle signal."""
 import json
+import time
 
 import pytest
 
@@ -11,12 +12,14 @@ import periscope.session_status as ss
 @pytest.fixture(autouse=True)
 def _reset_caches(monkeypatch):
     # Each test seeds its own sessions dir + live-pid set; clear the per-poll
-    # caches so state doesn't leak between tests.
+    # caches so state doesn't leak between tests. _config_dirs_cache is SEEDED
+    # empty rather than cleared: _build_index consults pane_config_dirs(), and
+    # an empty cache miss would fork real tmux/ps inside every index test.
     monkeypatch.setattr(ss, "_index_cache", None)
     monkeypatch.setattr(ss, "_claude_procs_cache", None)
     monkeypatch.setattr(ss, "_proc_table_cache", None)
     monkeypatch.setattr(ss, "_pane_pids_cache", None)
-    monkeypatch.setattr(ss, "_config_dirs_cache", None, raising=False)
+    monkeypatch.setattr(ss, "_config_dirs_cache", (time.time(), {}), raising=False)
 
 
 def _seed(tmp_path, monkeypatch, *sessions, live_pids=None):
@@ -286,3 +289,59 @@ def test_live_session_id_for_pane_ignores_dead_pid(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch, _sess(403, "sid-stale", "busy"), live_pids=set())
     monkeypatch.setattr(ss, "pane_claude_pids", lambda: {"%7": 403})
     assert ss.live_session_id_for_pane("%7") is None
+
+
+# ── multi-account sessions-dir scan ──────────────────────────────────────
+
+def test_build_index_scans_every_live_config_dir(tmp_path, mocker):
+    """A pane on CLAUDE_CONFIG_DIR=~/.claude-b writes sessions/<pid>.json
+    there; indexing only ~/.claude made the authoritative sid source blind on
+    exactly the panes an account swap creates."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    (a / "sessions").mkdir(parents=True)
+    (b / "sessions").mkdir(parents=True)
+    (a / "sessions" / "100.json").write_text('{"sessionId": "sid-a", "pid": 100}')
+    (b / "sessions" / "200.json").write_text('{"sessionId": "sid-b", "pid": 200}')
+    mocker.patch.object(ss, "_SESSIONS_DIR", a / "sessions")
+    mocker.patch.object(ss, "pane_config_dirs", return_value={"%9": str(b)})
+    by_sid, by_pid = ss._build_index()
+    assert "sid-a" in by_sid and "sid-b" in by_sid
+    assert {c["sessionId"] for c in by_pid[200]} == {"sid-b"}
+
+
+def test_by_pid_prefers_the_panes_own_config_dir(tmp_path, mocker):
+    """A recycled pid can leave a STALE <pid>.json in account A's dir while
+    account B's live claude wrote the real one — last-insert-wins handed back
+    a wrong sid, which would feed the TTL-exempt rebind pass 0 and reattach a
+    month-old entry's immunity fields."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    (a / "sessions").mkdir(parents=True)
+    (b / "sessions").mkdir(parents=True)
+    (a / "sessions" / "300.json").write_text('{"sessionId": "stale-sid", "pid": 300}')
+    (b / "sessions" / "300.json").write_text('{"sessionId": "live-sid", "pid": 300}')
+    mocker.patch.object(ss, "_SESSIONS_DIR", a / "sessions")
+    mocker.patch.object(ss, "pane_config_dirs", return_value={"%7": str(b)})
+    mocker.patch.object(ss, "pane_claude_pids", return_value={"%7": 300})
+    mocker.patch.object(ss, "_live_claude_pids", return_value={300})
+    assert ss.live_session_id_for_pane("%7") == "live-sid"
+
+
+def test_by_pid_mtime_fallback_when_pane_dir_unknown(tmp_path, mocker):
+    """When the ps scan missed the pane's config dir, prefer the newest file —
+    a live claude rewrites its session file; a stale one never does."""
+    import os
+    a, b = tmp_path / "a", tmp_path / "b"
+    (a / "sessions").mkdir(parents=True)
+    (b / "sessions").mkdir(parents=True)
+    old, new = a / "sessions" / "400.json", b / "sessions" / "400.json"
+    old.write_text('{"sessionId": "old-sid", "pid": 400}')
+    new.write_text('{"sessionId": "new-sid", "pid": 400}')
+    os.utime(old, (1000, 1000))
+    os.utime(new, (2000, 2000))
+    mocker.patch.object(ss, "_SESSIONS_DIR", a / "sessions")
+    mocker.patch.object(ss, "pane_config_dirs",
+                        return_value={"%1": str(b)})   # dirs to scan
+    mocker.patch.object(ss, "pane_claude_pids",
+                        return_value={"%5": 400})       # %5's dir unknown
+    mocker.patch.object(ss, "_live_claude_pids", return_value={400})
+    assert ss.live_session_id_for_pane("%5") == "new-sid"

@@ -41,9 +41,11 @@ _STATE_MAP = {"busy": "working", "waiting": "needs-input", "idle": "idle"}
 # ~3s poll; scanning ~30 tiny files and one `ps` per pane would be wasteful, so
 # both are built once and reused for the brief window a single poll spans.
 _CACHE_TTL_S = 1.0
-# (built_at, {sid: file}, {pid: file}) — one scan of the directory answers both
-# directions (sessionId -> state, pid -> current sessionId).
-_index_cache: tuple[float, dict, dict] | None = None
+# (built_at, {sid: file}, {pid: [files newest-first]}) — one scan of every live
+# account's sessions dir answers both directions (sessionId -> state,
+# pid -> current sessionId). by_pid holds a LIST because the same OS pid can
+# have a file in more than one account's dir (recycled pid, account swap).
+_index_cache: tuple[float, dict, dict[int, list[dict]]] | None = None
 # (built_at, {pid: (rss_kb, age_s)}) — one ps snapshot serves both pid
 # liveness (the key set) and the memory/uptime cycle-hint.
 _claude_procs_cache: tuple[float, dict[int, tuple[int, int]]] | None = None
@@ -58,27 +60,46 @@ _CONFIG_DIRS_TTL_S = 15.0
 _config_dirs_cache: tuple[float, dict[str, str]] | None = None
 
 
-def _build_index() -> tuple[dict, dict]:
+def _session_dirs() -> list[Path]:
+    """Every live account's sessions dir. The default account first, then each
+    distinct CLAUDE_CONFIG_DIR a live claude runs under — panes on a secondary
+    account write <config_dir>/sessions/<pid>.json, invisible to a single-dir
+    scan (the account-swap blindness in the 2026-08-05 identity merge)."""
+    dirs = [_SESSIONS_DIR]
+    for cfg in dict.fromkeys(pane_config_dirs().values()):
+        p = Path(cfg).expanduser() / "sessions"
+        if p != _SESSIONS_DIR:
+            dirs.append(p)
+    return dirs
+
+
+def _build_index() -> tuple[dict, dict[int, list[dict]]]:
     by_sid: dict = {}
-    by_pid: dict = {}
-    try:
-        files = list(_SESSIONS_DIR.glob("*.json"))
-    except OSError:
-        return by_sid, by_pid
-    for f in files:
+    by_pid: dict[int, list[dict]] = {}
+    for d in _session_dirs():
         try:
-            d = json.loads(f.read_text())
-        except (OSError, ValueError):
+            files = list(d.glob("*.json"))
+        except OSError:
             continue
-        sid = d.get("sessionId")
-        if sid:
-            by_sid[sid] = d
-        with contextlib.suppress(TypeError, ValueError):
-            by_pid[int(d.get("pid"))] = d
+        for f in files:
+            try:
+                data = json.loads(f.read_text())
+                mtime = f.stat().st_mtime
+            except (OSError, ValueError):
+                continue
+            data["_dir"] = str(d.parent)   # config dir, for the per-pane tiebreak
+            data["_mtime"] = mtime
+            sid = data.get("sessionId")
+            if sid:
+                by_sid[sid] = data
+            with contextlib.suppress(TypeError, ValueError):
+                by_pid.setdefault(int(data.get("pid")), []).append(data)
+    for cands in by_pid.values():
+        cands.sort(key=lambda c: c["_mtime"], reverse=True)
     return by_sid, by_pid
 
 
-def _indexes() -> tuple[dict, dict]:
+def _indexes() -> tuple[dict, dict[int, list[dict]]]:
     global _index_cache
     now = time.time()
     if _index_cache and now - _index_cache[0] < _CACHE_TTL_S:
@@ -330,14 +351,30 @@ def live_session_id_for_pane(pane_id: str) -> str | None:
     the pane has no live claude / no session file for it.
 
     Only honored when the pid is a live claude: a leftover <pid>.json whose pid
-    has been recycled would otherwise hand back an unrelated session."""
+    has been recycled would otherwise hand back an unrelated session. Across
+    accounts the same pid can have one live and one stale file (a recycled pid
+    overwrites in place only within its own dir) — prefer the file from the
+    pane's own CLAUDE_CONFIG_DIR; newest-mtime when that dir is unknown."""
     if not pane_id:
         return None
     pid = pane_claude_pids().get(pane_id)
     if pid is None or pid not in _live_claude_pids():
         return None
-    d = _indexes()[1].get(pid)
-    return d.get("sessionId") if d else None
+    cands = _indexes()[1].get(pid)
+    if not cands:
+        return None
+    cfg = pane_config_dirs().get(pane_id)
+    if cfg is None:
+        # pane_config_dirs has entries only for panes on a NON-default account
+        # (env var absent → no entry) — so "dir unknown" covers every
+        # default-account pane. Newest mtime is the live file there: a running
+        # claude rewrites its session file; a stale one never does.
+        return cands[0].get("sessionId")
+    want = str(Path(cfg).expanduser())
+    for c in cands:
+        if c["_dir"] == want:
+            return c.get("sessionId")
+    return cands[0].get("sessionId")   # pane's dir had no file — newest wins
 
 
 def claude_proc_for(sid: str | None) -> dict | None:
