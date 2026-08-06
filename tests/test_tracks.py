@@ -171,3 +171,17 @@ def test_migrate_workspaces_overrides_repo_default(clean_state, monkeypatch):
 
     assert tracks.migrate_workspaces_to_tracks() == 1
     assert activity.get_pane_track("aaaa0003") == ws["id"]  # repo-default overridden
+
+
+def test_seed_tracks_leaves_legacy_tagged_panes_for_migration(fresh_activity_db,
+                                                              mocker):
+    """A legacy %N row IS the pane's tag under its pre-re-key key. Seeding a
+    repo-default pid row over it pre-empts resolve's lazy migration, whose
+    never-clobber guard then discards the goal-track tag — the 2026-08-06
+    deploy wiped every goal track this way."""
+    mocker.patch.object(tracks, "_repo_for_window", return_value=None)
+    activity.set_pane_track("%9", "tk_goal")
+    windows = [{"pid_raw": "feed0009", "pane_id": "%9", "cwd": "/x"}]
+    assert tracks.seed_tracks(windows) == 0
+    assert activity.get_pane_track("feed0009") is None
+    assert activity.get_pane_track("%9") == "tk_goal"

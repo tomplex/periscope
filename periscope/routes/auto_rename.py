@@ -16,7 +16,7 @@ from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.panes import list_windows, parse_pane
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.rename_ai import build_rename_prompt, claude_complete, transcript_summary
-from periscope.tmux import capture, pane_meta, tmux
+from periscope.tmux import capture, pane_meta, tmux, window_identity
 
 router = APIRouter()
 
@@ -115,7 +115,9 @@ def auto_rename_window(session: str, index: int):
 
     # Single-window pid resolution: build a one-element list and reuse the
     # batch helper so `last_seen` stays current for this window too.
-    one = [{"session": session, "index": index, "name": current_name, "active": False, "cwd": cwd, "pid_raw": ""}]
+    pid_raw, pane_id, window_id = window_identity(target)
+    one = [{"session": session, "index": index, "name": current_name, "active": False,
+            "cwd": cwd, "pid_raw": pid_raw, "pane_id": pane_id, "window_id": window_id}]
     _attach_git_then_resolve_pids(one)
     pid = one[0].get("pid")
     if not current_name:

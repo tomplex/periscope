@@ -148,3 +148,18 @@ def test_env_args_builds_e_flag():
     assert env_args("/Users/tom/.claude-b") == [
         "-e", "CLAUDE_CONFIG_DIR=/Users/tom/.claude-b"
     ]
+
+
+def test_window_identity_parses_three_fields(mocker):
+    """Synthetic single-window rows must carry the real stamp — a hard-coded
+    pid_raw="" made every detail-pane poll rebind and flap last_seen.pane_id
+    (2026-08-06, post session-keyed-identity deploy)."""
+    from periscope import tmux as tmux_mod
+    mocker.patch.object(tmux_mod, "tmux", return_value="abc12345\t%7\t@9\n")
+    assert tmux_mod.window_identity("s:1") == ("abc12345", "%7", "@9")
+
+
+def test_window_identity_empty_on_unstamped(mocker):
+    from periscope import tmux as tmux_mod
+    mocker.patch.object(tmux_mod, "tmux", return_value="\t%7\t@9\n")
+    assert tmux_mod.window_identity("s:1") == ("", "%7", "@9")

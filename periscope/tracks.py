@@ -163,6 +163,13 @@ def seed_tracks(windows: list[dict]) -> int:
         pid = w.get("pid") or w.get("pid_raw")
         if not pid or pid in existing:
             continue
+        if (w.get("pane_id") or "") in existing:
+            # A legacy %N row IS this pane's tag, just under its pre-re-key
+            # key. Writing a repo-default pid row here pre-empts resolve's
+            # lazy migration, whose never-clobber guard then discards the
+            # user's goal-track tag — the 2026-08-06 deploy wiped every
+            # goal track this way. Leave the pane for the migration.
+            continue
         activity.set_pane_track(pid, resolve_track_for_window(w))
         written += 1
     return written

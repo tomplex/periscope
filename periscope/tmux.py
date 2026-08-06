@@ -110,6 +110,23 @@ def pane_meta(target: str) -> tuple[str, str]:
     return window_name, cwd
 
 
+def window_identity(target: str) -> tuple[str, str, str]:
+    """`(@periscope_id, pane_id, window_id)` for a tmux target, "" each on
+    failure. Synthetic single-window rows fed to resolve_pids MUST carry the
+    real stamp: a hard-coded pid_raw="" reads as an unstamped window, so every
+    call rebinds (log spam at detail-pane poll cadence) and last_seen.pane_id
+    flaps None↔%N against the real poll, dirtying state.json on each flip
+    (observed 2026-08-06, post session-keyed-identity deploy)."""
+    meta = tmux(
+        "display-message", "-t", target, "-p",
+        "#{@periscope_id}\t#{pane_id}\t#{window_id}",
+    )
+    # rstrip newline ONLY — .strip() would eat the leading tab of an
+    # unstamped window's empty first field and shift every field left.
+    parts = (meta.rstrip("\n").split("\t") + ["", "", ""])[:3]
+    return parts[0], parts[1], parts[2]
+
+
 # Threshold below which `send-keys -H` is used (single subprocess, fast path).
 # Above this we go via load-buffer + paste-buffer to avoid argv bloat — each
 # input byte becomes a 2-char hex arg, so ARG_MAX caps the -H path well below

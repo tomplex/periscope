@@ -24,7 +24,7 @@ from periscope.panes import (
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.store import get_window
 from periscope.tabs import activate_tab, close_tab, open_tab
-from periscope.tmux import pane_meta, tmux
+from periscope.tmux import pane_meta, tmux, window_identity
 from periscope.turns import get_turns_for_pane
 
 router = APIRouter()
@@ -66,7 +66,9 @@ def pane(session: str, index: int, lines: int = 200):
     except Exception:
         window_name, cwd = "", ""
     git = cached_git_state(cwd) or {}
-    one = [{"session": session, "index": index, "name": window_name, "active": False, "cwd": cwd, "pid_raw": ""}]
+    pid_raw, pane_id, window_id = window_identity(target)
+    one = [{"session": session, "index": index, "name": window_name, "active": False,
+            "cwd": cwd, "pid_raw": pid_raw, "pane_id": pane_id, "window_id": window_id}]
     _attach_git_then_resolve_pids(one)
     pid = one[0].get("pid")
     pr = cached_pr_state(cwd, git.get("branch")) or {}
