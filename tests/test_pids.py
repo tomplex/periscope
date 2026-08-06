@@ -629,3 +629,46 @@ def test_maintenance_never_runs_on_partial_pass(clean_state, fresh_activity_db,
     resolve_pids([w])                       # default: partial pass
     assert activity.get_pane_track("feed0006") == "tk_b"   # untouched
     assert pids._TRACKS_MAINTAINED is False
+
+
+def test_identity_merge_scenario_end_to_end(clean_state, fresh_activity_db,
+                                            mocker):
+    """The 2026-08-05 incident: two same-worktree panes; a restart rotates
+    pane ids AND tmux session names. sid-carrying entries must reattach to the
+    right windows and track tags must survive the pane-id rotation."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import activity, pids
+
+    # Before: two panes in one worktree, distinct sids, one in a goal track.
+    hub = _mkwin(session="periscope", index=1, name="pit-architecture",
+                 branch="spike", cwd="/wt", pane_id="%50", window_id="@50")
+    impl = _mkwin(session="periscope", index=2, name="pit-optimization",
+                  branch="spike", cwd="/wt", pane_id="%51", window_id="@51")
+    resolve_pids([hub, impl], session_hints={
+        "%50": {"sid": "sid-hub", "resume": None},
+        "%51": {"sid": "sid-impl", "resume": None}})
+    hub_pid, impl_pid = hub["pid"], impl["pid"]
+    assert hub_pid != impl_pid
+    activity.set_pane_track(hub_pid, "tk_pit")
+
+    # Restart: unstamped windows, rotated pane ids, new session name, and the
+    # IMPL window enumerates first (the order that used to misassign — both
+    # windows share (branch, cwd), so the occupancy passes can't tell them
+    # apart; only the sid can).
+    pids._TRACKS_MAINTAINED = False
+    hub2 = _mkwin(session="resumes", index=1, name="claude",
+                  branch="spike", cwd="/wt", pane_id="%60", window_id="@60")
+    impl2 = _mkwin(session="resumes", index=2, name="claude",
+                   branch="spike", cwd="/wt", pane_id="%61", window_id="@61")
+    resolve_pids([impl2, hub2], session_hints={
+        "%60": {"sid": "sid-hub", "resume": None},
+        "%61": {"sid": "sid-impl", "resume": None}}, full_roster=True)
+
+    assert hub2["pid"] == hub_pid      # identity survived by sid, not order
+    assert impl2["pid"] == impl_pid
+    # The full-roster maintenance pass ran (taken = {hub_pid, impl_pid}): the
+    # hub's tag is on a LIVE pid so prune keeps it, and the impl pane —
+    # never tagged — must not have grown one.
+    assert activity.get_pane_track(hub_pid) == "tk_pit"   # tag keyed on pid
+    assert activity.get_pane_track(impl_pid) is None
+    assert pids._TRACKS_MAINTAINED is True
