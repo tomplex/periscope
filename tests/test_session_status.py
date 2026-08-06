@@ -345,3 +345,19 @@ def test_by_pid_mtime_fallback_when_pane_dir_unknown(tmp_path, mocker):
                         return_value={"%5": 400})       # %5's dir unknown
     mocker.patch.object(ss, "_live_claude_pids", return_value={400})
     assert ss.live_session_id_for_pane("%5") == "new-sid"
+
+
+# ── resume lineage from argv ─────────────────────────────────────────────
+
+def test_pane_resume_ids_reads_resume_uuid_from_argv(mocker):
+    """`--resume <uuid>` in the claude argv names the session lineage even if
+    the live sid rotates — the safety net for the documented rotation-on-resume
+    case (CLAUDE.md pane→session section)."""
+    mocker.patch.object(ss, "pane_claude_pids",
+                        return_value={"%3": 500, "%4": 501})
+    mocker.patch.object(ss, "proc_table", return_value=({}, {
+        500: "claude --resume 828e314f-76fe-42af-a750-e48d1f0a5316",
+        501: "claude --system-prompt xyz",
+    }))
+    assert ss.pane_resume_ids() == {
+        "%3": "828e314f-76fe-42af-a750-e48d1f0a5316"}

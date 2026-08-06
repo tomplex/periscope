@@ -1,4 +1,6 @@
-"""Authoritative Claude pane state from ~/.claude/sessions/<pid>.json.
+"""Authoritative Claude pane state from each account's sessions/<pid>.json —
+~/.claude/sessions plus every live CLAUDE_CONFIG_DIR's sessions/ (see
+`_session_dirs`).
 
 Claude Code writes a small per-session status file (named by OS pid) carrying a
 live `status` — busy / waiting / idle / shell — plus a best-effort `waitingFor`
@@ -261,6 +263,27 @@ def pane_claude_pids() -> dict[str, int]:
             queue.extend(kids.get(pid, ()))
     _pane_pids_cache = (now, found)
     return found
+
+
+_RESUME_RE = re.compile(r"--resume[= ]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+
+
+def pane_resume_ids() -> dict[str, str]:
+    """tmux pane id -> the `--resume <uuid>` in its claude's argv, for panes
+    launched as resumes. The uuid names the session LINEAGE: resume currently
+    preserves the sid (verified 2026-08-06), but rotation on resume/compact is
+    documented from a real incident — argv still says where this claude came
+    from when the live sid no longer matches any recorded entry."""
+    pane_pids = pane_claude_pids()
+    if not pane_pids:
+        return {}   # no tmux/claudes — don't fork ps for nothing
+    out: dict[str, str] = {}
+    _, cmds = proc_table()
+    for pane_id, pid in pane_pids.items():
+        m = _RESUME_RE.search(cmds.get(pid) or "")
+        if m:
+            out[pane_id] = m.group(1)
+    return out
 
 
 def _env_by_pid(pids: list[int]) -> dict[int, str]:

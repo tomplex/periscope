@@ -361,7 +361,7 @@ def _resolve_window_by_pid(handle: str) -> tuple[str, str, dict]:
     # Resolve against the FULL window list, never just the match: a
     # single-window pass has an incomplete `carried` set, so an unstamped
     # window could rebind onto an id another live window is still wearing.
-    _attach_git_then_resolve_pids(wins)
+    _attach_git_then_resolve_pids(wins, full_roster=True)
     return match.get("pid") or "", match.get("pane_id") or "", match
 
 
@@ -1215,7 +1215,7 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
     from periscope.tmux import capture
 
     windows = list_windows()
-    _attach_git_then_resolve_pids(windows)  # attaches pid, strips pid_raw (not thread-safe)
+    _attach_git_then_resolve_pids(windows, full_roster=True)  # attaches pid, strips pid_raw (not thread-safe)
     statuses = pane_status_lines()
 
     def _collect():

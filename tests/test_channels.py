@@ -473,7 +473,7 @@ def test_resolve_window_by_pid_matches_stamped_handle(mocker):
     ]
     mocker.patch("periscope.channels.list_windows", return_value=rows)
 
-    def _attach(ws):
+    def _attach(ws, **kw):
         for w in ws:
             w["pid"] = w.pop("pid_raw")
     mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
@@ -1017,7 +1017,7 @@ def test_list_claudes_filters_and_trims(mocker):
     ]
     mocker.patch("periscope.channels.list_windows", return_value=rows)
 
-    def _attach(ws):
+    def _attach(ws, **kw):
         for w in ws:
             if "pid_raw" in w:
                 w["pid"] = w.pop("pid_raw")
@@ -1094,7 +1094,7 @@ def test_list_claudes_non_git_cwd_has_null_signal(mocker):
              "pane_id": "%2", "pid_raw": "p1"}]
     mocker.patch("periscope.channels.list_windows", return_value=rows)
     mocker.patch("periscope.channels._attach_git_then_resolve_pids",
-                 side_effect=lambda ws: [w.update(pid=w.pop("pid_raw")) for w in ws])
+                 side_effect=lambda ws, **kw: [w.update(pid=w.pop("pid_raw")) for w in ws])
     mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
     mocker.patch("periscope.panes.parse_pane", return_value={"agent": "claude"})
     mocker.patch("periscope.activity.pane_status_lines", return_value={})
@@ -1495,7 +1495,7 @@ def test_resolve_window_by_pid_falls_back_to_pane_id(mocker):
              "pane_id": "%106", "pid_raw": "e42b3b40"}]
     mocker.patch.object(channels, "list_windows", return_value=rows)
     mocker.patch.object(channels, "_attach_git_then_resolve_pids",
-                        side_effect=lambda ws: [w.update(pid=w["pid_raw"]) for w in ws])
+                        side_effect=lambda ws, **kw: [w.update(pid=w["pid_raw"]) for w in ws])
 
     # The stale spawn-time pid no longer resolves...
     assert channels._resolve_window_by_pid("3dc7686a") == ("", "", {})

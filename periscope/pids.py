@@ -9,6 +9,7 @@ restarts. Time-to-live is 30 days — older state.json entries get GC'd.
 import time
 import uuid
 
+from periscope import session_status
 from periscope import store as _store
 from periscope.git_pr import cached_git_state
 from periscope.log import log
@@ -273,7 +274,9 @@ def _gc_workspaces(workspaces: dict, now_ts: int) -> bool:
     return dirty
 
 
-def resolve_pids(windows: list[dict]) -> None:
+def resolve_pids(windows: list[dict],
+                 session_hints: dict[str, dict] | None = None,
+                 full_roster: bool = False) -> None:
     """Mutates `windows` in place, adding a `pid` field to every entry.
 
     For each window:
@@ -290,7 +293,18 @@ def resolve_pids(windows: list[dict]) -> None:
     Callers MUST have populated each window's `branch` (from
     cached_git_state) before calling, or rebind falls back to the
     session/name-only path.
+
+    `session_hints` maps tmux pane id -> {"sid": str|None, "resume": str|None}.
+    The hints are computed by the CALLER (see _attach_git_then_resolve_pids)
+    because building them forks tmux/ps — under _STATE_LOCK those forks would
+    stall every route, and list_claudes runs this resolve on the event loop.
+
+    `full_roster` marks a pass that saw every live window; track-row
+    maintenance in a later task must never run from a partial (single-window)
+    pass, which would read absence as death.
     """
+    hints = session_hints or {}
+    _ = hints, full_roster   # plumbing only — resolution consumes these in Task 4
     if not windows:
         return
     now_ts = int(time.time())
@@ -327,10 +341,13 @@ def resolve_pids(windows: list[dict]) -> None:
             _store._write_state(_store._STATE)
 
 
-def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
-    """resolve_pids relies on `branch` for its secondary match. Populate it
-    via cached_git_state before calling so the rebind heuristic has
-    everything it needs.
+def _attach_git_then_resolve_pids(windows: list[dict],
+                                  full_roster: bool = False) -> None:
+    """resolve_pids relies on `branch` for its secondary match and on session
+    hints (live sid + resume lineage) for its primary one. Both are attached
+    HERE, before resolve takes _STATE_LOCK: hint-building forks tmux/ps on a
+    cold cache, and those forks must not run under the lock or on the event
+    loop (list_claudes resolves in the loop).
 
     Despite the query-sounding name, this performs I/O: resolve_pids stamps
     `@periscope_id` onto tmux windows and may write state.json."""
@@ -338,4 +355,13 @@ def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
         git = cached_git_state(w.get("cwd", "")) or {}
         if "branch" in git:
             w["branch"] = git["branch"]
-    resolve_pids(windows)
+    resumes = session_status.pane_resume_ids()
+    hints: dict[str, dict] = {}
+    for w in windows:
+        pane_id = w.get("pane_id") or ""
+        if pane_id:
+            hints[pane_id] = {
+                "sid": session_status.live_session_id_for_pane(pane_id),
+                "resume": resumes.get(pane_id),
+            }
+    resolve_pids(windows, session_hints=hints, full_roster=full_roster)

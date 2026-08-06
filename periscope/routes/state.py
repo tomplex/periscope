@@ -61,7 +61,7 @@ def build_state() -> dict:
     """
     windows = list_windows()
     update_focus_from_windows(windows)
-    _attach_git_then_resolve_pids(windows)
+    _attach_git_then_resolve_pids(windows, full_roster=True)
     now_ts = int(time.time())
 
     # Parallel fan-out: capture()+parse per pane is the only per-poll
