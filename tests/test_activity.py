@@ -559,16 +559,65 @@ def test_prune_pane_workspaces(fresh_activity_db):
 
 
 def test_pane_tracks_set_get_map_prune():
-    activity.set_pane_track("%1", "tk_foo")
-    activity.set_pane_track("%2", "loose")
-    assert activity.get_pane_track("%1") == "tk_foo"
-    assert activity.pane_track_map() == {"%1": "tk_foo", "%2": "loose"}
-    activity.set_pane_track("%1", None)            # clear
-    assert activity.get_pane_track("%1") is None
-    removed = activity.prune_pane_tracks({"%2"})    # %1 already gone
+    activity.set_pane_track("aaaa1111", "tk_foo")
+    activity.set_pane_track("bbbb2222", "loose")
+    assert activity.get_pane_track("aaaa1111") == "tk_foo"
+    assert activity.pane_track_map() == {"aaaa1111": "tk_foo", "bbbb2222": "loose"}
+    activity.set_pane_track("aaaa1111", None)            # clear
+    assert activity.get_pane_track("aaaa1111") is None
+    removed = activity.prune_pane_tracks({"bbbb2222"})    # aaaa1111 already gone
     assert removed == 0
-    activity.set_pane_track("%3", "tk_foo")
-    assert activity.prune_pane_tracks({"%2"}) == 1  # %3 dead
+    activity.set_pane_track("cccc3333", "tk_foo")
+    activity.set_pane_track("%3", "tk_foo")  # legacy row — sweep's business
+    assert activity.prune_pane_tracks({"bbbb2222"}) == 1  # cccc3333 dead, %3 kept
+    assert activity.get_pane_track("%3") == "tk_foo"
+
+
+def test_pane_tracks_rekeyed_to_pid(fresh_activity_db):
+    activity.set_pane_track("abc12345", "tk_prog")
+    assert activity.get_pane_track("abc12345") == "tk_prog"
+    assert activity.pane_track_map() == {"abc12345": "tk_prog"}
+
+
+def test_pane_tracks_column_migration(tmp_path, monkeypatch):
+    """A live DB has the old pane_id column; the guarded rename must convert
+    it (values migrate lazily in resolve — this is schema only). The old
+    schema is created RAW first — fresh_activity_db would create the new
+    schema and the rename branch would never execute."""
+    import sqlite3
+    db = tmp_path / "old.db"
+    raw = sqlite3.connect(str(db))
+    raw.execute("CREATE TABLE pane_tracks (pane_id TEXT PRIMARY KEY, "
+                "track_id TEXT NOT NULL, updated_at INTEGER NOT NULL)")
+    raw.execute("INSERT INTO pane_tracks VALUES ('%9', 'tk_z', 1)")
+    raw.commit(); raw.close()
+    monkeypatch.setattr(activity.config, "ACTIVITY_DB", db)
+    monkeypatch.setattr(activity, "_CONN", None)
+    with activity._LOCK:
+        c = activity._conn()
+        cols = {r[1] for r in c.execute("PRAGMA table_info(pane_tracks)")}
+        rows = list(c.execute("SELECT pid, track_id FROM pane_tracks"))
+    assert "pid" in cols and "pane_id" not in cols
+    assert rows == [("%9", "tk_z")]   # values untouched — resolve migrates them
+    # Close under _LOCK before monkeypatch reverts _CONN — dropping the handle
+    # unclosed is the documented CPython 3.14 use-after-free class (conftest).
+    with activity._LOCK:
+        if activity._CONN is not None:
+            activity._CONN.close()
+            activity._CONN = None
+
+
+def test_sweep_legacy_pane_track_rows(fresh_activity_db):
+    """%-keyed rows are pre-re-key leftovers; sweeping only those whose pane is
+    not live means a not-yet-migrated live pane keeps its tag."""
+    activity.set_pane_track("%77", "tk_a")     # dead legacy row
+    activity.set_pane_track("%78", "tk_b")     # live legacy row
+    activity.set_pane_track("beef7777", "tk_c")
+    dropped = activity.sweep_legacy_pane_track_rows(live_pane_ids={"%78"})
+    assert dropped == 1
+    assert activity.get_pane_track("%77") is None
+    assert activity.get_pane_track("%78") == "tk_b"
+    assert activity.get_pane_track("beef7777") == "tk_c"
 
 
 def test_tracks_row_crud():

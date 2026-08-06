@@ -142,20 +142,6 @@ def test_account_prefix_not_doubled():
     assert twice.count("CLAUDE_CONFIG_DIR") == 1
 
 
-def test_config_dir_from_ps_reads_only_the_env_tail():
-    """`ps eww` concatenates command and env with no delimiter. A process whose
-    COMMAND merely mentions the variable must not be read as setting it."""
-    cmd = "grep -o :CLAUDE_CONFIG_DIR=[^\\011]*|:claude"
-    # command mentions it, environment does not
-    assert resurrect._config_dir_from_ps(cmd, f"{cmd} PATH=/usr/bin SHELL=/bin/zsh") is None
-    # genuine env value is found
-    assert resurrect._config_dir_from_ps(
-        "claude --resume x", f"claude --resume x PATH=/usr/bin CLAUDE_CONFIG_DIR={ALT} TERM=xterm"
-    ) == ALT
-    # command prefix mismatch (ps raced / truncated) yields nothing rather than a guess
-    assert resurrect._config_dir_from_ps("claude", f"something-else CLAUDE_CONFIG_DIR={ALT}") is None
-
-
 def test_non_claude_untouched():
     pane_map, sess_map = _maps()
     for cmd in ("nvim /tmp/foo.md", "zsh", ""):

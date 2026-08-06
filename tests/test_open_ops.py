@@ -225,10 +225,10 @@ def test_open_target_path_spawns_dormant_then_focuses(
     assert r1.repo == repo and r1.claude_pid
     assert r1.tmux_session == config.MANAGED_SESSION
     # Opened panes are tagged into the repo's default track (pane_tracks),
-    # NOT pane_projects — grouping is track-only.
+    # NOT pane_projects — grouping is track-only, keyed on the @periscope_id.
     tid = tracks.repo_default_track(repo)
     assert tid == repo  # repo-default track id == repo path
-    assert fresh_activity_db.get_pane_track(r1.claude_pane_id) == tid
+    assert fresh_activity_db.get_pane_track(r1.claude_pid) == tid
     assert tid in r1.ui["track_order"]
     assert r1.claude_pid in r1.ui["tabs_by_track"][tid]
     r2 = open_ops.open_target(open_ops.PathTarget(path=repo))   # idempotent focus
@@ -264,23 +264,24 @@ def test_open_path_tags_only_its_own_panes(
 
     repo_a, repo_b = _repo("a"), _repo("b")
     r_a = open_ops.open_target(open_ops.PathTarget(path=repo_a))
-    assert fresh_activity_db.get_pane_track(r_a.claude_pane_id) == repo_a
-    # A user goal-track move must also survive later opens.
+    assert fresh_activity_db.get_pane_track(r_a.claude_pid) == repo_a
+    # A user goal-track move must also survive later opens. Tags key on the
+    # stamped @periscope_id (pid_raw on raw rows), not the %N pane id.
     tk = tracks.create_track(name="my goal")
-    moved_pane = next(
-        w["pane_id"] for w in open_ops.list_windows()
-        if w.get("pane_id") and w["pane_id"] != r_a.claude_pane_id
+    moved_pid = next(
+        w["pid_raw"] for w in open_ops.list_windows()
+        if w.get("pid_raw") and w["pid_raw"] != r_a.claude_pid
         and os.path.realpath(w.get("cwd") or "") == repo_a)
-    tracks.move_pane(moved_pane, tk["id"])
+    tracks.move_pane(moved_pid, tk["id"])
 
     r_b = open_ops.open_target(open_ops.PathTarget(path=repo_b))
-    assert fresh_activity_db.get_pane_track(r_b.claude_pane_id) == repo_b
+    assert fresh_activity_db.get_pane_track(r_b.claude_pid) == repo_b
     # B's open left A's panes alone.
-    assert fresh_activity_db.get_pane_track(r_a.claude_pane_id) == repo_a
-    assert fresh_activity_db.get_pane_track(moved_pane) == tk["id"]
+    assert fresh_activity_db.get_pane_track(r_a.claude_pid) == repo_a
+    assert fresh_activity_db.get_pane_track(moved_pid) == tk["id"]
     # Re-opening A (focus path) keeps the explicit goal-track tag too.
     open_ops.open_target(open_ops.PathTarget(path=repo_a))
-    assert fresh_activity_db.get_pane_track(moved_pane) == tk["id"]
+    assert fresh_activity_db.get_pane_track(moved_pid) == tk["id"]
 
 
 @needs_tmux

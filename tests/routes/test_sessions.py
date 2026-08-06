@@ -36,13 +36,17 @@ def test_window_new_simple_shell(client, mocker, fresh_activity_db):
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="3", pane_id="%new"))
     _patch(mocker, "_tmux_mutate", return_value=(True, "@9"))  # new-window → window_id
     _patch(mocker, "_run", return_value=(0, ""))  # has-session: exists
+    stamp = _patch(mocker, "stamp_new_window", return_value="feed0001")
     r = client.post("/api/window/new?session=untracked&mode=shell")
     body = r.json()
     assert body["ok"] is True
     assert body["session"] == config.MANAGED_SESSION
     assert body["index"] == 3
     assert body["target"] == f"{config.MANAGED_SESSION}:3"
-    assert fresh_activity_db.get_pane_track("%new") == "untracked"
+    # The tag keys on the @periscope_id stamped onto the new window (by its
+    # stable @N id), never a %N pane id.
+    stamp.assert_called_once_with("@9")
+    assert fresh_activity_db.get_pane_track("feed0001") == "untracked"
 
 
 def test_window_new_codex_builds_typed_command(
@@ -53,6 +57,7 @@ def test_window_new_codex_builds_typed_command(
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="3", pane_id="%codex"))
     _patch(mocker, "_tmux_mutate", return_value=(True, "@9"))
     _patch(mocker, "_run", return_value=(0, ""))
+    _patch(mocker, "stamp_new_window", return_value="feed0002")
     mocker.patch("periscope.config.codex_exec", return_value="/opt/Codex CLI/codex")
 
     r = client.post("/api/window/new", params={
@@ -147,14 +152,15 @@ def test_window_new_repo_track_uses_repo_cwd(client, mocker, fresh_activity_db):
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="7", pane_id="%p7"))
     _patch(mocker, "_run", return_value=(0, ""))  # MANAGED_SESSION exists
     mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@7"))
+    _patch(mocker, "stamp_new_window", return_value="feed0007")
     r = client.post(f"/api/window/new?session={tid}&mode=shell")
     assert r.status_code == 200, r.text
     call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
     cwd_idx = list(call.args).index("-c") + 1
     assert call.args[cwd_idx] == "/Users/foo/dev/myproj"
-    # Target MANAGED_SESSION exactly (=prefix), and tag the new pane.
+    # Target MANAGED_SESSION exactly (=prefix), and tag the new pane by pid.
     assert call.args[2] == f"={config.MANAGED_SESSION}:"
-    assert fresh_activity_db.get_pane_track("%p7") == tid
+    assert fresh_activity_db.get_pane_track("feed0007") == tid
 
 
 def test_window_new_loose_track_defaults_to_dev_dir(client, mocker, fresh_activity_db):
@@ -166,12 +172,13 @@ def test_window_new_loose_track_defaults_to_dev_dir(client, mocker, fresh_activi
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="2", pane_id="%pg"))
     _patch(mocker, "_run", return_value=(0, ""))  # MANAGED_SESSION exists
     mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@2"))
+    _patch(mocker, "stamp_new_window", return_value="feed0022")
     r = client.post(f"/api/window/new?session={tk['id']}&mode=shell")
     assert r.status_code == 200, r.text
     call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
     cwd_idx = list(call.args).index("-c") + 1
     assert call.args[cwd_idx] == os.path.expanduser("~/dev")
-    assert fresh_activity_db.get_pane_track("%pg") == tk["id"]
+    assert fresh_activity_db.get_pane_track("feed0022") == tk["id"]
 
 
 def test_window_new_creates_managed_session_when_absent(client, mocker, fresh_activity_db):
@@ -181,13 +188,14 @@ def test_window_new_creates_managed_session_when_absent(client, mocker, fresh_ac
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="1", pane_id="%p1"))
     _patch(mocker, "_run", return_value=(1, ""))  # has-session: missing
     mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@1"))
+    _patch(mocker, "stamp_new_window", return_value="feed0011")
     r = client.post("/api/window/new?session=untracked&mode=shell")
     assert r.status_code == 200
     new_session = next(c for c in mutate.call_args_list if c.args[0] == "new-session")
     cwd_idx = list(new_session.args).index("-c") + 1
     assert new_session.args[cwd_idx] == os.path.expanduser("~/dev")
     assert not any(c.args[0] == "new-window" for c in mutate.call_args_list)
-    assert fresh_activity_db.get_pane_track("%p1") == "untracked"
+    assert fresh_activity_db.get_pane_track("feed0011") == "untracked"
 
 
 def test_window_new_existing_branch_cwd_override(client, mocker, fresh_activity_db):
@@ -201,6 +209,7 @@ def test_window_new_existing_branch_cwd_override(client, mocker, fresh_activity_
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="4", pane_id="%pb"))
     _patch(mocker, "_run", return_value=(0, ""))  # MANAGED_SESSION exists
     mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@4"))
+    _patch(mocker, "stamp_new_window", return_value="feed0044")
     with tempfile.TemporaryDirectory() as wt:
         r = client.post(f"/api/window/new?session={tid}&mode=shell&cwd={wt}")
         assert r.status_code == 200, r.text
@@ -208,7 +217,7 @@ def test_window_new_existing_branch_cwd_override(client, mocker, fresh_activity_
         cwd_idx = list(call.args).index("-c") + 1
         assert call.args[cwd_idx] == wt
         assert call.args[2] == f"={config.MANAGED_SESSION}:"
-        assert fresh_activity_db.get_pane_track("%pb") == tid
+        assert fresh_activity_db.get_pane_track("feed0044") == tid
 
 
 def test_window_new_nonexistent_cwd_falls_back_to_repo(client, mocker, fresh_activity_db):
@@ -218,6 +227,7 @@ def test_window_new_nonexistent_cwd_falls_back_to_repo(client, mocker, fresh_act
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="4", pane_id="%pn"))
     _patch(mocker, "_run", return_value=(0, ""))
     mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@4"))
+    _patch(mocker, "stamp_new_window", return_value="feed0045")
     r = client.post(f"/api/window/new?session={tid}&mode=shell&cwd=/no/such/dir")
     assert r.status_code == 200, r.text
     call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
@@ -237,6 +247,7 @@ def test_window_new_branch_spawns_worktree_when_none_exists(client, mocker, fres
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="6", pane_id="%pw"))
     _patch(mocker, "_run", return_value=(0, ""))
     mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@6"))
+    _patch(mocker, "stamp_new_window", return_value="feed0066")
     r = client.post(f"/api/window/new?session={tid}&mode=shell&branch=tc/feat")
     assert r.status_code == 200, r.text
     spawn.assert_called_once_with("/Users/foo/dev/myproj", "tc/feat")
@@ -244,7 +255,7 @@ def test_window_new_branch_spawns_worktree_when_none_exists(client, mocker, fres
     cwd_idx = list(call.args).index("-c") + 1
     assert call.args[cwd_idx] == "/Users/foo/dev/worktrees/myproj/tc-feat"
     assert call.args[2] == f"={config.MANAGED_SESSION}:"
-    assert fresh_activity_db.get_pane_track("%pw") == tid
+    assert fresh_activity_db.get_pane_track("feed0066") == tid
 
 
 def test_window_new_branch_409_on_existing(client, mocker, fresh_activity_db):
@@ -270,6 +281,7 @@ def test_window_new_branch_ignored_for_loose_track(client, mocker, fresh_activit
     _patch(mocker, "tmux", side_effect=_fake_window_tmux(index="2", pane_id="%pl"))
     _patch(mocker, "_run", return_value=(0, ""))
     mutate = _patch(mocker, "_tmux_mutate", return_value=(True, "@2"))
+    _patch(mocker, "stamp_new_window", return_value="feed0023")
     r = client.post(f"/api/window/new?session={tk['id']}&mode=shell&branch=tc/x")
     assert r.status_code == 200, r.text
     spawn.assert_not_called()
@@ -509,7 +521,8 @@ def test_move_account_lands_in_the_original_track(client, mocker):
     r = client.post("/api/pane/move-account?pid=aa11&account=b")
 
     assert r.status_code == 200, r.text
-    move.assert_called_once_with("%99", "tk_feature")
+    # The re-tag keys on the freshly minted @periscope_id, not the %N pane id.
+    move.assert_called_once_with("bb22", "tk_feature")
 
 
 def test_move_account_rejects_unknown_account(client, mocker):

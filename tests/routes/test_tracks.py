@@ -44,14 +44,25 @@ def test_rename_missing_404():
 
 def test_move_tab_retags():
     tid = client.post("/api/tracks", json={"name": "T"}).json()["id"]
-    r = client.post(f"/api/tracks/move-tab?track_id={tid}", json={"pane_id": "%7"})
+    r = client.post(f"/api/tracks/move-tab?track_id={tid}", json={"pid": "beef0007"})
     assert r.status_code == 200
     from periscope import activity
-    assert activity.get_pane_track("%7") == tid
+    assert activity.get_pane_track("beef0007") == tid
+
+
+def test_move_tab_rejects_pane_id_field():
+    """The old %N-keyed field must 422, not be leniently aliased — a silently
+    accepted pane_id would key rows on the rotating tmux id again (the exact
+    bug the pid re-key removed)."""
+    tid = client.post("/api/tracks", json={"name": "T"}).json()["id"]
+    r = client.post(f"/api/tracks/move-tab?track_id={tid}", json={"pane_id": "%7"})
+    assert r.status_code == 422
+    from periscope import activity
+    assert activity.get_pane_track("%7") is None
 
 
 def test_move_tab_missing_track_404():
-    r = client.post("/api/tracks/move-tab?track_id=tk_nope", json={"pane_id": "%1"})
+    r = client.post("/api/tracks/move-tab?track_id=tk_nope", json={"pid": "beef0001"})
     assert r.status_code == 404
 
 
@@ -74,13 +85,15 @@ def test_dissolve_missing_404():
 def test_teardown_returns_kill_list(mocker):
     tid = client.post("/api/tracks", json={"name": "T"}).json()["id"]
     from periscope import activity
-    activity.set_pane_track("%1", tid)
-    activity.set_pane_track("%2", tid)
+    # Tags key on @periscope_id (pid_raw on the raw rows); the kill list still
+    # reports stable %N pane ids.
+    activity.set_pane_track("aaaa0001", tid)
+    activity.set_pane_track("aaaa0002", tid)
     mocker.patch(
         "periscope.routes.tracks.list_windows",
         return_value=[
-            {"session": "s", "index": 0, "pane_id": "%1", "cwd": "/x"},
-            {"session": "s", "index": 1, "pane_id": "%2", "cwd": "/x"},
+            {"session": "s", "index": 0, "pane_id": "%1", "pid_raw": "aaaa0001", "cwd": "/x"},
+            {"session": "s", "index": 1, "pane_id": "%2", "pid_raw": "aaaa0002", "cwd": "/x"},
         ],
     )
     mutate = mocker.patch("periscope.routes.tracks._tmux_mutate")
@@ -108,9 +121,9 @@ def test_slashed_track_id_reaches_the_handler():
     """The regression: a repo path as the id must ROUTE, not 405."""
     from periscope import activity, tracks
     tracks.repo_default_track(REPO)
-    r = client.post(f"/api/tracks/move-tab?track_id={REPO}", json={"pane_id": "%9"})
+    r = client.post(f"/api/tracks/move-tab?track_id={REPO}", json={"pid": "beef0009"})
     assert r.status_code == 200, r.text
-    assert activity.get_pane_track("%9") == REPO
+    assert activity.get_pane_track("beef0009") == REPO
 
 
 def test_rename_slashed_track_id():

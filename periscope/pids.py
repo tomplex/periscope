@@ -9,6 +9,7 @@ restarts. Time-to-live is 30 days — older state.json entries get GC'd.
 import time
 import uuid
 
+from periscope import activity, session_status
 from periscope import store as _store
 from periscope.git_pr import cached_git_state
 from periscope.log import log
@@ -25,6 +26,19 @@ _PID_TTL_S = 30 * 86400  # 30 days — GC retention for state.json window entrie
 # inherited its immunity fields — surfacing as a brand-new pane wearing a stale
 # PR and Linear ticket.
 _REBIND_TTL_S = 15 * 60  # 15 minutes
+
+# Track-row maintenance (legacy %N migration + prune of dead pid rows) runs
+# ONCE per boot, from the first completed FULL-ROSTER resolve pass — never
+# before one, and never from a partial pass: post-tmux-restart the live-pid
+# set is unknowable until rebind runs, and resolve_pids is also called with
+# single windows (channel tools, pane routes) whose one-pid taken set would
+# prune every other live pane's rows. And never again until the next boot —
+# dead pid rows accumulate between boots, accepted (they're tens of bytes and
+# invisible to the rail). Accepted residual: a full-roster pass landing
+# mid-tmux-resurrect-restore prunes rows for panes not yet restored, even
+# though rebind would have reattached their pids moments later — narrow
+# window, no worse than the boot-time prune this replaced.
+_TRACKS_MAINTAINED = False
 
 
 def _mint_pid() -> str:
@@ -66,12 +80,41 @@ def _rebind_pid(
     branch: str | None,
     cwd: str | None,
     taken_pids: set[str],
-) -> str | None:
-    """Look for an orphan id in state's `windows` block that matches the
-    sighted window on (session, name) — or as a softer fallback,
-    (branch, cwd). Returns the matched pid, or None if no candidate
-    matches."""
+    sid: str | None = None,
+    resume: str | None = None,
+) -> tuple[str, str] | None:
+    """Look for an orphan id in state's `windows` block matching the sighted
+    window. Returns (pid, pass_name) or None.
+
+    Pass 0 (sid) and 0b (resume lineage) ignore _REBIND_TTL_S: a session id is
+    unique, so the collision risk the 15-minute TTL exists for (invariant 12)
+    doesn't apply — and honoring only the GC horizon is what lets `--resume`
+    of a days-old session reattach its notes/linked_pr instead of minting
+    fresh. Passes 1-2 keep the TTL: they match on occupancy, which collides.
+
+    Pass 0b additionally requires the entry's cwd: the resume hint is a regex
+    over ps argv, which flattens the whole command line INCLUDING any
+    first-message prompt — a fresh pane whose prompt merely mentions
+    `claude --resume <uuid>` must not inherit a dead session's identity. The
+    genuine cases (resurrect restore, move-account, resume tool) all resume
+    in the transcript's own cwd, so the corroboration costs them nothing.
+    Pass 0 needs no corroboration — the live sid comes from the process's own
+    session file, not from argv.
+    """
     now = time.time()
+    if sid:
+        for pid, entry in windows_block.items():
+            if pid in taken_pids:
+                continue
+            if (entry.get("last_seen") or {}).get("sid") == sid:
+                return pid, "sid"
+    if resume:
+        for pid, entry in windows_block.items():
+            if pid in taken_pids:
+                continue
+            ls = entry.get("last_seen") or {}
+            if ls.get("sid") == resume and cwd and ls.get("cwd") == cwd:
+                return pid, "resume"
     # Pass 1: strong match on (session, name).
     # Pass 2: secondary match on (branch, cwd) when both are set.
     for pass_n in (1, 2):
@@ -84,12 +127,12 @@ def _rebind_pid(
                 continue
             if pass_n == 1:
                 if ls.get("session") == session and ls.get("name") == name:
-                    return pid
+                    return pid, "session+name"
             else:
                 if not branch or not cwd:
                     continue
                 if ls.get("branch") == branch and ls.get("cwd") == cwd:
-                    return pid
+                    return pid, "branch+cwd"
     return None
 
 
@@ -117,7 +160,8 @@ _IMMUNITY_FIELDS = (
 
 
 def _resolve_one(
-    w: dict, wblock: dict, taken: set[str], carried: set[str], now_ts: int
+    w: dict, wblock: dict, taken: set[str], carried: set[str], now_ts: int,
+    hint: dict | None = None,
 ) -> bool:
     """Resolve one window's pid in place and refresh its `last_seen`.
 
@@ -129,6 +173,7 @@ def _resolve_one(
 
     Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
     """
+    hint = hint or {}
     target = f"{w['session']}:{w['index']}"
     pid_raw = (w.get("pid_raw") or "").strip()
     pid: str | None = None
@@ -164,14 +209,23 @@ def _resolve_one(
         # the gate above only cleans up after the fact: the victim silently
         # re-mints on the next poll, detaching pid-keyed UI state and orphaning
         # the `spawned_by` breadcrumb `report()` routes on.
-        pid = _rebind_pid(
+        match = _rebind_pid(
             wblock,
             session=w["session"],
             name=w["name"],
             branch=w.get("branch"),
             cwd=w.get("cwd"),
             taken_pids=taken | carried,
+            sid=hint.get("sid"),
+            resume=hint.get("resume"),
         )
+        if match:
+            pid, matched_on = match
+            # The theft path was silent in the 2026-08-05 identity merge — only
+            # the duplicate cleanup logged. Every rebind decision is loud now;
+            # `grep rebind` is the regression signal.
+            log.info("rebind %s -> %s via %s (was %s)", pid, target,
+                     matched_on, (wblock[pid].get("last_seen") or {}))
     if pid is None:
         pid = _mint_pid()
     dirty = False
@@ -199,11 +253,18 @@ def _resolve_one(
         "name": w["name"],
         "branch": w.get("branch"),
         "cwd": w.get("cwd"),
+        "pane_id": w.get("pane_id"),
+        # Fall back to the recorded sid when the hint is empty: a pane whose
+        # claude briefly has no readable session file (mid-restart) must not
+        # erase the recorded sid — pass 0 depends on it surviving exactly
+        # those gaps.
+        "sid": hint.get("sid") or prev.get("sid"),
         "ts": now_ts,
     }
     identity_changed = (
         "last_seen" not in entry
-        or any(prev.get(k) != new_seen[k] for k in ("session", "name", "branch", "cwd"))
+        or any(prev.get(k) != new_seen[k]
+               for k in ("session", "name", "branch", "cwd", "pane_id", "sid"))
     )
     entry["last_seen"] = new_seen
     if identity_changed:
@@ -273,7 +334,96 @@ def _gc_workspaces(workspaces: dict, now_ts: int) -> bool:
     return dirty
 
 
-def resolve_pids(windows: list[dict]) -> None:
+def _arbitrate_duplicates(windows: list[dict], wblock: dict,
+                          hints: dict[str, dict]) -> None:
+    """Phase 0: duplicate arbitration. The same @periscope_id stamped on
+    two windows used to be resolved by list order — which is not stable
+    across polls, so the identity ping-ponged between the windows
+    (observed 2026-08-05, periscope:4 ↔ resumes:4). Evidence beats
+    order: the keeper is the window whose live sid matches the entry's
+    recorded sid; everyone else (its `pid_raw` cleared here) resolves
+    fresh in phase 1.
+
+    Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
+    """
+    by_raw: dict[str, list[dict]] = {}
+    for w in windows:
+        raw = (w.get("pid_raw") or "").strip()
+        if _is_pid(raw):
+            by_raw.setdefault(raw, []).append(w)
+    for raw, group in by_raw.items():
+        if len(group) < 2:
+            continue
+        recorded_sid = ((wblock.get(raw) or {}).get("last_seen") or {}).get("sid")
+        keeper = None
+        if recorded_sid:
+            for w in group:
+                hint = hints.get(w.get("pane_id") or "", {})
+                if hint.get("sid") == recorded_sid:
+                    keeper = w
+                    break
+        # Three distinct stories, kept apart for incident grep: the sid
+        # named the keeper; the entry never recorded a sid; or a sid IS
+        # recorded but no on-screen window carries it — rotation/dead-pane
+        # territory, a very different investigation from "no evidence".
+        reason = ("sid evidence" if keeper is not None
+                  else "no recorded sid" if not recorded_sid
+                  else "recorded sid not on screen — first-in-list")
+        if keeper is None:
+            keeper = group[0]   # no evidence → status quo, but logged
+        losers = [w for w in group if w is not keeper]
+        for w in losers:
+            w["pid_raw"] = ""
+        # Name the demoted windows too: their phase-1 mints are silent, so
+        # without this the victims leave no trace in the log — and they're
+        # exactly what an incident hunt is looking for.
+        log.info("duplicate @periscope_id %s on %d windows — keeper %s:%s (%s); demoted %s",
+                 raw, len(group), keeper["session"], keeper["index"], reason,
+                 ", ".join(f"{w['session']}:{w['index']}" for w in losers))
+
+
+def _maintain_track_rows(windows: list[dict], taken: set[str]) -> None:
+    """Phase 5 (one-shot per boot): pane_tracks maintenance. The caller gates
+    on `full_roster` — only a pass that saw every live window has a
+    trustworthy `taken` set; this owns the `_TRACKS_MAINTAINED` half of the
+    gate. Live DBs still hold pre-re-key %N-keyed rows; migrate each live
+    window's legacy tag onto its resolved pid (never clobbering a pid row a
+    user move already wrote), then sweep dead % rows and prune dead pid rows.
+    Safe under _STATE_LOCK: activity's _LOCK has no path back to _STATE_LOCK,
+    and this is a handful of small sqlite statements.
+
+    A mid-maintenance sqlite failure aborts the caller's whole pass and
+    leaves the flag False, so the next full-roster pass retries — idempotent
+    by construction: each migration writes the pid row BEFORE deleting its
+    % row, so a partial run only leaves already-migrated pairs behind.
+
+    Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
+    """
+    global _TRACKS_MAINTAINED
+    if _TRACKS_MAINTAINED:
+        return
+    tag_map = activity.pane_track_map()
+    live_pane_ids = {p for w in windows if (p := w.get("pane_id"))}
+    for w in windows:
+        pane_id, pid = w.get("pane_id"), w.get("pid")
+        if not pane_id or not pid:
+            continue
+        legacy_tid = tag_map.get(pane_id)
+        if legacy_tid is None:
+            continue
+        if pid not in tag_map:
+            activity.set_pane_track(pid, legacy_tid)
+            log.info("pane_tracks: migrated %s -> %s (%s)",
+                     pane_id, pid, legacy_tid)
+        activity.set_pane_track(pane_id, None)   # delete the % row
+    activity.sweep_legacy_pane_track_rows(live_pane_ids)
+    activity.prune_pane_tracks(taken)
+    _TRACKS_MAINTAINED = True
+
+
+def resolve_pids(windows: list[dict],
+                 session_hints: dict[str, dict] | None = None,
+                 full_roster: bool = False) -> None:
     """Mutates `windows` in place, adding a `pid` field to every entry.
 
     For each window:
@@ -290,7 +440,17 @@ def resolve_pids(windows: list[dict]) -> None:
     Callers MUST have populated each window's `branch` (from
     cached_git_state) before calling, or rebind falls back to the
     session/name-only path.
+
+    `session_hints` maps tmux pane id -> {"sid": str|None, "resume": str|None}.
+    The hints are computed by the CALLER (see _attach_git_then_resolve_pids)
+    because building them forks tmux/ps — under _STATE_LOCK those forks would
+    stall every route, and list_claudes runs this resolve on the event loop.
+
+    `full_roster` marks a pass that saw every live window; it gates the
+    one-shot track-row maintenance below — a partial (single-window) pass
+    would read absence as death and mass-delete live panes' rows.
     """
+    hints = session_hints or {}
     if not windows:
         return
     now_ts = int(time.time())
@@ -305,12 +465,18 @@ def resolve_pids(windows: list[dict]) -> None:
         wblock = _store._STATE.setdefault("windows", {})
         taken: set[str] = set()
         # Every id tmux currently has stamped, gathered BEFORE the pass so
-        # rebind can't hand out an id a live window is still wearing.
+        # rebind can't hand out an id a live window is still wearing. Computed
+        # before phase 0 clears the losers' raw stamps — the keeper retains
+        # the pid so the set is identical either way, but pinning the order
+        # keeps the reasoning simple.
         carried = {p for w in windows if _is_pid(p := (w.get("pid_raw") or "").strip())}
         dirty = False
+        # Phase 0: duplicate arbitration (sid evidence beats list order).
+        _arbitrate_duplicates(windows, wblock, hints)
         # Phase 1: per-window pid resolution + last_seen refresh.
         for w in windows:
-            if _resolve_one(w, wblock, taken, carried, now_ts):
+            if _resolve_one(w, wblock, taken, carried, now_ts,
+                            hints.get(w.get("pane_id") or "", {})):
                 dirty = True
         # Phase 2: window-entry GC.
         if _gc_windows(wblock, taken, now_ts):
@@ -325,12 +491,21 @@ def resolve_pids(windows: list[dict]) -> None:
             dirty = True
         if dirty:
             _store._write_state(_store._STATE)
+        # Phase 5 (one-shot per boot): pane_tracks maintenance, gated on the
+        # first completed full-roster pass — the only moment the live-pid set
+        # (`taken`) is trustworthy.
+        if full_roster:
+            _maintain_track_rows(windows, taken)
 
 
-def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
-    """resolve_pids relies on `branch` for its secondary match. Populate it
-    via cached_git_state before calling so the rebind heuristic has
-    everything it needs.
+def _attach_git_then_resolve_pids(windows: list[dict],
+                                  full_roster: bool = False) -> None:
+    """resolve_pids relies on `branch` for its secondary match and on session
+    hints (live sid + resume lineage) for its primary one. Both are attached
+    HERE, before resolve takes _STATE_LOCK: hint-building forks tmux/ps on a
+    cold cache, and those forks must not run under the lock. (list_claudes
+    still runs this on the event loop — a cold-cache fork there is a known,
+    bounded cost; the lock is the boundary this function exists to protect.)
 
     Despite the query-sounding name, this performs I/O: resolve_pids stamps
     `@periscope_id` onto tmux windows and may write state.json."""
@@ -338,4 +513,13 @@ def _attach_git_then_resolve_pids(windows: list[dict]) -> None:
         git = cached_git_state(w.get("cwd", "")) or {}
         if "branch" in git:
             w["branch"] = git["branch"]
-    resolve_pids(windows)
+    resumes = session_status.pane_resume_ids()
+    hints: dict[str, dict] = {}
+    for w in windows:
+        pane_id = w.get("pane_id") or ""
+        if pane_id:
+            hints[pane_id] = {
+                "sid": session_status.live_session_id_for_pane(pane_id),
+                "resume": resumes.get(pane_id),
+            }
+    resolve_pids(windows, session_hints=hints, full_roster=full_roster)

@@ -361,7 +361,7 @@ def _resolve_window_by_pid(handle: str) -> tuple[str, str, dict]:
     # Resolve against the FULL window list, never just the match: a
     # single-window pass has an incomplete `carried` set, so an unstamped
     # window could rebind onto an id another live window is still wearing.
-    _attach_git_then_resolve_pids(wins)
+    _attach_git_then_resolve_pids(wins, full_roster=True)
     return match.get("pid") or "", match.get("pane_id") or "", match
 
 
@@ -754,22 +754,34 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # ("new") path tags the repo-default track for the worktree's repo; else
     # ("same") the spawn nests under the CALLER's track so a fan-out from a
     # promoted tab inherits that tab's track rather than falling back to the
-    # repo-default. Every tag guards on a non-empty spawned pane_id.
+    # repo-default. Every tag keys on the just-stamped @periscope_id, never
+    # the rotating %N.
     tagged_workspace = None
     ws_id = str(arguments.get("workspace_id") or "").strip()
-    if pane_id and ws_id:
+    if pid and ws_id:
         # workspace_id is a track id: validate it exists and isn't archived.
         row = activity.get_track(ws_id)
         if row and not row.get("archived_at"):
-            tracks.move_pane(pane_id, ws_id)
+            tracks.move_pane(pid, ws_id)
             tagged_workspace = ws_id
-    elif pane_id and anchored:
-        tracks.move_pane(pane_id, tracks.repo_default_track(project["repo"]))
-    elif pane_id and not commander_caller:
-        # "same" mode, a real pane: inherit the caller's track.
-        tracks.move_pane(pane_id, tracks.resolve_track_for_window(
-            {"pane_id": pane, "cwd": caller_cwd}))
+    elif pid and anchored:
+        tracks.move_pane(pid, tracks.repo_default_track(project["repo"]))
+    elif pid and not commander_caller:
+        # "same" mode: inherit the caller's track. parent_pid can be "" when
+        # the caller vanished — resolve falls through to the cwd's default
+        # (repo-default, or LOOSE for a non-git cwd), logged so a mis-bucketed
+        # spawn is diagnosable.
+        if not parent_pid:
+            log.info("spawn tag: caller pid unresolved (pane %s, cwd %s), "
+                     "%s falls to cwd default", pane, caller_cwd, pid)
+        tracks.move_pane(pid, tracks.resolve_track_for_window(
+            {"pid": parent_pid, "cwd": caller_cwd}))
 
+    # The FINAL track the spawn landed in, after the precedence above played
+    # out — resolved (tagged pid short-circuits; untagged falls to the spawn
+    # cwd's default) rather than re-deriving the branches, so the result always
+    # names the pane's real roster group for list_claudes(track="mine").
+    final_tid = tracks.resolve_track_for_window({"pid": pid, "cwd": cwd})
     body = {
         "ok": True,
         "target": target,
@@ -778,6 +790,8 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         "pid": pid,
         "pane_id": pane_id,
         "workspace_id": tagged_workspace,
+        "track": {"id": final_tid, "label": tracks.track_label(final_tid),
+                  "kind": tracks.track_kind(final_tid)},
     }
     return _tool_result(body)
 
@@ -932,19 +946,28 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     except HTTPException as e:
         return _tool_result({"ok": False, "error": str(e.detail)})
 
+    # Stamp the brand-new window unconditionally (mint-fresh, no rebind — same
+    # reasoning as _do_spawn_claude_tool) so the caller gets the durable handle
+    # and its track without a follow-up list_claudes, tagged or not.
+    target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
+    new_pid = stamp_new_window(target)
     # Tag the resumed pane into a track (the grouping authority) so it surfaces
     # under that group instead of the default "dev" bucket — the same tagging
-    # spawn_claude does. workspace_id is a track id now. The resume result carries
-    # session:index; resolve the pane id from it (pane_tracks is keyed on %N).
+    # spawn_claude does. workspace_id is a track id; pane_tracks keys on the
+    # @periscope_id.
     if ws_id:
         from periscope import activity
         row = activity.get_track(ws_id)
         if row and not row.get("archived_at"):
-            target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
-            pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
-            if pane_id:
-                tracks.move_pane(pane_id, ws_id)
-                result = {**result, "workspace_id": ws_id}
+            tracks.move_pane(new_pid, ws_id)
+            result = {**result, "workspace_id": ws_id}
+    # Resolve rather than echo ws_id: the tag row (when written) is the
+    # authority, the repo-default/loose fallback covers the untagged path, and
+    # resolving keeps the result honest if the tag ever races an archive.
+    tid = tracks.resolve_track_for_window({"pid": new_pid, "cwd": result.get("cwd")})
+    result = {**result, "pid": new_pid,
+              "track": {"id": tid, "label": tracks.track_label(tid),
+                        "kind": tracks.track_kind(tid)}}
     return _tool_result(result)
 
 
@@ -1215,8 +1238,16 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
     from periscope.tmux import capture
 
     windows = list_windows()
-    _attach_git_then_resolve_pids(windows)  # attaches pid, strips pid_raw (not thread-safe)
+    _attach_git_then_resolve_pids(windows, full_roster=True)  # attaches pid, strips pid_raw (not thread-safe)
     statuses = pane_status_lines()
+
+    def _track_info(w):
+        # The pane's rail group. LOOSE resolves to {"loose","loose","loose"}
+        # (verified: track_label/track_kind both special-case LOOSE_KEY), so
+        # same-track comparisons never need a null-guard.
+        tid = tracks.resolve_track_for_window(w)
+        return {"id": tid, "label": tracks.track_label(tid),
+                "kind": tracks.track_kind(tid)}
 
     def _collect():
         out = []
@@ -1262,15 +1293,38 @@ async def _do_list_claudes_tool(pane: str, arguments: dict):
                 # delegating into a hole.
                 "channel_ready": pane_channel_ready(pane_id),
                 "spawned_by": get_window(pid).get("spawned_by"),
+                "track": _track_info(w),
             })
             # Worktree root when the cwd is in a repo, else the resolved cwd —
             # so two panes in different subdirs of one tree still group.
             trees.append(signal.get("toplevel")
                          or os.path.realpath(w.get("cwd") or "") or "")
-        return _mark_shared_trees(out, trees)
+        # Self-identification: which of these windows is the CALLER. Resolved
+        # here (in the thread) rather than after the await — a track resolve
+        # can miss the git-state cache and shell out, which is exactly what
+        # this offload exists to keep off the event loop. Scans all windows,
+        # not just claude rows, so a caller whose capture/parse hiccuped still
+        # resolves.
+        you = None
+        for w in windows:
+            if w.get("pane_id") == pane:
+                you = {"handle": w.get("pid") or "", "track": _track_info(w)}
+                break
+        return _mark_shared_trees(out, trees), you
 
-    claudes = await asyncio.to_thread(_collect)
-    return _tool_result({"ok": True, "claudes": claudes})
+    claudes, you = await asyncio.to_thread(_collect)
+    want = str(arguments.get("track") or "").strip()
+    if want == "mine":
+        if you is None:
+            # Only the active pane per window is visible to list_windows — a
+            # background split pane can't resolve itself. Refuse loudly.
+            return _tool_result({"ok": False, "error":
+                "cannot resolve your own pane to a track (background split "
+                "pane?) — call without the track filter"})
+        want = you["track"]["id"]
+    if want:
+        claudes = [c for c in claudes if c.get("track", {}).get("id") == want]
+    return _tool_result({"ok": True, "you": you, "claudes": claudes})
 
 
 def _do_list_workspaces_tool(pane: str, arguments: dict):
@@ -1281,10 +1335,13 @@ def _do_list_workspaces_tool(pane: str, arguments: dict):
     Response key stays `workspaces` for arg compatibility."""
     from periscope.activity import all_tracks, pane_track_map
 
-    live_panes = {w.get("pane_id") for w in list_windows() if w.get("pane_id")}
+    # pane_tracks keys on @periscope_id — liveness intersects the stamped ids
+    # of live windows, not %N pane ids.
+    live_pids = {p for w in list_windows()
+                 if (p := (w.get("pid_raw") or "").strip())}
     counts: dict[str, int] = {}
-    for pane_id, tid in pane_track_map().items():
-        if pane_id in live_panes:
+    for pid, tid in pane_track_map().items():
+        if pid in live_pids:
             counts[tid] = counts.get(tid, 0) + 1
 
     out = [
@@ -1545,7 +1602,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "`report` tool, which routes to you automatically — it "
             "does NOT need your handle, so don't spend prompt "
             "budget telling it how to find you. Say what to report "
-            "and when; `report` handles the addressing."
+            "and when; `report` handles the addressing. "
+            "workspace=\"same\" (default) also tags the spawn into "
+            "YOUR track, so your spawns are your roster in "
+            "list_claudes(track=\"mine\")."
         ),
         "inputSchema": {
             "type": "object",
@@ -1750,9 +1810,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "type": "object",
             "properties": {
                 "handle": {"type": "string", "description": (
-                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
-                    "id (%N) also works and is stabler — prefer it if you have "
-                    "one, and fall back to it if a pid stops resolving."
+                    "Target pid (from spawn_claude/list_claudes) — the durable "
+                    "handle; it survives restarts and account swaps. A tmux "
+                    "pane id (%N) also works as a fallback, but %N rotates "
+                    "on every restart — do not store it."
                 )},
                 "message": {"type": "string", "description": "Message to deliver."},
             },
@@ -1805,9 +1866,26 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "routinely wrong about specifics: it has named files and tests a "
             "pane never touched. Never act on it as if the pane said it. Use "
             "`peek` to find out what a pane is actually doing before you "
-            "interrupt, correct, or terminate it."
+            "interrupt, correct, or terminate it. "
+            "Each row carries `track` ({id,label,kind} — the rail group the "
+            "pane belongs to). The response carries `you` (your own handle "
+            "and track; null when your pane can't be resolved — e.g. a "
+            "background split pane). Pass `track: \"mine\"` to list only "
+            "your own track's panes — your program's roster — or an explicit "
+            "track id."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "track": {
+                    "type": "string",
+                    "description": (
+                        "Filter to one track: \"mine\" for the caller's own, "
+                        "or a track id from a previous call."
+                    ),
+                },
+            },
+        },
         "handler": _do_list_claudes_tool,
     },
     {
@@ -1845,9 +1923,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "type": "object",
             "properties": {
                 "handle": {"type": "string", "description": (
-                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
-                    "id (%N) also works and is stabler — prefer it if you have "
-                    "one, and fall back to it if a pid stops resolving."
+                    "Target pid (from spawn_claude/list_claudes) — the durable "
+                    "handle; it survives restarts and account swaps. A tmux "
+                    "pane id (%N) also works as a fallback, but %N rotates "
+                    "on every restart — do not store it."
                 )},
                 "limit": {
                     "type": "integer",
@@ -1882,9 +1961,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "type": "object",
             "properties": {
                 "handle": {"type": "string", "description": (
-                    "Target pid (from spawn_claude/list_claudes). A tmux pane "
-                    "id (%N) also works and is stabler — prefer it if you have "
-                    "one, and fall back to it if a pid stops resolving."
+                    "Target pid (from spawn_claude/list_claudes) — the durable "
+                    "handle; it survives restarts and account swaps. A tmux "
+                    "pane id (%N) also works as a fallback, but %N rotates "
+                    "on every restart — do not store it."
                 )},
             },
             "required": ["handle"],

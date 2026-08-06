@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS tracks (
   archived_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS pane_tracks (
-  pane_id    TEXT PRIMARY KEY,
+  pid        TEXT PRIMARY KEY,     -- @periscope_id; %N rows are pre-re-key
+                                   -- leftovers, migrated lazily by resolve
   track_id   TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -129,6 +130,11 @@ def _conn() -> sqlite3.Connection:
         for col in ("rail", "goal", "history"):
             if col not in have:
                 c.execute(f"ALTER TABLE pane_status ADD COLUMN {col} TEXT")
+        # pane_tracks was keyed on tmux %N, which rotates on every restart —
+        # renamed so any raw-SQL regression against pane_id fails loudly.
+        pt_cols = {r[1] for r in c.execute("PRAGMA table_info(pane_tracks)")}
+        if "pane_id" in pt_cols:
+            c.execute("ALTER TABLE pane_tracks RENAME COLUMN pane_id TO pid")
         # usage_samples predates multi-account and was keyed (meter, at), which
         # would interleave two subscriptions into one unseparable series. SQLite
         # can't widen a PK in place, so rebuild — existing rows are all from the
@@ -390,47 +396,67 @@ def prune_pane_workspaces(alive_pane_ids: set[str]) -> int:
         return len(dead)
 
 
-# --- pane_tracks: tmux pane id -> track id tag (sibling of pane_workspaces) ---
-def set_pane_track(pane_id: str, track_id: str | None) -> None:
+# --- pane_tracks: @periscope_id -> track id tag (sibling of pane_workspaces) ---
+def set_pane_track(pid: str, track_id: str | None) -> None:
     with _LOCK:
         c = _conn()
         if track_id is None:
-            c.execute("DELETE FROM pane_tracks WHERE pane_id=?", (pane_id,))
+            c.execute("DELETE FROM pane_tracks WHERE pid=?", (pid,))
         else:
             c.execute(
-                "INSERT INTO pane_tracks (pane_id, track_id, updated_at) "
-                "VALUES (?,?,?) ON CONFLICT(pane_id) DO UPDATE SET "
+                "INSERT INTO pane_tracks (pid, track_id, updated_at) "
+                "VALUES (?,?,?) ON CONFLICT(pid) DO UPDATE SET "
                 "track_id=excluded.track_id, updated_at=excluded.updated_at",
-                (pane_id, track_id, int(time.time())),
+                (pid, track_id, int(time.time())),
             )
         c.commit()
 
 
-def get_pane_track(pane_id: str) -> str | None:
-    if not pane_id:
+def get_pane_track(pid: str) -> str | None:
+    if not pid:
         return None
     with _LOCK:
         row = _conn().execute(
-            "SELECT track_id FROM pane_tracks WHERE pane_id=?", (pane_id,)
+            "SELECT track_id FROM pane_tracks WHERE pid=?", (pid,)
         ).fetchone()
         return row[0] if row else None
 
 
 def pane_track_map() -> dict[str, str]:
     with _LOCK:
-        return dict(_conn().execute("SELECT pane_id, track_id FROM pane_tracks"))
+        return dict(_conn().execute("SELECT pid, track_id FROM pane_tracks"))
 
 
-def prune_pane_tracks(alive_pane_ids: set[str]) -> int:
+def prune_pane_tracks(alive_pids: set[str]) -> int:
     with _LOCK:
         c = _conn()
-        existing = {r[0] for r in c.execute("SELECT pane_id FROM pane_tracks")}
-        dead = existing - alive_pane_ids
-        if not dead:
-            return 0
-        c.executemany("DELETE FROM pane_tracks WHERE pane_id=?", [(p,) for p in dead])
+        existing = [r[0] for r in c.execute("SELECT pid FROM pane_tracks")]
+        # %N rows predate the pid re-key and are the sweep's business — judged
+        # against a pid set they would ALWAYS look dead and lose their tag
+        # before resolve's lazy migration could carry it over.
+        dead = [p for p in existing
+                if not p.startswith("%") and p not in alive_pids]
+        c.executemany("DELETE FROM pane_tracks WHERE pid=?",
+                      [(p,) for p in dead])
         c.commit()
         return len(dead)
+
+
+def sweep_legacy_pane_track_rows(live_pane_ids: set[str]) -> int:
+    """Delete %-keyed pane_tracks rows whose tmux pane no longer exists. Those
+    rows predate the pid re-key; a LIVE pane's row is left for resolve's lazy
+    migration to convert — sweeping it would drop the tag it's about to carry
+    over."""
+    with _LOCK:
+        c = _conn()
+        # Filter in Python: the table is tens of rows, and a SQL LIKE on a
+        # literal '%' needs ESCAPE gymnastics.
+        rows = [r[0] for r in c.execute("SELECT pid FROM pane_tracks")
+                if r[0].startswith("%") and r[0] not in live_pane_ids]
+        c.executemany("DELETE FROM pane_tracks WHERE pid=?",
+                      [(p,) for p in rows])
+        c.commit()
+        return len(rows)
 
 
 # --- tracks: entity rows (the registry, replacing projects/workspaces) ---

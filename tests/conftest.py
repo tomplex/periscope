@@ -67,6 +67,9 @@ def _no_live_session_scan(monkeypatch):
     monkeypatch.setattr(session_status, "_tmux_pane_pids", dict, raising=False)
     monkeypatch.setattr(session_status, "_pane_pids_cache", None, raising=False)
     monkeypatch.setattr(session_status, "_proc_table_cache", None, raising=False)
+    # pane_config_dirs' 15s TTL outlives a test — a populated cache would bleed
+    # one test's pane->config-dir map into every later view build.
+    monkeypatch.setattr(session_status, "_config_dirs_cache", None, raising=False)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -117,6 +120,21 @@ def _isolate_activity_db(tmp_path, monkeypatch):
         if activity._CONN is not None:
             activity._CONN.close()
             activity._CONN = None
+
+
+@pytest.fixture(autouse=True)
+def _no_track_maintenance(monkeypatch):
+    """Keep resolve_pids' one-shot pane_tracks maintenance OFF by default.
+
+    The module flag `pids._TRACKS_MAINTAINED` defaults to False (prod runs
+    maintenance once per boot, from the first full-roster resolve), and a
+    completed pass flips it True — module state that would leak across tests
+    and make any suite exercising a full-roster resolve (routes/state,
+    list_claudes) order-dependent. Pin it True here so maintenance never fires
+    unless a test opts in by setting it False itself; monkeypatch restores the
+    import-time default afterward."""
+    from periscope import pids
+    monkeypatch.setattr(pids, "_TRACKS_MAINTAINED", True, raising=False)
 
 
 @pytest.fixture

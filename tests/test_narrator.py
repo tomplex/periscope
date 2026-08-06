@@ -584,11 +584,16 @@ def test_tick_feeds_track_label_and_siblings_into_prompt(tick_env):
     named every tab after its branch (the attr-worker-phase2 twins)."""
     from periscope import tracks
     tk = tracks.create_track(name="attr worker phase2")
-    activity.set_pane_track("%1", tk["id"])
-    activity.set_pane_track("%2", tk["id"])
+    # Narrator rows are raw list_windows() rows — track tags key on pid_raw
+    # (the stamped @periscope_id), never the %N pane id.
+    activity.set_pane_track("aaaa0001", tk["id"])
+    activity.set_pane_track("aaaa0002", tk["id"])
+    p1, p2 = _pane(), _pane(pane_id="%2", name="drift-detection")
+    p1[0]["pid_raw"] = "aaaa0001"
+    p2[0]["pid_raw"] = "aaaa0002"
     narrator.tick([
-        _pane(),                                      # %1 — regenerates
-        _pane(pane_id="%2", name="drift-detection"),  # sibling, no session mapping
+        p1,   # %1 — regenerates
+        p2,   # sibling, no session mapping
     ])
     prompt = tick_env["haiku_calls"][0]
     assert "attr worker phase2" in prompt     # track label, from the registry

@@ -76,9 +76,9 @@ async def lifespan(_app: FastAPI):
         dropped_ws = activity.prune_pane_workspaces(alive)
         if dropped_ws:
             log.info("pruned %d dead pane_workspaces row(s)", dropped_ws)
-        dropped_tracks = activity.prune_pane_tracks(alive)
-        if dropped_tracks:
-            log.info("pruned %d dead pane_tracks row(s)", dropped_tracks)
+        # Track-row prune moved to the first full-roster resolve pass (see
+        # pids.resolve_pids) — pruning at boot fired before rebind could
+        # reattach post-tmux-restart pids, deleting tags it should have kept.
 
     _bg("pane-sessions-housekeeping", _pane_sessions_housekeeping)
 

@@ -48,7 +48,9 @@ def tracks_rename(track_id: str, body: RenameBody):
 
 
 class MoveTabBody(BaseModel):
-    pane_id: str
+    # Field renamed (not aliased) with the pane_tracks pid re-key: silently
+    # accepting `pane_id` would key rows on tmux %N again.
+    pid: str
 
 
 @router.post("/api/tracks/move-tab")
@@ -56,7 +58,7 @@ def tracks_move_tab(track_id: str, body: MoveTabBody):
     from periscope import activity
     if activity.get_track(track_id) is None:
         raise HTTPException(404, f"no track {track_id!r}")
-    tracks.move_pane(body.pane_id, track_id)
+    tracks.move_pane(body.pid, track_id)
     return {"ok": True}
 
 

@@ -409,11 +409,18 @@ def test_resume_session_tool_wraps_window_new_resume(mocker):
         return_value={"ok": True, "target": "resumes:3", "session": "resumes",
                       "index": 3, "mode": "resume",
                       "resumed_session_id": "abc123"})
+    stamp = mocker.patch("periscope.channels.stamp_new_window",
+                         return_value="beef4242")
 
     body = _body(_do_resume_session_tool("%5", {"session_id": "abc123"}))
 
     assert body["ok"] is True
     assert body["target"] == "resumes:3"
+    # Untagged resumes stamp too: the caller gets the durable handle and its
+    # (repo-default/loose) track without a follow-up list_claudes.
+    stamp.assert_called_once_with("resumes:3")
+    assert body["pid"] == "beef4242"
+    assert body["track"]["kind"] == "loose"      # no cwd in the result → loose
     args = resume.call_args[0]
     assert args[0] == "resumes"                  # default sentinel session
     assert "--resume abc123" in args[1]
@@ -449,13 +456,19 @@ def test_resume_session_tool_tags_pane_track(fresh_activity_db, mocker):
         "periscope.routes.sessions._window_new_resume",
         return_value={"ok": True, "target": "resumes:3", "session": "resumes",
                       "index": 3, "mode": "resume", "resumed_session_id": "abc"})
-    mocker.patch("periscope.channels.tmux", return_value="%88")  # display-message #{pane_id}
+    # The tag keys on the @periscope_id stamped onto the brand-new window,
+    # never a %N pane id.
+    stamp = mocker.patch("periscope.channels.stamp_new_window", return_value="resu8888")
 
     body = _body(_do_resume_session_tool(
         "%5", {"session_id": "abc", "workspace_id": tk["id"]}))
 
     assert body["ok"] is True and body["workspace_id"] == tk["id"]
-    assert activity.get_pane_track("%88") == tk["id"]
+    assert body["pid"] == "resu8888"
+    stamp.assert_called_once_with("resumes:3")
+    assert activity.get_pane_track("resu8888") == tk["id"]
+    # The result names the track the resumed pane joined (its roster group).
+    assert body["track"] == {"id": tk["id"], "label": "Auth", "kind": "goal"}
 
 
 # --- inter-claude management tools ---
@@ -473,7 +486,7 @@ def test_resolve_window_by_pid_matches_stamped_handle(mocker):
     ]
     mocker.patch("periscope.channels.list_windows", return_value=rows)
 
-    def _attach(ws):
+    def _attach(ws, **kw):
         for w in ws:
             w["pid"] = w.pop("pid_raw")
     mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
@@ -826,7 +839,10 @@ def test_spawn_workspace_id_tags_pane_track(fresh_activity_db, mocker):
 
     assert res["ok"] is True
     assert res["workspace_id"] == tk["id"]
-    assert activity.get_pane_track("%77") == tk["id"]
+    # Tagged by the stamped @periscope_id (the stamp_new_window return).
+    assert activity.get_pane_track("child99") == tk["id"]
+    # The result names the FINAL track the spawn landed in — the roster group.
+    assert res["track"] == {"id": tk["id"], "label": "Auth", "kind": "goal"}
 
 
 def test_spawn_workspace_id_unknown_track_skips_tag(fresh_activity_db, mocker):
@@ -842,12 +858,15 @@ def test_spawn_workspace_id_unknown_track_skips_tag(fresh_activity_db, mocker):
     mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
+    # The result's final-track resolve falls through the (skipped) tag to the
+    # cwd default — keep it off real git.
+    mocker.patch("periscope.git_pr.cached_git_state", return_value=None)
 
     res = _body(asyncio.run(
         channels._do_spawn_claude_tool("%1", {"prompt": "go", "workspace_id": "tk_nope"})))
 
     assert res["ok"] is True and res["workspace_id"] is None
-    assert activity.get_pane_track("%77") is None
+    assert activity.get_pane_track("child99") is None
 
 
 def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, mocker):
@@ -874,8 +893,63 @@ def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, 
         "%1", {"prompt": "go", "cwd": "/r", "workspace": "new"})))
 
     assert res["ok"] is True
-    # repo_default_track keys the track id on the repo path.
-    assert activity.get_pane_track("%77") == tracks.repo_default_track("/r")
+    # repo_default_track keys the track id on the repo path; the tag keys on
+    # the stamped @periscope_id.
+    assert activity.get_pane_track("child99") == tracks.repo_default_track("/r")
+
+
+def _mock_same_mode_spawn(mocker, parent_pid="parent11"):
+    """Stub the spawn shell-outs for the "same"-mode tag-branch tests."""
+    mocker.patch("periscope.channels.tmux", return_value="sess|/home/tom")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "3"))
+    mocker.patch("periscope.channels.os.path.isdir", return_value=True)
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    mocker.patch("periscope.channels.note_focus")
+    mocker.patch("periscope.channels.note_action")
+    mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value=parent_pid)
+    mocker.patch("periscope.channels.set_window_fields")
+    mocker.patch("periscope.channels.list_windows", return_value=[])
+    mocker.patch("periscope.channels.emit_channel_event",
+                 new=AsyncMock(return_value=True))
+    resolve = mocker.patch("periscope.channels.tracks.resolve_track_for_window",
+                           return_value="tk_caller")
+    move = mocker.patch("periscope.channels.tracks.move_pane")
+    return resolve, move
+
+
+def test_spawn_same_inherits_callers_track_by_pid(mocker):
+    """The "same" branch resolves the CALLER's track by its resolved pid (the
+    re-keyed input contract — never the %N pane id) and tags the SPAWNED
+    window's stamped pid into the result."""
+    from periscope import channels
+    resolve, move = _mock_same_mode_spawn(mocker)
+
+    res = asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    # First resolve is the caller's track (the tag); the result body triggers a
+    # second resolve for the spawned pane's final track.
+    assert resolve.call_args_list[0].args == ({"pid": "parent11", "cwd": "/home/tom"},)
+    move.assert_called_once_with("child99", "tk_caller")
+    assert _body(res)["track"]["id"] == "tk_caller"
+
+
+def test_spawn_same_vanished_caller_falls_to_cwd_default(mocker, caplog):
+    """Empty parent_pid (caller vanished): resolve gets pid="" and falls
+    through to the cwd's default, and the fallback is logged."""
+    import logging
+
+    from periscope import channels
+    resolve, move = _mock_same_mode_spawn(mocker, parent_pid="")
+
+    with caplog.at_level(logging.INFO, logger="periscope"):
+        asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    assert resolve.call_args_list[0].args == ({"pid": "", "cwd": "/home/tom"},)
+    move.assert_called_once_with("child99", "tk_caller")
+    assert "caller pid unresolved" in caplog.text
 
 
 def test_send_to_happy(mocker):
@@ -1017,7 +1091,7 @@ def test_list_claudes_filters_and_trims(mocker):
     ]
     mocker.patch("periscope.channels.list_windows", return_value=rows)
 
-    def _attach(ws):
+    def _attach(ws, **kw):
         for w in ws:
             if "pid_raw" in w:
                 w["pid"] = w.pop("pid_raw")
@@ -1036,10 +1110,16 @@ def test_list_claudes_filters_and_trims(mocker):
         "toplevel": "/a", "head": "9eab154", "head_subject": "label status",
         "head_committed_at": 1700000000, "dirty": 6,
     })
+    # Untagged pid + mocked-out repo resolution → the LOOSE catchall, so the
+    # exact-dict assertion stays hermetic (no real git run on the fake cwd).
+    mocker.patch("periscope.git_pr.cached_git_state", return_value=None)
 
     body = _body(asyncio.run(channels._do_list_claudes_tool("%1", {})))
 
     assert body["ok"] is True
+    # Caller pane %1 isn't in the window list, so the tool can't say who "you"
+    # are — null, not a guess.
+    assert body["you"] is None
     assert len(body["claudes"]) == 1
     c = body["claudes"][0]
     assert c == {
@@ -1048,6 +1128,7 @@ def test_list_claudes_filters_and_trims(mocker):
         "spawned_by": "boss0", "head": "9eab154",
         "head_subject": "label status", "head_committed_at": 1700000000,
         "dirty": 6, "cwd_shared_with": [],
+        "track": {"id": "loose", "label": "loose", "kind": "loose"},
         # None = no claude process resolved for the pane, so no assertion
         # either way about whether it registered the channel.
         "channel_ready": None,
@@ -1094,18 +1175,105 @@ def test_list_claudes_non_git_cwd_has_null_signal(mocker):
              "pane_id": "%2", "pid_raw": "p1"}]
     mocker.patch("periscope.channels.list_windows", return_value=rows)
     mocker.patch("periscope.channels._attach_git_then_resolve_pids",
-                 side_effect=lambda ws: [w.update(pid=w.pop("pid_raw")) for w in ws])
+                 side_effect=lambda ws, **kw: [w.update(pid=w.pop("pid_raw")) for w in ws])
     mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
     mocker.patch("periscope.panes.parse_pane", return_value={"agent": "claude"})
     mocker.patch("periscope.activity.pane_status_lines", return_value={})
     mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
     mocker.patch("periscope.channels.get_window", return_value={})
     mocker.patch("periscope.git_pr.cached_git_signal", return_value=None)
+    mocker.patch("periscope.git_pr.cached_git_state", return_value=None)
 
     body = _body(asyncio.run(channels._do_list_claudes_tool("%1", {})))
 
     c = body["claudes"][0]
     assert c["dirty"] is None and c["head"] is None
+
+
+def _mock_list_claudes_roster(mocker):
+    """Two-claude roster for the track tests: window A (%2/pa) and B (%3/pb),
+    both parsing as claude, git state mocked out so an untagged pane falls
+    deterministically to LOOSE instead of shelling git on a fake cwd."""
+    from periscope import channels
+    rows = [
+        {"session": "s", "index": 1, "name": "lead", "cwd": "/a", "pane_id": "%2", "pid_raw": "pa"},
+        {"session": "s", "index": 2, "name": "peer", "cwd": "/b", "pane_id": "%3", "pid_raw": "pb"},
+    ]
+    mocker.patch("periscope.channels.list_windows", return_value=rows)
+
+    def _attach(ws, **kw):
+        for w in ws:
+            if "pid_raw" in w:
+                w["pid"] = w.pop("pid_raw")
+    mocker.patch("periscope.channels._attach_git_then_resolve_pids", side_effect=_attach)
+    mocker.patch("periscope.tmux.capture", side_effect=lambda target, *a, **k: target)
+    mocker.patch("periscope.panes.parse_pane", return_value={"agent": "claude"})
+    mocker.patch("periscope.activity.pane_status_lines", return_value={})
+    mocker.patch("periscope.channels.channel_state_for", return_value={"attached": True})
+    mocker.patch("periscope.channels.get_window", return_value={})
+    mocker.patch("periscope.git_pr.cached_git_signal", return_value=None)
+    mocker.patch("periscope.git_pr.cached_git_state", return_value=None)
+    return channels
+
+
+def test_list_claudes_rows_carry_track_and_you(fresh_activity_db, mocker):
+    """Each row carries its rail group; the response says who the CALLER is
+    (handle + track) so `track: "mine"` and roster reasoning need no guessing."""
+    from periscope import activity, tracks
+    channels = _mock_list_claudes_roster(mocker)
+    tk = tracks.create_track(name="Goal")
+    activity.set_pane_track("pa", tk["id"])
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%2", {})))
+
+    assert body["ok"] is True
+    by_handle = {c["handle"]: c for c in body["claudes"]}
+    assert by_handle["pa"]["track"] == {"id": tk["id"], "label": "Goal", "kind": "goal"}
+    # Untagged, non-git cwd → the LOOSE bucket, surfaced as a full track dict
+    # so same-track comparisons never need a null-guard.
+    assert by_handle["pb"]["track"] == {"id": "loose", "label": "loose", "kind": "loose"}
+    assert body["you"] == {"handle": "pa",
+                           "track": {"id": tk["id"], "label": "Goal", "kind": "goal"}}
+
+
+def test_list_claudes_track_mine_filters(fresh_activity_db, mocker):
+    from periscope import activity, tracks
+    channels = _mock_list_claudes_roster(mocker)
+    tk = tracks.create_track(name="Goal")
+    activity.set_pane_track("pa", tk["id"])
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%2", {"track": "mine"})))
+
+    assert body["ok"] is True
+    assert [c["handle"] for c in body["claudes"]] == ["pa"]
+
+
+def test_list_claudes_track_explicit_id_filters(fresh_activity_db, mocker):
+    """An explicit track id filters regardless of which track the caller is in."""
+    from periscope import activity, tracks
+    channels = _mock_list_claudes_roster(mocker)
+    tk = tracks.create_track(name="Goal")
+    activity.set_pane_track("pa", tk["id"])
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%3", {"track": tk["id"]})))
+
+    assert body["ok"] is True
+    assert [c["handle"] for c in body["claudes"]] == ["pa"]
+    assert body["you"]["handle"] == "pb"
+    assert body["you"]["track"]["kind"] == "loose"
+
+
+def test_list_claudes_track_mine_refused_without_you(fresh_activity_db, mocker):
+    """Only the active pane per window is visible to list_windows — a caller in
+    a background split pane can't resolve itself, so "mine" must refuse loudly
+    instead of silently returning everything (or nothing)."""
+    channels = _mock_list_claudes_roster(mocker)
+
+    body = _body(asyncio.run(channels._do_list_claudes_tool("%9", {"track": "mine"})))
+
+    assert body["ok"] is False
+    assert "cannot resolve your own pane" in body["error"]
+    assert "without the track filter" in body["error"]
 
 
 def _peek_msgs(mocker, msgs):
@@ -1254,11 +1422,11 @@ def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_act
     from periscope import activity, tracks
     from periscope.channels import _do_list_workspaces_tool
     tk = tracks.create_track(name="Auth", repo="/d/fdy")
-    activity.set_pane_track("%1", tk["id"])
-    activity.set_pane_track("%99", tk["id"])   # dead pane — excluded from count
-    # LOOSE catchall must never surface in the list.
-    activity.set_pane_track("%1", tk["id"])
-    mocker.patch("periscope.channels.list_windows", return_value=[{"pane_id": "%1"}])
+    # Tags key on the @periscope_id; liveness intersects live windows' pid_raw.
+    activity.set_pane_track("aaaa0001", tk["id"])
+    activity.set_pane_track("aaaa0099", tk["id"])   # dead pane — excluded from count
+    mocker.patch("periscope.channels.list_windows",
+                 return_value=[{"pane_id": "%1", "pid_raw": "aaaa0001"}])
     r = _body(_do_list_workspaces_tool("%1", {}))
     assert r["ok"] is True
     rows = {w["id"]: w for w in r["workspaces"]}
@@ -1266,7 +1434,7 @@ def test_list_workspaces_tool_returns_ids_and_live_counts(clean_state, fresh_act
     assert tk["id"] in rows
     assert rows[tk["id"]]["name"] == "Auth"
     assert rows[tk["id"]]["base_repo"] == "/d/fdy"   # track.repo mapped to base_repo
-    assert rows[tk["id"]]["tagged_tabs"] == 1        # %99 dead, not counted
+    assert rows[tk["id"]]["tagged_tabs"] == 1        # aaaa0099 dead, not counted
 
 
 def test_list_workspaces_tool_excludes_archived(clean_state, fresh_activity_db, mocker):
@@ -1495,7 +1663,7 @@ def test_resolve_window_by_pid_falls_back_to_pane_id(mocker):
              "pane_id": "%106", "pid_raw": "e42b3b40"}]
     mocker.patch.object(channels, "list_windows", return_value=rows)
     mocker.patch.object(channels, "_attach_git_then_resolve_pids",
-                        side_effect=lambda ws: [w.update(pid=w["pid_raw"]) for w in ws])
+                        side_effect=lambda ws, **kw: [w.update(pid=w["pid_raw"]) for w in ws])
 
     # The stale spawn-time pid no longer resolves...
     assert channels._resolve_window_by_pid("3dc7686a") == ("", "", {})
