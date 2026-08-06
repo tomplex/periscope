@@ -170,7 +170,7 @@ async function reorderTabs(dragChildKey, targetChildKey, trackKey, insertAfter) 
 async function moveTabToTrack(w, trackId) {
   await apiCall("move tab", `/api/tracks/move-tab?track_id=${encodeURIComponent(trackId)}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pane_id: w.pane_id }),
+    body: JSON.stringify({ pid: w.pid }),
   });
 }
 

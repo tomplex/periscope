@@ -44,14 +44,22 @@ def test_rename_missing_404():
 
 def test_move_tab_retags():
     tid = client.post("/api/tracks", json={"name": "T"}).json()["id"]
-    r = client.post(f"/api/tracks/move-tab?track_id={tid}", json={"pane_id": "%7"})
+    r = client.post(f"/api/tracks/move-tab?track_id={tid}", json={"pid": "beef0007"})
     assert r.status_code == 200
     from periscope import activity
-    assert activity.get_pane_track("%7") == tid
+    assert activity.get_pane_track("beef0007") == tid
+
+
+def test_move_tab_takes_pid():
+    tid = client.post("/api/tracks", json={"name": "T"}).json()["id"]
+    r = client.post(f"/api/tracks/move-tab?track_id={tid}", json={"pid": "cafe0001"})
+    assert r.status_code == 200
+    from periscope import activity
+    assert activity.get_pane_track("cafe0001") == tid
 
 
 def test_move_tab_missing_track_404():
-    r = client.post("/api/tracks/move-tab?track_id=tk_nope", json={"pane_id": "%1"})
+    r = client.post("/api/tracks/move-tab?track_id=tk_nope", json={"pid": "beef0001"})
     assert r.status_code == 404
 
 
@@ -110,9 +118,9 @@ def test_slashed_track_id_reaches_the_handler():
     """The regression: a repo path as the id must ROUTE, not 405."""
     from periscope import activity, tracks
     tracks.repo_default_track(REPO)
-    r = client.post(f"/api/tracks/move-tab?track_id={REPO}", json={"pane_id": "%9"})
+    r = client.post(f"/api/tracks/move-tab?track_id={REPO}", json={"pid": "beef0009"})
     assert r.status_code == 200, r.text
-    assert activity.get_pane_track("%9") == REPO
+    assert activity.get_pane_track("beef0009") == REPO
 
 
 def test_rename_slashed_track_id():
