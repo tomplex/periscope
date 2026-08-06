@@ -9,7 +9,7 @@ restarts. Time-to-live is 30 days — older state.json entries get GC'd.
 import time
 import uuid
 
-from periscope import session_status
+from periscope import activity, session_status
 from periscope import store as _store
 from periscope.git_pr import cached_git_state
 from periscope.log import log
@@ -26,6 +26,14 @@ _PID_TTL_S = 30 * 86400  # 30 days — GC retention for state.json window entrie
 # inherited its immunity fields — surfacing as a brand-new pane wearing a stale
 # PR and Linear ticket.
 _REBIND_TTL_S = 15 * 60  # 15 minutes
+
+# Track-row maintenance (legacy %N migration + prune of dead pid rows) runs
+# ONCE per boot, from the first completed FULL-ROSTER resolve pass — never
+# before one, and never from a partial pass: post-tmux-restart the live-pid
+# set is unknowable until rebind runs, and resolve_pids is also called with
+# single windows (channel tools, pane routes) whose one-pid taken set would
+# prune every other live pane's rows.
+_TRACKS_MAINTAINED = False
 
 
 def _mint_pid() -> str:
@@ -346,12 +354,11 @@ def resolve_pids(windows: list[dict],
     because building them forks tmux/ps — under _STATE_LOCK those forks would
     stall every route, and list_claudes runs this resolve on the event loop.
 
-    `full_roster` marks a pass that saw every live window; track-row
-    maintenance in a later task must never run from a partial (single-window)
-    pass, which would read absence as death.
+    `full_roster` marks a pass that saw every live window; it gates the
+    one-shot track-row maintenance below — a partial (single-window) pass
+    would read absence as death and mass-delete live panes' rows.
     """
     hints = session_hints or {}
-    _ = full_roster   # plumbing only — Task 8's track-row maintenance consumes this
     if not windows:
         return
     now_ts = int(time.time())
@@ -430,6 +437,33 @@ def resolve_pids(windows: list[dict],
             dirty = True
         if dirty:
             _store._write_state(_store._STATE)
+        # Phase 5 (one-shot per boot): pane_tracks maintenance, gated on the
+        # first completed full-roster pass — the only moment the live-pid set
+        # (`taken`) is trustworthy. Live DBs still hold pre-re-key %N-keyed
+        # rows; migrate each live window's legacy tag onto its resolved pid
+        # (never clobbering a pid row a user move already wrote), then sweep
+        # dead % rows and prune dead pid rows. Safe under _STATE_LOCK:
+        # activity's _LOCK has no path back to _STATE_LOCK, and this is a
+        # handful of small sqlite statements.
+        global _TRACKS_MAINTAINED
+        if full_roster and not _TRACKS_MAINTAINED:
+            tag_map = activity.pane_track_map()
+            live_pane_ids = {p for w in windows if (p := w.get("pane_id"))}
+            for w in windows:
+                pane_id, pid = w.get("pane_id"), w.get("pid")
+                if not pane_id or not pid:
+                    continue
+                legacy_tid = tag_map.get(pane_id)
+                if legacy_tid is None:
+                    continue
+                if pid not in tag_map:
+                    activity.set_pane_track(pid, legacy_tid)
+                    log.info("pane_tracks: migrated %s -> %s (%s)",
+                             pane_id, pid, legacy_tid)
+                activity.set_pane_track(pane_id, None)   # delete the % row
+            activity.sweep_legacy_pane_track_rows(live_pane_ids)
+            activity.prune_pane_tracks(taken)
+            _TRACKS_MAINTAINED = True
 
 
 def _attach_git_then_resolve_pids(windows: list[dict],

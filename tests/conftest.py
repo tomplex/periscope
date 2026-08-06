@@ -122,6 +122,24 @@ def _isolate_activity_db(tmp_path, monkeypatch):
             activity._CONN = None
 
 
+@pytest.fixture(autouse=True)
+def _no_track_maintenance(monkeypatch):
+    """Keep resolve_pids' one-shot pane_tracks maintenance OFF by default.
+
+    The module flag `pids._TRACKS_MAINTAINED` defaults to False (prod runs
+    maintenance once per boot, from the first full-roster resolve), and a
+    completed pass flips it True — module state that would leak across tests
+    and make any suite exercising a full-roster resolve (routes/state,
+    list_claudes) order-dependent. Pin it True here so maintenance never fires
+    unless a test opts in by setting it False itself; monkeypatch restores the
+    import-time default afterward."""
+    try:
+        from periscope import pids
+    except ImportError:
+        return
+    monkeypatch.setattr(pids, "_TRACKS_MAINTAINED", True, raising=False)
+
+
 @pytest.fixture
 def tmp_xdg_home(monkeypatch, tmp_path: Path) -> Path:
     """Redirect XDG_CONFIG_HOME so state.json, pidfile, and the log

@@ -558,3 +558,74 @@ def test_rebind_never_steals_a_pid_a_live_window_still_carries(clean_state, mock
         f"live window lost its identity to a rebind steal: {windows[1]['pid']}"
     )
     assert windows[0]["pid"] != "beef0001"
+
+
+def test_resolve_migrates_legacy_pane_track_row(clean_state, fresh_activity_db,
+                                                mocker):
+    """A %-keyed pane_tracks row (pre-re-key) converts to the window's pid on
+    first sight; the % row is deleted."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import activity, pids
+    activity.set_pane_track("%30", "tk_x")
+    pids._TRACKS_MAINTAINED = False
+    w = _mkwin(pane_id="%30", window_id="@30", pid_raw="feed0001")
+    resolve_pids([w], full_roster=True)
+    assert activity.get_pane_track("feed0001") == "tk_x"
+    assert activity.get_pane_track("%30") is None
+
+
+def test_resolve_migration_never_clobbers_pid_row(clean_state,
+                                                  fresh_activity_db, mocker):
+    """A pid-keyed row wins over a legacy % row for the same window — a user
+    move made after the re-key must not be undone by stale legacy data."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import activity, pids
+    activity.set_pane_track("%31", "tk_old")
+    activity.set_pane_track("feed0002", "tk_new")
+    pids._TRACKS_MAINTAINED = False
+    w = _mkwin(pane_id="%31", window_id="@31", pid_raw="feed0002")
+    resolve_pids([w], full_roster=True)
+    assert activity.get_pane_track("feed0002") == "tk_new"
+    assert activity.get_pane_track("%31") is None   # legacy row still cleaned
+
+
+def test_prune_gated_on_completed_resolve(clean_state, fresh_activity_db,
+                                          mocker):
+    """Boot pruned pane_tracks BEFORE any resolve pass — post-tmux-restart the
+    live-pid set is unknowable until rebind runs, so that prune deleted every
+    tag at exactly the moment rebind could reattach them. Prune only fires
+    from a completed resolve pass, using its taken set."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import activity, pids
+    activity.set_pane_track("feed0003", "tk_live")
+    activity.set_pane_track("dead0004", "tk_dead")
+    pids._TRACKS_MAINTAINED = False
+    w = _mkwin(pane_id="%32", window_id="@32", pid_raw="feed0003")
+    resolve_pids([w], full_roster=True)
+    assert activity.get_pane_track("feed0003") == "tk_live"
+    assert activity.get_pane_track("dead0004") is None
+    # One-shot: the pass above completed, so a later full-roster pass must NOT
+    # prune again — a pid absent from that pass (pane closed mid-boot, tmux
+    # blip) keeps its tag until the next boot's first full pass.
+    assert pids._TRACKS_MAINTAINED is True
+    activity.set_pane_track("dead0005", "tk_late")
+    resolve_pids([w], full_roster=True)
+    assert activity.get_pane_track("dead0005") == "tk_late"
+
+
+def test_maintenance_never_runs_on_partial_pass(clean_state, fresh_activity_db,
+                                                mocker):
+    """resolve_pids is also called with SINGLE windows (channels.py:311,
+    routes/pane.py:70, routes/auto_rename.py:119). If one of those lands
+    before the first full poll, pruning against its one-pid taken set would
+    delete every other live pane's rows — the mass-deletion class the conftest
+    documents as real data loss. Maintenance requires full_roster=True."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import activity, pids
+    activity.set_pane_track("feed0005", "tk_a")
+    activity.set_pane_track("feed0006", "tk_b")
+    pids._TRACKS_MAINTAINED = False
+    w = _mkwin(pane_id="%33", window_id="@33", pid_raw="feed0005")
+    resolve_pids([w])                       # default: partial pass
+    assert activity.get_pane_track("feed0006") == "tk_b"   # untouched
+    assert pids._TRACKS_MAINTAINED is False
