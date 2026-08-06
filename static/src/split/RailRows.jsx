@@ -140,7 +140,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
   pinned, onTogglePin, awaitingSince, spawnerName, spawnerLive, onRevealSpawner,
-  onMoveAccount,
+  onMoveAccount, onToggleNamePin,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
@@ -292,6 +292,17 @@ export function PaneRow({
           title={pinned ? "unpin" : "pin"}
           onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
         >{pinned ? "★" : "☆"}</button>
+        {/* Distinct from the ★ above: that pins the tab into the PINNED
+            section, this freezes its NAME against the narrator's auto-rename.
+            Renaming pins on its own, so the useful direction here is the
+            release — plus keeping a generated name you happen to like. */}
+        <button
+          class={`rail-name-pin${w.name_pinned ? " pinned" : ""}`}
+          title={w.name_pinned
+            ? "name pinned — click to let periscope rename this tab again"
+            : "freeze this name — periscope won't rename this tab"}
+          onClick={(e) => { e.stopPropagation(); onToggleNamePin?.(); }}
+        >{w.name_pinned ? "🔒" : "🔓"}</button>
         <button
           class="rail-close"
           title="kill this tab"

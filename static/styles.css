@@ -2610,6 +2610,17 @@ body.modal-open { overflow: hidden; }
    rules (need #rail to outrank #rail .child-row .rail-pin / :hover .rail-close). */
 #rail .pane-actions .rail-pin,
 #rail .pane-actions .rail-close { opacity: 1; margin: 0; position: static; }
+/* Name pin (🔒): freezes the tab NAME against auto-rename — not the ★ beside
+   it, which pins the tab into the PINNED section. Rendered smaller and duller
+   than ★ so two adjacent pin-ish glyphs don't read as one control. */
+#rail .pane-actions .rail-name-pin {
+  opacity: .55; margin: 0; position: static;
+  background: none; border: 0; padding: 0 2px;
+  font-size: 10px; line-height: 1; cursor: pointer;
+  filter: grayscale(1);
+}
+#rail .pane-actions .rail-name-pin:hover { opacity: 1; filter: none; }
+#rail .pane-actions .rail-name-pin.pinned { opacity: 1; filter: none; }
 /* "→ B": re-open this pane's session on the other subscription. Text, not a
    glyph, because the destination account is the whole content of the action —
    an icon would need the tooltip to say anything at all. */

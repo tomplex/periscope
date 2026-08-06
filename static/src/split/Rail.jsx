@@ -289,6 +289,17 @@ export function Rail() {
     });
   }
 
+  // Freeze/release the pane's name against the narrator's auto-rename. The
+  // rename above pins on its own (server-side); this is the release, plus a
+  // way to keep a generated name you happen to like.
+  async function toggleNamePin(w) {
+    await apiCall("pin tab name", "/api/name-pin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pid: w.pid, pinned: !w.name_pinned }),
+    });
+  }
+
   // --- Track lifecycle -----------------------------------------------------
   async function renameTrack(trackId, next) {
     await apiCall("rename track", `/api/tracks?track_id=${encodeURIComponent(trackId)}`, {
@@ -434,6 +445,7 @@ export function Rail() {
           dropPos={dropPosFor(`pane:${w.pid}`)}
           pinned={prefs.getPinnedPids().includes(w.pid)}
           onTogglePin={() => prefs.togglePin(w.pid)}
+          onToggleNamePin={() => toggleNamePin(w)}
           awaitingSince={awaiting.get(w.pid)}
           spawnerName={w.spawner_name}
           spawnerLive={!!w.spawned_by && livePids.has(w.spawned_by)}

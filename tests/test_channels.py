@@ -18,6 +18,7 @@ from periscope.channels import (
     _do_link_pr_tool,
     _do_notify_tool,
     _do_open_document_tool,
+    _do_set_name_tool,
     recent_alerts,
     rehydrate_alerts_from_events,
 )
@@ -199,6 +200,56 @@ def test_link_linear_tool_persists_title_and_status(clean_state, mocker):
     assert entry["linked_linear"] == "FAR-456"
     assert entry["linked_linear_title"] == "Fix the thing"
     assert entry["linked_linear_status"] == "In Progress"
+
+
+def test_set_name_tool_renames_and_pins(clean_state, mocker):
+    from periscope import narrator
+
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    mocker.patch("periscope.store._write_state")
+    mocker.patch("periscope.activity.stamp_pane_rename")
+    tmux_mock = mocker.patch("periscope.channels.tmux", return_value="")
+
+    _do_set_name_tool("%5", {"name": "pit-orchestrator"})
+
+    assert tmux_mock.call_args.args == ("rename-window", "-t", "%5", "pit-orchestrator")
+    assert clean_state["windows"]["abc123"]["name_pinned"] is True
+    assert narrator.is_name_pinned({"pid": "abc123", "name": "pit-orchestrator"})
+
+
+def test_set_name_tool_stamps_the_narrator_seen_name(clean_state, mocker):
+    """Without the stamp the next tick reads its own pane's new name as an
+    EXTERNAL rename and burns a cooldown branch on a window it can't touch."""
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    mocker.patch("periscope.store._write_state")
+    mocker.patch("periscope.channels.tmux", return_value="")
+    stamp = mocker.patch("periscope.activity.stamp_pane_rename")
+
+    _do_set_name_tool("%5", {"name": "pit-orchestrator"})
+
+    assert stamp.call_args.args == ("%5",)
+    assert stamp.call_args.kwargs["name"] == "pit-orchestrator"
+
+
+@pytest.mark.parametrize("name", ["", "   ", "two\nlines"])
+def test_set_name_tool_rejects_unusable_names(clean_state, mocker, name):
+    mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="abc123")
+    tmux_mock = mocker.patch("periscope.channels.tmux", return_value="")
+
+    _do_set_name_tool("%5", {"name": name})
+
+    assert tmux_mock.call_count == 0
+    assert "abc123" not in clean_state["windows"]
+
+
+def test_set_name_tool_refuses_a_commander(clean_state, mocker):
+    """A commander handle is not a tmux target — renaming it would fail
+    obscurely inside tmux instead of saying what's wrong."""
+    tmux_mock = mocker.patch("periscope.channels.tmux", return_value="")
+
+    _do_set_name_tool("cmdr:abc", {"name": "whatever"})
+
+    assert tmux_mock.call_count == 0
 
 
 def test_link_linear_tool_clears_stale_metadata_on_relink(clean_state, mocker):

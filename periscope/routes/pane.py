@@ -15,6 +15,7 @@ from periscope.activity import cached_pane_activity, stamp_pane_rename
 from periscope.channels import channel_state_for
 from periscope.git_pr import cached_git_state, cached_pr_state
 from periscope.lgtm import cached_lgtm_state
+from periscope.log import log
 from periscope.panes import (
     list_windows,
     note_action,
@@ -22,7 +23,7 @@ from periscope.panes import (
     smooth_parsed,
 )
 from periscope.pids import _attach_git_then_resolve_pids
-from periscope.store import get_window
+from periscope.store import get_window, set_window_fields
 from periscope.tabs import activate_tab, close_tab, open_tab
 from periscope.tmux import pane_meta, tmux, window_identity
 from periscope.turns import get_turns_for_pane
@@ -32,6 +33,11 @@ router = APIRouter()
 
 class RenameBody(BaseModel):
     name: str
+
+
+class NamePinBody(BaseModel):
+    pid: str
+    pinned: bool
 
 
 class TabOpenBody(BaseModel):
@@ -166,11 +172,38 @@ def rename(session: str, index: int, body: RenameBody):
         raise HTTPException(400, "empty name")
     tmux("rename-window", "-t", target, name)
     note_action(target)
-    # A human chose this name — start the narrator's rename cooldown so it
-    # can't clobber it. The route only has session:index; resolve the
-    # active pane id from tmux. Empty means the window died between the
-    # two tmux calls — nothing to stamp.
+    # A human chose this name — pin it, so the narrator is locked out for good
+    # rather than for RENAME_COOLDOWN_S. A 30-minute cooldown reads as
+    # permanent right when you set the name and expires unnoticed; the
+    # orchestrator pane was renamed by hand and had drifted through five
+    # generated names by the end of the afternoon. The cooldown stamp still
+    # goes in: it carries `seen_name`, which is how the narrator knows this
+    # rename wasn't its own. Unpin from the rail to hand the name back.
+    #
+    # The route only has session:index. `pid_raw` is the live @periscope_id
+    # stamp — non-empty for any window a poll has seen, which is every window
+    # the rail can offer a rename for. Empty means the window died between the
+    # two tmux calls, or is brand-new and unstamped: nothing to pin.
     pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
     if pane_id:
         stamp_pane_rename(pane_id, name=name, at=int(time.time()))
-    return {"ok": True, "target": target, "name": name}
+    pid = window_identity(target)[0]
+    if pid:
+        set_window_fields(pid, name_pinned=True)
+    else:
+        log.warning("rename of %s not pinned: no @periscope_id stamp", target)
+    return {"ok": True, "target": target, "name": name, "name_pinned": bool(pid)}
+
+
+@router.post("/api/name-pin")
+def name_pin(body: NamePinBody):
+    """Toggle a pane's name pin. Unpinning is the ONLY release — the pin
+    survives later renames, because it marks the window as hand-named rather
+    than blessing one particular string."""
+    pid = body.pid.strip()
+    if not pid:
+        raise HTTPException(400, "pid must be non-empty")
+    # False removes the key rather than storing it (set_window_fields drops
+    # None), so an unpinned window is indistinguishable from one never pinned.
+    set_window_fields(pid, name_pinned=True if body.pinned else None)
+    return {"ok": True, "pid": pid, "name_pinned": body.pinned}

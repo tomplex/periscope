@@ -61,6 +61,50 @@ def test_rename_sets_name(client, mocker):
     )
 
 
+def test_rename_pins_the_name(client, mocker, clean_state):
+    """A name Tom typed locks the narrator out permanently, not for
+    RENAME_COOLDOWN_S — the cooldown expired unnoticed and the name drifted."""
+    from periscope import narrator, store
+
+    _patch(mocker, "tmux", return_value="")
+    _patch(mocker, "window_identity", return_value=("p9", "%7", "@3"))
+
+    r = client.post("/api/rename?session=main&index=0", json={"name": "pit-orchestrator"})
+    assert r.status_code == 200
+    assert r.json()["name_pinned"] is True
+    assert store.get_window("p9")["name_pinned"] is True
+    assert narrator.is_name_pinned({"pid": "p9", "name": "pit-orchestrator"})
+
+
+def test_rename_of_an_unstamped_window_reports_no_pin(client, mocker, clean_state):
+    """No @periscope_id means nothing to hang the pin on. The rename still
+    applies; the response says so rather than implying a lock that isn't there."""
+    _patch(mocker, "tmux", return_value="")
+    _patch(mocker, "window_identity", return_value=("", "%7", "@3"))
+
+    r = client.post("/api/rename?session=main&index=0", json={"name": "fresh"})
+    assert r.status_code == 200
+    assert r.json()["name_pinned"] is False
+
+
+def test_name_pin_toggles(client, clean_state):
+    from periscope import store
+
+    assert client.post("/api/name-pin", json={"pid": "p9", "pinned": True}).status_code == 200
+    assert store.get_window("p9")["name_pinned"] is True
+
+    r = client.post("/api/name-pin", json={"pid": "p9", "pinned": False})
+    assert r.status_code == 200
+    assert r.json()["name_pinned"] is False
+    # Unpinned is stored as absence, not False — no third state to reason about.
+    assert "name_pinned" not in store.get_window("p9")
+
+
+def test_name_pin_rejects_empty_pid(client, clean_state):
+    r = client.post("/api/name-pin", json={"pid": "  ", "pinned": True})
+    assert r.status_code == 400
+
+
 def test_rename_rejects_empty(client, mocker):
     for path in ("periscope.routes.pane.tmux", "server.tmux"):
         try:

@@ -198,7 +198,7 @@ One file per subsystem:
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
-`tests/routes/test_<route>.py` per route). 1069 pytest tests on a
+`tests/routes/test_<route>.py` per route). 1083 pytest tests on a
 clean run. Run with `uv run pytest -q`. The Preact app has its own
 suite: `npm test` (vitest), 252 tests over the pure helpers.
 
@@ -229,7 +229,7 @@ is no separate smoke script and no `collect_ignore`.
 the shim subprocess misbehaves — surfacing as two spurious
 `test_channel_shim.py` reconnect failures (`TimeoutError`/fast EOF) with
 NO code change. Fix: `uv sync` to rebuild `.venv` from the lock. The
-canonical locked env collects 1069 tests, all green. If you ever see only
+canonical locked env collects 1083 tests, all green. If you ever see only
 those two channel tests fail, suspect the env before the code.
 
 ### Key invariants the split preserved
@@ -625,6 +625,10 @@ Tools exposed to Claude:
 - `link_linear(id, title?, status?)` — same for Linear tickets (no
   auto-detection path). Optional `title`/`status` metadata renders on
   the card and in the modal; each call fully describes the link.
+- `set_name(name)` — rename the caller's own window and pin the name
+  against the narrator (see the narrator section's pin invariant). The
+  only self-naming path: `spawn_claude(name=…)` could name a CHILD, so a
+  pane holding a standing role had no way to assert its own label.
 - `spawn_claude(prompt, workspace?, session?, cwd?, name?)` — fork a
   fresh Claude pane in a new tmux window with the given first message.
   `workspace="same"` (default) adds a window to the caller's session, so
@@ -753,6 +757,20 @@ Invariants worth knowing before touching it:
   tmux-native renames; and `_generate` re-reads the live window name +
   row immediately before applying (a tick spans multi-second Haiku
   calls — the snapshot goes stale).
+- **A deliberate name is PINNED, not cooled down.** `windows[pid].name_pinned`
+  (state.json, `_IMMUNITY_FIELDS`) makes `narrator.is_name_pinned` return the
+  `locked=True` that shuts `rename_decision` off entirely. Three writers:
+  `/api/rename` (Tom typed it, including the rail's double-click), the
+  `set_name` MCP tool (a pane naming itself), and `spawn_claude(name=…)` (a
+  lead naming its worker). A cooldown was the wrong shape for all three —
+  nothing re-asserts a deliberate name, so `RENAME_COOLDOWN_S` expiring
+  unnoticed let the orchestrator pane drift through five generated names in
+  one afternoon and put one worker on the orchestrator's own role name, so the
+  dashboard misidentified both. The pin is NOT scoped to the name matching
+  (the old `spawn_name` lock was): it marks the window as hand-named, so a
+  later rename keeps it. Released only by `POST /api/name-pin {pinned: false}`
+  — the 🔒 in the rail row's hover actions, distinct from the ★ beside it,
+  which pins the tab into the rail's PINNED section and touches no name.
 - **No cwd fallback** when a pane has no `pane_sessions` row — on a
   shared cwd a wrong-session status is worse than none; the hook
   self-corrects on the next prompt.

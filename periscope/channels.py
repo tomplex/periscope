@@ -85,6 +85,13 @@ specific enough that you won't over-call them:
   the user will want to read (spec, design doc, report, HTML output).
   Quiet: the tab appears on this pane without stealing focus.
 
+- set_name(name): label THIS pane on the rail and pin the label. Periscope
+  otherwise infers each pane's name from its activity and re-infers it as
+  the work moves. Call it once, early, when you hold a standing role the
+  user will look for by name (orchestrator, reviewer, owner of one ticket
+  or one piece of a fan-out) — not to narrate progress, since a pinned
+  name never updates itself.
+
 - spawn_claude(prompt, workspace?, session?, cwd?, name?, workspace_id?):
   launch a fresh Claude session in a new tmux window with the given prompt
   as its first message. The new window appears on the dashboard. Use when
@@ -420,6 +427,39 @@ def _do_link_linear_tool(pane: str, arguments: dict):
     return _tool_result(body)
 
 
+def _do_set_name_tool(pane: str, arguments: dict):
+    """Rename the caller's own window and pin the name against the narrator.
+
+    A pane could not previously assert its own rail label: the narrator
+    regenerates names on divergence, so an orchestrator pane cycled through
+    five labels in one afternoon and a worker landed on the orchestrator's own
+    role name. spawn_claude could pin a name for a CHILD; nothing could pin one
+    for self. Pinning is the point of the tool, so there is no unpinned mode —
+    releasing it is a dashboard action."""
+    name = str(arguments.get("name", "")).strip()
+    if not name or "\n" in name:
+        body = {"ok": False, "error": "name is required and must be a non-empty single line"}
+        return _tool_result(body)
+    if is_commander(pane):
+        body = {"ok": False, "error": "commanders have no window to name"}
+        return _tool_result(body)
+
+    pid = _resolve_pid_for_pane(pane)
+    if not pid:
+        body = {"ok": False, "error": f"could not resolve pid for pane {pane}"}
+        return _tool_result(body)
+
+    # A pane target resolves to its window, so no session:index lookup is
+    # needed. Stamp the narrator's own memory too: without it the next tick
+    # reads the new name as an EXTERNAL rename and burns a cooldown branch.
+    from periscope import activity
+    tmux("rename-window", "-t", pane, name)
+    set_window_fields(pid, name_pinned=True)
+    activity.stamp_pane_rename(pane, name=name, at=int(time.time()))
+    body = {"ok": True, "name": name, "pid": pid, "pinned": True}
+    return _tool_result(body)
+
+
 def _do_open_document_tool(pane: str, arguments: dict):
     """Open a file as a preview tab on the pane's card — same as the user
     clicking it in the Inspector's Files section. Tabs are server-owned
@@ -712,11 +752,11 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
 
     # An explicit spawn name is the lead's deliberate label for the task it
-    # delegated — recorded so the narrator locks it instead of drifting it
-    # (narrator.is_spawn_named). Only when `name` was passed: without it tmux
+    # delegated — pinned so the narrator never drifts it
+    # (narrator.is_name_pinned). Only when `name` was passed: without it tmux
     # auto-names off the command/dir, which carries no intent to protect.
     if name and pid:
-        set_window_fields(pid, spawn_name=name)
+        set_window_fields(pid, name_pinned=True)
 
     # Provenance breadcrumb: record who spawned this child so report() knows
     # where "back" is. Pure metadata, no ownership — a severed child simply
@@ -1548,6 +1588,37 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
         "handler": _do_link_linear_tool,
     },
     {
+        "name": "set_name",
+        "description": (
+            "Name THIS pane on periscope's rail, and pin the name so it "
+            "holds. Periscope otherwise infers each pane's label from what "
+            "it's doing and re-infers it as the work moves — fine for a "
+            "single pane, wrong for a pane with a standing role: an "
+            "orchestrator cycled through five labels in one afternoon and a "
+            "worker drifted onto the orchestrator's own role name, so the "
+            "dashboard misidentified both. Call it once, early, when you "
+            "hold a role the user will look for by name (orchestrator, "
+            "reviewer, the owner of one ticket or one piece of a fan-out). "
+            "Don't call it to narrate progress — a pinned name never "
+            "updates itself, so a name describing your current step is worse "
+            "than the inferred one. Tom can unpin from the dashboard."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "The rail label. 1-3 lowercase dash-words matches the "
+                        "rail's style (e.g. 'pit-orchestrator')."
+                    ),
+                },
+            },
+            "required": ["name"],
+        },
+        "handler": _do_set_name_tool,
+    },
+    {
         "name": "open_document",
         "description": (
             "Open a file as a preview tab on this pane's periscope card — "
@@ -1652,7 +1723,19 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                 },
                 "name": {
                     "type": "string",
-                    "description": "Optional name for the new tmux window.",
+                    "description": (
+                        "Optional label for the spawned pane on periscope's "
+                        "rail. Setting it PINS it: periscope otherwise infers "
+                        "a name from what the pane is doing and re-infers it "
+                        "as the work moves, so a name set here is the only "
+                        "one that holds still. Worth setting when the pane's "
+                        "role is what you'll look for later (its piece of a "
+                        "fan-out, the ticket it owns); skip it when the "
+                        "inferred name would be just as good, since a pinned "
+                        "name goes stale if the pane's work moves on. Tom can "
+                        "unpin it from the dashboard. 1-3 lowercase "
+                        "dash-words matches the rail's style."
+                    ),
                 },
                 "account": {
                     "type": "string",

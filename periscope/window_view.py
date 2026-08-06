@@ -436,6 +436,12 @@ def build_window_view(
         # could not show that pane A's work is continued by pane B.
         "spawned_by": persisted.get("spawned_by"),
         "spawner_name": spawner_name,
+        # This name was chosen (typed here, set by the pane, or passed to
+        # spawn_claude) and the narrator is locked out of it. Surfaced so the
+        # rail can offer the unpin — the lock is otherwise invisible, and an
+        # invisible lock is indistinguishable from a narrator that has simply
+        # not gotten around to renaming yet.
+        "name_pinned": bool(persisted.get("name_pinned")),
         "linked_linear": linked_linear,
         "linked_linear_title": linked_linear_title,
         "linked_linear_status": linked_linear_status,

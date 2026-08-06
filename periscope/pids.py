@@ -152,10 +152,10 @@ _IMMUNITY_FIELDS = (
     # (last_seen-less) entry and the breadcrumb is lost. Durable channel
     # metadata, same category as linked_pr/linked_linear.
     "spawned_by",
-    # spawn_name is written in the same breath as spawned_by and for the same
+    # name_pinned is written in the same breath as spawned_by and for the same
     # reason — GC straddling a fresh spawn would reap it and the narrator would
     # start renaming a window whose name the lead chose deliberately.
-    "spawn_name",
+    "name_pinned",
 )
 
 

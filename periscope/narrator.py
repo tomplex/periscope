@@ -260,15 +260,17 @@ def rename_decision(suggestion: str | None, *, current_name: str,
     return suggestion
 
 
-def is_spawn_named(w: dict) -> bool:
-    """This window still wears the name the Claude that spawned it chose.
+def is_name_pinned(w: dict) -> bool:
+    """This window's name was chosen deliberately — a human, a spawning lead,
+    or the pane itself — and the narrator must never rename it.
 
-    A spawn name is deliberate the way a human rename is, but nothing will
-    re-assert it: the lead names its worker's task and then usually exits, so
-    a narrator drift is permanent and silently breaks the lineage chip (which
-    labels a spawner by its window name). So it's a lock, not a cooldown.
-    Scoped to the name still matching: rename the window and the lock
-    releases, restoring the normal cooldown rules.
+    A lock, not a cooldown: nothing re-asserts a deliberate name. A lead names
+    its worker's task and then usually exits, so a narrator drift is permanent
+    and silently breaks the lineage chip (which labels a spawner by its window
+    name); a name Tom typed drifted away 30 minutes later, five times in one
+    afternoon on the orchestrator pane. The pin survives later renames — it
+    marks the WINDOW as hand-named, not one particular string — and is
+    released only by an explicit unpin.
 
     Reads `pid_raw` as well as `pid`: the narrator's windows come straight
     from `list_windows()`, which carries only the raw `@periscope_id` stamp —
@@ -279,7 +281,7 @@ def is_spawn_named(w: dict) -> bool:
     pid = w.get("pid") or w.get("pid_raw") or ""
     if not pid:
         return False
-    return (get_window(pid).get("spawn_name") or "") == (w.get("name") or "")
+    return bool(get_window(pid).get("name_pinned"))
 
 
 def is_external_rename(row: PaneStatusRow, current_name: str) -> bool:
@@ -517,7 +519,7 @@ def _generate(w: dict, *, pane_id: str, sid: str, jsonl: Path, size: int,
     gate_row = replace(row, renamed_at=renamed_at) if row is not None else None
     new_name = rename_decision(suggestion, current_name=current_name,
                                row=gate_row, now=now,
-                               locked=is_spawn_named(w),
+                               locked=is_name_pinned(w),
                                container=container_tokens(
                                    track_name=track_name,
                                    branch=git.get("branch"), cwd=cwd))

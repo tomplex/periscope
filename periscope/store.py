@@ -75,6 +75,10 @@ class WindowAnnotation(TypedDict, total=False):
     is_fork: bool  # phase 4: set on PR-review projects' claude window
     open_tabs: list  # [{"path": str, "line": int|None}], see periscope.tabs
     active_tab: str  # "file:<path>"; absent means "pane"
+    # The name was chosen deliberately (typed in the rail, set by the pane via
+    # set_name, or passed to spawn_claude) — narrator.is_name_pinned locks the
+    # auto-rename out. Absent means unpinned; never stored as False.
+    name_pinned: bool
 
 
 class Settings(TypedDict, total=False):

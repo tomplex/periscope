@@ -247,38 +247,45 @@ def test_rename_decision_locked_blocks_valid_suggestion():
         locked=True) is None
 
 
-# ---- is_spawn_named (the spawn-name lock) ----
+# ---- is_name_pinned (the name-pin lock) ----
 
-def test_is_spawn_named_true_while_wearing_the_spawn_name(clean_state):
+def test_is_name_pinned_true_when_pinned(clean_state):
     from periscope import store
-    store.set_window_fields("p1", spawn_name="qa-app-design")
-    assert narrator.is_spawn_named({"pid": "p1", "name": "qa-app-design"})
+    store.set_window_fields("p1", name_pinned=True)
+    assert narrator.is_name_pinned({"pid": "p1", "name": "qa-app-design"})
 
 
-def test_is_spawn_named_false_after_a_later_rename(clean_state):
-    """A rename off the spawn name releases the lock — the deliberate label
-    the lead chose is gone, so the normal cooldown rules take over."""
+def test_is_name_pinned_survives_a_later_rename(clean_state):
+    """The pin marks the WINDOW as hand-named, not one string. Scoping it to a
+    matching name (the old spawn_name lock) meant renaming a pinned tab handed
+    it straight back to the narrator — the opposite of what renaming means."""
     from periscope import store
-    store.set_window_fields("p1", spawn_name="qa-app-design")
-    assert not narrator.is_spawn_named({"pid": "p1", "name": "something-else"})
+    store.set_window_fields("p1", name_pinned=True)
+    assert narrator.is_name_pinned({"pid": "p1", "name": "something-else"})
 
 
-def test_is_spawn_named_false_without_a_spawn_name(clean_state):
-    assert not narrator.is_spawn_named({"pid": "p1", "name": "claude"})
+def test_is_name_pinned_false_when_unpinned(clean_state):
+    assert not narrator.is_name_pinned({"pid": "p1", "name": "claude"})
 
 
-def test_is_spawn_named_false_without_a_pid(clean_state):
-    assert not narrator.is_spawn_named({"pid": "", "name": "claude"})
+def test_is_name_pinned_false_after_unpin(clean_state):
+    from periscope import store
+    store.set_window_fields("p1", name_pinned=True)
+    store.set_window_fields("p1", name_pinned=None)
+    assert not narrator.is_name_pinned({"pid": "p1", "name": "qa-app-design"})
 
 
-def test_is_spawn_named_reads_pid_raw_from_a_list_windows_shape(clean_state):
+def test_is_name_pinned_false_without_a_pid(clean_state):
+    assert not narrator.is_name_pinned({"pid": "", "name": "claude"})
+
+
+def test_is_name_pinned_reads_pid_raw_from_a_list_windows_shape(clean_state):
     """The narrator's windows come from `list_windows()`, which carries
     `pid_raw` and no `pid` — the shape every other test here skips. Keying on
     `pid` alone silently disabled the lock for every real pane."""
     from periscope import store
-    store.set_window_fields("p1", spawn_name="sts2-d2-darv")
-    assert narrator.is_spawn_named({"pid_raw": "p1", "name": "sts2-d2-darv"})
-    assert not narrator.is_spawn_named({"pid_raw": "p1", "name": "world-model"})
+    store.set_window_fields("p1", name_pinned=True)
+    assert narrator.is_name_pinned({"pid_raw": "p1", "name": "sts2-d2-darv"})
 
 
 @pytest.mark.parametrize("bad", [
