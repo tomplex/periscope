@@ -13,6 +13,13 @@ from periscope.pids import (
 )
 
 
+def _mkwin(session="periscope", index=1, name="w", branch="main",
+           cwd="/repo", pane_id="%1", window_id="@1", pid_raw=""):
+    return {"session": session, "index": index, "name": name, "branch": branch,
+            "cwd": cwd, "pane_id": pane_id, "window_id": window_id,
+            "pid_raw": pid_raw}
+
+
 def test_gc_windows_keeps_spawned_by_only_entry():
     """A freshly-written provenance entry (spawned_by set, NO last_seen yet)
     must survive a GC pass that doesn't see its window — otherwise a poll
@@ -82,11 +89,12 @@ def test_rebind_pid_strong_match_on_session_and_name():
             }
         }
     }
-    pid = _rebind_pid(
+    pid, pass_name = _rebind_pid(
         wblock, session="main", name="shell", branch=None, cwd=None,
         taken_pids=set(),
     )
     assert pid == "deadbeef"
+    assert pass_name == "session+name"
 
 
 def test_rebind_pid_returns_none_when_no_match():
@@ -150,11 +158,12 @@ def test_rebind_pid_still_matches_within_rebind_ttl():
             }
         }
     }
-    pid = _rebind_pid(
+    pid, pass_name = _rebind_pid(
         wblock, session="periscope", name="fresh-claude",
         branch="master", cwd="/repo", taken_pids=set(),
     )
     assert pid == "deadbeef"
+    assert pass_name == "branch+cwd"
 
 
 def test_rebind_pid_skips_expired_entries():
@@ -189,11 +198,12 @@ def test_rebind_pid_secondary_match_on_branch_and_cwd():
             }
         }
     }
-    pid = _rebind_pid(
+    pid, pass_name = _rebind_pid(
         wblock, session="new-session", name="new-name",
         branch="feature", cwd="/tmp", taken_pids=set(),
     )
     assert pid == "deadbeef"
+    assert pass_name == "branch+cwd"
 
 
 def test_resolve_pids_uses_existing_periscope_id_when_well_formed(clean_state, mocker):
@@ -293,6 +303,90 @@ def test_resolve_pids_re_mints_when_two_windows_share_periscope_id(
     stamped_targets = {call.args[0] for call in mock_stamp.call_args_list}
     assert stamped_targets == {"@12", "@13"}
     assert "lgtm:2" not in stamped_targets
+
+
+def test_rebind_pass0_sid_beats_branch_cwd(clean_state, mocker):
+    """Two same-worktree entries are indistinguishable to the (branch, cwd)
+    fallback — the FDY-6630 hub topology. The sid names exactly one."""
+    mocker.patch("periscope.pids._stamp_pid")
+    now = int(time.time())
+    from periscope import store
+    store._STATE["windows"] = {
+        "aaaa1111": {"last_seen": {"session": "old", "name": "a", "branch": "b1",
+                                   "cwd": "/wt", "ts": now - 60, "sid": "sid-A",
+                                   "pane_id": "%90"}},
+        "bbbb2222": {"last_seen": {"session": "old", "name": "b", "branch": "b1",
+                                   "cwd": "/wt", "ts": now - 30, "sid": "sid-B",
+                                   "pane_id": "%91"}},
+    }
+    w = _mkwin(session="resumes", name="fresh", branch="b1", cwd="/wt",
+               pane_id="%5")
+    resolve_pids([w], session_hints={"%5": {"sid": "sid-B", "resume": None}})
+    assert w["pid"] == "bbbb2222"
+
+
+def test_rebind_pass0_ignores_rebind_ttl(clean_state, mocker):
+    """A sid is unique, so the 15-min TTL's collision rationale (invariant 12)
+    doesn't apply: `claude --resume` of a days-old session reattaches its
+    notes/linked_pr instead of minting fresh."""
+    mocker.patch("periscope.pids._stamp_pid")
+    now = int(time.time())
+    from periscope import store
+    store._STATE["windows"] = {
+        "cccc3333": {"last_seen": {"session": "x", "name": "y", "branch": None,
+                                   "cwd": "/z", "ts": now - _REBIND_TTL_S * 10,
+                                   "sid": "sid-OLD", "pane_id": "%2"},
+                     "linked_pr": 777},
+    }
+    w = _mkwin(pane_id="%6", branch=None, cwd="/z")
+    resolve_pids([w], session_hints={"%6": {"sid": "sid-OLD", "resume": None}})
+    assert w["pid"] == "cccc3333"
+
+
+def test_rebind_pass0b_resume_lineage_with_cwd_corroboration(clean_state, mocker):
+    """Live sid matches nothing (rotation case) but argv's --resume uuid names
+    the lineage — honored only when the window sits in the entry's own cwd."""
+    mocker.patch("periscope.pids._stamp_pid")
+    now = int(time.time())
+    from periscope import store
+    store._STATE["windows"] = {
+        "dddd4444": {"last_seen": {"session": "x", "name": "y", "branch": None,
+                                   "cwd": "/z", "ts": now - 60,
+                                   "sid": "sid-PRE", "pane_id": "%3"}},
+    }
+    w = _mkwin(pane_id="%7", branch=None, cwd="/z")
+    resolve_pids([w], session_hints={
+        "%7": {"sid": "sid-ROTATED", "resume": "sid-PRE"}})
+    assert w["pid"] == "dddd4444"
+
+
+def test_rebind_pass0b_refuses_without_cwd_match(clean_state, mocker):
+    """The resume hint is regex over ps argv, which flattens the PROMPT too —
+    a fresh pane whose prompt mentions `claude --resume <uuid>` must not
+    inherit a dead session's identity. cwd corroboration is the gate."""
+    mocker.patch("periscope.pids._stamp_pid")
+    now = int(time.time())
+    from periscope import store
+    store._STATE["windows"] = {
+        "eeee5555": {"last_seen": {"session": "x", "name": "y", "branch": None,
+                                   "cwd": "/somewhere-else", "ts": now - 60,
+                                   "sid": "sid-DEAD", "pane_id": "%4"},
+                     "linked_pr": 123},
+    }
+    w = _mkwin(pane_id="%8", branch=None, cwd="/fresh")
+    resolve_pids([w], session_hints={
+        "%8": {"sid": "sid-NEW", "resume": "sid-DEAD"}})
+    assert w["pid"] != "eeee5555"
+
+
+def test_last_seen_records_sid_and_pane_id(clean_state, mocker):
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+    w = _mkwin(pane_id="%8")
+    resolve_pids([w], session_hints={"%8": {"sid": "sid-X", "resume": None}})
+    entry = store._STATE["windows"][w["pid"]]["last_seen"]
+    assert entry["sid"] == "sid-X"
+    assert entry["pane_id"] == "%8"
 
 
 def test_rebind_never_steals_a_pid_a_live_window_still_carries(clean_state, mocker):

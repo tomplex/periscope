@@ -67,12 +67,41 @@ def _rebind_pid(
     branch: str | None,
     cwd: str | None,
     taken_pids: set[str],
-) -> str | None:
-    """Look for an orphan id in state's `windows` block that matches the
-    sighted window on (session, name) — or as a softer fallback,
-    (branch, cwd). Returns the matched pid, or None if no candidate
-    matches."""
+    sid: str | None = None,
+    resume: str | None = None,
+) -> tuple[str, str] | None:
+    """Look for an orphan id in state's `windows` block matching the sighted
+    window. Returns (pid, pass_name) or None.
+
+    Pass 0 (sid) and 0b (resume lineage) ignore _REBIND_TTL_S: a session id is
+    unique, so the collision risk the 15-minute TTL exists for (invariant 12)
+    doesn't apply — and honoring only the GC horizon is what lets `--resume`
+    of a days-old session reattach its notes/linked_pr instead of minting
+    fresh. Passes 1-2 keep the TTL: they match on occupancy, which collides.
+
+    Pass 0b additionally requires the entry's cwd: the resume hint is a regex
+    over ps argv, which flattens the whole command line INCLUDING any
+    first-message prompt — a fresh pane whose prompt merely mentions
+    `claude --resume <uuid>` must not inherit a dead session's identity. The
+    genuine cases (resurrect restore, move-account, resume tool) all resume
+    in the transcript's own cwd, so the corroboration costs them nothing.
+    Pass 0 needs no corroboration — the live sid comes from the process's own
+    session file, not from argv.
+    """
     now = time.time()
+    if sid:
+        for pid, entry in windows_block.items():
+            if pid in taken_pids:
+                continue
+            if (entry.get("last_seen") or {}).get("sid") == sid:
+                return pid, "sid"
+    if resume:
+        for pid, entry in windows_block.items():
+            if pid in taken_pids:
+                continue
+            ls = entry.get("last_seen") or {}
+            if ls.get("sid") == resume and cwd and ls.get("cwd") == cwd:
+                return pid, "resume"
     # Pass 1: strong match on (session, name).
     # Pass 2: secondary match on (branch, cwd) when both are set.
     for pass_n in (1, 2):
@@ -85,12 +114,12 @@ def _rebind_pid(
                 continue
             if pass_n == 1:
                 if ls.get("session") == session and ls.get("name") == name:
-                    return pid
+                    return pid, "session+name"
             else:
                 if not branch or not cwd:
                     continue
                 if ls.get("branch") == branch and ls.get("cwd") == cwd:
-                    return pid
+                    return pid, "branch+cwd"
     return None
 
 
@@ -118,7 +147,8 @@ _IMMUNITY_FIELDS = (
 
 
 def _resolve_one(
-    w: dict, wblock: dict, taken: set[str], carried: set[str], now_ts: int
+    w: dict, wblock: dict, taken: set[str], carried: set[str], now_ts: int,
+    hint: dict | None = None,
 ) -> bool:
     """Resolve one window's pid in place and refresh its `last_seen`.
 
@@ -130,6 +160,7 @@ def _resolve_one(
 
     Runs inside the caller's `_STATE_LOCK`; does NOT acquire it itself.
     """
+    hint = hint or {}
     target = f"{w['session']}:{w['index']}"
     pid_raw = (w.get("pid_raw") or "").strip()
     pid: str | None = None
@@ -165,14 +196,23 @@ def _resolve_one(
         # the gate above only cleans up after the fact: the victim silently
         # re-mints on the next poll, detaching pid-keyed UI state and orphaning
         # the `spawned_by` breadcrumb `report()` routes on.
-        pid = _rebind_pid(
+        match = _rebind_pid(
             wblock,
             session=w["session"],
             name=w["name"],
             branch=w.get("branch"),
             cwd=w.get("cwd"),
             taken_pids=taken | carried,
+            sid=hint.get("sid"),
+            resume=hint.get("resume"),
         )
+        if match:
+            pid, matched_on = match
+            # The theft path was silent in the 2026-08-05 identity merge — only
+            # the duplicate cleanup logged. Every rebind decision is loud now;
+            # `grep rebind` is the regression signal.
+            log.info("rebind %s -> %s via %s (was %s)", pid, target,
+                     matched_on, (wblock[pid].get("last_seen") or {}))
     if pid is None:
         pid = _mint_pid()
     dirty = False
@@ -200,11 +240,18 @@ def _resolve_one(
         "name": w["name"],
         "branch": w.get("branch"),
         "cwd": w.get("cwd"),
+        "pane_id": w.get("pane_id"),
+        # Fall back to the recorded sid when the hint is empty: a pane whose
+        # claude briefly has no readable session file (mid-restart) must not
+        # erase the recorded sid — pass 0 depends on it surviving exactly
+        # those gaps.
+        "sid": hint.get("sid") or prev.get("sid"),
         "ts": now_ts,
     }
     identity_changed = (
         "last_seen" not in entry
-        or any(prev.get(k) != new_seen[k] for k in ("session", "name", "branch", "cwd"))
+        or any(prev.get(k) != new_seen[k]
+               for k in ("session", "name", "branch", "cwd", "pane_id", "sid"))
     )
     entry["last_seen"] = new_seen
     if identity_changed:
@@ -304,7 +351,7 @@ def resolve_pids(windows: list[dict],
     pass, which would read absence as death.
     """
     hints = session_hints or {}
-    _ = hints, full_roster   # plumbing only — resolution consumes these in Task 4
+    _ = full_roster   # plumbing only — Task 8's track-row maintenance consumes this
     if not windows:
         return
     now_ts = int(time.time())
@@ -324,7 +371,8 @@ def resolve_pids(windows: list[dict],
         dirty = False
         # Phase 1: per-window pid resolution + last_seen refresh.
         for w in windows:
-            if _resolve_one(w, wblock, taken, carried, now_ts):
+            if _resolve_one(w, wblock, taken, carried, now_ts,
+                            hints.get(w.get("pane_id") or "", {})):
                 dirty = True
         # Phase 2: window-entry GC.
         if _gc_windows(wblock, taken, now_ts):
@@ -346,8 +394,9 @@ def _attach_git_then_resolve_pids(windows: list[dict],
     """resolve_pids relies on `branch` for its secondary match and on session
     hints (live sid + resume lineage) for its primary one. Both are attached
     HERE, before resolve takes _STATE_LOCK: hint-building forks tmux/ps on a
-    cold cache, and those forks must not run under the lock or on the event
-    loop (list_claudes resolves in the loop).
+    cold cache, and those forks must not run under the lock. (list_claudes
+    still runs this on the event loop — a cold-cache fork there is a known,
+    bounded cost; the lock is the boundary this function exists to protect.)
 
     Despite the query-sounding name, this performs I/O: resolve_pids stamps
     `@periscope_id` onto tmux windows and may write state.json."""
