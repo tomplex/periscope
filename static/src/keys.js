@@ -6,8 +6,9 @@
 // ⌘R is taken from the browser deliberately. Reloading the whole dashboard is
 // the rare intent; refreshing the thing you are looking at is the common one,
 // and the browser's default served the rare case. Full reload moves to ⌘⇧R.
-import { requestTerminalReconcile } from "./terminal/terminalCore.js";
+
 import { docRefreshNonce, paneActiveTab, railSelection } from "./store.js";
+import { requestTerminalReconcile } from "./terminal/terminalCore.js";
 
 // Which pane the rail has selected, or null. railSelection is a string
 // highlight-key ("pane:<pid>" | "review:<worktree>" | null) — only the pane

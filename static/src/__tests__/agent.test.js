@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { h } from "preact";
 import render from "preact-render-to-string";
+import { describe, expect, it } from "vitest";
 import { passesFilter } from "../filter.js";
 import { Inspector } from "../inspector/Inspector.jsx";
 import { computeMode, PaneHeader } from "../split/Detail.jsx";

@@ -2,11 +2,11 @@
 // view (grid was retired).
 import { render } from "preact";
 import { Header } from "./chrome/Header.jsx";
+import { installKeys } from "./keys.js";
+import { startMemtest } from "./memtest.js";
 import { DialogHost } from "./overlays/Dialog.jsx";
 import { Overlays } from "./overlays/Overlays.jsx";
 import { Toaster } from "./overlays/Toast.jsx";
-import { installKeys } from "./keys.js";
-import { startMemtest } from "./memtest.js";
 import { getLastSelected, loadPrefs } from "./prefs.js";
 import { Split } from "./split/Split.jsx";
 import { railSelection } from "./store.js";
