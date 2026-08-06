@@ -487,6 +487,36 @@ def test_duplicate_arbitration_no_sid_falls_back_to_first(clean_state, mocker):
     assert second["pid"] != "ffff6666"
 
 
+def test_duplicate_arbitration_recorded_sid_not_on_screen(
+        clean_state, mocker, caplog):
+    """The entry DOES record a sid but no on-screen window carries it
+    (rotation / dead pane) — a different incident story from "no recorded
+    sid", and the log must keep them apart: the greppable reason string is
+    the requirement. Status quo keeps first-in-list; the demoted window is
+    named (its phase-1 mint is silent)."""
+    mocker.patch("periscope.pids._stamp_pid")
+    now = int(time.time())
+    from periscope import store
+    store._STATE["windows"] = {
+        "abab1212": {"last_seen": {"session": "s", "name": "n", "branch": "b",
+                                   "cwd": "/w", "ts": now, "sid": "sid-GONE",
+                                   "pane_id": "%30"}},
+    }
+    first = _mkwin(session="a", index=1, pane_id="%30", window_id="@40",
+                   pid_raw="abab1212")
+    second = _mkwin(session="b", index=2, pane_id="%31", window_id="@41",
+                    pid_raw="abab1212")
+    with caplog.at_level("INFO", logger="periscope"):
+        resolve_pids([first, second], session_hints={
+            "%30": {"sid": "sid-NEW", "resume": None},
+            "%31": {"sid": "sid-OTHER", "resume": None},
+        })
+    assert first["pid"] == "abab1212"
+    assert second["pid"] != "abab1212"
+    assert "recorded sid not on screen" in caplog.text
+    assert "demoted b:2" in caplog.text
+
+
 def test_rebind_never_steals_a_pid_a_live_window_still_carries(clean_state, mocker):
     """An unstamped window must NOT rebind onto a pid that another window in
     the SAME pass is still carrying in tmux.

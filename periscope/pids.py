@@ -394,16 +394,24 @@ def resolve_pids(windows: list[dict],
                     if hint.get("sid") == recorded_sid:
                         keeper = w
                         break
+            # Three distinct stories, kept apart for incident grep: the sid
+            # named the keeper; the entry never recorded a sid; or a sid IS
+            # recorded but no on-screen window carries it — rotation/dead-pane
+            # territory, a very different investigation from "no evidence".
+            reason = ("sid evidence" if keeper is not None
+                      else "no recorded sid" if not recorded_sid
+                      else "recorded sid not on screen — first-in-list")
             if keeper is None:
                 keeper = group[0]   # no evidence → status quo, but logged
-            for w in group:
-                if w is not keeper:
-                    w["pid_raw"] = ""
-            sid_decided = recorded_sid is not None and (
-                hints.get(keeper.get("pane_id") or "", {}).get("sid") == recorded_sid)
-            log.info("duplicate @periscope_id %s on %d windows — keeper %s:%s (%s)",
-                     raw, len(group), keeper["session"], keeper["index"],
-                     "sid evidence" if sid_decided else "first-in-list")
+            losers = [w for w in group if w is not keeper]
+            for w in losers:
+                w["pid_raw"] = ""
+            # Name the demoted windows too: their phase-1 mints are silent, so
+            # without this the victims leave no trace in the log — and they're
+            # exactly what an incident hunt is looking for.
+            log.info("duplicate @periscope_id %s on %d windows — keeper %s:%s (%s); demoted %s",
+                     raw, len(group), keeper["session"], keeper["index"], reason,
+                     ", ".join(f"{w['session']}:{w['index']}" for w in losers))
         # Phase 1: per-window pid resolution + last_seen refresh.
         for w in windows:
             if _resolve_one(w, wblock, taken, carried, now_ts,
