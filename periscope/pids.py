@@ -366,9 +366,44 @@ def resolve_pids(windows: list[dict],
         wblock = _store._STATE.setdefault("windows", {})
         taken: set[str] = set()
         # Every id tmux currently has stamped, gathered BEFORE the pass so
-        # rebind can't hand out an id a live window is still wearing.
+        # rebind can't hand out an id a live window is still wearing. Computed
+        # before phase 0 clears the losers' raw stamps — the keeper retains
+        # the pid so the set is identical either way, but pinning the order
+        # keeps the reasoning simple.
         carried = {p for w in windows if _is_pid(p := (w.get("pid_raw") or "").strip())}
         dirty = False
+        # Phase 0: duplicate arbitration. The same @periscope_id stamped on
+        # two windows used to be resolved by list order — which is not stable
+        # across polls, so the identity ping-ponged between the windows
+        # (observed 2026-08-05, periscope:4 ↔ resumes:4). Evidence beats
+        # order: the keeper is the window whose live sid matches the entry's
+        # recorded sid; everyone else resolves fresh in phase 1.
+        by_raw: dict[str, list[dict]] = {}
+        for w in windows:
+            raw = (w.get("pid_raw") or "").strip()
+            if _is_pid(raw):
+                by_raw.setdefault(raw, []).append(w)
+        for raw, group in by_raw.items():
+            if len(group) < 2:
+                continue
+            recorded_sid = ((wblock.get(raw) or {}).get("last_seen") or {}).get("sid")
+            keeper = None
+            if recorded_sid:
+                for w in group:
+                    hint = hints.get(w.get("pane_id") or "", {})
+                    if hint.get("sid") == recorded_sid:
+                        keeper = w
+                        break
+            if keeper is None:
+                keeper = group[0]   # no evidence → status quo, but logged
+            for w in group:
+                if w is not keeper:
+                    w["pid_raw"] = ""
+            sid_decided = recorded_sid is not None and (
+                hints.get(keeper.get("pane_id") or "", {}).get("sid") == recorded_sid)
+            log.info("duplicate @periscope_id %s on %d windows — keeper %s:%s (%s)",
+                     raw, len(group), keeper["session"], keeper["index"],
+                     "sid evidence" if sid_decided else "first-in-list")
         # Phase 1: per-window pid resolution + last_seen refresh.
         for w in windows:
             if _resolve_one(w, wblock, taken, carried, now_ts,

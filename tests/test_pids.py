@@ -447,6 +447,46 @@ def test_last_seen_records_sid_and_pane_id(clean_state, mocker):
     assert entry["pane_id"] == "%8"
 
 
+def test_duplicate_arbitration_sid_picks_keeper_regardless_of_order(
+        clean_state, mocker):
+    """2026-08-05 20:06→20:11: the same pid duplicated across two windows and
+    the dedup gate kept whichever came FIRST in list order — which flipped
+    between polls, ping-ponging the identity. The keeper must be the window
+    whose live sid matches the entry, in either list order."""
+    mocker.patch("periscope.pids._stamp_pid")
+    now = int(time.time())
+    from periscope import store
+    for order in (False, True):
+        store._STATE["windows"] = {
+            "eeee5555": {"last_seen": {"session": "s", "name": "n",
+                                       "branch": "b", "cwd": "/w", "ts": now,
+                                       "sid": "sid-OWNER", "pane_id": "%10"}},
+        }
+        rightful = _mkwin(session="resumes", index=4, pane_id="%10",
+                          window_id="@10", pid_raw="eeee5555")
+        imposter = _mkwin(session="periscope", index=4, pane_id="%11",
+                          window_id="@11", pid_raw="eeee5555")
+        windows = [imposter, rightful] if order else [rightful, imposter]
+        resolve_pids(windows, session_hints={
+            "%10": {"sid": "sid-OWNER", "resume": None},
+            "%11": {"sid": "sid-OTHER", "resume": None},
+        })
+        assert rightful["pid"] == "eeee5555", f"order={order}"
+        assert imposter["pid"] != "eeee5555", f"order={order}"
+
+
+def test_duplicate_arbitration_no_sid_falls_back_to_first(clean_state, mocker):
+    """No sid evidence on any window → status quo (first-in-list keeps it)."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+    store._STATE["windows"] = {}
+    first = _mkwin(index=1, pane_id="%20", window_id="@20", pid_raw="ffff6666")
+    second = _mkwin(index=2, pane_id="%21", window_id="@21", pid_raw="ffff6666")
+    resolve_pids([first, second], session_hints={})
+    assert first["pid"] == "ffff6666"
+    assert second["pid"] != "ffff6666"
+
+
 def test_rebind_never_steals_a_pid_a_live_window_still_carries(clean_state, mocker):
     """An unstamped window must NOT rebind onto a pid that another window in
     the SAME pass is still carrying in tmux.
