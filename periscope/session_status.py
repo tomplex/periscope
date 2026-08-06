@@ -290,8 +290,9 @@ def _env_by_pid(pids: list[int]) -> dict[int, str]:
     """pid -> its `ps eww` command+environment text, in ONE fork.
 
     Probing each pid separately costs ~165ms on a machine with ~60 claude
-    processes, and window_view runs this on every /api/state poll — one fork
-    keeps it off the dashboard's hot path.
+    processes. The caller is `pane_config_dirs`, which sits behind a 15s
+    cache (_CONFIG_DIRS_TTL_S) — one fork keeps the refresh cheap when the
+    cache does expire.
     """
     if not pids:
         return {}

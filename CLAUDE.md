@@ -198,9 +198,9 @@ One file per subsystem:
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
-`tests/routes/test_<route>.py` per route). 788 pytest tests on a
+`tests/routes/test_<route>.py` per route). 1069 pytest tests on a
 clean run. Run with `uv run pytest -q`. The Preact app has its own
-suite: `npm test` (vitest), 111 tests over the pure helpers.
+suite: `npm test` (vitest), 252 tests over the pure helpers.
 
 `cleanup.py` has no `tests/test_<module>.py` but is exercised
 indirectly through its route tests (`tests/routes/test_cleanup.py`).
@@ -229,7 +229,7 @@ is no separate smoke script and no `collect_ignore`.
 the shim subprocess misbehaves — surfacing as two spurious
 `test_channel_shim.py` reconnect failures (`TimeoutError`/fast EOF) with
 NO code change. Fix: `uv sync` to rebuild `.venv` from the lock. The
-canonical locked env collects 788 tests, all green. If you ever see only
+canonical locked env collects 1069 tests, all green. If you ever see only
 those two channel tests fail, suspect the env before the code.
 
 ### Key invariants the split preserved
@@ -378,8 +378,11 @@ These are the non-obvious behaviors worth preserving:
     `~/.config/periscope/periscope-8765.log`). A re-mint changes a
     window's identity, and `railSelection` is keyed `pane:<pid>` — so the
     detail pane silently detaches. Historically reported as "detail pane
-    closes on cd". `grep -c re-minting` on the log is the regression
-    signal.
+    closes on cd". Regression signal on the log: same-poll duplicates
+    surface as `duplicate @periscope_id ... keeper ...` (INFO, from
+    arbitration — invariant 18) while `re-minting` (WARNING) covers
+    cross-poll residue; `grep "re-minting\|duplicate @periscope_id"`
+    catches both.
 
 12. **Rebind eligibility (`_REBIND_TTL_S`, 15 min) is NOT GC retention
     (`_PID_TTL_S`, 30 days).** Rebind exists so persisted state reattaches
@@ -404,7 +407,9 @@ These are the non-obvious behaviors worth preserving:
     `carried` (every well-formed `pid_raw` in the pass) and excludes it from
     rebind. `spawn_claude` already worked around this locally with
     `stamp_new_window`; every other creation path was exposed. Regression
-    signal is unchanged: `grep -c re-minting` on the log.
+    signal on the log: `grep "re-minting\|duplicate @periscope_id"` —
+    same-poll duplicates land as the INFO arbitration message
+    (invariant 18), cross-poll residue as the `re-minting` WARNING.
 
 14. **A pane can be `attached` and still deaf.** Claude registers for
     `notifications/claude/channel` only when the server is named in its
@@ -449,6 +454,33 @@ These are the non-obvious behaviors worth preserving:
     flag (invariant 14) and genuinely received nothing — peek was the only
     tool telling the truth, and the retraction was itself wrong. The work
     landed because Tom pasted it in by hand.
+
+18. **Pane identity is session-id-first.** `resolve_pids` takes precomputed
+    session hints (live sid + `--resume` lineage per pane, built by
+    `_attach_git_then_resolve_pids` BEFORE `_STATE_LOCK` — hint-building forks
+    tmux/ps, and list_claudes resolves on the event loop). Rebind pass 0
+    matches `last_seen.sid` TTL-exempt (a sid is unique; the 15-min TTL guards
+    occupancy collisions, invariant 12); pass 0b matches the argv
+    `--resume <uuid>` lineage but ONLY with cwd corroboration — the hint is
+    regex over ps argv, which flattens prompts, so a pane whose prompt merely
+    quotes a resume command must not inherit a dead session's identity.
+    Duplicate pids are arbitrated by recorded-sid evidence
+    (`_arbitrate_duplicates`), not list order. Every rebind and arbitration
+    decision is logged — `grep "rebind\|duplicate @periscope_id"` is the
+    regression signal (the re-minting warning alone goes quiet for same-poll
+    duplicates, which arbitration now intercepts). The session index scans
+    EVERY live account's `<config_dir>/sessions/` with a per-pane config-dir
+    tiebreak (a recycled pid leaves a stale same-pid file in the other
+    account's dir).
+
+19. **`pane_tracks` keys on `@periscope_id`, never `%N`.** The column is
+    named `pid` so a raw-SQL regression against `pane_id` fails loudly, and
+    the move-tab route 422s on a `pane_id` body field. Legacy `%N` rows
+    migrate lazily in the first completed FULL-ROSTER resolve pass
+    (`_maintain_track_rows`), which also owns the prune — gated on the pass's
+    `taken` set because a boot-time prune fires before rebind can reattach,
+    and a partial (single-window) pass's one-pid taken set would mass-delete
+    every other pane's rows.
 
 ## Status-line parsing
 
@@ -603,7 +635,13 @@ Tools exposed to Claude:
   project + dedupes a foreign-name clash, the spawn creates the session
   (or new-tabs into an existing worktree session), then `place_in_rail`
   records the ordering. Non-git `cwd` with `workspace="new"` falls back
-  to `"same"` (no worktree to anchor a rail item to).
+  to `"same"` (no worktree to anchor a rail item to). Its result carries
+  the spawned pane's `track` (the rail group it landed in, after the
+  precedence above plays out).
+
+`list_claudes` rows carry `track` (the rail group each pane sits in), the
+response carries `you` (the caller's own handle + track), and
+`track: "mine"` filters to the caller's roster.
 
 Notifications go the other way as `notifications/claude/channel`
 messages, surfacing in Claude's prompt as `<channel source="periscope">`
@@ -654,7 +692,8 @@ always fire for the successor — a pane then points at a superseded transcript
 ~18h back). `turns.session_id_for_pane` therefore asks
 `session_status.live_session_id_for_pane` first: the pane's process subtree is
 walked to its claude pid (`session_status.pane_claude_pids`, the one
-implementation — `resurrect._pane_config_dirs` uses it too) and
+implementation — `session_status.pane_config_dirs` builds its scan on it, and
+resurrect and window_view consume that) and
 `~/.claude/sessions/<pid>.json` is read for the sessionId that process reports
 *now*. `pane_sessions` answers only when there is no live claude.
 
