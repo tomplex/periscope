@@ -3441,6 +3441,35 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
   font-size: 12px;
   padding: 2px 8px;
 }
+.preview-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.preview-btn:disabled:hover { background: transparent; }
+.preview-btn-save { color: var(--accent, #58a6ff); }
+/* Unsaved marker beside the path. Deliberately loud enough to catch the eye
+   in a header that is otherwise all muted mono — an editor whose buffer has
+   drifted from disk without saying so is the failure this prevents. */
+.preview-dirty {
+  margin-left: 8px;
+  color: #e3b341;
+  font-size: 10px;
+  vertical-align: middle;
+}
+/* Sits above the editor, doesn't overlay it — the user needs to read the
+   text they are about to lose while deciding. */
+.preview-conflict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(227,179,65,0.12);
+  border-bottom: 1px solid rgba(227,179,65,0.35);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-1);
+}
+.preview-conflict span { flex: 1; }
 .preview-loading,
 .preview-error {
   padding: 20px;
