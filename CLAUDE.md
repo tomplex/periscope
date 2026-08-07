@@ -194,7 +194,8 @@ One file per subsystem:
 | `periscope/rename_ai.py` | Anthropic SDK plumbing for auto-rename (`RENAME_RULES` taste block shared with the narrator) |
 | `periscope/narrator.py` | Per-pane AI status lines + divergence renames (pure decision core + worker-driven tick; see "Narrator" below) |
 | `periscope/open_ops.py` | Unified-open core: `open_target` dispatch (path/branch/pr descriptors → resolve → register → idempotent create-or-focus → server-side rail placement) + `ensure_session` / `worktree_for_branch` / `place_in_rail` / `build_catalog`. No HTTP (see "Unified open" below) |
-| `periscope/routes/*.py` | One APIRouter per file (alerts, auto_rename, channel, cleanup, command, events, fs, healthz, history, lgtm, open, pane, paste_image, prefs, projects, send, sessions, settings, state, tracks, workspaces, ws) |
+| `periscope/updater.py` | Self-update: commits-behind check (worker-driven, hourly) + detached spawn of `bin/periscope update` (see "Updating" below) |
+| `periscope/routes/*.py` | One APIRouter per file (alerts, auto_rename, channel, cleanup, command, events, fs, healthz, history, lgtm, open, pane, paste_image, prefs, projects, send, sessions, settings, state, tracks, update, workspaces, ws) |
 
 Tests live under `tests/` mirroring the package structure (one
 `tests/test_<module>.py` per `periscope/<module>.py`, plus
@@ -918,6 +919,55 @@ Practical rules:
   multiple commits before pushing.
 - Don't ask "should I commit?" after a self-contained change — just
   commit it.
+
+## Updating (`bin/periscope update` + `periscope/updater.py`)
+
+`bin/periscope update` pulls, re-provisions, and restarts. **`git pull` +
+`bin/periscope restart` is NOT equivalent**, which is the whole reason the verb
+exists:
+
+- The launchd plist is *generated* by this script, so plist changes ship as
+  changes to the generator. A pull doesn't rewrite `~/Library/LaunchAgents/`,
+  and `restart` (`launchctl kickstart -k`) restarts the job against the
+  **already-loaded** config — plist changes need `bootout` + `bootstrap`. A
+  checkout that pulled past the `NumberOfFiles` 256→1024 fix but never
+  re-provisioned still runs with the 256 cap that silently wedges the server.
+- Hook registration (`install-hook`) is likewise a script action, not a file in
+  the repo. A pull past the Codex-hook or multi-account-config-dir commits
+  leaves those panes unhooked, and the transcript view / narrator / resurrect
+  go dark for them with no error anywhere.
+
+**Ordering is the safety property.** `git pull --ff-only` runs before anything
+touches launchd, so the common failures (dirty tree, diverged branch) abort
+with the running server completely untouched. That's what makes the
+dashboard-driven path viable: a failed update leaves the server alive to serve
+the reason back. Verified by running the verb with a dirty tree and on a branch
+with no upstream — both exit 1 with prod's pid unchanged.
+
+The verb deliberately does **not** run `npm run build`: `static/dist/app.js` is
+committed, so the pull already carries it, and a build against drifted
+`node_modules` can emit a different bundle — dirtying the tree and breaking the
+NEXT `--ff-only` pull. It ends by polling `/api/healthz` until the served SHA
+matches what it pulled, so "updated" is evidence rather than a claim.
+
+**From the dashboard.** `updater.check()` runs on the activity worker's tick
+(self-throttled hourly) and counts commits behind the tracked upstream; the
+count rides `/api/state` as `update` and renders as a header pill. Clicking it
+POSTs `/api/update`, which spawns the script **detached**
+(`start_new_session=True`) — non-negotiable, because the script's `bootout`
+tears down the launchd job and would otherwise kill the very process running
+it. The POST cannot report success (a successful update kills the server
+mid-request), so the two outcomes are read differently: success = the server
+dies, the connection banner shows, and the next poll carries `behind: 0`;
+failure = the server is still alive and `/api/update/status` has the log tail.
+
+Both `check()` (worker-gated) and `start()` (explicitly gated) are prod-only. A
+dev instance runs from a worktree on a feature branch, where `git pull
+--ff-only` would fail or pull the WRONG branch over work in progress; `POST
+/api/update` 409s there. This also means the pill is invisible in dev by
+construction — hence the render test in
+`static/src/chrome/__tests__/updatePillRender.test.jsx`, since the browser
+can't exercise those states.
 
 ## Development workflow (prod + dev split)
 

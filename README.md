@@ -33,6 +33,23 @@ For the always-on / launchd-managed setup and the prod/dev port split,
 see [CLAUDE.md → Development workflow](./CLAUDE.md#development-workflow-prod--dev-split)
 and `bin/periscope`.
 
+### Updating
+
+```sh
+bin/periscope update
+```
+
+Pulls, regenerates the launchd plist, re-registers the agent hooks, restarts,
+and waits until `/api/healthz` reports the SHA it just pulled. When the
+dashboard is running as the launchd service it also nags: the header shows an
+`↑ N behind` pill once the checkout falls behind, and clicking it runs the same
+sequence in place.
+
+Use this rather than `git pull` + `bin/periscope restart` — the plist and the
+hook registration are *generated* by `bin/periscope`, so a plain pull carries
+neither, and `restart` reuses the already-loaded plist. It aborts without
+touching the running server if the tree is dirty or the branch has diverged.
+
 ### Agent lifecycle hooks
 
 `bin/periscope install-hook` merges Periscope's Claude and Codex lifecycle
