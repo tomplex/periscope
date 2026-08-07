@@ -6,3 +6,4 @@
   - along with maybe a built-in claude to dispatch those tasks?
 - sometimes modal tabs become pinned so that you cannot reach the bottom
 - claude working / idle detection STILL not working
+- (demo commit for the update pill — safe to delete)
