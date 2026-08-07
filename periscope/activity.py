@@ -1012,6 +1012,13 @@ def _worker_tick(last_ctx: dict) -> None:
         resurrect.save_now()
     except Exception:
         log.exception("continuum save failed")
+    # How far behind origin this checkout is, for the header's update pill.
+    # Self-throttled to hourly; the tick is just a convenient heartbeat.
+    try:
+        from periscope import updater
+        updater.check()
+    except Exception:
+        log.exception("update check failed")
     # Keep periscope.db-wal bounded — see checkpoint() docstring for why
     # SQLite's default auto-checkpoint isn't enough on its own.
     checkpoint()

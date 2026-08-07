@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 
+from periscope import updater
 from periscope.activity import pane_status_lines
 from periscope.channels import _channel_gc
 from periscope.panes import (
@@ -163,6 +164,7 @@ def build_state() -> dict:
         "ts": int(time.time()),
         "usage": cached_claude_usage(),
         "usage_plan": cached_plan_usage(),
+        "update": updater.summary(),
     }
 
 
