@@ -17,6 +17,7 @@ import { useEscape } from "../hooks/useEscape.js";
 import { windows } from "../store.js";
 import { track } from "../track.js";
 import { FilterBar } from "./FilterBar.jsx";
+import { UpdatePill } from "./UpdatePill.jsx";
 import { UsagePill } from "./UsagePill.jsx";
 
 // One dropdown open at a time among the toggle-style menus (+ new, ⋯). The
@@ -124,6 +125,7 @@ export function Header() {
           periscope<i class="brand-cursor"></i>
         </span>
         <UsagePill />
+        <UpdatePill />
         <div class="meta">
           <Counts />
           <span id="last-update"></span>

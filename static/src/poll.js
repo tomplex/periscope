@@ -15,6 +15,7 @@ import {
   projects,
   syncTabsFromWindows,
   tracks,
+  updateInfo,
   usage,
   windows,
   workspaces,
@@ -50,6 +51,7 @@ function applyState(data) {
   syncTabsFromWindows(windows.value);
   // UsagePill reads { plan, fallback }.
   usage.value = { plan: data.usage_plan, fallback: data.usage };
+  updateInfo.value = data.update || null;
 }
 
 function markOk() {

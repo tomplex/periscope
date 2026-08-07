@@ -194,6 +194,29 @@ html, body {
 .usage-acct.is-stale { opacity: 0.55; }
 .usage-acct.is-stale .usage-item-fill { background: var(--fg-3); }
 .usage-stale-mark { cursor: help; }
+
+/* "N behind → update" pill. Absent (returns null) when the checkout is
+   current, so it only ever draws when there is something to say. Accent-tinted
+   rather than danger-red: being behind is a nudge, not an incident. */
+.update-pill {
+  flex: 0 0 auto;
+  align-self: center;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+}
+.update-pill:hover { background: color-mix(in oklch, var(--accent) 26%, transparent); }
+.update-pill.is-running { opacity: 0.7; cursor: default; }
+.update-pill.is-error {
+  color: var(--s-danger);
+  background: color-mix(in oklch, var(--s-danger) 14%, transparent);
+  border-color: color-mix(in oklch, var(--s-danger) 45%, transparent);
+}
 /* Pane card flame: this pane carries >=40% of the current token burn while
    the session meter is hot. */
 .rail-burn { flex: 0 0 auto; font-size: 10px; cursor: help; }
