@@ -183,3 +183,81 @@ def test_safe_resolve_doesnt_cap_size(tmp_path):
     big.write_bytes(b"x" * (2 * 1024 * 1024))
     resolved = fs.safe_resolve(str(tmp_path), "big.bin")
     assert str(resolved) == str(big.resolve())
+
+
+# --- safe_write ------------------------------------------------------------
+
+
+def test_safe_write_overwrites_and_returns_new_mtime(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("old\n")
+    base = f.stat().st_mtime
+    resolved, mtime = fs.safe_write(str(tmp_path), "a.py", "new\n", base)
+    assert resolved == str(f.resolve())
+    assert f.read_text() == "new\n"
+    assert mtime == f.stat().st_mtime
+
+
+def test_safe_write_conflict_when_file_moved(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("old\n")
+    stale = f.stat().st_mtime - 5
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_write(str(tmp_path), "a.py", "mine\n", stale)
+    assert exc.value.status_code == 409
+    # The whole point: the losing write must not have landed.
+    assert f.read_text() == "old\n"
+
+
+def test_safe_write_none_base_mtime_forces(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("old\n")
+    fs.safe_write(str(tmp_path), "a.py", "mine\n", None)
+    assert f.read_text() == "mine\n"
+
+
+def test_safe_write_preserves_mode(tmp_path):
+    f = tmp_path / "run.sh"
+    f.write_text("#!/bin/sh\n")
+    f.chmod(0o755)
+    fs.safe_write(str(tmp_path), "run.sh", "#!/bin/sh\necho hi\n", None)
+    # os.replace swaps the inode — an executable script that silently
+    # loses +x is a broken hook/CI script with no error anywhere.
+    assert f.stat().st_mode & 0o777 == 0o755
+
+
+def test_safe_write_leaves_no_temp_behind(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("old\n")
+    fs.safe_write(str(tmp_path), "a.py", "new\n", None)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.py"]
+
+
+def test_safe_write_refuses_outside_roots(tmp_path, monkeypatch):
+    (tmp_path / "outside").mkdir()
+    victim = tmp_path / "outside" / "secret"
+    victim.write_text("keep\n")
+    (tmp_path / "cwd").mkdir()
+    monkeypatch.setattr(fs, "_safe_roots", lambda c: [Path(c).resolve()])
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_write(str(tmp_path / "cwd"), "../outside/secret", "pwned\n", None)
+    assert exc.value.status_code == 403
+    assert victim.read_text() == "keep\n"
+
+
+def test_safe_write_refuses_to_create(tmp_path):
+    # The tab viewer only opens files that exist; a path that doesn't
+    # resolve is a typo, not a new file.
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_write(str(tmp_path), "nope.py", "x\n", None)
+    assert exc.value.status_code == 404
+    assert not (tmp_path / "nope.py").exists()
+
+
+def test_safe_write_oversize(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("old\n")
+    with pytest.raises(HTTPException) as exc:
+        fs.safe_write(str(tmp_path), "a.py", "x" * 200, None, max_bytes=128)
+    assert exc.value.status_code == 413
+    assert f.read_text() == "old\n"

@@ -66,18 +66,17 @@ def _inside_any(resolved: Path, roots: list[Path]) -> bool:
     return False
 
 
-def safe_read(cwd: str, raw_path: str,
-              max_bytes: int = _MAX_BYTES_DEFAULT) -> tuple[str, str]:
-    """Resolve `raw_path` against `cwd`, enforce safe roots, read as UTF-8.
+def _resolve_existing(cwd: str, raw_path: str) -> Path:
+    """Shared gate: resolve `raw_path` against `cwd` and prove it is an
+    existing path inside the safe roots.
 
-    Returns (resolved_abs_path, contents).
+    The single place traversal is refused. Every public entry point below
+    routes through here rather than re-deriving the check — four near-copies
+    of security-critical resolution is how one of them ends up subtly weaker
+    than the others.
 
-    Raises HTTPException with:
-      400 — empty path.
-      403 — resolved path escapes the safe roots.
-      404 — file missing.
-      413 — file exceeds max_bytes.
-      415 — file is not UTF-8 decodable (binary).
+    Raises 400 (empty path / missing cwd), 403 (escapes roots), 404 (no such
+    path).
     """
     if not raw_path or not raw_path.strip():
         raise HTTPException(status_code=400, detail="empty path")
@@ -99,29 +98,11 @@ def safe_read(cwd: str, raw_path: str,
     except OSError:
         raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}") from None
 
-    roots = _safe_roots(cwd_p)
-    if not _inside_any(resolved, roots):
+    if not _inside_any(resolved, _safe_roots(cwd_p)):
         raise HTTPException(status_code=403, detail="path outside safe roots")
-
     if not resolved.exists():
         raise HTTPException(status_code=404, detail=f"no such file: {resolved}")
-    if not resolved.is_file():
-        raise HTTPException(status_code=400, detail="not a regular file")
-
-    size = resolved.stat().st_size
-    if size > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"file too large ({size} > {max_bytes} bytes)",
-        )
-
-    blob = resolved.read_bytes()
-    try:
-        text = blob.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=415, detail="binary file") from None
-
-    return (str(resolved), text)
+    return resolved
 
 
 def safe_resolve(cwd: str, raw_path: str) -> Path:
@@ -133,27 +114,100 @@ def safe_resolve(cwd: str, raw_path: str) -> Path:
     decode. The `safe_read` size + UTF-8 caps don't apply here; callers
     enforce their own (typically larger) limit.
     """
-    if not raw_path or not raw_path.strip():
-        raise HTTPException(status_code=400, detail="empty path")
-    cwd_p = Path(cwd).resolve()
-    if not cwd_p.exists():
-        raise HTTPException(status_code=400, detail=f"cwd does not exist: {cwd}")
-    candidate = raw_path
-    if ":" in candidate and candidate.rsplit(":", 1)[1].isdigit():
-        candidate = candidate.rsplit(":", 1)[0]
-    expanded = os.path.expanduser(candidate)
-    target = Path(expanded) if os.path.isabs(expanded) else cwd_p / expanded
-    try:
-        resolved = target.resolve()
-    except OSError:
-        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}") from None
-    if not _inside_any(resolved, _safe_roots(cwd_p)):
-        raise HTTPException(status_code=403, detail="path outside safe roots")
-    if not resolved.exists():
-        raise HTTPException(status_code=404, detail=f"no such file: {resolved}")
+    resolved = _resolve_existing(cwd, raw_path)
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail="not a regular file")
     return resolved
+
+
+def safe_read(cwd: str, raw_path: str,
+              max_bytes: int = _MAX_BYTES_DEFAULT) -> tuple[str, str]:
+    """Resolve `raw_path` against `cwd`, enforce safe roots, read as UTF-8.
+
+    Returns (resolved_abs_path, contents).
+
+    Raises HTTPException with:
+      400 — empty path.
+      403 — resolved path escapes the safe roots.
+      404 — file missing.
+      413 — file exceeds max_bytes.
+      415 — file is not UTF-8 decodable (binary).
+    """
+    resolved = safe_resolve(cwd, raw_path)
+    return (str(resolved), read_text(resolved, max_bytes))
+
+
+def read_text(resolved: Path, max_bytes: int = _MAX_BYTES_DEFAULT) -> str:
+    """Size-capped UTF-8 read of an ALREADY-RESOLVED path.
+
+    Split out of safe_read for callers that need the resolved Path itself
+    (to stat it) and must not resolve twice — each resolution forks tmux
+    for the pane's cwd, and two of them can disagree about the target.
+
+    Raises 413 (over max_bytes) / 415 (not UTF-8).
+    """
+    size = resolved.stat().st_size
+    if size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large ({size} > {max_bytes} bytes)",
+        )
+
+    try:
+        return resolved.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=415, detail="binary file") from None
+
+
+def safe_write(cwd: str, raw_path: str, content: str,
+               base_mtime: float | None,
+               max_bytes: int = _MAX_BYTES_DEFAULT) -> tuple[str, float]:
+    """Overwrite an existing file with `content`. Returns (path, new mtime).
+
+    `base_mtime` is the st_mtime the editor loaded. A file that moved since
+    then 409s rather than being written: periscope's whole job is running
+    Claude against these files, so "the thing you are editing changed under
+    you" is the common case here, not the exotic one. Passing None is the
+    deliberate overwrite path (the conflict banner's Overwrite button) — the
+    only way to skip the check, and explicit at every call site.
+
+    Creation is not supported. The tab viewer only ever opens files that
+    already exist, so a path that doesn't resolve is a typo, not a new file;
+    `safe_resolve` 404s it.
+
+    Raises 400/403/404 (see `_resolve_existing`), 409 (changed on disk),
+    413 (over max_bytes).
+    """
+    resolved = safe_resolve(cwd, raw_path)
+
+    blob = content.encode("utf-8")
+    if len(blob) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"content too large ({len(blob)} > {max_bytes} bytes)",
+        )
+
+    st = resolved.stat()
+    if base_mtime is not None and st.st_mtime != base_mtime:
+        raise HTTPException(
+            status_code=409, detail="file changed on disk since it was loaded")
+
+    # Write a sibling temp and rename over the target: a crash or a full
+    # disk leaves the original intact instead of truncated, and no reader
+    # (the preview poller, Claude, a build watcher) can observe a half-
+    # written file. Sibling rather than /tmp so the rename stays within one
+    # filesystem, which is what makes it atomic. os.replace swaps the inode,
+    # so the original's mode has to be carried across explicitly.
+    tmp = resolved.with_name(f".{resolved.name}.periscope-tmp")
+    try:
+        tmp.write_bytes(blob)
+        os.chmod(tmp, st.st_mode & 0o7777)
+        os.replace(tmp, resolved)
+    except OSError as e:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"write failed: {e}") from None
+
+    return (str(resolved), resolved.stat().st_mtime)
 
 
 def safe_reveal(cwd: str, raw_path: str) -> None:
@@ -161,25 +215,9 @@ def safe_reveal(cwd: str, raw_path: str) -> None:
 
     Same gating as safe_read; on success runs macOS Finder reveal.
     """
-    if not raw_path or not raw_path.strip():
-        raise HTTPException(status_code=400, detail="empty path")
-    cwd_p = Path(cwd).resolve()
-    candidate = raw_path
-    if ":" in candidate and candidate.rsplit(":", 1)[1].isdigit():
-        candidate = candidate.rsplit(":", 1)[0]
-    expanded = os.path.expanduser(candidate)
-    target = Path(expanded) if os.path.isabs(expanded) else cwd_p / expanded
-    try:
-        resolved = target.resolve()
-    except OSError:
-        raise HTTPException(status_code=404, detail=f"path not resolvable: {candidate}") from None
-    if not _inside_any(resolved, _safe_roots(cwd_p)):
-        raise HTTPException(status_code=403, detail="path outside safe roots")
-    if not resolved.exists():
-        raise HTTPException(status_code=404, detail=f"no such file: {resolved}")
+    resolved = _resolve_existing(cwd, raw_path)
     # Best-effort; don't surface non-zero exits as 500 (Finder may be
-    # closed, etc.). Logging level is debug because this is user-visible
-    # and the failure mode is benign.
+    # closed, etc.). The failure mode is benign and user-visible.
     subprocess.run(["open", "-R", str(resolved)], check=False)
 
 
@@ -201,6 +239,12 @@ def safe_read_for_pane(target: str, raw_path: str,
                        max_bytes: int = _MAX_BYTES_DEFAULT) -> tuple[str, str]:
     """tmux-resolves cwd from `target`, then calls safe_read."""
     return safe_read(_cwd_for_target(target), raw_path, max_bytes)
+
+
+def safe_write_for_pane(target: str, raw_path: str, content: str,
+                        base_mtime: float | None) -> tuple[str, float]:
+    """tmux-resolves cwd from `target`, then calls safe_write."""
+    return safe_write(_cwd_for_target(target), raw_path, content, base_mtime)
 
 
 def safe_reveal_for_pane(target: str, raw_path: str) -> None:

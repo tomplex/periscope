@@ -10,6 +10,7 @@ import os
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from periscope import fs
 
@@ -81,9 +82,35 @@ def fs_read(session: str, index: int, path: str):
     # they're not UTF-8 and the client streams them via /api/fs/render.
     if os.path.splitext(path)[1].lower() in _IMAGE_EXTS:
         resolved = fs.safe_resolve_for_pane(target, path)
-        return {"path": str(resolved), "content": None, "language": "image"}
-    resolved, content = fs.safe_read_for_pane(target, path)
-    return {"path": resolved, "content": content, "language": _language_for(resolved)}
+        return {"path": str(resolved), "content": None, "language": "image",
+                "mtime": resolved.stat().st_mtime}
+    # mtime is sampled BEFORE the body so the editor's save precondition can
+    # only ever be too STRICT. A file that changes between the two samples
+    # leaves us holding content newer than the mtime we hand out, so the save
+    # 409s spuriously; sampling after would hand out an mtime describing
+    # content we never showed, and the save would silently clobber it.
+    resolved = fs.safe_resolve_for_pane(target, path)
+    mtime = resolved.stat().st_mtime
+    content = fs.read_text(resolved)
+    return {"path": str(resolved), "content": content,
+            "language": _language_for(str(resolved)), "mtime": mtime}
+
+
+class WriteBody(BaseModel):
+    session: str
+    index: int
+    path: str
+    content: str
+    # The mtime the editor loaded, echoed back as a save precondition.
+    # Explicit null is the conflict banner's Overwrite — see fs.safe_write.
+    base_mtime: float | None
+
+
+@router.post("/api/fs/write")
+def fs_write(body: WriteBody):
+    resolved, mtime = fs.safe_write_for_pane(
+        f"{body.session}:{body.index}", body.path, body.content, body.base_mtime)
+    return {"path": resolved, "mtime": mtime}
 
 
 @router.get("/api/fs/stat")

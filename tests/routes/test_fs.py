@@ -222,3 +222,81 @@ def test_fs_stat_enforces_safe_roots(tmp_path, monkeypatch):
     r = client.get("/api/fs/stat",
                    params={"session": "s", "index": 1, "path": "../../../etc/passwd"})
     assert r.status_code in (400, 403, 404)
+
+
+# --- POST /api/fs/write ----------------------------------------------------
+
+
+def _pane_cwd(monkeypatch, tmp_path):
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: str(tmp_path) + "\n")
+
+
+def test_fs_read_returns_mtime(tmp_path, monkeypatch):
+    # The editor's save precondition rides on this field.
+    f = tmp_path / "f.py"
+    f.write_text("x = 1\n")
+    _pane_cwd(monkeypatch, tmp_path)
+    r = TestClient(app).get("/api/fs/read",
+                            params={"session": "s", "index": 1, "path": "f.py"})
+    assert r.status_code == 200, r.text
+    assert r.json()["mtime"] == f.stat().st_mtime
+
+
+def test_fs_write_roundtrip(tmp_path, monkeypatch):
+    f = tmp_path / "f.py"
+    f.write_text("x = 1\n")
+    _pane_cwd(monkeypatch, tmp_path)
+    r = TestClient(app).post("/api/fs/write", json={
+        "session": "s", "index": 1, "path": "f.py",
+        "content": "x = 2\n", "base_mtime": f.stat().st_mtime,
+    })
+    assert r.status_code == 200, r.text
+    assert f.read_text() == "x = 2\n"
+    assert r.json()["mtime"] == f.stat().st_mtime
+    assert r.json()["path"].endswith("/f.py")
+
+
+def test_fs_write_409_on_stale_base_mtime(tmp_path, monkeypatch):
+    f = tmp_path / "f.py"
+    f.write_text("claude's edit\n")
+    _pane_cwd(monkeypatch, tmp_path)
+    r = TestClient(app).post("/api/fs/write", json={
+        "session": "s", "index": 1, "path": "f.py",
+        "content": "mine\n", "base_mtime": f.stat().st_mtime - 10,
+    })
+    assert r.status_code == 409
+    assert f.read_text() == "claude's edit\n"
+
+
+def test_fs_write_null_base_mtime_overwrites(tmp_path, monkeypatch):
+    f = tmp_path / "f.py"
+    f.write_text("theirs\n")
+    _pane_cwd(monkeypatch, tmp_path)
+    r = TestClient(app).post("/api/fs/write", json={
+        "session": "s", "index": 1, "path": "f.py",
+        "content": "mine\n", "base_mtime": None,
+    })
+    assert r.status_code == 200, r.text
+    assert f.read_text() == "mine\n"
+
+
+def test_fs_write_missing_base_mtime_is_422(tmp_path, monkeypatch):
+    # base_mtime is required, not optional-with-default: a client that
+    # forgets to send it must not silently get the clobbering path.
+    f = tmp_path / "f.py"
+    f.write_text("theirs\n")
+    _pane_cwd(monkeypatch, tmp_path)
+    r = TestClient(app).post("/api/fs/write", json={
+        "session": "s", "index": 1, "path": "f.py", "content": "mine\n",
+    })
+    assert r.status_code == 422
+    assert f.read_text() == "theirs\n"
+
+
+def test_fs_write_unknown_pane(monkeypatch):
+    monkeypatch.setattr("periscope.fs.tmux", lambda *a: "\n")
+    r = TestClient(app).post("/api/fs/write", json={
+        "session": "s", "index": 9, "path": "f.py",
+        "content": "x\n", "base_mtime": None,
+    })
+    assert r.status_code == 404
