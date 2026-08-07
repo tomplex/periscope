@@ -1,24 +1,13 @@
-// "N behind → update" pill in the dashboard header. Hidden entirely when the
-// checkout is current, so it costs nothing in the normal case.
+// "N behind → update" pill. Hidden entirely when the checkout is current, so
+// it costs nothing in the normal case. See CLAUDE.md > "Updating" for the
+// design; the consequence that shapes THIS file is that POST /api/update
+// cannot report success — a successful update kills the server mid-request —
+// so the two outcomes are read from opposite signals:
 //
-// THE NAG IS THE POINT. `bin/periscope update` existed as a command long
-// before anyone ran it; a coworker daily-driving periscope went many commits
-// stale purely because nothing ever surfaced that he was. The pill is the part
-// that closes that gap — the click is a convenience on top.
-//
-// Clicking POSTs /api/update, which spawns a DETACHED updater and returns
-// immediately. It cannot report success, because a successful update kills the
-// server mid-request: the sequence ends in `launchctl bootout` + `bootstrap`.
-// So the two outcomes are read differently:
-//
-//   success — the server dies, the connection banner appears, and the next
-//             successful poll carries behind:0 and the pill vanishes.
-//   failure — `git pull --ff-only` aborts BEFORE launchd is touched, so the
-//             server is still alive; /api/update/status reports running:false
-//             with the reason in the log tail (dirty tree, diverged branch).
-//
-// That asymmetry is why failure polls the status endpoint and success doesn't
-// need to: the absence of the pill IS the success signal.
+//   success — server dies, connection banner shows, next poll carries
+//             behind:0, pill vanishes. Its ABSENCE is the success signal.
+//   failure — the pull aborts before launchd is touched, so the server is
+//             still alive and /api/update/status has the reason.
 import { useState } from "preact/hooks";
 import { updateInfo } from "../store.js";
 import { apiCall } from "../util.js";
@@ -59,7 +48,14 @@ export function UpdatePill() {
       return setError((st.log || []).filter(Boolean).slice(-3).join("\n")
         || "update exited without applying — see ~/.config/periscope/update.log");
     }
+    // Never came back. Reverting to "↑ N behind" would imply a healthy server
+    // that simply didn't update; the honest reading is that we don't know, and
+    // the install may be down (bootout succeeded, bootstrap didn't).
     setBusy(false);
+    setError(
+      "no response for 2 minutes — periscope may not have come back up.\n" +
+        "check `bin/periscope status` and ~/.config/periscope/update.log",
+    );
   }
 
   async function start() {

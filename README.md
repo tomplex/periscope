@@ -48,7 +48,8 @@ sequence in place.
 Use this rather than `git pull` + `bin/periscope restart` — the plist and the
 hook registration are *generated* by `bin/periscope`, so a plain pull carries
 neither, and `restart` reuses the already-loaded plist. It aborts without
-touching the running server if the tree is dirty or the branch has diverged.
+touching the running server if the tree is dirty, the branch has diverged, or
+it's being run from a linked worktree.
 
 ### Agent lifecycle hooks
 

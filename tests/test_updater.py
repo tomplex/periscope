@@ -1,6 +1,7 @@
 """Tests for periscope.updater — the self-update nag + spawn."""
 
 import subprocess
+import time
 
 import pytest
 
@@ -13,6 +14,7 @@ def _reset(monkeypatch):
     monkeypatch.setattr(updater, "_checked_at", 0.0)
     monkeypatch.setattr(updater, "_behind", 0)
     monkeypatch.setattr(updater, "_proc", None)
+    monkeypatch.setattr(updater, "_started_at", 0.0)
 
 
 # --- check() ---------------------------------------------------------------
@@ -64,26 +66,35 @@ def test_check_force_bypasses_throttle(monkeypatch):
     assert "fetch" in calls
 
 
-def test_check_quiet_without_upstream(monkeypatch):
-    # Detached HEAD / no tracking branch: nothing to compare against, and the
-    # pill must stay silent rather than guess.
+def test_check_silent_without_upstream(monkeypatch):
+    # Detached HEAD / no tracking branch: nothing to compare against.
     monkeypatch.setattr(updater, "_git", _git_stub({"rev-parse": None}))
     assert updater.check() == 0
+    assert updater.summary()["behind"] == 0
 
 
-def test_check_quiet_when_fetch_fails(monkeypatch):
-    # Offline or no credentials — degrade silently, don't nag with a stale count.
+@pytest.mark.parametrize("broken", [
+    {"rev-parse": "origin/main", "fetch": None},                    # offline
+    {"rev-parse": None},                                            # no upstream
+    {"rev-parse": "origin/main", "fetch": "", "rev-list": ""},      # bad count
+])
+def test_check_keeps_last_count_when_it_cannot_answer(monkeypatch, broken):
+    """A failed probe must LEAVE THE COUNT STANDING, not reset it to 0.
+
+    Publishing 0 would render as "up to date" — the one wrong answer. Going
+    offline doesn't make the checkout less behind. Asserts through summary(),
+    which is what the pill actually reads; check()'s return value alone would
+    pass even if _behind were being clobbered.
+    """
     monkeypatch.setattr(updater, "_git", _git_stub({
-        "rev-parse": "origin/main", "fetch": None,
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "9",
     }))
-    assert updater.check() == 0
+    updater.check()
+    assert updater.summary()["behind"] == 9
 
-
-def test_check_survives_nonnumeric_revlist(monkeypatch):
-    monkeypatch.setattr(updater, "_git", _git_stub({
-        "rev-parse": "origin/main", "fetch": "", "rev-list": "",
-    }))
-    assert updater.check() == 0
+    monkeypatch.setattr(updater, "_git", _git_stub(broken))
+    assert updater.check(force=True) == 9
+    assert updater.summary()["behind"] == 9
 
 
 # --- start() ---------------------------------------------------------------
@@ -96,17 +107,37 @@ def test_start_refuses_on_dev_instance(monkeypatch):
         updater.start()
 
 
+class LiveProc:
+    pid = 999
+    killed = False
+    def poll(self): return None              # still running
+    def kill(self): self.killed = True
+
+
 def test_start_refuses_when_already_running(monkeypatch):
     monkeypatch.setattr(config, "PORT", 8765)
     monkeypatch.setattr(config, "DEV", False)
-
-    class LiveProc:
-        pid = 999
-        def poll(self): return None          # still running
-
     monkeypatch.setattr(updater, "_proc", LiveProc())
+    monkeypatch.setattr(updater, "_started_at", time.time())
     with pytest.raises(RuntimeError, match="already running"):
         updater.start()
+
+
+def test_start_kills_a_wedged_updater(monkeypatch, tmp_path):
+    """A `git pull` blocked on the network would otherwise pin running() true
+    forever, 409ing every later attempt until the server restarts — on a box
+    that is only ever restarted BY this feature."""
+    monkeypatch.setattr(config, "PORT", 8765)
+    monkeypatch.setattr(config, "DEV", False)
+    monkeypatch.setattr(updater, "log_path", lambda: tmp_path / "update.log")
+    wedged = LiveProc()
+    monkeypatch.setattr(updater, "_proc", wedged)
+    monkeypatch.setattr(updater, "_started_at", time.time() - updater.STALE_PROC_S - 1)
+    assert updater.running() is False        # past the cap, so no longer "live"
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: LiveProc())
+    updater.start()                          # must not raise
+    assert wedged.killed is True
 
 
 def test_start_spawns_detached(monkeypatch, tmp_path):
@@ -142,7 +173,16 @@ def test_running_false_after_exit(monkeypatch):
         def poll(self): return 1
 
     monkeypatch.setattr(updater, "_proc", DeadProc())
+    monkeypatch.setattr(updater, "_started_at", time.time())
     assert updater.running() is False
+
+
+def test_summary_does_not_deadlock_on_the_hot_path(monkeypatch):
+    """_LOCK is a plain Lock and summary() rides every 3s /api/state poll, so
+    a re-entrant acquire would hang the whole dashboard, not just this call."""
+    monkeypatch.setattr(updater, "_proc", LiveProc())
+    monkeypatch.setattr(updater, "_started_at", time.time())
+    assert updater.summary()["running"] is True
 
 
 # --- status()/summary() ----------------------------------------------------

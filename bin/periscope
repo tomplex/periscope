@@ -12,17 +12,27 @@ LABEL="gui/$(id -u)/com.tom.periscope"
 CONFIG_DIR="$HOME/.config/periscope"
 LOG="$CONFIG_DIR/periscope-8765.log"
 
-# Regenerate the launchd plist from the current checkout. Shared by `install`
+# Everything is wrapped in main() so `sh` parses the WHOLE file before running
+# any of it. `update` rewrites this very script mid-execution via git pull; an
+# unwrapped script leaves sh resuming at a byte offset into a file that has
+# since changed length.
+main() {
+
+# Regenerate the launchd plist from the current checkout. Requires $UV (see
+# require_uv, which every caller runs as a precondition). Shared by `install`
 # and `update`: the plist embeds repo/uv paths AND tunables that change over
 # time (NumberOfFiles was raised 256->1024 after a silent EMFILE wedge), so an
 # update that only pulls code leaves those fixes unapplied. launchd caches the
 # loaded plist — a rewrite only takes effect after bootout+bootstrap, NOT
 # `kickstart -k`, which restarts the job against the already-loaded config.
+require_uv() {
+  UV="$(command -v uv)" || {
+    echo "uv not found on PATH — install it: https://docs.astral.sh/uv/" >&2
+    return 1
+  }
+}
+
 write_plist() {
-    UV="$(command -v uv)" || {
-      echo "uv not found on PATH — install it: https://docs.astral.sh/uv/" >&2
-      return 1
-    }
     mkdir -p "$CONFIG_DIR"
     cat > "$PLIST_DST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -82,6 +92,7 @@ case "$1" in
       echo "npm install && npm run build failed" >&2
       exit 1
     }
+    require_uv || exit 1
     write_plist || exit 1
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
     "$0" install-hook
@@ -97,7 +108,28 @@ case "$1" in
     # committed, so the pull already carries it, and a build against drifted
     # node_modules can emit a different bundle — dirtying the tree and breaking
     # the NEXT `git pull --ff-only`.
+    # `uv` is a precondition of write_plist, so resolve it BEFORE the pull. A
+    # pull that lands and then aborts at write_plist leaves the new committed
+    # bundle (served per-request from disk) talking to the old Python — a
+    # silent, permanent version skew.
+    require_uv || exit 1
+    # Refuse from a linked worktree. $REPO comes from dirname "$0", so running
+    # this from .claude/worktrees/foo would pull the FEATURE branch and then
+    # write WorkingDirectory=<worktree> into the PROD plist — leaving prod
+    # pointing at a directory that ExitWorktree later deletes.
+    if [ "$(git -C "$REPO" rev-parse --git-dir)" != "$(git -C "$REPO" rev-parse --git-common-dir)" ]; then
+      echo "refusing: $REPO is a linked worktree — update the main checkout instead" >&2
+      exit 1
+    fi
+    # Never block on a credential or host-key prompt: under launchd there is no
+    # tty to answer one, and a wedged `git pull` would pin updater.running()
+    # true forever, 409ing every later attempt until the server restarts.
+    GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT
+    GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"; export GIT_SSH_COMMAND
     OLD="$(git -C "$REPO" rev-parse --short HEAD)"
+    # Refresh first: a stale index makes diff-index report phantom modifications
+    # from mtime churn alone.
+    git -C "$REPO" update-index -q --refresh
     git -C "$REPO" diff-index --quiet HEAD -- || {
       echo "working tree is dirty — commit or stash before updating" >&2
       exit 1
@@ -108,20 +140,52 @@ case "$1" in
     }
     NEW="$(git -C "$REPO" rev-parse --short HEAD)"
     write_plist || exit 1
-    launchctl bootout "$LABEL" 2>/dev/null
-    launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" || {
-      echo "launchctl bootstrap failed — periscope is NOT running" >&2
+    # Validate before booting out: a malformed plist is the one realistic way
+    # bootstrap fails, and past this line a failure means nothing is running.
+    plutil -lint "$PLIST_DST" >/dev/null 2>&1 || {
+      echo "generated plist is malformed — refusing to restart" >&2
       exit 1
     }
-    "$0" install-hook
-    # Verify the new code is actually serving rather than claiming success:
-    # poll healthz until it reports the SHA we just pulled.
+    # bootout is ASYNCHRONOUS and periscope has twice lingered in teardown (once
+    # 20s, once 3+ min — see CLAUDE.md > Development workflow). Bootstrapping
+    # into a half-torn-down job fails, and by then we are already booted out
+    # with KeepAlive unable to help: the dashboard is gone, so nothing can even
+    # report the failure. Wait for the job to actually leave, then retry.
+    launchctl bootout "$LABEL" 2>/dev/null
     i=0
     while [ "$i" -lt 60 ]; do
+      launchctl print "$LABEL" >/dev/null 2>&1 || break
+      i=$((i + 1))
+      sleep 1
+    done
+    i=0
+    until launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" 2>/dev/null; do
+      i=$((i + 1))
+      if [ "$i" -ge 15 ]; then
+        echo "launchctl bootstrap failed after $i tries — periscope is NOT running." >&2
+        echo "recover with: $0 start" >&2
+        exit 1
+      fi
+      sleep 2
+    done
+    "$0" install-hook
+    # Verify the new code is actually serving rather than claiming success:
+    # poll healthz until it reports the SHA we just pulled. Generous, because
+    # a pull that changed server.py's PEP-723 header makes `uv run` resolve and
+    # download dependencies before the port ever opens.
+    i=0
+    while [ "$i" -lt 180 ]; do
       SERVING="$(curl -fsS "http://127.0.0.1:8765/api/healthz" 2>/dev/null \
         | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null)"
       if [ "$SERVING" = "$NEW" ]; then
         echo "updated $OLD -> $NEW"
+        exit 0
+      fi
+      # healthz reports 'unknown' when git isn't on the launchd PATH. The SHA
+      # can then never match, so waiting out the full timeout would report a
+      # failure for an update that actually landed.
+      if [ "$SERVING" = "unknown" ]; then
+        echo "updated $OLD -> $NEW (serving, but healthz can't read its own SHA)"
         exit 0
       fi
       i=$((i + 1))
@@ -251,3 +315,7 @@ PY
     exit 1
     ;;
 esac
+
+}
+
+main "$@"

@@ -1,22 +1,13 @@
 """Self-update: how far behind origin the checkout is, and driving the update.
 
-Two halves, and the nag is the load-bearing one — a coworker daily-driving
-periscope had gone many commits stale simply because nothing ever told him to
-pull. `check()` counts commits behind upstream (throttled to hourly, run from
-the activity worker's tick) and the count surfaces on /api/state as a header
-pill.
+See CLAUDE.md > "Updating" for the design and why a plain `git pull` +
+`restart` is not equivalent. The invariants that live in THIS file:
 
-`start()` runs `bin/periscope update` DETACHED (`start_new_session=True`).
-That is not incidental: the script calls `launchctl bootout`, which tears down
-the launchd job — an inline or plain-child process would be killed mid-update
-by the very teardown it just requested. A new session escapes the job's
-process group, so the updater outlives the server it is replacing.
-
-Failure surfacing relies on the script's ordering: `git pull --ff-only` runs
-before anything touches launchd, so the common failures (dirty tree, diverged
-branch) abort with the server still alive to serve the error back through
-`status()`. Only after the pull succeeds does the process become unkillable-
-by-design, and by then the outcome is visible as a changed SHA.
+- `start()` spawns DETACHED (`start_new_session=True`). The script calls
+  `launchctl bootout`, which tears down the launchd job — a plain child would
+  be killed mid-update by the very teardown it requested.
+- Both entry points are prod-only. A dev instance runs from a worktree on a
+  feature branch, where a pull would clobber work in progress.
 """
 
 import subprocess
@@ -33,10 +24,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # that is 40 commits behind does not become urgent within the hour.
 CHECK_INTERVAL_S = 3600
 
+# An updater still alive past this is wedged, not working: the script's own
+# worst case is ~5 min (bootout wait + bootstrap retries + healthz poll) plus
+# the pull. Without a cap, one hung `git pull` pins running() true forever and
+# every later attempt 409s until the server restarts — days, on a box that is
+# only ever restarted BY this feature.
+STALE_PROC_S = 15 * 60
+
 _LOCK = threading.Lock()
 _checked_at = 0.0
 _behind = 0
 _proc: subprocess.Popen | None = None
+_started_at = 0.0
 
 
 def log_path() -> Path:
@@ -57,43 +56,64 @@ def _git(*args: str, timeout: float = 10.0) -> str | None:
 
 
 def check(force: bool = False) -> int:
-    """Fetch and recount commits behind upstream. Returns the count (0 when
-    up to date or when the state can't be determined). Throttled to
-    CHECK_INTERVAL_S unless `force`. Blocking — call from a worker thread."""
+    """Fetch and recount commits behind upstream. Throttled to
+    CHECK_INTERVAL_S unless `force`. Blocking — call from a worker thread.
+
+    A probe that can't answer LEAVES THE LAST COUNT STANDING rather than
+    resetting to zero: going offline doesn't make the checkout less behind, and
+    publishing 0 would claim "up to date", which is the one wrong answer.
+    """
     global _checked_at, _behind
     with _LOCK:
         if not force and time.time() - _checked_at < CHECK_INTERVAL_S:
             return _behind
         _checked_at = time.time()
+        known = _behind
     # Compare against the tracked upstream rather than a hardcoded origin/main,
     # matching the `git pull --ff-only` the update itself will run.
     upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
     if not upstream:
-        return 0                      # detached HEAD or no tracking branch
+        return known                  # detached HEAD or no tracking branch
     if _git("fetch", "--quiet", timeout=30.0) is None:
-        return 0                      # offline, or no credentials — stay quiet
+        return known                  # offline, or no credentials
     count = _git("rev-list", "--count", f"HEAD..{upstream}")
-    behind = int(count) if count and count.isdigit() else 0
+    if not (count and count.isdigit()):
+        return known
+    behind = int(count)
     with _LOCK:
         _behind = behind
     return behind
 
 
+def _running_locked() -> bool:
+    """Caller must hold _LOCK. A spawned updater counts as running only until
+    STALE_PROC_S — past that it is wedged, and treating it as live would 409
+    every future attempt forever."""
+    if _proc is None or _proc.poll() is not None:
+        return False
+    return time.time() - _started_at < STALE_PROC_S
+
+
 def running() -> bool:
-    """True while a spawned updater is still alive. Naturally self-clearing: a
+    """True while a spawned updater is live. Naturally self-clearing: a
     SUCCESSFUL update kills this process, so the replacement boots with no
     handle and a changed SHA. A FAILED update leaves the handle here, exited,
     with the reason in the log."""
     with _LOCK:
-        return _proc is not None and _proc.poll() is None
+        return _running_locked()
 
 
 def summary() -> dict:
     """The nag, without the log. Rides on every /api/state poll (3s), so it
-    must stay allocation-cheap and touch no disk."""
+    must stay allocation-cheap and touch no disk.
+
+    Reads everything under ONE acquire — `_LOCK` is a plain Lock, so calling
+    the public `running()` from inside the block would self-deadlock the
+    hottest endpoint in the app.
+    """
     with _LOCK:
-        behind, checked_at = _behind, _checked_at
-    return {"behind": behind, "checked_at": checked_at, "running": running()}
+        return {"behind": _behind, "checked_at": _checked_at,
+                "running": _running_locked()}
 
 
 def status() -> dict:
@@ -113,15 +133,23 @@ def tail(limit: int = 40) -> list[str]:
 def start() -> None:
     """Spawn the detached updater. Raises RuntimeError if this instance must
     not self-update or one is already in flight."""
-    global _proc
+    global _proc, _started_at
     # Prod-only. A dev instance runs from a worktree on a feature branch, where
     # `git pull --ff-only` would either fail or pull the WRONG branch over the
-    # work in progress.
+    # work in progress. (`bin/periscope update` refuses from a worktree too —
+    # this gate and that one are independent, since the script is also a
+    # user-facing verb.)
     if not config.is_prod():
         raise RuntimeError("self-update is prod-only (this is a dev instance)")
     with _LOCK:
-        if _proc is not None and _proc.poll() is None:
+        if _running_locked():
             raise RuntimeError("an update is already running")
+        # Past STALE_PROC_S but still alive = wedged (a `git pull` blocked on
+        # the network). Kill it before spawning, or two updaters race on the
+        # same checkout and launchd job.
+        if _proc is not None and _proc.poll() is None:
+            log.warning("killing wedged updater (pid %d)", _proc.pid)
+            _proc.kill()
         script = REPO_ROOT / "bin" / "periscope"
         log_path().parent.mkdir(parents=True, exist_ok=True)
         # Truncate: the log is the CURRENT run's transcript, which is what
@@ -136,4 +164,5 @@ def start() -> None:
             )
         finally:
             handle.close()               # the child holds its own dup
-    log.info("self-update started (pid %d)", _proc.pid)
+        _started_at = time.time()
+        log.info("self-update started (pid %d)", _proc.pid)
