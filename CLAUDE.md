@@ -566,6 +566,45 @@ Invariants worth knowing before touching it:
   (`PERISCOPE_TMUX_SOCKET`) with a stub exec (`PERISCOPE_CLAUDE_EXEC`); both
   seams live in `periscope/tmux.py` + `config.py` and are inert in prod.
 
+## Wrapper profiles (normal | lab)
+
+`claude` on this machine is a **zsh function**, not the binary
+(`~/.claude/bin/claude-wrapper.zsh`). It injects a system prompt and, given
+`lab`, swaps the plugin set. Periscope spawns are `send-keys` into an
+interactive shell, so **every periscope-spawned pane already goes through that
+wrapper** — this is why a spawned pane has Tom's system prompt at all.
+
+The launcher's Profile picker (sticky, `prefs.ui.launch_profile`) sends
+`profile=lab` to `/api/window/new`, which sets `CLAUDE_WRAPPER_PROFILE=lab` on
+the new tmux window via `tmux -e`.
+
+**The profile is carried as an env var, never as the `claude lab` argv word.**
+The wrapper *accepts* that word, but consumes it and execs `command claude
+--settings '{...plugins...}'` — so `lab` never reaches claude's argv, and
+nothing downstream could observe it. Two consumers need to:
+`session_status.pane_profiles` (the rail chip) and `resurrect._rewrite_line`
+(re-emitting the prefix so a lab pane survives a reboot on the lab plugin set).
+Detecting it from argv instead would mean fingerprinting the wrapper's exact
+plugin JSON. Env is the one carrier all three parties read — the same reason
+`CLAUDE_CONFIG_DIR` works this way.
+
+Consequences worth knowing:
+
+- **The account and the profile are orthogonal.** Account = which subscription
+  bills (`CLAUDE_CONFIG_DIR`); profile = which plugin set runs. Both ride
+  `tmux.env_args`, both get scrubbed off the session by `scrub_session_env`,
+  both get re-emitted by resurrect. A lab pane on account B is normal.
+- **`session_status` caches the raw env TAIL, not parsed values**
+  (`_pane_claude_envs`). One `ps eww` fork serves every per-pane variable; a
+  per-variable cache would fork once per variable on the `/api/state` hot path.
+- **Only agent windows carry it** (`profiles.sendsProfile`, mirroring
+  `sendsAccount`). A shell window that inherited it would put a hand-typed
+  `claude` on the lab plugin set invisibly — the chip is derived from a live
+  claude process, which a shell window has none of.
+- **Editing the wrapper is part of this feature.** Periscope sets the var; the
+  wrapper is what honours it. It fails safe: an un-updated wrapper ignores the
+  var and yields a normal pane, never a wrong-plugin-set one.
+
 ## tmux persistence (`periscope/resurrect.py`)
 
 Session survival across reboots is tmux-resurrect + tmux-continuum, with two
