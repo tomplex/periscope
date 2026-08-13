@@ -247,19 +247,60 @@ def test_pane_config_dirs_cached_at_15s(mocker):
     assert envs.call_count == 1  # second call served from cache
 
 
-def test_config_dir_from_ps_reads_only_the_env_tail():
+def test_env_tail_strips_the_command():
     """`ps eww` concatenates command and env with no delimiter. A process whose
-    COMMAND merely mentions the variable must not be read as setting it."""
+    COMMAND merely mentions a variable must not be read as setting it."""
     alt = "/Users/tom/.claude-b"
     cmd = "grep -o :CLAUDE_CONFIG_DIR=[^\\011]*|:claude"
     # command mentions it, environment does not
-    assert ss._config_dir_from_ps(cmd, f"{cmd} PATH=/usr/bin SHELL=/bin/zsh") is None
+    assert ss._CONFIG_DIR_RE.search(
+        ss._env_tail(cmd, f"{cmd} PATH=/usr/bin SHELL=/bin/zsh") or "") is None
     # genuine env value is found
-    assert ss._config_dir_from_ps(
-        "claude --resume x", f"claude --resume x PATH=/usr/bin CLAUDE_CONFIG_DIR={alt} TERM=xterm"
-    ) == alt
+    tail = ss._env_tail(
+        "claude --resume x",
+        f"claude --resume x PATH=/usr/bin CLAUDE_CONFIG_DIR={alt} TERM=xterm")
+    assert ss._CONFIG_DIR_RE.search(tail or "").group(1) == alt
     # command prefix mismatch (ps raced / truncated) yields nothing rather than a guess
-    assert ss._config_dir_from_ps("claude", f"something-else CLAUDE_CONFIG_DIR={alt}") is None
+    assert ss._env_tail("claude", f"something-else CLAUDE_CONFIG_DIR={alt}") is None
+
+
+def test_pane_profiles_reads_the_wrapper_profile_from_env(mocker):
+    """The profile is observable ONLY in env: the wrapper consumes the typed
+    `claude lab` word and execs `command claude --settings ...`, so it never
+    reaches argv."""
+    ss._config_dirs_cache = None
+    mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111, "%2": 222})
+    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude", 222: "claude"}))
+    mocker.patch.object(ss, "_env_by_pid", return_value={
+        111: "claude PATH=/x CLAUDE_WRAPPER_PROFILE=lab TERM=xterm",
+        222: "claude PATH=/x TERM=xterm",
+    })
+    # Only the lab pane gets an entry; a default-profile pane has none.
+    assert ss.pane_profiles() == {"%1": "lab"}
+
+
+def test_pane_profiles_and_config_dirs_share_one_ps_fork(mocker):
+    """Both bindings come off ONE `ps eww` snapshot. Caching parsed values
+    per-variable instead of the env tail would fork once per variable on every
+    poll, on the /api/state hot path."""
+    ss._config_dirs_cache = None
+    mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
+    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude"}))
+    envs = mocker.patch.object(ss, "_env_by_pid", return_value={
+        111: "claude CLAUDE_CONFIG_DIR=/Users/t/.claude-b CLAUDE_WRAPPER_PROFILE=lab"})
+    assert ss.pane_config_dirs() == {"%1": "/Users/t/.claude-b"}
+    assert ss.pane_profiles() == {"%1": "lab"}
+    assert envs.call_count == 1
+
+
+def test_pane_profiles_ignores_a_command_that_merely_mentions_the_var(mocker):
+    """The `ps eww` no-delimiter trap, for the profile variable specifically."""
+    ss._config_dirs_cache = None
+    cmd = "rg CLAUDE_WRAPPER_PROFILE=lab"
+    mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
+    mocker.patch.object(ss, "proc_table", return_value=({}, {111: cmd}))
+    mocker.patch.object(ss, "_env_by_pid", return_value={111: f"{cmd} PATH=/x"})
+    assert ss.pane_profiles() == {}
 
 
 # ── live_session_id_for_pane: the pane's CURRENT session id ──────────────

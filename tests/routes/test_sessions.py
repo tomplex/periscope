@@ -379,6 +379,60 @@ def test_new_session_env_is_scrubbed(client, mocker, fresh_activity_db):
                for c in calls), f"session env never scrubbed: {calls}"
 
 
+# --- wrapper profile (which plugin set the pane runs) -------------------------
+
+
+def test_window_new_passes_profile_env_to_tmux(client, mocker, fresh_activity_db):
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&profile=lab")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["profile"] == "lab"
+    flat = list(_created(calls)[0])
+    assert "CLAUDE_WRAPPER_PROFILE=lab" in flat
+
+
+def test_window_new_default_profile_sends_no_env(client, mocker, fresh_activity_db):
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&profile=default")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["profile"] == "default"
+    assert "-e" not in list(_created(calls)[0])
+
+
+def test_window_new_unknown_profile_falls_back_to_default(client, mocker, fresh_activity_db):
+    """Fails OPEN, like account_config_dir: an unknown id is a periscope bug,
+    and the default profile is the one that behaves like a hand-typed claude."""
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&profile=nonsense")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["profile"] == "default"
+    assert "-e" not in list(_created(calls)[0])
+
+
+def test_profile_only_spawn_still_scrubs_session_env(client, mocker, fresh_activity_db):
+    """The scrub gate must not stay account-only: a lab pane on the DEFAULT
+    account creates the session with -e too, and an unscrubbed session env
+    would put every later window on the lab plugin set."""
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls, has_session=1)  # no session yet → new-session
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&profile=lab")
+
+    assert r.status_code == 200, r.text
+    assert _created(calls)[0][0] == "new-session"
+    assert any(c[0] == "set-environment" and "-u" in c and "CLAUDE_WRAPPER_PROFILE" in c
+               for c in calls), f"session env never scrubbed: {calls}"
+
+
 # --- resume path: account binding + move-account ------------------------------
 
 

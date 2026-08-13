@@ -14,6 +14,8 @@ import re
 import subprocess
 import uuid
 
+from periscope import config
+
 # Strip SGR escape sequences from captured pane text before parsing.
 _ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
 _FG_COLOR_RE = re.compile(r"\x1b\[38(?:;\d+)+m")
@@ -54,40 +56,50 @@ def _tmux_mutate(*args: str) -> tuple[bool, str]:
     return True, r.stdout.strip()
 
 
-def env_args(config_dir: str | None) -> list[str]:
-    """`-e CLAUDE_CONFIG_DIR=...` args for new-window/new-session, or [].
+def env_args(config_dir: str | None, profile: str | None = None) -> list[str]:
+    """`-e VAR=...` args for new-window/new-session, or [].
+
+    Two bindings ride here: CLAUDE_CONFIG_DIR (which subscription the pane
+    bills) and the wrapper profile (which plugin set it runs under).
 
     Set on the window rather than prefixed onto the command string so the
     binding lives in the pane's process environment: a user re-running
-    `claude` by hand in that pane stays on the same account, and resurrect
-    reads it back off the live process at save time.
+    `claude` by hand in that pane keeps the same account and profile, and
+    resurrect reads both back off the live process at save time.
     """
-    if not config_dir:
-        return []
-    return ["-e", f"CLAUDE_CONFIG_DIR={config_dir}"]
+    args: list[str] = []
+    if config_dir:
+        args += ["-e", f"CLAUDE_CONFIG_DIR={config_dir}"]
+    if profile:
+        args += ["-e", f"{config.PROFILE_ENV_VAR}={profile}"]
+    return args
 
 
 def scrub_session_env(session: str) -> bool:
-    """Unset CLAUDE_CONFIG_DIR from a SESSION's environment. True on success.
+    """Unset the env_args vars from a SESSION's environment. True on success.
 
     `new-session -e` sets the session env, not just the first window's — so
     every later window in periscope's single shared session would inherit the
-    first window's account, silently billing account-A panes to account B.
-    The first window's shell has already forked with the value, so scrubbing
-    immediately after creation keeps that pane correct and leaves the session
-    clean for the next one.
+    first window's account, silently billing account-A panes to account B (and,
+    for the profile, silently running them on the wrong plugin set). The first
+    window's shell has already forked with the values, so scrubbing immediately
+    after creation keeps that pane correct and leaves the session clean for the
+    next one.
 
     A failure here is the exact outcome this feature exists to prevent, and its
     blast radius is every LATER pane rather than this one — so it must never be
     silent. `_tmux_mutate` only returns stderr, it does not log, so log here.
     """
-    ok, msg = _tmux_mutate("set-environment", "-t", f"={session}", "-u", "CLAUDE_CONFIG_DIR")
-    if not ok:
-        from periscope.log import log
-        log.error(
-            "FAILED to scrub CLAUDE_CONFIG_DIR from session %s (%s) — later panes "
-            "in this session may silently run on the wrong account", session, msg,
-        )
+    ok = True
+    for var in ("CLAUDE_CONFIG_DIR", config.PROFILE_ENV_VAR):
+        got, msg = _tmux_mutate("set-environment", "-t", f"={session}", "-u", var)
+        if not got:
+            ok = False
+            from periscope.log import log
+            log.error(
+                "FAILED to scrub %s from session %s (%s) — later panes in this "
+                "session may silently inherit it", var, session, msg,
+            )
     return ok
 
 

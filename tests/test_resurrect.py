@@ -142,6 +142,63 @@ def test_account_prefix_not_doubled():
     assert twice.count("CLAUDE_CONFIG_DIR") == 1
 
 
+# --- wrapper profile prefix ---------------------------------------------
+#
+# Same argv-invisibility as the account, one step worse: the `claude` wrapper
+# consumes a typed `lab` and execs `command claude --settings '{...}'`, so the
+# profile is absent from argv even when it WAS typed. Without re-emitting it a
+# lab pane restores on the default plugin set, silently.
+
+def test_profile_prefix_emitted_with_resume():
+    pane_map, sess_map = _maps()
+    line = _pane_line("s", "1", "1", _both_channels())
+    out, changed = resurrect._rewrite_line(
+        line, pane_map, sess_map, {}, {"%56": "lab"})
+    assert changed
+    assert out.split("\t")[10] == (
+        f":CLAUDE_WRAPPER_PROFILE=lab claude --resume {SID}"
+        " --dangerously-load-development-channels server:lgtm"
+        " --dangerously-load-development-channels server:periscope"
+    )
+
+
+def test_profile_prefix_emitted_without_session():
+    """No pane_sessions row: --resume is lost, but the profile must NOT be."""
+    line = _pane_line("s", "1", "1", "claude")
+    out, changed = resurrect._rewrite_line(line, {"s:1.1": "%56"}, {}, {}, {"%56": "lab"})
+    assert changed
+    assert out.split("\t")[10] == ":CLAUDE_WRAPPER_PROFILE=lab claude"
+
+
+def test_account_and_profile_prefixes_coexist():
+    """The two axes are independent — a lab pane on account B carries both."""
+    pane_map, sess_map = _maps()
+    line = _pane_line("s", "1", "1", "claude")
+    out, changed = resurrect._rewrite_line(
+        line, pane_map, sess_map, {"%56": ALT}, {"%56": "lab"})
+    assert changed
+    assert out.split("\t")[10] == (
+        f":CLAUDE_CONFIG_DIR={ALT} CLAUDE_WRAPPER_PROFILE=lab claude --resume {SID}"
+    )
+
+
+def test_default_profile_gets_no_prefix():
+    pane_map, sess_map = _maps()
+    line = _pane_line("s", "1", "1", "claude")
+    out, changed = resurrect._rewrite_line(line, pane_map, sess_map, {}, {"%99": "lab"})
+    assert changed
+    assert out.split("\t")[10] == f":claude --resume {SID}"
+
+
+def test_profile_prefix_not_doubled():
+    pane_map, sess_map = _maps()
+    line = _pane_line("s", "1", "1", _both_channels())
+    once, _ = resurrect._rewrite_line(line, pane_map, sess_map, {}, {"%56": "lab"})
+    twice, _ = resurrect._rewrite_line(once, pane_map, sess_map, {}, {"%56": "lab"})
+    assert twice == once
+    assert twice.count("CLAUDE_WRAPPER_PROFILE") == 1
+
+
 def test_non_claude_untouched():
     pane_map, sess_map = _maps()
     for cmd in ("nvim /tmp/foo.md", "zsh", ""):

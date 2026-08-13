@@ -183,17 +183,20 @@ def _apply_codex_state(
 # the mapping, and a new pane waiting one interval for its chip is harmless.
 _ACCOUNTS_TTL_S = 15.0
 _pane_accounts_lock = threading.Lock()
-_pane_accounts_cache: tuple[float, dict[str, str]] | None = None
+_pane_accounts_cache: tuple[float, dict[str, str], dict[str, str]] | None = None
 
 
-def _pane_accounts() -> dict[str, str]:
-    """tmux pane id -> account id, for panes NOT on the default account.
+def _pane_env_labels() -> tuple[dict[str, str], dict[str, str]]:
+    """(accounts, profiles), each tmux pane id -> label for panes NOT on the
+    default. Both come off the same live-process env scan, under one lock: they
+    share a `ps eww` snapshot downstream, and two separately-locked callers
+    would each pay the stampede this lock exists to prevent.
 
-    Derived live from each Claude process's CLAUDE_CONFIG_DIR via
-    `session_status.pane_config_dirs` — reused rather than reimplemented because it
-    encodes the `ps eww` trap (command and environment are concatenated with no
-    delimiter, so a naive regex matches the variable NAME appearing inside some
-    other process's command text).
+    Derived live via `session_status.pane_config_dirs` / `pane_profiles` —
+    reused rather than reimplemented because they encode the `ps eww` trap
+    (command and environment are concatenated with no delimiter, so a naive
+    regex matches the variable NAME appearing inside some other process's
+    command text).
 
     Never persisted. tmux recycles pane ids across a server restart, so a stored
     pane->account row would eventually be inherited by an unrelated later pane
@@ -203,14 +206,15 @@ def _pane_accounts() -> dict[str, str]:
     A config dir no registry entry claims reports "unknown", not the default:
     such a pane demonstrably is NOT on the default account (whose config_dir is
     ""), and reporting default would hide the chip — asserting the opposite of
-    what is true, which is the exact mislabel the chip exists to prevent.
+    what is true, which is the exact mislabel the chip exists to prevent. The
+    profile needs no such mapping: its env value IS the profile id.
     """
     global _pane_accounts_cache
     now = time.time()
     with _pane_accounts_lock:
         cached = _pane_accounts_cache
         if cached is not None and now - cached[0] < _ACCOUNTS_TTL_S:
-            return cached[1]
+            return cached[1], cached[2]
         by_dir: dict[str, str] = {}
         for a in get_accounts():
             cfg, aid = a.get("config_dir"), a.get("id")
@@ -220,8 +224,9 @@ def _pane_accounts() -> dict[str, str]:
             pane_id: by_dir.get(cfg, "unknown")
             for pane_id, cfg in session_status.pane_config_dirs().items()
         }
-        _pane_accounts_cache = (now, accounts)
-        return accounts
+        profiles = dict(session_status.pane_profiles())
+        _pane_accounts_cache = (now, accounts, profiles)
+        return accounts, profiles
 
 
 def mem_signal(proc: dict | None) -> dict | None:
@@ -415,6 +420,8 @@ def build_window_view(
     pinned_for_aff = aff_repo if aff_repo else None
     aff = affiliation(w.get("cwd", ""), pinned_for_aff, aff_repo)
 
+    pane_accounts, pane_profiles = _pane_env_labels()
+
     view = {
         **w, **parsed, **git, **pr,
         "target": target,
@@ -460,7 +467,12 @@ def build_window_view(
         # Which Claude subscription this pane bills. The whole point of pooling
         # two accounts is balancing work across two weekly limits, and nothing
         # else on the card says which one a pane is spending. Snapshot lookup —
-        # the scan behind it runs once per poll (see _pane_accounts).
-        "account": _pane_accounts().get(w.get("pane_id") or "", "default"),
+        # the scan behind it runs once per poll (see _pane_env_labels).
+        "account": pane_accounts.get(w.get("pane_id") or "", "default"),
+        # Which `claude` wrapper profile this pane runs — i.e. which plugin set
+        # and system prompt. Same reasoning as the account: nothing else on the
+        # card distinguishes a lab pane from a normal one, and the difference
+        # changes what the pane can do.
+        "profile": pane_profiles.get(w.get("pane_id") or "", "default"),
     }
     return view, stamp_update

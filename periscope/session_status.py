@@ -33,6 +33,8 @@ import time
 from collections import deque
 from pathlib import Path
 
+from periscope import config
+
 _SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
 # Claude status -> periscope state. Only these are trusted; everything else
@@ -55,10 +57,15 @@ _proc_table_cache: tuple[float, tuple[dict[int, list[int]], dict[int, str]]] | N
 _pane_pids_cache: tuple[float, dict[str, int]] | None = None
 
 _CONFIG_DIR_RE = re.compile(r"\bCLAUDE_CONFIG_DIR=(\S+)")
+_PROFILE_RE = re.compile(rf"\b{config.PROFILE_ENV_VAR}=(\S+)")
 # Config dirs are read from process env, which is immutable for a process's
 # lifetime — a short TTL would re-fork `ps eww` for an answer that cannot
 # change. 15s matches the cadence window_view already used.
 _CONFIG_DIRS_TTL_S = 15.0
+# pane id -> the ENVIRONMENT TAIL of its live claude (command already stripped).
+# Cached as the raw tail rather than as parsed values so every per-pane env
+# binding periscope reads — account, wrapper profile — comes out of ONE
+# `ps eww` fork instead of one fork per variable.
 _config_dirs_cache: tuple[float, dict[str, str]] | None = None
 
 
@@ -315,35 +322,30 @@ def _env_by_pid(pids: list[int]) -> dict[int, str]:
     return envs
 
 
-def _config_dir_from_ps(cmd_only: str, with_env: str) -> str | None:
-    """Extract CLAUDE_CONFIG_DIR from `ps eww` output.
+def _env_tail(cmd_only: str, with_env: str) -> str | None:
+    """The ENVIRONMENT portion of one `ps eww` line, or None when it can't be
+    isolated.
 
     `ps eww` prints the command and the environment concatenated with no
     delimiter, so searching the whole string matches any process whose COMMAND
-    merely mentions the variable (observed: a grep pattern containing the name
+    merely mentions a variable (observed: a grep pattern containing the name
     was picked up as if it were a real value). Strip the command — obtained
-    without `e` for the same pid — and search only the environment tail.
+    without `e` for the same pid — and leave callers only the tail.
     """
     cmd_only, with_env = cmd_only.strip(), with_env.strip()
     if not with_env.startswith(cmd_only):
         return None
-    env_tail = with_env[len(cmd_only):]
-    m = _CONFIG_DIR_RE.search(env_tail)
-    return m.group(1) if m else None
+    return with_env[len(cmd_only):]
 
 
-def pane_config_dirs() -> dict[str, str]:
-    """tmux pane id -> the CLAUDE_CONFIG_DIR its live Claude runs under.
+def _pane_claude_envs() -> dict[str, str]:
+    """tmux pane id -> the environment tail of its live Claude.
 
     Read from the running process's environment rather than from any stored
-    binding: env is what the process is actually using, and it needs no state to
-    stay in sync. Panes on the default account have no entry.
-
-    Consumed live by window_view's account attribution and at SAVE time by
-    resurrect's save-file rewrite — a shell-level `VAR=x cmd` prefix is
-    consumed by the shell and never reaches argv, so the config dir is absent
-    from the command resurrect captures via ps; without this lookup every
-    account-B pane silently restores onto the default account.
+    binding: env is what the process is actually using, and it needs no state
+    to stay in sync. One `ps eww` fork serves every variable periscope reads
+    off a pane (see the cache comment); parse with `pane_config_dirs` /
+    `pane_profiles` rather than calling this directly.
     """
     global _config_dirs_cache
     now = time.time()
@@ -354,20 +356,56 @@ def pane_config_dirs() -> dict[str, str]:
         return {}   # no tmux/claudes — don't cache the empty answer
     _, cmds = proc_table()
     envs = _env_by_pid(list(pane_pids.values()))
-    dirs: dict[str, str] = {}
+    tails: dict[str, str] = {}
     for pane_id, pid in pane_pids.items():
         # A pid missing from the command table (process exited between the two
         # snapshots) is skipped rather than passed as "": an empty command
-        # makes _config_dir_from_ps search the whole `ps eww` string, which is
-        # the false-positive it exists to prevent.
+        # makes _env_tail return the whole `ps eww` string, which is the
+        # false-positive it exists to prevent.
         cmd = cmds.get(pid)
         if cmd is None:
             continue
-        cfg = _config_dir_from_ps(cmd, envs.get(pid, ""))
-        if cfg:
-            dirs[pane_id] = cfg
-    _config_dirs_cache = (now, dirs)
-    return dirs
+        tail = _env_tail(cmd, envs.get(pid, ""))
+        if tail:
+            tails[pane_id] = tail
+    _config_dirs_cache = (now, tails)
+    return tails
+
+
+def pane_config_dirs() -> dict[str, str]:
+    """tmux pane id -> the CLAUDE_CONFIG_DIR its live Claude runs under.
+    Panes on the default account have no entry.
+
+    Consumed live by window_view's account attribution and at SAVE time by
+    resurrect's save-file rewrite — a shell-level `VAR=x cmd` prefix is
+    consumed by the shell and never reaches argv, so the config dir is absent
+    from the command resurrect captures via ps; without this lookup every
+    account-B pane silently restores onto the default account.
+    """
+    out = {}
+    for pane_id, tail in _pane_claude_envs().items():
+        m = _CONFIG_DIR_RE.search(tail)
+        if m:
+            out[pane_id] = m.group(1)
+    return out
+
+
+def pane_profiles() -> dict[str, str]:
+    """tmux pane id -> the `claude` wrapper profile its live Claude runs under.
+    Panes on the default profile have no entry.
+
+    The profile is only ever observable here. The wrapper also accepts a typed
+    `claude lab`, but it consumes that word and execs `command claude
+    --settings '{...}'`, so the profile is absent from argv — fingerprinting
+    the settings JSON would couple periscope to the wrapper's exact plugin
+    list. The env var both periscope and the wrapper agree on is the contract.
+    """
+    out = {}
+    for pane_id, tail in _pane_claude_envs().items():
+        m = _PROFILE_RE.search(tail)
+        if m:
+            out[pane_id] = m.group(1)
+    return out
 
 
 def live_session_id_for_pane(pane_id: str) -> str | None:

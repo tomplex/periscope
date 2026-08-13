@@ -14,13 +14,15 @@ restarts, so at restore time there is nothing left to map. The save file is the
 one artifact that survives the reboot pairing each pane (by session:window.pane
 position) with its command.
 
-A pane running on a second Claude subscription (`CLAUDE_CONFIG_DIR=<dir> claude`)
-gets that prefix re-emitted here too. resurrect captures commands from ps argv,
-and a shell-level env prefix never reaches argv — so without this the pane
-restores onto the DEFAULT account and quietly bills the wrong subscription.
-Emitting the prefix requires `@resurrect-processes '~claude'` (substring match)
-in tmux.conf; a bare `'claude'` anchors at the start of the command and a
-prefixed line would not be restored at all.
+Two env prefixes are re-emitted here too: `CLAUDE_CONFIG_DIR=<dir>` (which
+subscription the pane bills) and `CLAUDE_WRAPPER_PROFILE=<id>` (which plugin set
+the `claude` wrapper gives it). resurrect captures commands from ps argv, and a
+shell-level env prefix never reaches argv — so without this a pane restores onto
+the DEFAULT account, quietly billing the wrong subscription, and onto the default
+profile, quietly swapping its plugin set. Emitting a prefix requires
+`@resurrect-processes '~claude'` (substring match) in tmux.conf; a bare
+`'claude'` anchors at the start of the command and a prefixed line would not be
+restored at all.
 
 Import discipline: stdlib only, plus `periscope.config` and
 `periscope.session_status` (both stdlib-only leaves). Never import
@@ -116,10 +118,11 @@ def _rewrite_line(
     pane_map: dict[str, str],
     session_map: dict[str, str],
     config_dirs: dict[str, str] | None = None,
+    profiles: dict[str, str] | None = None,
 ) -> tuple[str, bool]:
     """Rewrite one save-file line. Returns (line, rewritten?). Non-claude lines,
     non-pane lines, and panes with neither a resolvable session nor a non-default
-    account are returned unchanged."""
+    account/profile are returned unchanged."""
     parts = line.split("\t", _PANE_FIELDS - 1)
     if parts[0] != "pane" or len(parts) != _PANE_FIELDS:
         return line, False
@@ -133,14 +136,18 @@ def _rewrite_line(
     pane_id = pane_map.get(f"{parts[1]}:{parts[2]}.{parts[5]}")
     uuid = session_map.get(pane_id) if pane_id else None
     cfg = (config_dirs or {}).get(pane_id) if pane_id else None
-    # The account prefix must be emitted even when the session is unresolvable
+    prof = (profiles or {}).get(pane_id) if pane_id else None
+    # The env prefixes must be emitted even when the session is unresolvable
     # (no pane_sessions row). Returning early there would restore a non-default
     # pane onto the DEFAULT account — burning the wrong subscription silently,
-    # which is worse than losing --resume.
-    if not uuid and not cfg:
+    # which is worse than losing --resume — or onto the default wrapper profile,
+    # silently swapping the plugin set the pane was working under.
+    if not uuid and not cfg and not prof:
         return line, False
 
     prefix = f"CLAUDE_CONFIG_DIR={cfg} " if cfg else ""
+    if prof:
+        prefix += f"{config.PROFILE_ENV_VAR}={prof} "
     if not uuid:
         parts[10] = ":" + prefix + cmd
         return "\t".join(parts), True
@@ -164,13 +171,15 @@ def rewrite_save_file(save_path: Path) -> int:
     pane_map = _live_pane_map()
     session_map = _session_map()
     config_dirs = session_status.pane_config_dirs()
+    profiles = session_status.pane_profiles()
 
     out_lines: list[str] = []
     rewritten = 0
     with save_path.open() as f:
         for raw in f:
             stripped = raw.rstrip("\n")
-            new, changed = _rewrite_line(stripped, pane_map, session_map, config_dirs)
+            new, changed = _rewrite_line(
+                stripped, pane_map, session_map, config_dirs, profiles)
             rewritten += changed
             out_lines.append(new)
 

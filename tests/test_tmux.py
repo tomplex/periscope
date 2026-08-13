@@ -6,6 +6,7 @@ the wrappers compose argv correctly and return what they claim to return.
 
 import subprocess
 
+from periscope import config
 from periscope.tmux import (
     _ANSI_SGR_RE,
     _FG_COLOR_RE,
@@ -142,12 +143,36 @@ def test_deliver_input_large_falls_back_to_paste_buffer(mocker):
 def test_env_args_empty_for_default_account():
     assert env_args("") == []
     assert env_args(None) == []
+    assert env_args("", "") == []
+    assert env_args(None, None) == []
 
 
 def test_env_args_builds_e_flag():
     assert env_args("/Users/tom/.claude-b") == [
         "-e", "CLAUDE_CONFIG_DIR=/Users/tom/.claude-b"
     ]
+
+
+def test_env_args_carries_the_wrapper_profile():
+    assert env_args("", "lab") == ["-e", "CLAUDE_WRAPPER_PROFILE=lab"]
+
+
+def test_env_args_account_and_profile_are_independent():
+    """The two axes compose: a lab pane on the second subscription carries both."""
+    assert env_args("/Users/tom/.claude-b", "lab") == [
+        "-e", "CLAUDE_CONFIG_DIR=/Users/tom/.claude-b",
+        "-e", "CLAUDE_WRAPPER_PROFILE=lab",
+    ]
+
+
+def test_profile_env_fails_open_to_the_default():
+    """An unknown id is a periscope bug; the default profile is the one that
+    behaves like a hand-typed `claude`, so it is the safe landing."""
+    assert config.profile_env("lab") == "lab"
+    assert config.profile_env("default") == ""
+    assert config.profile_env(None) == ""
+    assert config.profile_env("") == ""
+    assert config.profile_env("nonsense") == ""
 
 
 def test_window_identity_parses_three_fields(mocker):

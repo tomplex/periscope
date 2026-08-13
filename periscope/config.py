@@ -43,6 +43,32 @@ MANAGED_SESSION = "periscope"
 CHANNEL_FLAG = "--dangerously-load-development-channels"
 CLAUDE_EXEC = f"claude {CHANNEL_FLAG} server:periscope"
 
+# Wrapper profile: which plugin set / system prompt a spawned Claude runs under.
+# Resolved by the `claude` zsh function (~/.claude/bin/claude-wrapper.zsh), which
+# every periscope-spawned pane already goes through — spawns are `send-keys` into
+# an interactive shell, not a bare exec.
+#
+# Carried as an ENV VAR on the tmux window, never as the `claude lab` argv word
+# the wrapper also accepts: the wrapper consumes that word and execs `command
+# claude --settings '{...}'`, so `lab` never reaches claude's argv and neither
+# the rail's profile attribution nor resurrect's save-file rewrite could observe
+# it. Env is the one carrier all three parties read — the same reason
+# CLAUDE_CONFIG_DIR is set this way (see tmux.env_args).
+PROFILE_ENV_VAR = "CLAUDE_WRAPPER_PROFILE"
+CLAUDE_PROFILES = ("default", "lab")
+
+
+def profile_env(profile_id: str | None) -> str:
+    """The PROFILE_ENV_VAR value for a profile id; "" for the default profile.
+
+    Fails OPEN to the default on an unknown id, mirroring
+    `store.account_config_dir`: an unknown id is a periscope bug, and the
+    default profile is the one guaranteed to behave like a hand-typed `claude`.
+    """
+    if not profile_id or profile_id == "default" or profile_id not in CLAUDE_PROFILES:
+        return ""
+    return profile_id
+
 # Claude cycle-hint thresholds (rail ↻ chip): red when a pane's claude RSS
 # crosses BAD, amber at WARN rss or WARN age. Healthy claudes idle around
 # 0.3–0.6GB; the leak class that motivated this shows up as multi-GB RSS on
