@@ -17,6 +17,7 @@
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { moveAccountTarget } from "../accounts.js";
+import { profileLabel } from "../profiles.js";
 import { AGENT_META, memHint, paneLabel, prStateMeta, prUrl, relTime } from "../util.js";
 import { waitTier } from "./attention.js";
 
@@ -223,6 +224,16 @@ export function PaneRow({
             class="rail-account"
             title={`running on Claude account ${w.account} — its usage bills that subscription`}
           >@{w.account}</span>
+        )}
+        {/* Which `claude` wrapper profile this pane runs — i.e. which plugin set
+            and system prompt. Only for non-default profiles, same as the account
+            chip: a chip on every pane would say nothing. Derived from the live
+            process env, so a shell pane never shows one. */}
+        {w.profile && w.profile !== "default" && (
+          <span
+            class="rail-profile"
+            title={`running the ${profileLabel(w.profile)} profile — a different plugin set and system prompt than a normal pane`}
+          >{profileLabel(w.profile)}</span>
         )}
         {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
         {waitTierCls && (

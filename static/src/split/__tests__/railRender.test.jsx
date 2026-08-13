@@ -96,6 +96,29 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain("@b");
   });
 
+  it("chips the wrapper profile only on panes off the default profile", () => {
+    projects.value = [];
+    tracks.value = [];
+    const pane = (over) => ({
+      pid: "p", session: "managed", index: 0, target: "managed:0", name: "claude",
+      agent: "claude", state: "idle", track_id: "/dev/myproj", track_name: "myproj",
+      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
+      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"),
+      pane_id: "%1", ...over,
+    });
+    windows.value = [
+      pane({ pid: "lab", profile: "lab" }),
+      pane({ pid: "normal", index: 1, target: "managed:1", profile: "default", pane_id: "%2" }),
+      // A pre-profiles server stamps no field at all — must read as normal,
+      // not as an unlabeled chip.
+      pane({ pid: "legacy", index: 2, target: "managed:2", pane_id: "%3" }),
+    ];
+
+    const html = render(<Rail />);
+    expect(html.split('class="rail-profile"').length - 1).toBe(1);
+    expect(html).toContain(">lab</span>");
+  });
+
   it("offers the move-account action on Claude panes only, labeled with its destination", () => {
     projects.value = [];
     tracks.value = [];

@@ -32,6 +32,7 @@ import { ACCOUNTS } from "../accounts.js";
 import { bestAccount } from "../chrome/usageSummary.js";
 import { useEscape } from "../hooks/useEscape.js";
 import * as prefs from "../prefs.js";
+import { PROFILES, profileQuery, sendsProfile } from "../profiles.js";
 import { trackLabel } from "../split/railTree.js";
 import { tracks, usage, windows } from "../store.js";
 import { track } from "../track.js";
@@ -49,6 +50,11 @@ const branchQuery = signal("");
 
 // Which Claude subscription the new pane runs on ("default" | "b").
 const account = signal("default");
+
+// Which `claude` wrapper profile the new pane runs under ("default" | "lab").
+// Seeded from prefs on open and written back on pick — see prefs.getLaunchProfile
+// for why this one is sticky while the account is re-derived.
+const profile = signal("default");
 
 // account id → the `account` query param, or null to omit it entirely.
 // The server fails OPEN on an unknown id (store.account_config_dir), so a
@@ -206,6 +212,7 @@ export function openLauncher(trackId) {
   // that filled up since. Falls back to the default account when no usage
   // has been fetched yet, which is the pre-accounts behaviour.
   account.value = bestAccount(usage.value?.plan, Date.now() / 1000) || "default";
+  profile.value = prefs.getLaunchProfile();
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.
   catalog.value = null;
@@ -266,6 +273,8 @@ export function LauncherModal() {
     if (t.mode === "shell" && t.exec) qs.set("exec", t.exec);
     const acct = sendsAccount(t) ? accountQuery(account.value) : null;
     if (acct) qs.set("account", acct);
+    const prof = sendsProfile(t) ? profileQuery(profile.value) : null;
+    if (prof) qs.set("profile", prof);
     const nb = newBranchName.value;
     if (nb?.trim()) {
       qs.set("branch", nb.trim());
@@ -378,6 +387,24 @@ export function LauncherModal() {
                 onClick={() => { account.value = a.id; }}
               >
                 {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div class="launcher-section">
+          <div class="launcher-section-label">Profile</div>
+          <div class="launcher-branches">
+            {PROFILES.map((p) => (
+              <button
+                key={p.id}
+                class={`launcher-branch${profile.value === p.id ? " is-active" : ""}`}
+                title={p.id === "lab"
+                  ? "lab plugin set — no workflow direction, mattpocock-skills on"
+                  : "the standard plugin set and workflow direction"}
+                onClick={() => { profile.value = p.id; prefs.setLaunchProfile(p.id); }}
+              >
+                {p.label}
               </button>
             ))}
           </div>

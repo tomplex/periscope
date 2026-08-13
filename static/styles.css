@@ -223,6 +223,14 @@ html, body {
 /* Which subscription a pane bills; absent on the default account. Quiet like
    the lineage chip — orientation, not a status. */
 .rail-account { flex: 0 0 auto; font-size: 10px; cursor: help; color: var(--fg-3); }
+/* Wrapper profile (non-default only). Outlined rather than plain text like the
+   account chip: the profile changes what the pane can DO, so it should read as
+   a badge you notice, not orientation you look up. */
+.rail-profile {
+  flex: 0 0 auto; font-size: 9px; cursor: help; color: var(--fg-2);
+  border: 1px solid var(--fg-3); border-radius: 3px; padding: 0 3px;
+  text-transform: uppercase; letter-spacing: .04em;
+}
 /* Claude cycle-hint (memory/uptime past thresholds — see config.MEM_*) */
 .rail-mem { flex: 0 0 auto; font-size: 10px; cursor: help; }
 .rail-mem.mem-warn, .header-mem.mem-warn { color: var(--s-working); }
