@@ -243,6 +243,30 @@ def test_open_target_non_git_path_raises(tmp_path, clean_state):
         open_ops.open_target(open_ops.PathTarget(path=str(tmp_path)))
 
 
+def test_open_target_missing_path_says_so(tmp_path, clean_state):
+    """A typo must not report "not inside a git repo" — that sends you looking
+    for the wrong problem. The existence check runs before the git check."""
+    with pytest.raises(ValueError, match="no such directory"):
+        open_ops.open_target(open_ops.PathTarget(path=str(tmp_path / "nope")))
+
+
+def test_open_target_expands_tilde(monkeypatch, tmp_path, clean_state):
+    """The omnibox hands over whatever was typed, so `~` arrives unexpanded;
+    git -C takes it literally and fails."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = {}
+
+    def fake_toplevel(path):
+        seen["path"] = path
+        raise ValueError("stop here")     # far enough: expansion already happened
+
+    monkeypatch.setattr(open_ops, "_git_toplevel", fake_toplevel)
+    (tmp_path / "proj").mkdir()
+    with pytest.raises(ValueError):
+        open_ops.open_target(open_ops.PathTarget(path="~/proj"))
+    assert seen["path"] == str(tmp_path / "proj")
+
+
 @needs_tmux
 def test_open_path_tags_only_its_own_panes(
         tmp_path, clean_state, fresh_activity_db, tmux_test_server):
