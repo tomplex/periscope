@@ -2644,6 +2644,17 @@ body.modal-open { overflow: hidden; }
 }
 #rail .pane-actions .rail-name-pin:hover { opacity: 1; filter: none; }
 #rail .pane-actions .rail-name-pin.pinned { opacity: 1; filter: none; }
+/* "↗": open this pane's worktree in the configured editor. A plain glyph
+   rather than the app's name — unlike "→ B" below, the destination is fixed
+   by Settings, so the tooltip carries it and the row stays narrow. */
+#rail .pane-actions .rail-editor {
+  opacity: .55; margin: 0; position: static;
+  background: none; border: 0; padding: 0 3px;
+  color: var(--fg-3);
+  font-size: 11px; line-height: 1; cursor: pointer;
+  transition: opacity .12s, color .12s;
+}
+#rail .pane-actions .rail-editor:hover { opacity: 1; color: var(--fg-1); }
 /* "→ B": re-open this pane's session on the other subscription. Text, not a
    glyph, because the destination account is the whole content of the action —
    an icon would need the tooltip to say anything at all. */

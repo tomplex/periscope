@@ -15,6 +15,7 @@ import {
   projects,
   syncTabsFromWindows,
   tracks,
+  editor as editorSignal,
   updateInfo,
   usage,
   windows,
@@ -52,6 +53,7 @@ function applyState(data) {
   // UsagePill reads { plan, fallback }.
   usage.value = { plan: data.usage_plan, fallback: data.usage };
   updateInfo.value = data.update || null;
+  editorSignal.value = data.editor || "";
 }
 
 function markOk() {

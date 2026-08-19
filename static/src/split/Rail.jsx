@@ -26,7 +26,7 @@ import { useRef, useState } from "preact/hooks";
 import { passesFilter } from "../filter.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
 import * as prefs from "../prefs.js";
-import { currentFilter, dismissedAlertIds, dragState, projects, railSelection, tracks, windows, workspaces } from "../store.js";
+import { currentFilter, dismissedAlertIds, dragState, editor as editorSignal, projects, railSelection, tracks, windows, workspaces } from "../store.js";
 import { track } from "../track.js";
 import { apiCall, paneLabel, targetQuery } from "../util.js";
 import { ActivitySection, AttentionTop } from "./AttentionSections.jsx";
@@ -292,6 +292,18 @@ export function Rail() {
   // Freeze/release the pane's name against the narrator's auto-rename. The
   // rename above pins on its own (server-side); this is the release, plus a
   // way to keep a generated name you happen to like.
+  // The server resolves pid → pane cwd → git toplevel and launches the
+  // configured app, so the client sends only the pid. A failure (no editor
+  // set, pane not in a repo, launch refused) comes back as a 4xx/5xx whose
+  // detail apiCall already toasts.
+  async function openInEditor(w) {
+    await apiCall("open in editor", "/api/editor/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pid: w.pid }),
+    });
+  }
+
   async function toggleNamePin(w) {
     await apiCall("pin tab name", "/api/name-pin", {
       method: "POST",
@@ -446,6 +458,8 @@ export function Rail() {
           pinned={prefs.getPinnedPids().includes(w.pid)}
           onTogglePin={() => prefs.togglePin(w.pid)}
           onToggleNamePin={() => toggleNamePin(w)}
+          editor={editorSignal.value}
+          onOpenInEditor={() => openInEditor(w)}
           awaitingSince={awaiting.get(w.pid)}
           spawnerName={w.spawner_name}
           spawnerLive={!!w.spawned_by && livePids.has(w.spawned_by)}

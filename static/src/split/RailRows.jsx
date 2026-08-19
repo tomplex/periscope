@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { moveAccountTarget } from "../accounts.js";
 import { AGENT_META, memHint, paneLabel, prStateMeta, prUrl, relTime } from "../util.js";
+import { canOpenInEditor, openInEditorTitle } from "./openInEditor.js";
 import { waitTier } from "./attention.js";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
@@ -140,7 +141,7 @@ function RailLabel({ label, kind, renameable, onCommit }) {
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
   pinned, onTogglePin, awaitingSince, spawnerName, spawnerLive, onRevealSpawner,
-  onMoveAccount, onToggleNamePin,
+  onMoveAccount, onToggleNamePin, editor, onOpenInEditor,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
@@ -303,6 +304,17 @@ export function PaneRow({
             : "freeze this name — periscope won't rename this tab"}
           onClick={(e) => { e.stopPropagation(); onToggleNamePin?.(); }}
         >{w.name_pinned ? "🔒" : "🔓"}</button>
+        {/* Opens the pane's WORKTREE ROOT (the server resolves the git
+            toplevel), not its cwd — an editor treats the opened folder as the
+            project, so a pane sitting in a subdirectory would get a fragment
+            of the tree. Hidden entirely for panes outside a repo. */}
+        {canOpenInEditor(w, editor) && (
+          <button
+            class="rail-editor"
+            title={openInEditorTitle(w, editor)}
+            onClick={(e) => { e.stopPropagation(); onOpenInEditor?.(); }}
+          >↗</button>
+        )}
         <button
           class="rail-close"
           title="kill this tab"

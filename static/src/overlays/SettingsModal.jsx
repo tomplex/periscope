@@ -31,6 +31,8 @@ export function SettingsModal() {
   const [layoutDefault, setLayoutDefault] = useState("sibling");
   // overrides: array of { repo, layout } so editing/removing is stable.
   const [overrides, setOverrides] = useState([]);
+  const [editor, setEditor] = useState("");
+  const [editorsAvailable, setEditorsAvailable] = useState([]);
 
   useEffect(() => {
     const btn = document.getElementById("settings-btn");
@@ -48,6 +50,11 @@ export function SettingsModal() {
       setIdleDays(s.cleanup_idle_days ?? 14);
       setLayoutDefault(s.worktree_layout_default ?? "sibling");
       setOverrides(Object.entries(s.worktree_layout_overrides || {}).map(([repo, layout]) => ({ repo, layout })));
+      // editors_available is derived server-side (a scan of /Applications), so
+      // an app uninstalled since the setting was saved just isn't listed —
+      // the stored value then shows as "(none)" rather than a dead option.
+      setEditorsAvailable(body.editors_available || []);
+      setEditor(s.editor ?? "");
     })();
   }, [open.value]);
 
@@ -64,6 +71,8 @@ export function SettingsModal() {
       cleanup_idle_days: idle,
       worktree_layout_default: layoutDefault,
       worktree_layout_overrides: overridesMap,
+      // null clears; the server rejects any name it can't currently detect.
+      editor: editor || null,
     };
     setSubmitting(true);
     const { error: err } = await modalRequest("save settings", "/api/settings", {
@@ -99,6 +108,19 @@ export function SettingsModal() {
               value={idleDays}
               onInput={(e) => setIdleDays(e.currentTarget.value)}
             />
+          </label>
+          <label>
+            Preferred editor
+            <select
+              id="settings-editor"
+              value={editor}
+              onChange={(e) => setEditor(e.currentTarget.value)}
+            >
+              <option value="">(none — hides the rail's ↗ action)</option>
+              {editorsAvailable.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
           </label>
           <label>
             Default worktree layout
