@@ -147,3 +147,42 @@ def summarize_tail(records: Iterable[UsageRecord], *, cutoff: float) -> TailSumm
         if rec.ts >= cutoff:
             calls += 1
     return TailSummary(cur_ctx=cur_ctx, last_ts=last_ts, calls=calls)
+
+
+def score(sample: CostSample, *, now: float) -> Pressure | None:
+    """Band one pane's measurement against a fresh clock, or None for silence.
+
+    None is the single "no annotation" contract, covering both a base we cannot
+    trust (<= 0) and a pane that has not grown past its own fresh start
+    (debt <= 0). The caller already handles absence for panes with no session
+    and no usage record, so this collapses three silent paths into one.
+
+    Scoring happens here rather than at cache-refresh time because `active` is a
+    clock comparison and the cache is up to 60s stale — freezing `active` at
+    refresh time would keep showing the active remedy for a minute after a pane
+    stopped working.
+    """
+    base = min(sample.base_ctx, _BASE_CAP)
+    if base <= 0:
+        return None
+    debt = sample.cur_ctx - base
+    if debt <= 0:
+        return None
+
+    payback_calls = (_CACHE_WRITE_MULT * base) / (_CACHE_READ_MULT * debt)
+    payback_mins = payback_calls / sample.pace if sample.pace > 0 else None
+    active = (now - sample.last_ts) <= _ACTIVE_WITHIN_S
+
+    band: Band = "none"
+    if payback_calls <= _PAYBACK_CALLS_WARN:
+        band = "warn"
+        if active and payback_mins is not None and payback_mins <= _PAYBACK_MINS_HOT:
+            band = "hot"
+
+    return Pressure(
+        band=band,
+        active=active,
+        cur_ctx=sample.cur_ctx,
+        payback_calls=payback_calls,
+        payback_mins=payback_mins,
+    )

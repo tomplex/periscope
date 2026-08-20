@@ -129,3 +129,73 @@ def test_summarize_tail_takes_the_last_record_not_the_largest():
     ]
     got = cp.summarize_tail(records, cutoff=0.0)
     assert got.cur_ctx == 50_000
+
+
+def _sample(**over):
+    kw = {"cur_ctx": 300_000, "base_ctx": 50_000, "pace": 2.0, "last_ts": 1000.0}
+    kw.update(over)
+    return cp.CostSample(**kw)
+
+
+def test_score_computes_payback_calls():
+    # 2.0 * 50_000 / (0.1 * 250_000) == 4.0
+    got = cp.score(_sample(), now=1000.0)
+    assert got is not None
+    assert got.payback_calls == 4.0
+    assert got.payback_mins == 2.0  # 4 calls / 2.0 calls-per-min
+
+
+def test_score_clamps_base_ctx_at_the_cap():
+    """The clamp lives here, not in the reader — the reader stays honest about
+    what it saw, and the clamp is testable without touching a file."""
+    got = cp.score(_sample(base_ctx=500_000, cur_ctx=900_000), now=1000.0)
+    assert got is not None
+    # base clamped to 80_000: 2.0 * 80_000 / (0.1 * 820_000)
+    assert round(got.payback_calls, 4) == round(160_000 / 82_000, 4)
+
+
+def test_score_returns_none_when_there_is_nothing_to_say():
+    assert cp.score(_sample(base_ctx=0), now=1000.0) is None
+    assert cp.score(_sample(cur_ctx=50_000, base_ctx=50_000), now=1000.0) is None
+    assert cp.score(_sample(cur_ctx=10_000, base_ctx=50_000), now=1000.0) is None
+
+
+def test_score_bands_plain_above_the_warn_threshold():
+    # base 50k, cur 100k -> debt 50k -> 2.0*50_000/(0.1*50_000) == 20 calls
+    got = cp.score(_sample(cur_ctx=100_000), now=1000.0)
+    assert got is not None
+    assert got.band == "none"
+
+
+def test_score_bands_warn_at_the_threshold():
+    got = cp.score(_sample(), now=1000.0)  # exactly 4.0 calls
+    assert got is not None
+    assert got.band in ("warn", "hot")
+    assert got.payback_calls == 4.0
+
+
+def test_score_bands_hot_only_when_active_and_fast():
+    fast = cp.score(_sample(pace=8.0), now=1000.0)  # 4 calls / 8 per min = 0.5 min
+    assert fast is not None
+    assert fast.band == "hot"
+    assert fast.active is True
+
+
+def test_score_parked_pane_is_warn_never_hot():
+    """Idle past _ACTIVE_WITHIN_S: the remedy is a handoff, not /clear."""
+    got = cp.score(_sample(pace=8.0), now=1000.0 + 301)
+    assert got is not None
+    assert got.active is False
+    assert got.band == "warn"
+
+
+def test_score_zero_pace_gives_no_payback_mins_and_never_hot():
+    got = cp.score(_sample(pace=0.0), now=1000.0)
+    assert got is not None
+    assert got.payback_mins is None
+    assert got.band == "warn"
+
+
+def test_score_active_boundary_is_inclusive():
+    assert cp.score(_sample(pace=8.0), now=1000.0 + 300).active is True
+    assert cp.score(_sample(pace=8.0), now=1000.0 + 301).active is False
