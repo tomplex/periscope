@@ -15,7 +15,7 @@
 //  - When data.channel_unread > 0 and we're rendering data.pane_id, fire a
 //    /api/channel/clear-unread POST (the badge clears as soon as the user
 //    looks at the pane in either modal or split-view).
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import * as prefs from "../prefs.js";
 import { filesTouched, partitionFilesByPriority } from "../split/filesTouched.js";
 import { openFileTab, paneTranscript, transcriptSeen } from "../store.js";
@@ -347,6 +347,10 @@ function FilesSection({ pid }) {
   // Subscribe to prefs explicitly so a pin toggle re-renders this section
   // without waiting for the 1.5s /api/pane poll.
   prefs.prefsSignal.value;
+  // Substring filter over FULL paths (not the display suffix — you search by
+  // what you remember, which is often a directory). Local state survives the
+  // 1.5s poll re-render; Escape clears.
+  const [query, setQuery] = useState("");
   if (!pid) return null;
   // Touched files come from the transcript when it's loaded. Pins survive
   // independently — render the section if EITHER side has anything.
@@ -365,18 +369,22 @@ function FilesSection({ pid }) {
   // Touched groups (priority / other) exclude paths already in the pinned group
   // so each path appears once.
   const remainingTouched = touched.filter((it) => !pinnedSet.has(it.path));
-  const { priority, others } = partitionFilesByPriority(remainingTouched);
 
-  // Shortest-unique-suffix universe spans every rendered path so a leaf only
-  // grows a directory segment on real collision (e.g. two index.html).
+  // Shortest-unique-suffix universe spans every path PRE-filter so labels
+  // stay stable while typing (a match shouldn't shrink its own label).
   const allPaths = [...pinnedPaths, ...remainingTouched.map((it) => it.path)];
   const label = (p) => shortestUniqueSuffix(p, allPaths);
+
+  const q = query.trim().toLowerCase();
+  const matches = (it) => !q || it.path.toLowerCase().includes(q);
+  const shownPinned = pinned.filter(matches);
+  const { priority, others } = partitionFilesByPriority(remainingTouched.filter(matches));
 
   const togglePin = (path) => () => prefs.togglePinnedFile(pid, path);
 
   // Divider between any two non-empty groups (at most two dividers possible).
   const groups = [
-    { items: pinned, render: (it) => (
+    { items: shownPinned, render: (it) => (
       <FileRow
         key={`pin:${it.path}`} it={it} label={label(it.path)}
         pinned onTogglePin={togglePin(it.path)}
@@ -399,6 +407,17 @@ function FilesSection({ pid }) {
   return (
     <section class="modal-side-section modal-side-files">
       <h4>Files</h4>
+      <input
+        class="files-filter"
+        type="text"
+        placeholder="filter files"
+        value={query}
+        onInput={(e) => setQuery(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Escape") { e.preventDefault(); setQuery(""); }
+        }}
+      />
       <ul class="files-list">
         {groups.map((g, gi) => (
           <>
@@ -406,6 +425,7 @@ function FilesSection({ pid }) {
             {g.items.map(g.render)}
           </>
         ))}
+        {q && !groups.length && <li class="files-nomatch">no files match</li>}
       </ul>
     </section>
   );

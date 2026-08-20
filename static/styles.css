@@ -3039,6 +3039,28 @@ body.modal-open { overflow: hidden; }
 #modal-xterm.bell-pulse {
   animation: terminal-bell-pulse 400ms ease-out;
 }
+/* Substring filter over the touched-files list. Same skin as the tag input;
+   Escape clears rather than closing the pane (stop-prop in the handler). */
+.files-filter {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: 3px 6px;
+  color: var(--fg-1);
+}
+.files-filter::placeholder { color: var(--fg-4); }
+.files-nomatch {
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-4);
+}
 .modal-side-files .files-list {
   list-style: none;
   margin: 0;
