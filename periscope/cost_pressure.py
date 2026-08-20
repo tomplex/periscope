@@ -186,3 +186,30 @@ def score(sample: CostSample, *, now: float) -> Pressure | None:
         payback_calls=payback_calls,
         payback_mins=payback_mins,
     )
+
+
+def fmt_tokens(n: int) -> str:
+    """600_000 -> '600k'. The frontend formats its own chip text; this is only
+    for the sentence, and the two-line duplication is cheaper than shipping a
+    pre-formatted display string for one chip."""
+    return f"{round(n / 1000)}k"
+
+
+def hint(p: Pressure) -> str:
+    """The tooltip sentence. Separate from score() on purpose: copy churns and
+    banding does not, so editing a sentence must not touch an arithmetic test.
+
+    The spec's fifth case ("plain, no cost data") is a frontend default, not a
+    string from here — in that case the server sends nothing at all.
+    """
+    ctx = fmt_tokens(p.cur_ctx)
+    if p.band == "hot" and p.payback_mins is not None:
+        return (f"each call re-reads {ctx} of context; clearing pays for itself "
+                f"in ~{round(p.payback_mins)} min at this pace")
+    if p.band == "warn" and not p.active:
+        return (f"carrying {ctx} of context — write a handoff before resuming "
+                f"rather than picking this up as-is")
+    if p.band == "warn":
+        return (f"carrying {ctx} of context; clearing pays back in "
+                f"~{round(p.payback_calls)} calls")
+    return f"context window used — near a fresh start ({ctx})"

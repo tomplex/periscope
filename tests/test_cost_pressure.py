@@ -199,3 +199,40 @@ def test_score_zero_pace_gives_no_payback_mins_and_never_hot():
 def test_score_active_boundary_is_inclusive():
     assert cp.score(_sample(pace=8.0), now=1000.0 + 300).active is True
     assert cp.score(_sample(pace=8.0), now=1000.0 + 301).active is False
+
+
+def test_hint_hot_names_the_payback_time_and_the_remedy():
+    p = cp.Pressure(band="hot", active=True, cur_ctx=600_000,
+                    payback_calls=4.0, payback_mins=2.0)
+    got = cp.hint(p)
+    assert "600k" in got
+    assert "2 min" in got
+    assert "clearing" in got.lower()
+
+
+def test_hint_warn_parked_points_at_a_handoff_not_a_clear():
+    p = cp.Pressure(band="warn", active=False, cur_ctx=600_000,
+                    payback_calls=4.0, payback_mins=None)
+    got = cp.hint(p)
+    assert "handoff" in got.lower()
+    assert "clearing pays" not in got.lower()
+
+
+def test_hint_warn_active_names_the_payback_in_calls():
+    p = cp.Pressure(band="warn", active=True, cur_ctx=300_000,
+                    payback_calls=4.0, payback_mins=30.0)
+    got = cp.hint(p)
+    assert "300k" in got
+    assert "4 calls" in got
+
+
+def test_hint_plain_says_it_is_near_a_fresh_start():
+    p = cp.Pressure(band="none", active=True, cur_ctx=90_000,
+                    payback_calls=20.0, payback_mins=10.0)
+    assert "fresh start" in cp.hint(p)
+
+
+def test_fmt_tokens_rounds_to_k():
+    assert cp.fmt_tokens(600_000) == "600k"
+    assert cp.fmt_tokens(1_500) == "2k"
+    assert cp.fmt_tokens(0) == "0k"
