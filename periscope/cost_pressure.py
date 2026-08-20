@@ -215,4 +215,4 @@ def hint(p: Pressure) -> str:
     if p.band == "warn":
         return (f"carrying {ctx} of context; clearing pays back in "
                 f"~{max(1, round(p.payback_calls))} calls")
-    return f"context window used — near a fresh start ({ctx})"
+    return f"context window used — clearing this wouldn't pay off yet ({ctx})"

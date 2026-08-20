@@ -243,10 +243,10 @@ def test_hint_warn_active_floors_sub_call_payback_at_one():
     assert "~0 calls" not in got
 
 
-def test_hint_plain_says_it_is_near_a_fresh_start():
+def test_hint_plain_says_clearing_would_not_pay_off_yet():
     p = cp.Pressure(band="none", active=True, cur_ctx=90_000,
                     payback_calls=20.0, payback_mins=10.0)
-    assert "fresh start" in cp.hint(p)
+    assert "wouldn't pay off yet" in cp.hint(p)
 
 
 def test_fmt_tokens_rounds_to_k():
