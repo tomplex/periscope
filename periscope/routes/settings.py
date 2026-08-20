@@ -5,6 +5,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from periscope.editors import detect_editors
 from periscope.store import get_accounts, get_settings, update_settings
 
 router = APIRouter()
@@ -15,7 +16,10 @@ _VALID_LAYOUTS = ("sibling", "inline")
 
 @router.get("/api/settings")
 def settings_get():
-    return {"settings": get_settings()}
+    # editors_available rides along so the modal populates its dropdown from
+    # one request. It is derived (a scan of /Applications), never persisted —
+    # an editor uninstalled since the setting was written just drops out.
+    return {"settings": get_settings(), "editors_available": detect_editors()}
 
 
 class SettingsPatch(BaseModel):
@@ -26,6 +30,7 @@ class SettingsPatch(BaseModel):
     cleanup_idle_days: int | None = None
     bg_account: str | None = None
     spawn_account: str | None = None
+    editor: str | None = None
 
 
 @router.patch("/api/settings")
@@ -84,6 +89,16 @@ def settings_patch(body: SettingsPatch):
             patch["spawn_account"] = v
         else:
             raise HTTPException(400, f"unknown account id {v!r}")
+
+    if "editor" in sent:
+        v = body.editor
+        # Same reasoning as bg_account: validate at the write boundary. An app
+        # name that isn't installed can never launch, so storing it would leave
+        # a button that fails every time it is clicked.
+        if v is None or v in detect_editors():
+            patch["editor"] = v
+        else:
+            raise HTTPException(400, f"not an available editor: {v!r}")
 
     update_settings(patch)
     return {"ok": True, "settings": get_settings()}

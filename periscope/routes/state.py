@@ -24,7 +24,7 @@ from periscope.panes import (
 )
 from periscope.pids import _attach_git_then_resolve_pids
 from periscope.projects import all_projects
-from periscope.store import set_window_fields_bulk
+from periscope.store import get_settings, set_window_fields_bulk
 from periscope.usage import annotate_hot_panes, cached_claude_usage, cached_plan_usage
 from periscope.window_view import build_window_view
 
@@ -168,6 +168,10 @@ def build_state() -> dict:
         # launcher's seed stay fresh without a second fetch path.
         "spawn_account": store.get_settings().get("spawn_account"),
         "update": updater.summary(),
+        # The rail gates its open-in-editor action on this. Read from settings
+        # rather than re-scanning /Applications every poll — detection is only
+        # needed at the Settings write boundary, which already validates it.
+        "editor": (get_settings().get("editor") or ""),
     }
 
 

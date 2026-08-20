@@ -88,6 +88,7 @@ class Settings(TypedDict, total=False):
     cleanup_idle_days: int
     bg_account: str  # account id background commander jobs bill; unset => default
     spawn_account: str  # account id every unnamed spawn lands on; unset => most headroom
+    editor: str  # display name of a KNOWN_EDITORS entry; unset => no open-in-editor action
 
 
 class Command(TypedDict):
