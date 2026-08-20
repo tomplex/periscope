@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {fileExt, 
-  filesTouched, partitionFilesByPriority,
+import {fileExt,
+  fileFilterMatch, filesTouched, partitionFilesByPriority,
 } from "../filesTouched.js";
 
 // Matches the /api/pane/turns shape (history/search.py:262-275): each
@@ -98,5 +98,47 @@ describe("partitionFilesByPriority", () => {
   it("empty priority group when nothing matches", () => {
     const items = [{ path: "a.js", op: "Edit" }];
     expect(partitionFilesByPriority(items).priority).toEqual([]);
+  });
+});
+
+describe("fileFilterMatch", () => {
+  const P = "periscope/static/src/split/Rail.jsx";
+
+  it("empty / blank query matches everything", () => {
+    expect(fileFilterMatch(P, "")).toBe(true);
+    expect(fileFilterMatch(P, "  ")).toBe(true);
+  });
+
+  it("plain query is a case-insensitive substring over the full path", () => {
+    expect(fileFilterMatch(P, "split/rail")).toBe(true);
+    expect(fileFilterMatch(P, "SRC")).toBe(true);
+    expect(fileFilterMatch(P, "inspector")).toBe(false);
+  });
+
+  it("* matches within one segment, anchored to segment start and path end", () => {
+    expect(fileFilterMatch(P, "*.jsx")).toBe(true);
+    expect(fileFilterMatch(P, "split/*.jsx")).toBe(true);
+    expect(fileFilterMatch(P, "src/*.jsx")).toBe(false);      // Rail.jsx is not directly in src/
+    expect(fileFilterMatch("a/b.pyc", "*.py")).toBe(false);   // end-anchored
+  });
+
+  it("** crosses segments", () => {
+    expect(fileFilterMatch(P, "src/**")).toBe(true);
+    expect(fileFilterMatch(P, "periscope/**/*.jsx")).toBe(true);
+    expect(fileFilterMatch(P, "inspector/**")).toBe(false);
+  });
+
+  it("? matches exactly one non-slash char", () => {
+    expect(fileFilterMatch(P, "Rail.js?")).toBe(true);
+    expect(fileFilterMatch(P, "Rail.?jsx")).toBe(false);
+  });
+
+  it("globs are case-insensitive too", () => {
+    expect(fileFilterMatch(P, "rail.*")).toBe(true);
+  });
+
+  it("regex metacharacters in the query are literal", () => {
+    expect(fileFilterMatch("a/b+c(d).js", "b+c(d).js")).toBe(true);
+    expect(fileFilterMatch("a/bbc.js", "b+c*")).toBe(false);  // + is not regex-plus
   });
 });

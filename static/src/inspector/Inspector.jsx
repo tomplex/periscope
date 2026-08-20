@@ -17,7 +17,7 @@
 //    looks at the pane in either modal or split-view).
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as prefs from "../prefs.js";
-import { filesTouched, partitionFilesByPriority } from "../split/filesTouched.js";
+import { fileFilterMatch, filesTouched, partitionFilesByPriority } from "../split/filesTouched.js";
 import { openFileTab, paneTranscript, transcriptSeen } from "../store.js";
 import { prUrl, relTime, shortestUniqueSuffix } from "../util.js";
 
@@ -347,8 +347,9 @@ function FilesSection({ pid }) {
   // Subscribe to prefs explicitly so a pin toggle re-renders this section
   // without waiting for the 1.5s /api/pane poll.
   prefs.prefsSignal.value;
-  // Substring filter over FULL paths (not the display suffix — you search by
-  // what you remember, which is often a directory). Local state survives the
+  // Filter over FULL paths (not the display suffix — you search by what you
+  // remember, which is often a directory): substring, or a glob when the
+  // query carries * / ? (see fileFilterMatch). Local state survives the
   // 1.5s poll re-render; Escape clears.
   const [query, setQuery] = useState("");
   if (!pid) return null;
@@ -375,8 +376,8 @@ function FilesSection({ pid }) {
   const allPaths = [...pinnedPaths, ...remainingTouched.map((it) => it.path)];
   const label = (p) => shortestUniqueSuffix(p, allPaths);
 
-  const q = query.trim().toLowerCase();
-  const matches = (it) => !q || it.path.toLowerCase().includes(q);
+  const q = query.trim();
+  const matches = (it) => fileFilterMatch(it.path, q);
   const shownPinned = pinned.filter(matches);
   const { priority, others } = partitionFilesByPriority(remainingTouched.filter(matches));
 
@@ -410,7 +411,7 @@ function FilesSection({ pid }) {
       <input
         class="files-filter"
         type="text"
-        placeholder="filter files"
+        placeholder="filter files — text or glob"
         value={query}
         onInput={(e) => setQuery(e.currentTarget.value)}
         onKeyDown={(e) => {

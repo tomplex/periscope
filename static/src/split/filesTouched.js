@@ -14,6 +14,28 @@ const FILE_TOOLS = new Set([
 // (specs/docs to read). The Files section hoists + accents these.
 export const PRIORITY_EXTS = new Set(["html", "md"]);
 
+// Files-list filter predicate. A query without glob metacharacters is a
+// case-insensitive substring over the full path. With `*` or `?` it's a glob:
+// `*` = within one path segment, `**` = across segments, `?` = one char —
+// anchored to a segment boundary at the start and the path's end, so
+// `*.py` means "any .py file" and `split/*.jsx` means "a .jsx directly in
+// some split/ dir". Everything else is escaped (no regex injection).
+export function fileFilterMatch(path, query) {
+  const q = (query || "").trim();
+  if (!q) return true;
+  const p = (path || "").toLowerCase();
+  if (!/[*?]/.test(q)) return p.includes(q.toLowerCase());
+  // Split on ** first so the single-* rewrite can't eat it.
+  const rx = q
+    .split("**")
+    .map((part) => part
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, "[^/]*")
+      .replace(/\?/g, "[^/]"))
+    .join(".*");
+  return new RegExp(`(?:^|/)${rx}$`, "i").test(p);
+}
+
 // Lowercase extension (no dot), or "" when the leaf has none.
 export function fileExt(path) {
   const leaf = (path || "").split("/").pop() || "";
