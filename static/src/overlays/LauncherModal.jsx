@@ -31,6 +31,7 @@ import { useEffect } from "preact/hooks";
 import { ACCOUNTS } from "../accounts.js";
 import { bestAccount } from "../chrome/usageSummary.js";
 import { useEscape } from "../hooks/useEscape.js";
+import { MODELS, modelQuery } from "../models.js";
 import * as prefs from "../prefs.js";
 import { PROFILES, profileQuery, sendsProfile } from "../profiles.js";
 import { trackLabel } from "../split/railTree.js";
@@ -55,6 +56,10 @@ const account = signal("default");
 // Seeded from prefs on open and written back on pick — see prefs.getLaunchProfile
 // for why this one is sticky while the account is re-derived.
 const profile = signal("default");
+
+// Model override for the new pane ("default" | a Claude alias). Sticky like the
+// profile; carried only by Claude agent windows (same guard, `sendsProfile`).
+const model = signal("default");
 
 // account id → the `account` query param, or null to omit it entirely.
 // The server fails OPEN on an unknown id (store.account_config_dir), so a
@@ -216,6 +221,7 @@ export function openLauncher(trackId) {
   account.value =
     spawnAccount.value || bestAccount(usage.value?.plan, Date.now() / 1000) || "default";
   profile.value = prefs.getLaunchProfile();
+  model.value = prefs.getLaunchModel();
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.
   catalog.value = null;
@@ -278,6 +284,8 @@ export function LauncherModal() {
     if (acct) qs.set("account", acct);
     const prof = sendsProfile(t) ? profileQuery(profile.value) : null;
     if (prof) qs.set("profile", prof);
+    const mdl = sendsProfile(t) ? modelQuery(model.value) : null;
+    if (mdl) qs.set("model", mdl);
     const nb = newBranchName.value;
     if (nb?.trim()) {
       qs.set("branch", nb.trim());
@@ -408,6 +416,24 @@ export function LauncherModal() {
                 onClick={() => { profile.value = p.id; prefs.setLaunchProfile(p.id); }}
               >
                 {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div class="launcher-section">
+          <div class="launcher-section-label">Model</div>
+          <div class="launcher-branches">
+            {MODELS.map((m) => (
+              <button
+                key={m.id}
+                class={`launcher-branch${model.value === m.id ? " is-active" : ""}`}
+                title={m.id === "default"
+                  ? "whatever the account's settings.json picks"
+                  : `spawn on ${m.label} (ANTHROPIC_MODEL on the pane — a hand re-run claude there keeps it)`}
+                onClick={() => { model.value = m.id; prefs.setLaunchModel(m.id); }}
+              >
+                {m.label}
               </button>
             ))}
           </div>

@@ -405,6 +405,30 @@ def test_window_new_default_profile_sends_no_env(client, mocker, fresh_activity_
     assert "-e" not in list(_created(calls)[0])
 
 
+def test_window_new_passes_model_env_to_tmux(client, mocker, fresh_activity_db):
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&model=opus")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["model"] == "opus"
+    assert "ANTHROPIC_MODEL=opus" in list(_created(calls)[0])
+
+
+def test_window_new_rejects_unsafe_model_string_to_default(client, mocker, fresh_activity_db):
+    """Lands in a tmux -e arg and a resurrect shell prefix: anything outside
+    the model-id character set fails OPEN to the default, like profile."""
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&model=opus%20%26%26%20rm")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["model"] == "default"
+    assert "-e" not in list(_created(calls)[0])
+
+
 def test_window_new_unknown_profile_falls_back_to_default(client, mocker, fresh_activity_db):
     """Fails OPEN, like account_config_dir: an unknown id is a periscope bug,
     and the default profile is the one that behaves like a hand-typed claude."""

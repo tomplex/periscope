@@ -56,11 +56,14 @@ def _tmux_mutate(*args: str) -> tuple[bool, str]:
     return True, r.stdout.strip()
 
 
-def env_args(config_dir: str | None, profile: str | None = None) -> list[str]:
+def env_args(
+    config_dir: str | None, profile: str | None = None, model: str | None = None,
+) -> list[str]:
     """`-e VAR=...` args for new-window/new-session, or [].
 
-    Two bindings ride here: CLAUDE_CONFIG_DIR (which subscription the pane
-    bills) and the wrapper profile (which plugin set it runs under).
+    Three bindings ride here: CLAUDE_CONFIG_DIR (which subscription the pane
+    bills), the wrapper profile (which plugin set it runs under), and the
+    model override (ANTHROPIC_MODEL).
 
     Set on the window rather than prefixed onto the command string so the
     binding lives in the pane's process environment: a user re-running
@@ -72,6 +75,8 @@ def env_args(config_dir: str | None, profile: str | None = None) -> list[str]:
         args += ["-e", f"CLAUDE_CONFIG_DIR={config_dir}"]
     if profile:
         args += ["-e", f"{config.PROFILE_ENV_VAR}={profile}"]
+    if model:
+        args += ["-e", f"{config.MODEL_ENV_VAR}={model}"]
     return args
 
 
@@ -91,7 +96,7 @@ def scrub_session_env(session: str) -> bool:
     silent. `_tmux_mutate` only returns stderr, it does not log, so log here.
     """
     ok = True
-    for var in ("CLAUDE_CONFIG_DIR", config.PROFILE_ENV_VAR):
+    for var in ("CLAUDE_CONFIG_DIR", config.PROFILE_ENV_VAR, config.MODEL_ENV_VAR):
         got, msg = _tmux_mutate("set-environment", "-t", f"={session}", "-u", var)
         if not got:
             ok = False

@@ -190,6 +190,38 @@ def test_default_profile_gets_no_prefix():
     assert out.split("\t")[10] == f":claude --resume {SID}"
 
 
+# --- model prefix (ANTHROPIC_MODEL) ------------------------------------------
+# A resumed session restores its OWN model, and ANTHROPIC_MODEL at launch would
+# override it — clobbering a later in-session /model switch with the spawn-time
+# choice. So the prefix is emitted only when there is no session to resume.
+
+def test_model_prefix_emitted_without_session():
+    line = _pane_line("s", "1", "1", "claude")
+    out, changed = resurrect._rewrite_line(
+        line, {"s:1.1": "%56"}, {}, {}, {}, {"%56": "opus"})
+    assert changed
+    assert out.split("\t")[10] == ":ANTHROPIC_MODEL=opus claude"
+
+
+def test_model_prefix_NOT_emitted_with_resume():
+    pane_map, sess_map = _maps()
+    line = _pane_line("s", "1", "1", _both_channels())
+    out, changed = resurrect._rewrite_line(
+        line, pane_map, sess_map, {}, {}, {"%56": "opus"})
+    assert changed
+    assert "ANTHROPIC_MODEL" not in out
+    assert out.split("\t")[10].startswith(f":claude --resume {SID}")
+
+
+def test_model_prefix_orders_after_account_and_profile():
+    line = _pane_line("s", "1", "1", "claude")
+    out, _ = resurrect._rewrite_line(
+        line, {"s:1.1": "%56"}, {}, {"%56": ALT}, {"%56": "lab"}, {"%56": "opus"})
+    assert out.split("\t")[10] == (
+        f":CLAUDE_CONFIG_DIR={ALT} CLAUDE_WRAPPER_PROFILE=lab ANTHROPIC_MODEL=opus claude"
+    )
+
+
 def test_profile_prefix_not_doubled():
     pane_map, sess_map = _maps()
     line = _pane_line("s", "1", "1", _both_channels())

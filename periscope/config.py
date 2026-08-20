@@ -2,6 +2,7 @@
 from any other periscope.* module — keep this a leaf."""
 
 import os
+import re
 import shlex
 import shutil
 from pathlib import Path
@@ -57,6 +58,16 @@ CLAUDE_EXEC = f"claude {CHANNEL_FLAG} server:periscope"
 PROFILE_ENV_VAR = "CLAUDE_WRAPPER_PROFILE"
 CLAUDE_PROFILES = ("default", "lab")
 
+# Model override for a spawned pane. Claude Code reads this env var as the
+# session model (precedence: --model > ANTHROPIC_MODEL > settings.json), so it
+# rides `tmux.env_args` beside the account and profile for the same reason they
+# do: a hand re-run `claude` in the pane keeps it, and the live process env is
+# where session_status reads it back. `--resume` restores a session's OWN model
+# unless this var is set at launch — which is why resurrect re-emits it only on
+# the session-lost path (see resurrect._rewrite_line).
+MODEL_ENV_VAR = "ANTHROPIC_MODEL"
+_MODEL_OK = re.compile(r"^[A-Za-z0-9._:-]+$")
+
 
 def profile_env(profile_id: str | None) -> str:
     """The PROFILE_ENV_VAR value for a profile id; "" for the default profile.
@@ -68,6 +79,20 @@ def profile_env(profile_id: str | None) -> str:
     if not profile_id or profile_id == "default" or profile_id not in CLAUDE_PROFILES:
         return ""
     return profile_id
+
+
+def model_env(model: str | None) -> str:
+    """The MODEL_ENV_VAR value for a picker choice; "" for the default.
+
+    Not validated against a list — Claude accepts aliases ('fable', 'opus',
+    'sonnet') and full model ids alike, and the list moves. Only the character
+    set is checked (it lands in a tmux `-e` arg and a resurrect shell prefix);
+    anything else fails OPEN to the default, like `profile_env`.
+    """
+    m = (model or "").strip()
+    if not m or m == "default" or not _MODEL_OK.match(m):
+        return ""
+    return m
 
 # Claude cycle-hint thresholds (rail ↻ chip): red when a pane's claude RSS
 # crosses BAD, amber at WARN rss or WARN age. Healthy claudes idle around

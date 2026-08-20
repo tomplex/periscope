@@ -58,6 +58,7 @@ _pane_pids_cache: tuple[float, dict[str, int]] | None = None
 
 _CONFIG_DIR_RE = re.compile(r"\bCLAUDE_CONFIG_DIR=(\S+)")
 _PROFILE_RE = re.compile(rf"\b{config.PROFILE_ENV_VAR}=(\S+)")
+_MODEL_RE = re.compile(rf"\b{config.MODEL_ENV_VAR}=(\S+)")
 # Config dirs are read from process env, which is immutable for a process's
 # lifetime — a short TTL would re-fork `ps eww` for an answer that cannot
 # change. 15s matches the cadence window_view already used.
@@ -403,6 +404,23 @@ def pane_profiles() -> dict[str, str]:
     out = {}
     for pane_id, tail in _pane_claude_envs().items():
         m = _PROFILE_RE.search(tail)
+        if m:
+            out[pane_id] = m.group(1)
+    return out
+
+
+def pane_models() -> dict[str, str]:
+    """tmux pane id -> the ANTHROPIC_MODEL its live Claude was launched with.
+    Panes without an override have no entry.
+
+    This is the SPAWN-TIME choice, not necessarily the model running now — an
+    in-session `/model` changes the latter and leaves env alone. The rail's
+    model chip comes from the status line (`panes.STATUS_RE`) and is the truth;
+    this lookup exists for resurrect's session-lost path only.
+    """
+    out = {}
+    for pane_id, tail in _pane_claude_envs().items():
+        m = _MODEL_RE.search(tail)
         if m:
             out[pane_id] = m.group(1)
     return out

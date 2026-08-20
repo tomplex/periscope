@@ -157,6 +157,14 @@ def test_env_args_carries_the_wrapper_profile():
     assert env_args("", "lab") == ["-e", "CLAUDE_WRAPPER_PROFILE=lab"]
 
 
+def test_env_args_carries_the_model_override():
+    assert env_args("", None, "opus") == ["-e", "ANTHROPIC_MODEL=opus"]
+    assert env_args("/c", "lab", "opus") == [
+        "-e", "CLAUDE_CONFIG_DIR=/c", "-e", "CLAUDE_WRAPPER_PROFILE=lab",
+        "-e", "ANTHROPIC_MODEL=opus",
+    ]
+
+
 def test_env_args_account_and_profile_are_independent():
     """The two axes compose: a lab pane on the second subscription carries both."""
     assert env_args("/Users/tom/.claude-b", "lab") == [

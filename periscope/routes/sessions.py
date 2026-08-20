@@ -269,6 +269,7 @@ def _window_new_plain(
     agent: Literal["claude", "codex"] = "claude",
     account: str | None = None,
     profile: str | None = None,
+    model: str | None = None,
 ) -> dict:
     """Non-resume "+ New tab": open a window in the one shared MANAGED_SESSION
     and tag the new pane into `track_id` (the `session` query param now carries
@@ -289,6 +290,7 @@ def _window_new_plain(
     repo = row["repo"] if row and row.get("repo") else None
     config_dir = store.account_config_dir(account)
     profile_env = config.profile_env(profile)
+    model_env = config.model_env(model)
 
     branch = (branch or "").strip()
     if branch and repo:
@@ -316,7 +318,7 @@ def _window_new_plain(
     if code != 0:
         ok, msg = _tmux_mutate(
             "new-session", "-d", "-s", MANAGED_SESSION, "-c", cwd,
-            *tmux_mod.env_args(config_dir, profile_env),
+            *tmux_mod.env_args(config_dir, profile_env, model_env),
             "-P", "-F", "#{window_id}",
         )
         if not ok:
@@ -325,12 +327,12 @@ def _window_new_plain(
         # window in the one shared session inherits this account — silently
         # billing account-A panes to account B — and this profile. This window
         # already forked with the values; `new-window -e` has no such spillover.
-        if config_dir or profile_env:
+        if config_dir or profile_env or model_env:
             tmux_mod.scrub_session_env(MANAGED_SESSION)
     else:
         ok, msg = _tmux_mutate(
             "new-window", "-t", f"={MANAGED_SESSION}:", "-c", cwd,
-            *tmux_mod.env_args(config_dir, profile_env),
+            *tmux_mod.env_args(config_dir, profile_env, model_env),
             "-P", "-F", "#{window_id}",
         )
         if not ok:
@@ -358,7 +360,8 @@ def _window_new_plain(
     _send_and_stamp(target, cmd)
     return {"ok": True, "session": MANAGED_SESSION, "index": index,
             "target": target, "mode": mode, "agent": agent, "exec": cmd,
-            "cwd": cwd, "profile": profile_env or "default"}
+            "cwd": cwd, "profile": profile_env or "default",
+            "model": model_env or "default"}
 
 
 def _codex_binding(session_id: str):
@@ -469,6 +472,7 @@ def window_new(
     agent: Literal["claude", "codex"] = "claude",
     account: str | None = None,
     profile: str | None = None,
+    model: str | None = None,
 ):
     """Spawn a window in `session`. `exec` param sends a command to the new
     window; legacy `mode` maps to `exec` for backwards-compat. `mode=resume`
@@ -497,7 +501,7 @@ def window_new(
         return {**result, "agent": "claude"}
     return _window_new_plain(
         session, exec_cmd, mode, cwd_param=cwd, branch=branch, agent=agent,
-        account=account, profile=profile,
+        account=account, profile=profile, model=model,
     )
 
 

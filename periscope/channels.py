@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TypedDict
 
-from periscope import store, tracks, usage
+from periscope import config, store, tracks, usage
 from periscope import tmux as tmux_mod
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
@@ -92,7 +92,7 @@ specific enough that you won't over-call them:
   or one piece of a fan-out) — not to narrate progress, since a pinned
   name never updates itself.
 
-- spawn_claude(prompt, workspace?, session?, cwd?, name?, workspace_id?):
+- spawn_claude(prompt, workspace?, session?, cwd?, name?, model?, workspace_id?):
   launch a fresh Claude session in a new tmux window with the given prompt
   as its first message. The new window appears on the dashboard. Use when
   the user asks you to delegate, parallelize, or "spin up another session"
@@ -669,11 +669,12 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     config_dir = store.account_config_dir(
         arguments.get("account") or usage.best_account()
     )
+    model_env = config.model_env(arguments.get("model"))
     code, _ = _run(["tmux", "has-session", "-t", session])
     if code != 0:
         ok, msg = _tmux_mutate(
             "new-session", "-d", "-s", session, "-c", cwd,
-            *tmux_mod.env_args(config_dir),
+            *tmux_mod.env_args(config_dir, None, model_env),
             "-P", "-F", "#{window_index}",
             *(["-n", name] if name else []),
         )
@@ -681,12 +682,12 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
         # window spawned into this session inherits this account — silently
         # billing them to the wrong subscription. This window's shell already
         # forked with the value; `new-window -e` has no such spillover.
-        if ok and config_dir:
+        if ok and (config_dir or model_env):
             tmux_mod.scrub_session_env(session)
     else:
         ok, msg = _tmux_mutate(
             "new-window", "-t", f"{session}:", "-c", cwd,
-            *tmux_mod.env_args(config_dir),
+            *tmux_mod.env_args(config_dir, None, model_env),
             "-P", "-F", "#{window_index}",
             *(["-n", name] if name else []),
         )
@@ -1745,6 +1746,15 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                         "OMIT THIS unless the user named an account: omitting "
                         "picks whichever subscription has the most remaining "
                         "usage, which is almost always what you want."
+                    ),
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "Model for the spawned session — an alias ('fable', "
+                        "'opus', 'sonnet') or a full model id. Omit to use the "
+                        "account's default. Set as ANTHROPIC_MODEL on the pane, "
+                        "so a hand re-run `claude` there keeps it."
                     ),
                 },
                 "workspace_id": {

@@ -279,6 +279,17 @@ def test_pane_profiles_reads_the_wrapper_profile_from_env(mocker):
     assert ss.pane_profiles() == {"%1": "lab"}
 
 
+def test_pane_models_reads_the_spawn_model_from_env(mocker):
+    ss._config_dirs_cache = None
+    mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111, "%2": 222})
+    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude", 222: "claude"}))
+    mocker.patch.object(ss, "_env_by_pid", return_value={
+        111: "claude PATH=/x ANTHROPIC_MODEL=opus TERM=xterm",
+        222: "claude PATH=/x TERM=xterm",
+    })
+    assert ss.pane_models() == {"%1": "opus"}
+
+
 def test_pane_profiles_and_config_dirs_share_one_ps_fork(mocker):
     """Both bindings come off ONE `ps eww` snapshot. Caching parsed values
     per-variable instead of the env tail would fork once per variable on every

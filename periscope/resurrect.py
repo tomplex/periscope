@@ -119,6 +119,7 @@ def _rewrite_line(
     session_map: dict[str, str],
     config_dirs: dict[str, str] | None = None,
     profiles: dict[str, str] | None = None,
+    models: dict[str, str] | None = None,
 ) -> tuple[str, bool]:
     """Rewrite one save-file line. Returns (line, rewritten?). Non-claude lines,
     non-pane lines, and panes with neither a resolvable session nor a non-default
@@ -137,18 +138,26 @@ def _rewrite_line(
     uuid = session_map.get(pane_id) if pane_id else None
     cfg = (config_dirs or {}).get(pane_id) if pane_id else None
     prof = (profiles or {}).get(pane_id) if pane_id else None
+    model = (models or {}).get(pane_id) if pane_id else None
     # The env prefixes must be emitted even when the session is unresolvable
     # (no pane_sessions row). Returning early there would restore a non-default
     # pane onto the DEFAULT account — burning the wrong subscription silently,
     # which is worse than losing --resume — or onto the default wrapper profile,
     # silently swapping the plugin set the pane was working under.
-    if not uuid and not cfg and not prof:
+    if not uuid and not cfg and not prof and not model:
         return line, False
 
     prefix = f"CLAUDE_CONFIG_DIR={cfg} " if cfg else ""
     if prof:
         prefix += f"{config.PROFILE_ENV_VAR}={prof} "
     if not uuid:
+        # The model prefix is emitted ONLY here. A resumed session restores its
+        # own model, and ANTHROPIC_MODEL at launch would override that — so on
+        # the --resume path the spawn-time choice would clobber a later
+        # in-session /model switch. With no session to resume, the spawn-time
+        # choice is all that is left of the intent.
+        if model:
+            prefix += f"{config.MODEL_ENV_VAR}={model} "
         parts[10] = ":" + prefix + cmd
         return "\t".join(parts), True
 
@@ -172,6 +181,7 @@ def rewrite_save_file(save_path: Path) -> int:
     session_map = _session_map()
     config_dirs = session_status.pane_config_dirs()
     profiles = session_status.pane_profiles()
+    models = session_status.pane_models()
 
     out_lines: list[str] = []
     rewritten = 0
@@ -179,7 +189,7 @@ def rewrite_save_file(save_path: Path) -> int:
         for raw in f:
             stripped = raw.rstrip("\n")
             new, changed = _rewrite_line(
-                stripped, pane_map, session_map, config_dirs, profiles)
+                stripped, pane_map, session_map, config_dirs, profiles, models)
             rewritten += changed
             out_lines.append(new)
 

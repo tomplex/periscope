@@ -607,6 +607,26 @@ Consequences worth knowing:
   wrapper is what honours it. It fails safe: an un-updated wrapper ignores the
   var and yields a normal pane, never a wrong-plugin-set one.
 
+**Model override (`ANTHROPIC_MODEL`) rides the same carrier.** The launcher's
+Model picker (sticky, `prefs.ui.launch_model`; registry in `static/src/models.js`)
+and `spawn_claude(model=…)` set `ANTHROPIC_MODEL` on the new window via
+`tmux.env_args` — the third env binding beside the account and profile, scrubbed
+off the session by `scrub_session_env` like the other two. Claude reads it with
+precedence `--model` > `ANTHROPIC_MODEL` > `settings.json`. `config.model_env`
+checks only the character set (it lands in a `-e` arg and a shell prefix) and
+fails open to the default, like `profile_env`; the alias list is not validated
+server-side because it moves. Two things differ from the profile:
+
+- **There is no model chip.** The rail already shows the model parsed off
+  Claude's status line (`panes.STATUS_RE` → `w.model`), and that is the truth —
+  the env var is the SPAWN-TIME choice, which an in-session `/model` leaves
+  untouched. `session_status.pane_models` exists for resurrect only.
+- **Resurrect re-emits the prefix ONLY on the session-lost path.** `--resume`
+  restores a session's own model unless `ANTHROPIC_MODEL` is set at launch, so
+  a prefix on a resumed pane would clobber a later `/model` switch with the
+  spawn-time choice. With no session to resume, the spawn-time choice is all
+  that is left of the intent, so it is kept there.
+
 ## tmux persistence (`periscope/resurrect.py`)
 
 Session survival across reboots is tmux-resurrect + tmux-continuum, with two
