@@ -13,6 +13,7 @@ subsequent call cheap, so the question "should this be cleared" reduces to "how
 many calls until that write pays for itself".
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -126,3 +127,23 @@ def parse_usage_record(rec: dict) -> UsageRecord | None:
         return None
 
     return UsageRecord(ts=ts, ctx_tokens=fresh + written + read)
+
+
+def summarize_tail(records: Iterable[UsageRecord], *, cutoff: float) -> TailSummary:
+    """Reduce one pass over a transcript tail.
+
+    `cur_ctx` and `last_ts` IGNORE the cutoff; `calls` respects it. That
+    asymmetry is the parked case: a pane idle longer than the burn window has no
+    records inside it, but its context debt is real and is owed the moment it
+    resumes. Filtering everything by the cutoff would silence exactly the panes
+    the parked remedy exists for.
+    """
+    cur_ctx: int | None = None
+    last_ts: float | None = None
+    calls = 0
+    for rec in records:
+        cur_ctx = rec.ctx_tokens
+        last_ts = rec.ts
+        if rec.ts >= cutoff:
+            calls += 1
+    return TailSummary(cur_ctx=cur_ctx, last_ts=last_ts, calls=calls)
