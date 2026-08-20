@@ -755,3 +755,52 @@ def test_readers_survive_a_missing_file(tmp_path):
     path = tmp_path / "nope.jsonl"
     assert usage._tail_summary_from_jsonl(path, cutoff=0).cur_ctx is None
     assert usage._base_ctx_from_jsonl(path) is None
+
+
+# --- annotate_cost_pressure: stamping pane views for the dashboard ----------
+
+import pytest
+
+from periscope import cost_pressure
+
+
+def test_annotate_stamps_three_keys_on_a_pressured_pane(monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(usage, "pane_cost_pressure", lambda ids: {
+        "%1": cost_pressure.CostSample(cur_ctx=600_000, base_ctx=50_000,
+                                       pace=8.0, last_ts=now),
+    })
+    views = [{"pane_id": "%1", "agent": "claude"}]
+    usage.annotate_cost_pressure(views)
+    assert views[0]["ctx_class"] == "hot"
+    assert "clearing" in views[0]["ctx_hint"]
+    assert views[0]["ctx_tokens"] == 600_000
+
+
+def test_annotate_stamps_nothing_without_a_sample(monkeypatch):
+    monkeypatch.setattr(usage, "pane_cost_pressure", lambda ids: {})
+    views = [{"pane_id": "%1", "agent": "claude"}]
+    usage.annotate_cost_pressure(views)
+    assert "ctx_class" not in views[0]
+    assert "ctx_hint" not in views[0]
+    assert "ctx_tokens" not in views[0]
+
+
+def test_annotate_stamps_none_band_when_there_is_data_but_no_debt(monkeypatch):
+    """'server said plain' must be distinguishable from 'server said nothing'."""
+    now = time.time()
+    monkeypatch.setattr(usage, "pane_cost_pressure", lambda ids: {
+        "%1": cost_pressure.CostSample(cur_ctx=100_000, base_ctx=50_000,
+                                       pace=1.0, last_ts=now),
+    })
+    views = [{"pane_id": "%1", "agent": "claude"}]
+    usage.annotate_cost_pressure(views)
+    assert views[0]["ctx_class"] == "none"
+
+
+def test_annotate_ignores_shell_panes(monkeypatch):
+    monkeypatch.setattr(usage, "pane_cost_pressure",
+                        lambda ids: pytest.fail("should not be asked"))
+    views = [{"pane_id": "%1", "agent": None}]
+    usage.annotate_cost_pressure(views)
+    assert "ctx_class" not in views[0]

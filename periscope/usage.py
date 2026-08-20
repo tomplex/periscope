@@ -30,7 +30,9 @@ from periscope import activity, store
 from periscope.cost_pressure import (
     CostSample,
     TailSummary,
+    hint,
     parse_usage_record,
+    score,
     summarize_tail,
 )
 from periscope.log import _bg, log
@@ -583,6 +585,36 @@ def pane_cost_pressure(pane_ids: list[str]) -> dict[str, CostSample]:
             _cost_in_flight = True
             _bg("pane-cost", _refresh_cost_into_cache, list(pane_ids))
         return samples
+
+
+def annotate_cost_pressure(views: list[dict]) -> None:
+    """Stamp ctx_class / ctx_hint / ctx_tokens on Claude panes with cost data.
+
+    `ctx_class` is "none" | "warn" | "hot", and the key is ABSENT when there is
+    nothing to say. Never "": in JS "" and undefined are both falsy, so the
+    natural `w.ctx_class || pctBand(w.context_pct)` idiom would collapse "server
+    said plain" into "server said nothing" and silently fall a cost-classified
+    pane back onto the auto-compact percent bands.
+
+    Unlike the burn flag it replaces, this touches no plan-usage state — no
+    OAuth call, no account gate.
+    """
+    ids = [v["pane_id"] for v in views
+           if v.get("agent") == "claude" and v.get("pane_id")]
+    if not ids:
+        return
+    samples = pane_cost_pressure(ids)
+    now = time.time()
+    for v in views:
+        sample = samples.get(v.get("pane_id") or "")
+        if sample is None:
+            continue
+        pressure = score(sample, now=now)
+        if pressure is None:
+            continue
+        v["ctx_class"] = pressure.band
+        v["ctx_hint"] = hint(pressure)
+        v["ctx_tokens"] = pressure.cur_ctx
 
 
 def _weighted_burn_from_jsonl(path: Path, cutoff: float) -> float:
