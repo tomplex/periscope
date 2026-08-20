@@ -204,6 +204,9 @@ def hint(p: Pressure) -> str:
     """
     ctx = fmt_tokens(p.cur_ctx)
     if p.band == "hot" and p.payback_mins is not None:
+        if p.payback_mins < 1:
+            return (f"each call re-reads {ctx} of context; clearing pays for itself "
+                    f"almost immediately at this pace")
         return (f"each call re-reads {ctx} of context; clearing pays for itself "
                 f"in ~{round(p.payback_mins)} min at this pace")
     if p.band == "warn" and not p.active:
@@ -211,5 +214,5 @@ def hint(p: Pressure) -> str:
                 f"rather than picking this up as-is")
     if p.band == "warn":
         return (f"carrying {ctx} of context; clearing pays back in "
-                f"~{round(p.payback_calls)} calls")
+                f"~{max(1, round(p.payback_calls))} calls")
     return f"context window used — near a fresh start ({ctx})"

@@ -211,6 +211,14 @@ def test_hint_hot_names_the_payback_time_and_the_remedy():
     assert "clearing" in got.lower()
 
 
+def test_hint_hot_sub_minute_payback_reads_as_immediate_not_zero():
+    p = cp.Pressure(band="hot", active=True, cur_ctx=600_000,
+                    payback_calls=4.0, payback_mins=0.4)
+    got = cp.hint(p)
+    assert "almost immediately" in got
+    assert "~0 min" not in got
+
+
 def test_hint_warn_parked_points_at_a_handoff_not_a_clear():
     p = cp.Pressure(band="warn", active=False, cur_ctx=600_000,
                     payback_calls=4.0, payback_mins=None)
@@ -225,6 +233,14 @@ def test_hint_warn_active_names_the_payback_in_calls():
     got = cp.hint(p)
     assert "300k" in got
     assert "4 calls" in got
+
+
+def test_hint_warn_active_floors_sub_call_payback_at_one():
+    p = cp.Pressure(band="warn", active=True, cur_ctx=900_000,
+                    payback_calls=0.3, payback_mins=30.0)
+    got = cp.hint(p)
+    assert "1 calls" in got
+    assert "~0 calls" not in got
 
 
 def test_hint_plain_says_it_is_near_a_fresh_start():
