@@ -12,6 +12,19 @@ export function parsePrRef(q) {
   return null;
 }
 
+// A typed filesystem path. Kept pure + exported so it unit-tests on its own,
+// like parsePrRef. Existence and git-ness are NOT checked here — classify has
+// no filesystem; the card is optimistic and POST /api/open 400s with the real
+// reason ("no such directory" / "not inside a git repo"), which apiCall
+// already surfaces as a toast.
+const PATH_LIKE = /^(~|\.{0,2}\/)/;
+
+export function parsePathRef(q) {
+  const s = (q || "").trim();
+  if (!s || !PATH_LIKE.test(s)) return null;
+  return s.replace(/\/+$/, "") || "/";   // "/repo/" → "/repo"; bare "/" survives
+}
+
 function match(hay, needle) {
   return hay.toLowerCase().includes(needle.toLowerCase());
 }
@@ -20,6 +33,17 @@ export function classify(query, catalog) {
   const q = (query || "").trim();
   const cards = [];
   if (!q) return cards;
+
+  // An explicit path leads everything — it's the most specific intent a query
+  // can carry. Reuses kind "open" so pick() routes it through the existing
+  // POST /api/open, which registers the project (ensure_project, never 409)
+  // when it isn't one yet. Skipped when the catalog already knows this exact
+  // path: that card carries the better label (repo · branch).
+  const typed = parsePathRef(q);
+  if (typed && !(catalog.worktrees || []).some(w => w.path === typed)) {
+    cards.push({ kind: "open", label: `open path: ${typed}`,
+                 sub: "register + open", descriptor: { path: typed } });
+  }
 
   // Create actions lead — a new worktree or track is almost always the target,
   // so they sit above "open existing". Grouped by kind (all new-worktree cards,

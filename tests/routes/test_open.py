@@ -22,6 +22,12 @@ def test_post_open_non_git_400(client, tmp_path, clean_state):
     r = client.post("/api/open", json={"path": str(tmp_path)})
     assert r.status_code == 400
 
+def test_post_open_missing_path_400_with_reason(client, tmp_path, clean_state):
+    # apiCall surfaces `detail` in a toast, so the message is user-facing.
+    r = client.post("/api/open", json={"path": str(tmp_path / "nope")})
+    assert r.status_code == 400
+    assert "no such directory" in r.json()["detail"]
+
 def test_post_open_bad_descriptor_400(client, clean_state):
     assert client.post("/api/open", json={}).status_code == 400
     assert client.post("/api/open", json={"branch": "x"}).status_code == 400  # repo missing

@@ -237,6 +237,15 @@ def _open_path(
     The shared implementation for PathTarget and PR/Branch targets so the
     path case is monkeypatchable independently of the descriptor dispatch.
     """
+    # The omnibox hands over whatever was typed, so `~` arrives unexpanded —
+    # git -C takes it literally and fails. Expand here rather than in the route:
+    # this is the single choke point every descriptor variant funnels through.
+    path = os.path.expanduser(path)
+    # Check existence separately from the git check. Without this a typo falls
+    # through to _git_toplevel and reports "not inside a git repo", which sends
+    # you looking for the wrong problem.
+    if not os.path.isdir(path):
+        raise ValueError(f"no such directory: {path}")
     toplevel = _git_toplevel(path)                       # ValueError if non-git
     repo = resolve_repo(toplevel)                        # --git-common-dir → parent
     project = ensure_project(toplevel, repo)
