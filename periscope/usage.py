@@ -27,7 +27,12 @@ from pathlib import Path
 import httpx
 
 from periscope import activity, store
-from periscope.cost_pressure import TailSummary, parse_usage_record, summarize_tail
+from periscope.cost_pressure import (
+    CostSample,
+    TailSummary,
+    parse_usage_record,
+    summarize_tail,
+)
 from periscope.log import _bg, log
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
@@ -464,10 +469,19 @@ PANE_BURN_REFRESH_S = 60.0
 _PANE_BURN_WINDOW_S = 1800
 _BURN_TAIL_BYTES = 4_000_000
 _TAIL_BYTES = 4_000_000
+PANE_COST_REFRESH_S = 60.0
+_PANE_WINDOW_S = 1800
 _HOT_PANE_SHARE = 0.4
 _W_INPUT, _W_CACHE_W, _W_OUT, _W_CACHE_R = 1.0, 1.25, 5.0, 0.1
 
 _burn_cache: tuple[float, dict[str, float]] = (0.0, {})
+_cost_cache: tuple[float, dict[str, CostSample]] = (0.0, {})
+_cost_in_flight = False
+_cost_lock = threading.Lock()
+# session id -> first observed context. Written and read ONLY by the single
+# refresh thread that _cost_in_flight guarantees, so it needs no lock — and it
+# must never be read from the request path.
+_base_ctx_cache: dict[str, int] = {}
 _burn_in_flight = False
 _burn_lock = threading.Lock()
 
@@ -515,6 +529,60 @@ def _base_ctx_from_jsonl(path: Path) -> int | None:
     except OSError:
         return None
     return None
+
+
+def _refresh_cost_into_cache(pane_ids: list[str]) -> None:
+    global _cost_cache, _cost_in_flight
+    from periscope import turns
+    samples: dict[str, CostSample] = {}
+    seen_sids: set[str] = set()
+    try:
+        now = time.time()
+        cutoff = now - _PANE_WINDOW_S
+        for pid in pane_ids:
+            sid = turns.session_id_for_pane(pid)
+            jsonl = turns.jsonl_for_session(sid) if sid else None
+            if not jsonl or not sid:
+                continue
+            tail = _tail_summary_from_jsonl(jsonl, cutoff=cutoff)
+            if tail.cur_ctx is None or tail.last_ts is None:
+                continue
+            seen_sids.add(sid)
+            # Gated on a successful tail read, which bounds the head read: a
+            # transcript with no usage record in its 4MB tail is genuinely
+            # usage-free, so we never re-walk a pathological file every 60s.
+            base = _base_ctx_cache.get(sid)
+            if base is None:
+                base = _base_ctx_from_jsonl(jsonl) or 0
+                if base > 0:  # only cache a real answer; a new session retries
+                    _base_ctx_cache[sid] = base
+            samples[pid] = CostSample(
+                cur_ctx=tail.cur_ctx,
+                base_ctx=base,
+                pace=tail.calls / (_PANE_WINDOW_S / 60.0),
+                last_ts=tail.last_ts,
+            )
+        for stale in set(_base_ctx_cache) - seen_sids:
+            del _base_ctx_cache[stale]
+    finally:
+        with _cost_lock:
+            _cost_cache = (time.time(), samples)
+            _cost_in_flight = False
+
+
+def pane_cost_pressure(pane_ids: list[str]) -> dict[str, CostSample]:
+    """Stale-while-revalidate per-pane cost measurements. Serves the last
+    computed samples immediately; refreshes in a background thread when older
+    than PANE_COST_REFRESH_S. Returns MEASUREMENTS, not scores — banding needs a
+    fresh clock and happens at annotate time."""
+    global _cost_in_flight
+    now = time.time()
+    with _cost_lock:
+        ts, samples = _cost_cache
+        if now - ts >= PANE_COST_REFRESH_S and not _cost_in_flight:
+            _cost_in_flight = True
+            _bg("pane-cost", _refresh_cost_into_cache, list(pane_ids))
+        return samples
 
 
 def _weighted_burn_from_jsonl(path: Path, cutoff: float) -> float:

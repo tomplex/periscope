@@ -46,6 +46,9 @@ def _no_plan_usage_refresh(monkeypatch):
     monkeypatch.setattr(usage, "_plan_cache", {}, raising=False)
     monkeypatch.setattr(usage, "_plan_in_flight", set(), raising=False)
     monkeypatch.setattr(usage, "_bg", lambda *a, **kw: None, raising=False)
+    usage._cost_cache = (0.0, {})
+    usage._cost_in_flight = False
+    usage._base_ctx_cache = {}
 
 
 @pytest.fixture(autouse=True)

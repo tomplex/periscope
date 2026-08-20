@@ -679,6 +679,71 @@ def test_base_ctx_skips_a_synthetic_first_record(tmp_path):
     assert usage._base_ctx_from_jsonl(path) == 50_000
 
 
+def test_pane_cost_pressure_serves_cache_and_schedules_refresh(monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(usage, "_bg", lambda name, fn, *a: scheduled.append(name))
+    monkeypatch.setattr(usage, "_cost_cache", (0.0, {"%1": "sample"}))
+    monkeypatch.setattr(usage, "_cost_in_flight", False)
+
+    got = usage.pane_cost_pressure(["%1"])
+
+    assert got == {"%1": "sample"}          # stale value served immediately
+    assert scheduled == ["pane-cost"]        # refresh scheduled, not awaited
+
+
+def test_refresh_cost_into_cache_builds_a_sample(tmp_path, monkeypatch):
+    """The background path never runs under pytest — conftest neuters usage._bg —
+    so it is called directly here or it ships untested."""
+    from periscope import turns
+    now = time.time()
+    jsonl = tmp_path / "sess.jsonl"
+    jsonl.write_text("\n".join([
+        _assistant_line(_iso(now - 600), {"cache_creation_input_tokens": 50_000}),
+        _assistant_line(_iso(now - 60), {"cache_read_input_tokens": 600_000}),
+    ]) + "\n")
+    monkeypatch.setattr(turns, "session_id_for_pane", lambda pid: "sess")
+    monkeypatch.setattr(turns, "jsonl_for_session", lambda sid: jsonl)
+    monkeypatch.setattr(usage, "_base_ctx_cache", {})
+    monkeypatch.setattr(usage, "_cost_in_flight", True)
+
+    usage._refresh_cost_into_cache(["%1"])
+
+    sample = usage._cost_cache[1]["%1"]
+    assert sample.cur_ctx == 600_000
+    assert sample.base_ctx == 50_000
+    assert sample.pace == 2 / 30.0          # 2 calls over the 30-minute window
+    assert usage._cost_in_flight is False    # the finally block released it
+
+
+def test_refresh_cost_into_cache_does_not_memoize_a_zero_base(tmp_path, monkeypatch):
+    """Spec Data flow item 2: only a successful non-zero read is cached, so a
+    brand-new session is retried rather than frozen for its lifetime."""
+    from periscope import turns
+    now = time.time()
+    jsonl = tmp_path / "sess.jsonl"
+    jsonl.write_text(_assistant_line(_iso(now - 60),
+                                     {"output_tokens": 5}) + "\n")
+    monkeypatch.setattr(turns, "session_id_for_pane", lambda pid: "sess")
+    monkeypatch.setattr(turns, "jsonl_for_session", lambda sid: jsonl)
+    monkeypatch.setattr(usage, "_base_ctx_cache", {})
+    monkeypatch.setattr(usage, "_cost_in_flight", True)
+
+    usage._refresh_cost_into_cache(["%1"])
+
+    assert "sess" not in usage._base_ctx_cache
+
+
+def test_pane_cost_pressure_does_not_double_schedule(monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(usage, "_bg", lambda name, fn, *a: scheduled.append(name))
+    monkeypatch.setattr(usage, "_cost_cache", (0.0, {}))
+    monkeypatch.setattr(usage, "_cost_in_flight", True)
+
+    usage.pane_cost_pressure(["%1"])
+
+    assert scheduled == []
+
+
 def test_readers_return_nothing_on_a_usage_free_transcript(tmp_path):
     path = tmp_path / "s.jsonl"
     path.write_text(_json.dumps({"type": "user", "timestamp": "x"}) + "\n")
