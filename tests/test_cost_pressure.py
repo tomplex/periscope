@@ -1,5 +1,9 @@
 """Pure unit tests for the cost-pressure decision core. No fixtures, no files."""
 
+import dataclasses
+
+import pytest
+
 from periscope import cost_pressure as cp
 
 
@@ -13,9 +17,6 @@ def test_constants_match_the_calibrated_values():
 
 
 def test_value_objects_are_frozen():
-    import dataclasses
-    import pytest
-
     rec = cp.UsageRecord(ts=1.0, ctx_tokens=100)
     with pytest.raises(dataclasses.FrozenInstanceError):
         rec.ctx_tokens = 200
