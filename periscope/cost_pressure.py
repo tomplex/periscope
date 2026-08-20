@@ -67,7 +67,7 @@ class CostSample:
 
     cur_ctx: int
     base_ctx: int
-    pace: float  # calls per minute over the burn window
+    pace: float  # calls per minute over the pace-measurement window
     last_ts: float
 
 

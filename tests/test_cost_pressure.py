@@ -169,10 +169,21 @@ def test_score_bands_plain_above_the_warn_threshold():
 
 
 def test_score_bands_warn_at_the_threshold():
-    got = cp.score(_sample(), now=1000.0)  # exactly 4.0 calls
+    # pace=0 gives no payback_mins, which can never satisfy the hot branch —
+    # pins this on warn instead of a disjunction that hot also satisfies.
+    got = cp.score(_sample(pace=0.0), now=1000.0)  # exactly 4.0 calls
     assert got is not None
-    assert got.band in ("warn", "hot")
+    assert got.band == "warn"
     assert got.payback_calls == 4.0
+
+
+def test_score_bands_warn_just_above_the_hot_minutes_boundary():
+    # payback_calls == 4.0 (the warn threshold) but pace is just slow enough
+    # that payback_mins lands just past _PAYBACK_MINS_HOT -> stays warn.
+    got = cp.score(_sample(pace=1.99), now=1000.0)
+    assert got is not None
+    assert got.payback_mins > cp._PAYBACK_MINS_HOT
+    assert got.band == "warn"
 
 
 def test_score_bands_hot_only_when_active_and_fast():

@@ -459,17 +459,24 @@ def cached_plan_usage() -> dict[str, dict]:
 
 # --- Per-pane cost pressure ---
 #
-# Which pane is eating the quota? Each Claude pane maps to its session JSONL
-# (pane_sessions table, via periscope.turns); summing the usage blocks in the
-# last 30 minutes gives a per-pane burn rate. Tokens are weighted to roughly
-# match how the plan meters count them — output dominates, cache reads are
-# nearly free. The absolute scale is meaningless (Anthropic's weighting is
-# opaque); only the per-pane SHARES are used, so weighting errors mostly
-# cancel.
+# Which pane is expensive to keep carrying? Each Claude pane maps to its
+# session JSONL (pane_sessions table, via periscope.turns). For each one we
+# read three numbers off that transcript — its current context size, the
+# base_ctx a fresh session in this pane would have cost (it varies by repo
+# CLAUDE.md, MCP set and wrapper profile, so it can't be a constant), and how
+# many API calls it's making per minute — and hand them to cost_pressure.py's
+# pure core, which decides whether a /clear would pay for itself soon enough
+# to be worth recommending.
+#
+# Those reads are bounded (a capped tail plus a head scan that stops at the
+# first real usage record) but they're still file I/O, and /api/state polls
+# every 3s: doing this inline would mean re-reading every visible pane's
+# transcript three times a second. So it runs on a background refresh into a
+# cache instead, and the request path only ever reads that cache.
 
 _TAIL_BYTES = 4_000_000
-PANE_COST_REFRESH_S = 60.0
-_PANE_WINDOW_S = 1800
+_COST_REFRESH_S = 60.0
+_PACE_WINDOW_S = 1800
 
 _cost_cache: tuple[float, dict[str, CostSample]] = (0.0, {})
 _cost_in_flight = False
@@ -542,7 +549,7 @@ def _refresh_cost_into_cache(pane_ids: list[str]) -> None:
         # to self-recover.
         from periscope import turns
         now = time.time()
-        cutoff = now - _PANE_WINDOW_S
+        cutoff = now - _PACE_WINDOW_S
         for pid in pane_ids:
             sid = turns.session_id_for_pane(pid)
             jsonl = turns.jsonl_for_session(sid) if sid else None
@@ -563,7 +570,7 @@ def _refresh_cost_into_cache(pane_ids: list[str]) -> None:
             samples[pid] = CostSample(
                 cur_ctx=tail.cur_ctx,
                 base_ctx=base,
-                pace=tail.calls / (_PANE_WINDOW_S / 60.0),
+                pace=tail.calls / (_PACE_WINDOW_S / 60.0),
                 last_ts=tail.last_ts,
             )
         for stale in set(_base_ctx_cache) - seen_sids:
@@ -577,13 +584,13 @@ def _refresh_cost_into_cache(pane_ids: list[str]) -> None:
 def pane_cost_pressure(pane_ids: list[str]) -> dict[str, CostSample]:
     """Stale-while-revalidate per-pane cost measurements. Serves the last
     computed samples immediately; refreshes in a background thread when older
-    than PANE_COST_REFRESH_S. Returns MEASUREMENTS, not scores — banding needs a
+    than _COST_REFRESH_S. Returns MEASUREMENTS, not scores — banding needs a
     fresh clock and happens at annotate time."""
     global _cost_in_flight
     now = time.time()
     with _cost_lock:
         ts, samples = _cost_cache
-        if now - ts >= PANE_COST_REFRESH_S and not _cost_in_flight:
+        if now - ts >= _COST_REFRESH_S and not _cost_in_flight:
             _cost_in_flight = True
             _bg("pane-cost", _refresh_cost_into_cache, list(pane_ids))
         return samples

@@ -228,9 +228,6 @@ def test_projected_recent_and_hot_default_none_false():
     assert meters["session"]["hot"] is False
 
 
-# --- per-pane burn attribution -------------------------------------------
-
-
 # --- weekly meters: duty-cycle-adjusted recent burn (24h slope) -----------
 
 def _week(utilization, resets_at):
@@ -552,6 +549,8 @@ def test_best_account_breaks_ties_randomly(monkeypatch, clean_state):
     assert usage.best_account(rand=lambda: 0.99) == "b"
 
 
+# --- per-pane cost pressure: transcript readers and the refresh cache -----
+
 import time
 
 
@@ -563,7 +562,7 @@ def _iso(epoch):
 def _assistant_line(ts_iso, usage, model="claude-opus-5"):
     """A well-formed assistant record — the shape parse_usage_record accepts.
 
-    NOTE: this file imports `json as _json` (near line 231), not `json`.
+    NOTE: this file imports `json as _json`, not `json`.
     """
     return _json.dumps({
         "type": "assistant",
@@ -728,8 +727,10 @@ def test_annotate_stamps_nothing_without_a_sample(monkeypatch):
     assert "ctx_tokens" not in views[0]
 
 
-def test_annotate_stamps_none_band_when_there_is_data_but_no_debt(monkeypatch):
-    """'server said plain' must be distinguishable from 'server said nothing'."""
+def test_annotate_stamps_the_none_sentinel_when_payback_is_too_slow_to_flag(monkeypatch):
+    """'server said plain' must be distinguishable from 'server said nothing'.
+    This pane has real debt (100k - 50k) — it's plain because payback is 20
+    calls, above _PAYBACK_CALLS_WARN, not because debt is zero."""
     now = time.time()
     monkeypatch.setattr(usage, "pane_cost_pressure", lambda ids: {
         "%1": cost_pressure.CostSample(cur_ctx=100_000, base_ctx=50_000,
