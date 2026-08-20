@@ -100,6 +100,8 @@ def parse_usage_record(rec: dict) -> UsageRecord | None:
     August usage records in main transcripts carry `isSidechain: true`. Re-verify
     if record shapes change.
     """
+    if not isinstance(rec, dict):
+        return None
     if rec.get("type") != "assistant":
         return None
     message = rec.get("message") or {}

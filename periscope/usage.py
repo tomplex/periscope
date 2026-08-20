@@ -518,7 +518,13 @@ def _base_ctx_from_jsonl(path: Path) -> int | None:
                 except ValueError:
                     continue
                 parsed = parse_usage_record(rec)
-                if parsed is not None:
+                # An output-only record (ctx_tokens == 0) is real work by
+                # parse_usage_record's own contract, but it is not a usable
+                # base: base 0 is never memoized below, so landing on one as
+                # the session's first hit would re-walk the head every 60s
+                # and silence the pane's score() forever. Keep scanning for
+                # the first record that actually has context.
+                if parsed is not None and parsed.ctx_tokens > 0:
                     return parsed.ctx_tokens
     except OSError:
         return None
@@ -527,10 +533,14 @@ def _base_ctx_from_jsonl(path: Path) -> int | None:
 
 def _refresh_cost_into_cache(pane_ids: list[str]) -> None:
     global _cost_cache, _cost_in_flight
-    from periscope import turns
     samples: dict[str, CostSample] = {}
     seen_sids: set[str] = set()
     try:
+        # Imported inside the try: if this ever raises, the finally below
+        # still clears _cost_in_flight, so a broken import can't latch the
+        # refresh permanently in-flight and freeze the feature with no way
+        # to self-recover.
+        from periscope import turns
         now = time.time()
         cutoff = now - _PANE_WINDOW_S
         for pid in pane_ids:
