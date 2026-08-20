@@ -96,6 +96,7 @@ case "$1" in
     write_plist || exit 1
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
     "$0" install-hook
+    "$0" install-tmux
     ;;
   update)
     # Pull + re-provision + restart. Ordering is the safety property: the git
@@ -169,6 +170,7 @@ case "$1" in
       sleep 2
     done
     "$0" install-hook
+    "$0" install-tmux
     # Verify the new code is actually serving rather than claiming success:
     # poll healthz until it reports the SHA we just pulled. Generous, because
     # a pull that changed server.py's PEP-723 header makes `uv run` resolve and
@@ -198,6 +200,7 @@ case "$1" in
     launchctl bootout "$LABEL" 2>/dev/null
     rm -f "$PLIST_DST"
     "$0" uninstall-hook
+    "$0" uninstall-tmux
     ;;
   install-hook)
     "$0" install-claude-hook
@@ -287,6 +290,16 @@ PY
   uninstall-codex-hook)
     ( cd "$REPO" && exec python3 -m periscope.codex_hook_config uninstall "$REPO" )
     ;;
+  install-tmux)
+    # The tmux side of continuation-over-reboot: TPM + tmux-resurrect +
+    # tmux-continuum, plus a periscope-owned conf sourced from ~/.tmux.conf
+    # that points @resurrect-hook-post-save-layout at THIS checkout. Fails
+    # loudly — a silently missing plugin is a silently missing save.
+    ( cd "$REPO" && exec python3 -m periscope.tmux_persist install "$REPO" )
+    ;;
+  uninstall-tmux)
+    ( cd "$REPO" && exec python3 -m periscope.tmux_persist uninstall )
+    ;;
   resurrect-rewrite)
     # tmux-resurrect post-save-layout hook (save.sh passes the save-file path).
     # Rewrites claude pane commands to `claude --resume <uuid> <channels>` so a
@@ -311,7 +324,7 @@ PY
     tail -F "$LOG"
     ;;
   *)
-    echo "usage: $0 {install|update|uninstall|install-hook|install-claude-hook|install-codex-hook|uninstall-hook|uninstall-claude-hook|uninstall-codex-hook|resurrect-rewrite|start|stop|restart|status|tail}"
+    echo "usage: $0 {install|update|uninstall|install-hook|install-claude-hook|install-codex-hook|uninstall-hook|uninstall-claude-hook|uninstall-codex-hook|install-tmux|uninstall-tmux|resurrect-rewrite|start|stop|restart|status|tail}"
     exit 1
     ;;
 esac

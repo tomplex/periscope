@@ -23,6 +23,10 @@ def test_healthz_returns_ok_with_metadata():
     assert isinstance(data["version"], str) and data["version"]
     assert data["codex_hook"]["hook_version"] == 1
     assert "trusted" not in data["codex_hook"]
+    assert set(data["resurrect"]) == {
+        "ok", "plugins", "conf_sourced", "restore_on", "processes_ok",
+        "hook_current", "last_save_at", "last_save_stale",
+    }
 
 
 def test_codex_hook_health_reports_definition_observation_and_staleness(

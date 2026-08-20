@@ -17,6 +17,7 @@ from fastapi import APIRouter
 
 from periscope import config
 from periscope.codex_hook_config import EVENTS, codex_home, command_for
+from periscope.tmux_persist import status as resurrect_status
 
 router = APIRouter()
 
@@ -39,6 +40,7 @@ def _git_short_sha() -> str:
 
 
 _BOOT_TS = time.time()
+_REPO = Path(__file__).resolve().parent.parent.parent
 _VERSION = _git_short_sha()
 CODEX_HOOK_STALE_S = 7 * 24 * 60 * 60
 
@@ -126,4 +128,5 @@ def healthz():
         "uptime_s": round(time.time() - _BOOT_TS, 1),
         "version": _VERSION,
         "codex_hook": _codex_hook_health(),
+        "resurrect": resurrect_status(_REPO),
     }
