@@ -301,6 +301,24 @@ describe("<Rail> delegation lineage", () => {
   });
 });
 
+describe("<Rail> context chip", () => {
+  it("paints the context chip from tokens when the status line did not parse", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [{
+      pid: "p1", session: "managed", index: 0, target: "managed:0", name: "worker",
+      agent: "claude", state: "idle", track_id: "t1", track_name: "myproj",
+      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
+      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"), pane_id: "%1",
+      context_pct: null, ctx_tokens: 600000, ctx_class: "hot", ctx_hint: "clearing pays for itself",
+    }];
+    const html = render(<Rail />);
+    expect(html).toContain("600k");
+    expect(html).toContain("ctx-hot");
+    expect(html).toContain("clearing pays for itself");
+  });
+});
+
 import { ctxClass, ctxChipText } from "../RailRows.jsx";
 
 describe("ctxClass", () => {

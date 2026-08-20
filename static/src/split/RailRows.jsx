@@ -228,15 +228,12 @@ export function PaneRow({
             the footer (expanded) so they never crowd the name. */}
         {expanded
           ? (model && <span class="pane-model" title={w.model}>{model}</span>)
-          : (w.context_pct != null && (
-              <span class={`pane-mini-ctx${ctxClass(w.context_pct)}`}>{w.context_pct}%</span>
+          : (ctxChipText(w) != null && (
+              <span
+                class={`pane-mini-ctx${ctxClass(w)}`}
+                title={w.ctx_hint || "context window used"}
+              >{ctxChipText(w)}</span>
             ))}
-        {w.burn_hot && (
-          <span
-            class="rail-burn"
-            title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
-          >🔥</span>
-        )}
         {/* Which subscription this pane bills. Only for non-default accounts:
             pooling exists to balance two weekly limits, and a chip on every
             pane would say nothing. "unknown" = a CLAUDE_CONFIG_DIR no
@@ -295,14 +292,17 @@ export function PaneRow({
           )}
         </div>
       )}
-      {expanded && (w.pr || w.linked_linear || isDirty(w.git) || w.context_pct != null) && (
+      {expanded && (w.pr || w.linked_linear || isDirty(w.git) || ctxChipText(w) != null) && (
         <div class="pane-foot">
           {prChip}
           {linChip}
           {isDirty(w.git) && <span class="pane-pill pane-pill-git" title="git status">{w.git}</span>}
           <span class="pane-foot-spacer"></span>
-          {w.context_pct != null && (
-            <span class={`pane-pill pane-pill-ctx${ctxClass(w.context_pct)}`} title="context window used">{w.context_pct}%</span>
+          {ctxChipText(w) != null && (
+            <span
+              class={`pane-pill pane-pill-ctx${ctxClass(w)}`}
+              title={w.ctx_hint || "context window used"}
+            >{ctxChipText(w)}</span>
           )}
           {w.status_at ? <span class="pane-time">{relTime(w.status_at)}</span> : null}
         </div>
