@@ -143,6 +143,7 @@ const READ_ONLY = [EditorState.readOnly.of(true), EditorView.editable.of(false)]
 export function PreviewTabInner({ entry, active = true }) {
   const hostRef = useRef(null);
   const editorRef = useRef(null);
+  const mdHostRef = useRef(null);
   // Per-mount compartment holding READ_ONLY (or nothing, while editing).
   const editableComp = useRef(null);
   // Scroll position carried ACROSS a content-driven CodeMirror remount. Without
@@ -313,6 +314,11 @@ export function PreviewTabInner({ entry, active = true }) {
           Prec.highest(keymap.of([
             { key: "Mod-s", run: () => { saveRef.current?.(); return true; } },
           ])),
+          // Focusable even when read-only (contenteditable=false has no
+          // tabindex by default): CM only syncs its drawn selection to the
+          // DOM selection when the content is focused, and without that a
+          // ⌘A select-all can't be ⌘C-copied.
+          EditorView.contentAttributes.of({ tabindex: "0" }),
           PREVIEW_THEME,
           syntaxHighlighting(PREVIEW_HIGHLIGHT, { fallback: true }),
           comp.of(editingRef.current ? [] : READ_ONLY),
@@ -360,6 +366,39 @@ export function PreviewTabInner({ entry, active = true }) {
     editor.dispatch({ effects: editableComp.current.reconfigure(editing ? [] : READ_ONLY) });
     if (editing) editor.focus();
   }, [editing, state.content, effectiveView]);
+
+  // ⌘A while this file tab is showing selects the FILE, not the whole app.
+  // Document-level because the read-only preview rarely holds focus — the
+  // keypress usually lands on <body>. Real inputs keep their own select-all
+  // (notes, omnibox, terminal, CM in edit mode — anything focused that is an
+  // input/textarea/contenteditable). Source view goes through CM's selection
+  // (it virtualizes long docs, so a native DOM range would only cover the
+  // rendered lines); the markdown view is plain DOM and uses the native one.
+  // At most one PreviewTab is active at a time (Detail shows one pane, one
+  // tab), so gating on `active` never double-registers.
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "a" || e.defaultPrevented) return;
+      const t = e.target;
+      if (t instanceof Element && t.closest('input, textarea, [contenteditable="true"], .xterm')) return;
+      const editor = editorRef.current;
+      if (editor) {
+        e.preventDefault();
+        editor.focus();
+        editor.dispatch({ selection: { anchor: 0, head: editor.state.doc.length } });
+      } else if (mdHostRef.current) {
+        e.preventDefault();
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.selectAllChildren(mdHostRef.current);
+      }
+      // iframe / image / loading states: nothing selectable here — leave the
+      // event alone rather than eating it.
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [active]);
 
   // Line jumps AFTER mount — clicking another hunk for a file that's already
   // open. Kept out of the mount effect so changing the target line re-scrolls
@@ -554,7 +593,7 @@ export function PreviewTabInner({ entry, active = true }) {
           // breaks (hard-wrapped READMEs reflow), lezer-highlighted fences,
           // and doc-relative image/link URLs served via /api/fs/render.
           // .md-doc is a full parallel skin to the transcript's .turn-prose.
-          <div class="preview-md-host">
+          <div ref={mdHostRef} class="preview-md-host">
             <div class="md-doc">
               {renderMarkdown(state.content || "", {
                 demote: false,
