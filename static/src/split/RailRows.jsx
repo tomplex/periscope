@@ -57,13 +57,6 @@ function ctxClass(p) {
   return "";
 }
 
-// A worktree's git field is "clean" / "clean *" (the `*` means unpushed
-// commits, not untracked files) when there's nothing to surface; anything
-// else ("+149 -118", "?3", "+12 -3 ?1") is a real dirty count.
-function isDirty(git) {
-  return git && git !== "clean" && git !== "clean *";
-}
-
 // Inline-rename label. `kind` is "pane" or "track" (pane renders plain, track
 // renders bold; both rename when `renameable`).
 // `onCommit(next)` does the network write; `label` is the bold/plain display
@@ -134,14 +127,16 @@ function RailLabel({ label, kind, renameable, onCommit }) {
   );
 }
 
-// Adaptive pane row. Default state is a COMPACT two-line row (stripe + name +
-// one key metric, plus the always-visible narrator summary). A pane LIFTS into
-// an expanded card — gaining a model badge and a PR/Linear/git/ctx/time footer
-// — only when it's selected or needs input. State rides the left stripe at both
-// sizes, so collapsing never loses what a pane is or how it's doing.
+// Adaptive pane row. Default state is a COMPACT row: name + one key metric on
+// line 1, then the narrator summary, with PR/Linear/account/profile chips on
+// the bottom line. A pane LIFTS into an expanded card — gaining a model badge
+// and a PR/Linear/account/ctx/time footer — only when it's selected or needs
+// input. State rides the left stripe at both sizes, so collapsing never loses
+// what a pane is or how it's doing. Lineage (↳ spawned-by) and git-dirty are
+// deliberately NOT here — both live in the detail header.
 export function PaneRow({
   w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
-  pinned, onTogglePin, awaitingSince, spawnerName, spawnerLive, onRevealSpawner,
+  pinned, onTogglePin, awaitingSince,
   onMoveAccount, onToggleNamePin, editor, onOpenInEditor,
 }) {
   const k = `pane:${w.pid}`;
@@ -187,6 +182,23 @@ export function PaneRow({
   const linChip = w.linked_linear && (
     <a class="pane-pill pane-pill-linear" href={`https://linear.app/issue/${w.linked_linear}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`Linear ${w.linked_linear}${w.linked_linear_status ? ` [${w.linked_linear_status}]` : ""}`}>{w.linked_linear}</a>
   );
+  // Account + wrapper-profile chips ride the bottom line (compact meta strip /
+  // expanded footer), not the name line — they're orientation, not attention.
+  // Only for non-default values: a chip on every pane would say nothing.
+  // "unknown" account = a CLAUDE_CONFIG_DIR no registered account claims —
+  // still not the default, so still shown.
+  const acctChip = w.account && w.account !== "default" && (
+    <span
+      class="rail-account"
+      title={`running on Claude account ${w.account} — its usage bills that subscription`}
+    >@{w.account}</span>
+  );
+  const profChip = w.profile && w.profile !== "default" && (
+    <span
+      class="rail-profile"
+      title={`running the ${profileLabel(w.profile)} profile — a different plugin set and system prompt than a normal pane`}
+    >{profileLabel(w.profile)}</span>
+  );
 
   return (
     <div
@@ -216,26 +228,6 @@ export function PaneRow({
             title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
           >🔥</span>
         )}
-        {/* Which subscription this pane bills. Only for non-default accounts:
-            pooling exists to balance two weekly limits, and a chip on every
-            pane would say nothing. "unknown" = a CLAUDE_CONFIG_DIR no
-            registered account claims — still not the default, so still shown. */}
-        {w.account && w.account !== "default" && (
-          <span
-            class="rail-account"
-            title={`running on Claude account ${w.account} — its usage bills that subscription`}
-          >@{w.account}</span>
-        )}
-        {/* Which `claude` wrapper profile this pane runs — i.e. which plugin set
-            and system prompt. Only for non-default profiles, same as the account
-            chip: a chip on every pane would say nothing. Derived from the live
-            process env, so a shell pane never shows one. */}
-        {w.profile && w.profile !== "default" && (
-          <span
-            class="rail-profile"
-            title={`running the ${profileLabel(w.profile)} profile — a different plugin set and system prompt than a normal pane`}
-          >{profileLabel(w.profile)}</span>
-        )}
         {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
         {waitTierCls && (
           <span
@@ -243,43 +235,29 @@ export function PaneRow({
             title={`asked you something ${relTime(awaitingSince)} ago and has had no reply since`}
           >⚠{relTime(awaitingSince)}</span>
         )}
-        {/* Lineage: this pane was delegated to by another. A dead lead still
-            shows (greyed, inert) — leads exit, and hiding the chip then erases
-            exactly the long chain lineage exists to make legible. stop-prop so
-            a live chip reveals the lead instead of selecting this row (#4). */}
-        {spawnerName && (
-          <span
-            class={`rail-lineage${spawnerLive ? "" : " lineage-gone"}`}
-            title={spawnerLive
-              ? `spawned by ${spawnerName} — click to reveal`
-              : `spawned by ${spawnerName}, which is no longer running`}
-            onClick={spawnerLive
-              ? (e) => { e.stopPropagation(); onRevealSpawner?.(); }
-              : undefined}
-          >↳{spawnerName}</span>
-        )}
         {/* At-rest pinned flag — the hover actions take no width, so this keeps
             the "this tab is pinned" signal visible without one. Hidden on hover
             (the real toggle is in the action overlay). */}
         {pinned && <span class="pane-pin-flag" title="pinned">★</span>}
       </div>
-      {(chip || statusText || (!expanded && (prChip || linChip))) && (
+      {(chip || statusText || (!expanded && (prChip || linChip || acctChip || profChip))) && (
         <div class={`rail-meta${statusStale ? " stale" : ""}`}>
           {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
           {statusText && (
             <span class="rail-status" title={w.status_line}>{statusText}</span>
           )}
-          {!expanded && (prChip || linChip) && (
-            <span class="rail-chips">{prChip}{linChip}</span>
+          {!expanded && (prChip || linChip || acctChip || profChip) && (
+            <span class="rail-chips">{prChip}{linChip}{acctChip}{profChip}</span>
           )}
         </div>
       )}
-      {expanded && (w.pr || w.linked_linear || isDirty(w.git) || w.context_pct != null) && (
+      {expanded && (w.pr || w.linked_linear || w.context_pct != null || acctChip || profChip) && (
         <div class="pane-foot">
           {prChip}
           {linChip}
-          {isDirty(w.git) && <span class="pane-pill pane-pill-git" title="git status">{w.git}</span>}
           <span class="pane-foot-spacer"></span>
+          {acctChip}
+          {profChip}
           {w.context_pct != null && (
             <span class={`pane-pill pane-pill-ctx${ctxClass(w.context_pct)}`} title="context window used">{w.context_pct}%</span>
           )}

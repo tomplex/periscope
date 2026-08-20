@@ -21,7 +21,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ChangesTab } from "../diff/ChangesTab.jsx";
 import { Inspector } from "../inspector/Inspector.jsx";
-import { getDetailMode, setDetailMode } from "../prefs.js";
+import { getDetailMode, setDetailMode, setLastSelected } from "../prefs.js";
 import { PreviewTab } from "../preview/PreviewTab.jsx";
 import {activeTarget, closeFileTab, openFileTab, paneActiveTab, 
   paneTabs, paneTranscript,railSelection, setActiveTab,
@@ -157,6 +157,13 @@ async function handleDetailPaste(e) {
 // the rail rows).
 export function PaneHeader({ w, mode, onMode }) {
   const [renaming, setRenaming] = useState(false);
+  // Delegation lineage — which pane spawned this one. Lives here (its own
+  // line above the status summary), not on the rail card: it's orientation
+  // about a relationship, not a live signal. A dead lead still shows,
+  // greyed — leads exit, and hiding it then erases exactly the long chain
+  // lineage exists to make legible. Click reveals the live lead in the rail.
+  const spawnerLive = !!w.spawned_by
+    && (windows.value || []).some((x) => x.pid === w.spawned_by);
 
   async function autoRename() {
     if (renaming) return;
@@ -286,6 +293,20 @@ export function PaneHeader({ w, mode, onMode }) {
   return (
     <header id="detail-pane-header" class="detail-pane-header">
       {parts.map((p, _i) => <>{p}</>)}
+      {w.spawner_name && (
+        <span
+          class={`header-lineage${spawnerLive ? "" : " lineage-gone"}`}
+          title={spawnerLive
+            ? `spawned by ${w.spawner_name} — click to reveal`
+            : `spawned by ${w.spawner_name}, which is no longer running`}
+          onClick={spawnerLive
+            ? () => {
+                railSelection.value = `pane:${w.spawned_by}`;
+                setLastSelected({ kind: "pane", pid: w.spawned_by });
+              }
+            : undefined}
+        >↳ launched by {w.spawner_name}</span>
+      )}
       {w.status_line && (
         <span
           class="header-status"

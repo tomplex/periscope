@@ -186,24 +186,19 @@ function tildify(p) {
   return String(p || "").replace(/^\/(?:Users|home)\/[^/]+/, "~");
 }
 
-// Chip text for a pane row, or null (at-pin / nothing to say). Built from
+// Chip text for a pane row, or null. The chip exists to flag DIVERGENCE —
+// a pane whose cwd is not its track's own worktree — so at-pin panes never
+// chip (the track label above them already says where they are). Built from
 // aff.kind + the window's OWN git/cwd fields — aff.label is only trusted for
-// the sibling case (off-repo's label is basename(cwd), and dev panes always
-// get {kind: no-repo, label: null} because __main__ is unpinned).
-export function paneChip(w, { isDev = false, sessionPrefix = null } = {}) {
+// the sibling case (off-repo's label is basename(cwd)).
+export function paneChip(w) {
   const aff = w.worktree_affiliation || {};
-  let text = null;
-  if (isDev || aff.kind === "no-repo" || aff.kind === "off-repo") {
+  if (aff.kind === "sibling") return aff.label || null;
+  if (aff.kind === "no-repo" || aff.kind === "off-repo") {
     if (w.repo_key && w.repo_label) {
-      text = w.branch ? `${w.repo_label}/${w.branch}` : w.repo_label;
-    } else if (w.cwd) {
-      text = tildify(w.cwd);
+      return w.branch ? `${w.repo_label}/${w.branch}` : w.repo_label;
     }
-  } else if (aff.kind === "sibling") {
-    text = aff.label || null;
+    if (w.cwd) return tildify(w.cwd);
   }
-  // at-pin (non-dev) never chips, whatever the git fields say.
-  if (aff.kind === "at-pin" && !isDev) text = null;
-  if (!text) return sessionPrefix || null;
-  return sessionPrefix ? `${sessionPrefix}: ${text}` : text;
+  return null;
 }

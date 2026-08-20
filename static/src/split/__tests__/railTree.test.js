@@ -216,20 +216,11 @@ describe("paneChip", () => {
     expect(paneChip(w)).toBe("~/tmp/x");
   });
 
-  it("dev pane in a git cwd → repo_label/branch", () => {
+  it("no-repo (unpinned) pane in a git cwd → repo_label/branch", () => {
     const w = win({
       worktree_affiliation: { kind: "no-repo", label: null },
       repo_label: "fdy", branch: "master", repo_key: "/dev/fdy",
     });
-    expect(paneChip(w, { isDev: true })).toBe("fdy/master");
-  });
-
-  it("folded ad-hoc session gets its session name as prefix", () => {
-    const w = win({
-      session: "scratch",
-      worktree_affiliation: { kind: "no-repo", label: null },
-      repo_label: "fdy", branch: "master", repo_key: "/dev/fdy",
-    });
-    expect(paneChip(w, { isDev: true, sessionPrefix: "scratch" })).toBe("scratch: fdy/master");
+    expect(paneChip(w)).toBe("fdy/master");
   });
 });

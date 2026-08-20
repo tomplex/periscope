@@ -9,6 +9,7 @@
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { alerts, dismissedAlertIds, projects, tracks, windows } from "../../store.js";
+import { PaneHeader } from "../Detail.jsx";
 import { Rail } from "../Rail.jsx";
 
 const aff = (kind, label = null) => ({ kind, label });
@@ -254,7 +255,7 @@ describe("<Rail> awaiting-reply marker", () => {
   });
 });
 
-describe("<Rail> delegation lineage", () => {
+describe("delegation lineage placement", () => {
   const paneWin = (over = {}) => ({
     session: "managed", agent: "claude", state: "idle",
     track_id: "/dev/myproj", track_name: "myproj", repo_key: "/dev/myproj",
@@ -262,7 +263,7 @@ describe("<Rail> delegation lineage", () => {
     worktree_affiliation: aff("at-pin"), ...over,
   });
 
-  it("names the spawner on a delegated pane's row", () => {
+  it("the rail card carries no lineage chip — it lives in the detail header", () => {
     projects.value = [];
     tracks.value = [];
     windows.value = [
@@ -271,32 +272,39 @@ describe("<Rail> delegation lineage", () => {
                 spawned_by: "lead1", spawner_name: "world-model-driver" }),
     ];
     const html = render(<Rail />);
-    expect(html).toContain("rail-lineage");
-    expect(html).toContain("↳world-model-driver");
+    expect(html).not.toContain("lineage");
+  });
+
+  it("names the spawner in the delegated pane's header, above the status line", () => {
+    windows.value = [
+      paneWin({ pid: "lead1", index: 0, target: "managed:0", name: "world-model-driver", pane_id: "%1" }),
+    ];
+    const w = paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2",
+                        spawned_by: "lead1", spawner_name: "world-model-driver",
+                        status_line: "porting the mover" });
+    const html = render(<PaneHeader w={w} mode="terminal" onMode={() => {}} />);
+    expect(html).toContain("header-lineage");
+    expect(html).toContain("↳ launched by world-model-driver");
     expect(html).not.toContain("lineage-gone");   // live lead stays clickable
+    // lineage precedes the status summary in flow (both are full-width lines)
+    expect(html.indexOf("header-lineage")).toBeLessThan(html.indexOf("header-status"));
   });
 
   it("still names a spawner that has exited, marked inert", () => {
     // Leads exit: the only real lineage on the dev box was a 3-link chain
-    // whose MIDDLE pane was already dead. Hiding the chip then erases exactly
+    // whose MIDDLE pane was already dead. Hiding it then erases exactly
     // the long chain this feature exists to show.
-    projects.value = [];
-    tracks.value = [];
-    windows.value = [
-      paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2",
-                spawned_by: "gone", spawner_name: "model-migration" }),
-    ];
-    const html = render(<Rail />);
-    expect(html).toContain("↳model-migration");
+    windows.value = [];
+    const w = paneWin({ pid: "work1", index: 1, target: "managed:1", name: "porter", pane_id: "%2",
+                        spawned_by: "gone", spawner_name: "model-migration" });
+    const html = render(<PaneHeader w={w} mode="terminal" onMode={() => {}} />);
+    expect(html).toContain("↳ launched by model-migration");
     expect(html).toContain("lineage-gone");
   });
 
-  it("shows no lineage chip on a hand-created pane", () => {
-    projects.value = [];
-    tracks.value = [];
-    windows.value = [
-      paneWin({ pid: "solo1", index: 0, target: "managed:0", name: "claude", pane_id: "%1" }),
-    ];
-    expect(render(<Rail />)).not.toContain("rail-lineage");
+  it("shows no lineage line on a hand-created pane's header", () => {
+    windows.value = [];
+    const w = paneWin({ pid: "solo1", index: 0, target: "managed:0", name: "claude", pane_id: "%1" });
+    expect(render(<PaneHeader w={w} mode="terminal" onMode={() => {}} />)).not.toContain("lineage");
   });
 });

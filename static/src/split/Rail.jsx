@@ -222,10 +222,6 @@ export function Rail() {
   const awaiting = awaitingReplyByPid(
     allLive, alertItems.value, dismissedAlertIds.value
   );
-  // The spawner's NAME comes from the server (persisted, so it outlives the
-  // lead). Liveness is the client's to know, and decides only whether the chip
-  // can reveal the lead — a dead lead still shows, greyed.
-  const livePids = new Set(allLive.map((w) => w.pid));
   // Registry rows feed EMPTY goal tracks into the tree; a track-scope lens
   // narrows them the same way scopeWindows narrows the live set.
   const allTracks = tracks.value;
@@ -446,7 +442,7 @@ export function Rail() {
         <PaneRow
           key={`pane:${w.pid}`}
           w={w}
-          chip={paneChip(w, { isDev: true })}
+          chip={paneChip(w)}
           selectedKey={selectedKey}
           dim={passesFilter(w, filter)}
           onSelect={selectKey}
@@ -461,9 +457,6 @@ export function Rail() {
           editor={editorSignal.value}
           onOpenInEditor={() => openInEditor(w)}
           awaitingSince={awaiting.get(w.pid)}
-          spawnerName={w.spawner_name}
-          spawnerLive={!!w.spawned_by && livePids.has(w.spawned_by)}
-          onRevealSpawner={() => selectKey(`pane:${w.spawned_by}`)}
         />
       ));
   }
