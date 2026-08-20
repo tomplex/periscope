@@ -47,13 +47,35 @@ function shortModel(m) {
   return m.replace(/\s*\(.*$/, "").trim();
 }
 
-// Context-window fill drives a quiet→warn→hot color ramp: a pane near its
-// context limit is the one about to compact / lose history.
-function ctxClass(p) {
+// Today's context-window ramp, kept verbatim for panes the server could not
+// classify: it warns about auto-compact proximity, which is a different thing
+// from cost pressure and still worth showing.
+function pctBand(p) {
   if (p == null) return "";
   if (p >= 80) return " ctx-hot";
   if (p >= 60) return " ctx-warn";
   return "";
+}
+
+// The server sends "none" | "warn" | "hot", and omits the key entirely when it
+// has nothing to say. It must never send "" — "" and undefined are both falsy,
+// so the two states would collapse here and a cost-classified pane would fall
+// back to the percent bands.
+export function ctxClass(w) {
+  if (w.ctx_class) return w.ctx_class === "none" ? "" : ` ctx-${w.ctx_class}`;
+  return pctBand(w.context_pct);
+}
+
+function fmtCtxTokens(n) {
+  return `${Math.round(n / 1000)}k`;
+}
+
+// The chip shows the percentage when Claude's status line parsed, and the raw
+// context otherwise — so a pane whose status line is unreadable still paints.
+export function ctxChipText(w) {
+  if (w.context_pct != null) return `${w.context_pct}%`;
+  if (w.ctx_tokens != null) return fmtCtxTokens(w.ctx_tokens);
+  return null;
 }
 
 // A worktree's git field is "clean" / "clean *" (the `*` means unpushed
