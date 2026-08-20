@@ -249,9 +249,6 @@ html, body {
   background: color-mix(in oklch, var(--s-danger) 14%, transparent);
   border-color: color-mix(in oklch, var(--s-danger) 45%, transparent);
 }
-/* Pane card flame: this pane carries >=40% of the current token burn while
-   the session meter is hot. */
-.rail-burn { flex: 0 0 auto; font-size: 10px; cursor: help; }
 /* Which subscription a pane bills; absent on the default account. Quiet like
    the lineage chip — orientation, not a status. */
 .rail-account { flex: 0 0 auto; font-size: 10px; cursor: help; color: var(--fg-3); }
@@ -2575,7 +2572,7 @@ body.modal-open { overflow: hidden; }
    compact is the one worth seeing. */
 .pane-mini { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .pane-mini-pr { font-size: 10px; color: var(--fg-3); }
-.pane-mini-ctx { font-size: 10px; color: var(--fg-4); }
+.pane-mini-ctx { font-size: 10px; color: var(--fg-4); cursor: help; }
 .pane-mini-ctx.ctx-warn { color: var(--s-working); }
 .pane-mini-ctx.ctx-hot { color: var(--s-danger); }
 .pane-model { font-size: 10px; color: var(--fg-3); flex: 0 0 auto; }

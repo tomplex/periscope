@@ -48,15 +48,40 @@ function shortModel(m) {
   return m.replace(/\s*\(.*$/, "").trim();
 }
 
-// Context-window fill drives a quiet→warn→hot color ramp: a pane near its
-// context limit is the one about to compact / lose history.
-function ctxClass(p) {
+// Today's context-window ramp: auto-compact proximity, a different hazard
+// from cost pressure ("this is about to lose history" vs "this is expensive
+// to keep carrying"). The two compose — this band still paints when cost
+// pressure has nothing to say (band "none" or no session), so a pane sitting
+// at 90% of its window keeps its red warning even though clearing it
+// wouldn't pay off yet.
+function pctBand(p) {
   if (p == null) return "";
   if (p >= 80) return " ctx-hot";
   if (p >= 60) return " ctx-warn";
   return "";
 }
 
+// The server sends "none" | "warn" | "hot", and omits the key entirely when it
+// has nothing to say. Cost pressure wins only when it actually has something
+// to say (warn/hot); "none" and absent both fall through to the percent
+// bands, so the auto-compact warning isn't silenced for the common case of a
+// classified pane that just isn't cost-pressured.
+export function ctxClass(w) {
+  if (w.ctx_class && w.ctx_class !== "none") return ` ctx-${w.ctx_class}`;
+  return pctBand(w.context_pct);
+}
+
+function fmtCtxTokens(n) {
+  return `${Math.round(n / 1000)}k`;
+}
+
+// The chip shows the percentage when Claude's status line parsed, and the raw
+// context otherwise — so a pane whose status line is unreadable still paints.
+export function ctxChipText(w) {
+  if (w.context_pct != null) return `${w.context_pct}%`;
+  if (w.ctx_tokens != null) return fmtCtxTokens(w.ctx_tokens);
+  return null;
+}
 // Inline-rename label. `kind` is "pane" or "track" (pane renders plain, track
 // renders bold; both rename when `renameable`).
 // `onCommit(next)` does the network write; `label` is the bold/plain display
@@ -219,15 +244,12 @@ export function PaneRow({
             the footer (expanded) so they never crowd the name. */}
         {expanded
           ? (model && <span class="pane-model" title={w.model}>{model}</span>)
-          : (w.context_pct != null && (
-              <span class={`pane-mini-ctx${ctxClass(w.context_pct)}`}>{w.context_pct}%</span>
+          : (ctxChipText(w) != null && (
+              <span
+                class={`pane-mini-ctx${ctxClass(w)}`}
+                title={w.ctx_hint || "context window used"}
+              >{ctxChipText(w)}</span>
             ))}
-        {w.burn_hot && (
-          <span
-            class="rail-burn"
-            title={`eating the session quota — ~${w.burn_wtpm || "?"} weighted tok/min over the last 30m`}
-          >🔥</span>
-        )}
         {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
         {waitTierCls && (
           <span
@@ -251,15 +273,18 @@ export function PaneRow({
           )}
         </div>
       )}
-      {expanded && (w.pr || w.linked_linear || w.context_pct != null || acctChip || profChip) && (
+      {expanded && (w.pr || w.linked_linear || ctxChipText(w) != null || acctChip || profChip) && (
         <div class="pane-foot">
           {prChip}
           {linChip}
           <span class="pane-foot-spacer"></span>
           {acctChip}
           {profChip}
-          {w.context_pct != null && (
-            <span class={`pane-pill pane-pill-ctx${ctxClass(w.context_pct)}`} title="context window used">{w.context_pct}%</span>
+          {ctxChipText(w) != null && (
+            <span
+              class={`pane-pill pane-pill-ctx${ctxClass(w)}`}
+              title={w.ctx_hint || "context window used"}
+            >{ctxChipText(w)}</span>
           )}
           {w.status_at ? <span class="pane-time">{relTime(w.status_at)}</span> : null}
         </div>

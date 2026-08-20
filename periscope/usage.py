@@ -27,6 +27,14 @@ from pathlib import Path
 import httpx
 
 from periscope import activity, store
+from periscope.cost_pressure import (
+    CostSample,
+    TailSummary,
+    hint,
+    parse_usage_record,
+    score,
+    summarize_tail,
+)
 from periscope.log import _bg, log
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
@@ -449,123 +457,173 @@ def cached_plan_usage() -> dict[str, dict]:
     return out
 
 
-# --- Per-pane burn attribution ---
+# --- Per-pane cost pressure ---
 #
-# Which pane is eating the quota? Each Claude pane maps to its session JSONL
-# (pane_sessions table, via periscope.turns); summing the usage blocks in the
-# last 30 minutes gives a per-pane burn rate. Tokens are weighted to roughly
-# match how the plan meters count them — output dominates, cache reads are
-# nearly free. The absolute scale is meaningless (Anthropic's weighting is
-# opaque); only the per-pane SHARES are used, so weighting errors mostly
-# cancel.
+# Which pane is expensive to keep carrying? Each Claude pane maps to its
+# session JSONL (pane_sessions table, via periscope.turns). For each one we
+# read three numbers off that transcript — its current context size, the
+# base_ctx a fresh session in this pane would have cost (it varies by repo
+# CLAUDE.md, MCP set and wrapper profile, so it can't be a constant), and how
+# many API calls it's making per minute — and hand them to cost_pressure.py's
+# pure core, which decides whether a /clear would pay for itself soon enough
+# to be worth recommending.
+#
+# Those reads are bounded (a capped tail plus a head scan that stops at the
+# first real usage record) but they're still file I/O, and /api/state polls
+# every 3s: doing this inline would mean re-reading every visible pane's
+# transcript three times a second. So it runs on a background refresh into a
+# cache instead, and the request path only ever reads that cache.
 
-PANE_BURN_REFRESH_S = 60.0
-_PANE_BURN_WINDOW_S = 1800
-_BURN_TAIL_BYTES = 4_000_000
-_HOT_PANE_SHARE = 0.4
-_W_INPUT, _W_CACHE_W, _W_OUT, _W_CACHE_R = 1.0, 1.25, 5.0, 0.1
+_TAIL_BYTES = 4_000_000
+_COST_REFRESH_S = 60.0
+_PACE_WINDOW_S = 1800
 
-_burn_cache: tuple[float, dict[str, float]] = (0.0, {})
-_burn_in_flight = False
-_burn_lock = threading.Lock()
+_cost_cache: tuple[float, dict[str, CostSample]] = (0.0, {})
+_cost_in_flight = False
+_cost_lock = threading.Lock()
+# session id -> first observed context. Written and read ONLY by the single
+# refresh thread that _cost_in_flight guarantees, so it needs no lock — and it
+# must never be read from the request path.
+_base_ctx_cache: dict[str, int] = {}
 
 
-def _weighted_burn_from_jsonl(path: Path, cutoff: float) -> float:
-    """Weighted token total from usage records newer than cutoff. Bounded
-    tail read — transcripts can be tens of MB and 4MB comfortably covers a
-    heavy 30 minutes."""
+def _tail_summary_from_jsonl(path: Path, *, cutoff: float) -> TailSummary:
+    """Bounded tail read of one transcript. Transcripts run to tens of MB and
+    4MB comfortably covers a heavy 30 minutes."""
     try:
         size = path.stat().st_size
         with path.open("rb") as f:
-            if size > _BURN_TAIL_BYTES:
-                f.seek(size - _BURN_TAIL_BYTES)
+            if size > _TAIL_BYTES:
+                f.seek(size - _TAIL_BYTES)
                 f.readline()  # discard the partial line
             data = f.read()
     except OSError:
-        return 0.0
-    total = 0.0
-    for line in data.splitlines():
-        try:
-            rec = json.loads(line)
-        except Exception:
-            continue
-        ts_str = rec.get("timestamp")
-        if not isinstance(ts_str, str):
-            continue
-        try:
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
-        except Exception:
-            continue
-        if ts < cutoff:
-            continue
-        u = ((rec.get("message") or {}).get("usage")) or {}
-        if not u:
-            continue
-        total += (_W_INPUT * int(u.get("input_tokens") or 0)
-                  + _W_CACHE_W * int(u.get("cache_creation_input_tokens") or 0)
-                  + _W_OUT * int(u.get("output_tokens") or 0)
-                  + _W_CACHE_R * int(u.get("cache_read_input_tokens") or 0))
-    return total
+        return TailSummary(cur_ctx=None, last_ts=None, calls=0)
+
+    def _records():
+        for line in data.splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            parsed = parse_usage_record(rec)
+            if parsed is not None:
+                yield parsed
+
+    return summarize_tail(_records(), cutoff=cutoff)
 
 
-def _refresh_burn_into_cache(pane_ids: list[str]) -> None:
-    global _burn_cache, _burn_in_flight
-    from periscope import turns
-    rates: dict[str, float] = {}
+def _base_ctx_from_jsonl(path: Path) -> int | None:
+    """The session's FIRST real usage record — what a fresh session costs in this
+    pane, which varies by repo CLAUDE.md, MCP set and wrapper profile. Median 86KB
+    to reach it; stops at the first hit."""
     try:
-        cutoff = time.time() - _PANE_BURN_WINDOW_S
+        with path.open("rb") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                parsed = parse_usage_record(rec)
+                # An output-only record (ctx_tokens == 0) is real work by
+                # parse_usage_record's own contract, but it is not a usable
+                # base: base 0 is never memoized below, so landing on one as
+                # the session's first hit would re-walk the head every 60s
+                # and silence the pane's score() forever. Keep scanning for
+                # the first record that actually has context.
+                if parsed is not None and parsed.ctx_tokens > 0:
+                    return parsed.ctx_tokens
+    except OSError:
+        return None
+    return None
+
+
+def _refresh_cost_into_cache(pane_ids: list[str]) -> None:
+    global _cost_cache, _cost_in_flight
+    samples: dict[str, CostSample] = {}
+    seen_sids: set[str] = set()
+    try:
+        # Imported inside the try: if this ever raises, the finally below
+        # still clears _cost_in_flight, so a broken import can't latch the
+        # refresh permanently in-flight and freeze the feature with no way
+        # to self-recover.
+        from periscope import turns
+        now = time.time()
+        cutoff = now - _PACE_WINDOW_S
         for pid in pane_ids:
             sid = turns.session_id_for_pane(pid)
             jsonl = turns.jsonl_for_session(sid) if sid else None
-            if jsonl:
-                rates[pid] = _weighted_burn_from_jsonl(jsonl, cutoff) / (
-                    _PANE_BURN_WINDOW_S / 60.0)
+            if not jsonl or not sid:
+                continue
+            tail = _tail_summary_from_jsonl(jsonl, cutoff=cutoff)
+            if tail.cur_ctx is None or tail.last_ts is None:
+                continue
+            seen_sids.add(sid)
+            # Gated on a successful tail read, which bounds the head read: a
+            # transcript with no usage record in its 4MB tail is genuinely
+            # usage-free, so we never re-walk a pathological file every 60s.
+            base = _base_ctx_cache.get(sid)
+            if base is None:
+                base = _base_ctx_from_jsonl(jsonl) or 0
+                if base > 0:  # only cache a real answer; a new session retries
+                    _base_ctx_cache[sid] = base
+            samples[pid] = CostSample(
+                cur_ctx=tail.cur_ctx,
+                base_ctx=base,
+                pace=tail.calls / (_PACE_WINDOW_S / 60.0),
+                last_ts=tail.last_ts,
+            )
+        for stale in set(_base_ctx_cache) - seen_sids:
+            del _base_ctx_cache[stale]
     finally:
-        with _burn_lock:
-            _burn_cache = (time.time(), rates)
-            _burn_in_flight = False
+        with _cost_lock:
+            _cost_cache = (time.time(), samples)
+            _cost_in_flight = False
 
 
-def pane_burn_rates(pane_ids: list[str]) -> dict[str, float]:
-    """Stale-while-revalidate: weighted tokens/min per pane over the last
-    30 minutes. Serves the last computed rates immediately; refreshes in a
-    background thread when older than PANE_BURN_REFRESH_S."""
-    global _burn_in_flight
+def pane_cost_pressure(pane_ids: list[str]) -> dict[str, CostSample]:
+    """Stale-while-revalidate per-pane cost measurements. Serves the last
+    computed samples immediately; refreshes in a background thread when older
+    than _COST_REFRESH_S. Returns MEASUREMENTS, not scores — banding needs a
+    fresh clock and happens at annotate time."""
+    global _cost_in_flight
     now = time.time()
-    with _burn_lock:
-        ts, rates = _burn_cache
-        if now - ts >= PANE_BURN_REFRESH_S and not _burn_in_flight:
-            _burn_in_flight = True
-            _bg("pane-burn", _refresh_burn_into_cache, list(pane_ids))
-        return rates
+    with _cost_lock:
+        ts, samples = _cost_cache
+        if now - ts >= _COST_REFRESH_S and not _cost_in_flight:
+            _cost_in_flight = True
+            _bg("pane-cost", _refresh_cost_into_cache, list(pane_ids))
+        return samples
 
 
-def annotate_hot_panes(views: list[dict]) -> None:
-    """Stamp burn_hot/burn_wtpm on the pane views eating the quota: only
-    while the session meter is hot, and only on panes carrying >=40% of the
-    current weighted burn across Claude panes (so at most two flames)."""
-    # Default account only. Burn is measured from activity._PROJECTS_DIR
-    # (~/.claude/projects), which holds the default account's transcripts and
-    # nothing else — a second account's hot meter has no measurable panes here,
-    # so gating on it would flame panes that provably aren't the cause. Widen
-    # this when per-account transcript discovery lands.
-    plan = cached_plan_usage().get("default") or {}
-    if not ((plan.get("meters") or {}).get("session") or {}).get("hot"):
+def annotate_cost_pressure(views: list[dict]) -> None:
+    """Stamp ctx_class / ctx_hint / ctx_tokens on Claude panes with cost data.
+
+    `ctx_class` is "none" | "warn" | "hot", and the key is ABSENT when there is
+    nothing to say. Never "": in JS "" and undefined are both falsy, so the
+    natural `w.ctx_class || pctBand(w.context_pct)` idiom would collapse "server
+    said plain" into "server said nothing" and silently fall a cost-classified
+    pane back onto the auto-compact percent bands.
+
+    Unlike the burn flag it replaces, this touches no plan-usage state — no
+    OAuth call, no account gate.
+    """
+    ids = [v["pane_id"] for v in views
+           if v.get("agent") == "claude" and v.get("pane_id")]
+    if not ids:
         return
-    ids = [
-        v["pane_id"]
-        for v in views
-        if v.get("agent") == "claude" and v.get("pane_id")
-    ]
-    rates = pane_burn_rates(ids)
-    total = sum(rates.get(i, 0.0) for i in ids)
-    if total <= 0:
-        return
+    samples = pane_cost_pressure(ids)
+    now = time.time()
     for v in views:
-        r = rates.get(v.get("pane_id") or "", 0.0)
-        if r / total >= _HOT_PANE_SHARE:
-            v["burn_hot"] = True
-            v["burn_wtpm"] = round(r)
+        sample = samples.get(v.get("pane_id") or "")
+        if sample is None:
+            continue
+        pressure = score(sample, now=now)
+        if pressure is None:
+            continue
+        v["ctx_class"] = pressure.band
+        v["ctx_hint"] = hint(pressure)
+        v["ctx_tokens"] = pressure.cur_ctx
 
 
 def best_account(*, rand: Callable[[], float] = random.random) -> str:

@@ -1,5 +1,7 @@
 """Claude usage tracking: JSONL parsing + OAuth plan-usage endpoint."""
 
+import json as _json
+
 from periscope.usage import compute_claude_usage, parse_plan_usage
 
 
@@ -224,69 +226,6 @@ def test_projected_recent_and_hot_default_none_false():
     attach_projections(meters, NOW, samples_for=_no_samples)
     assert meters["session"]["projected_recent"] is None
     assert meters["session"]["hot"] is False
-
-
-# --- per-pane burn attribution -------------------------------------------
-
-import json as _json
-from datetime import UTC
-
-from periscope.usage import _weighted_burn_from_jsonl
-
-
-def _jsonl_line(ts_iso, usage):
-    return _json.dumps({"timestamp": ts_iso, "message": {"usage": usage}})
-
-
-def test_weighted_burn_from_jsonl_sums_recent_weighted(tmp_path):
-    """Recent records weighted (out x5, cache_w x1.25, cache_r x0.1);
-    records older than the cutoff and junk lines are skipped."""
-    from datetime import datetime
-    recent = datetime.fromtimestamp(NOW, tz=UTC).isoformat()
-    old = datetime.fromtimestamp(NOW - 7200, tz=UTC).isoformat()
-    f = tmp_path / "s.jsonl"
-    f.write_text("\n".join([
-        _jsonl_line(recent, {"input_tokens": 100, "output_tokens": 10,
-                             "cache_creation_input_tokens": 80,
-                             "cache_read_input_tokens": 1000}),
-        _jsonl_line(old, {"output_tokens": 99999}),
-        "not json",
-        _json.dumps({"timestamp": recent}),  # no usage block
-    ]) + "\n")
-    # 100*1 + 10*5 + 80*1.25 + 1000*0.1 = 350
-    assert _weighted_burn_from_jsonl(f, NOW - 1800) == 350.0
-
-
-def test_annotate_hot_panes_flames_majority_burner(monkeypatch):
-    """Session meter hot -> the pane carrying >=40% of burn gets flamed."""
-    import periscope.usage as usage
-    monkeypatch.setattr(usage, "cached_plan_usage",
-                        lambda: {"default": {"meters": {"session": {"hot": True}}}})
-    monkeypatch.setattr(usage, "pane_burn_rates",
-                        lambda ids: {"%1": 900.0, "%2": 100.0})
-    views = [
-        {"pane_id": "%1", "agent": "claude"},
-        {"pane_id": "%2", "agent": "claude"},
-        {"pane_id": "%3", "agent": None},
-    ]
-    usage.annotate_hot_panes(views)
-    assert views[0].get("burn_hot") is True
-    assert views[0].get("burn_wtpm") == 900
-    assert "burn_hot" not in views[1]
-    assert "burn_hot" not in views[2]
-
-
-def test_annotate_hot_panes_noop_when_meter_not_hot(monkeypatch):
-    import periscope.usage as usage
-    monkeypatch.setattr(usage, "cached_plan_usage",
-                        lambda: {"default": {"meters": {"session": {"hot": False}}}})
-    called = []
-    monkeypatch.setattr(usage, "pane_burn_rates",
-                        lambda ids: called.append(ids) or {})
-    views = [{"pane_id": "%1", "agent": "claude"}]
-    usage.annotate_hot_panes(views)
-    assert not called  # burn never even computed
-    assert "burn_hot" not in views[0]
 
 
 # --- weekly meters: duty-cycle-adjusted recent burn (24h slope) -----------
@@ -608,3 +547,203 @@ def test_best_account_breaks_ties_randomly(monkeypatch, clean_state):
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=20, b=20))
     assert usage.best_account(rand=lambda: 0.0) == "default"
     assert usage.best_account(rand=lambda: 0.99) == "b"
+
+
+# --- per-pane cost pressure: transcript readers and the refresh cache -----
+
+import time
+
+
+def _iso(epoch):
+    from datetime import UTC, datetime
+    return datetime.fromtimestamp(epoch, UTC).isoformat().replace("+00:00", "Z")
+
+
+def _assistant_line(ts_iso, usage, model="claude-opus-5"):
+    """A well-formed assistant record — the shape parse_usage_record accepts.
+
+    NOTE: this file imports `json as _json`, not `json`.
+    """
+    return _json.dumps({
+        "type": "assistant",
+        "timestamp": ts_iso,
+        "message": {"model": model, "usage": usage},
+    })
+
+
+def _synthetic_line(ts_iso):
+    """Claude Code's interrupt/error/limit placeholder: all-zero usage."""
+    return _json.dumps({
+        "type": "assistant",
+        "timestamp": ts_iso,
+        "message": {"model": "<synthetic>", "usage": {
+            "input_tokens": 0, "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0, "output_tokens": 0}},
+    })
+
+
+def test_tail_summary_ignores_a_synthetic_final_record(tmp_path):
+    """A transcript that ends on a limit message must still report its real
+    context, not zero."""
+    path = tmp_path / "s.jsonl"
+    now = time.time()
+    path.write_text("\n".join([
+        _assistant_line(_iso(now - 60), {"input_tokens": 5,
+                                         "cache_read_input_tokens": 503_608}),
+        _synthetic_line(_iso(now - 30)),
+    ]) + "\n")
+    got = usage._tail_summary_from_jsonl(path, cutoff=now - 1800)
+    assert got.cur_ctx == 503_613
+    assert got.calls == 1
+
+
+def test_tail_summary_reports_cur_ctx_for_a_fully_parked_transcript(tmp_path):
+    path = tmp_path / "s.jsonl"
+    now = time.time()
+    path.write_text(_assistant_line(_iso(now - 7200),
+                                    {"cache_read_input_tokens": 600_000}) + "\n")
+    got = usage._tail_summary_from_jsonl(path, cutoff=now - 1800)
+    assert got.cur_ctx == 600_000
+    assert got.calls == 0
+    assert got.last_ts is not None
+
+
+def test_base_ctx_skips_a_synthetic_first_record(tmp_path):
+    path = tmp_path / "s.jsonl"
+    now = time.time()
+    path.write_text("\n".join([
+        _synthetic_line(_iso(now - 300)),
+        _assistant_line(_iso(now - 200), {"input_tokens": 1,
+                                          "cache_creation_input_tokens": 49_999}),
+        _assistant_line(_iso(now - 100), {"cache_read_input_tokens": 400_000}),
+    ]) + "\n")
+    assert usage._base_ctx_from_jsonl(path) == 50_000
+
+
+def test_pane_cost_pressure_serves_cache_and_schedules_refresh(monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(usage, "_bg", lambda name, fn, *a: scheduled.append(name))
+    monkeypatch.setattr(usage, "_cost_cache", (0.0, {"%1": "sample"}))
+    monkeypatch.setattr(usage, "_cost_in_flight", False)
+
+    got = usage.pane_cost_pressure(["%1"])
+
+    assert got == {"%1": "sample"}          # stale value served immediately
+    assert scheduled == ["pane-cost"]        # refresh scheduled, not awaited
+
+
+def test_refresh_cost_into_cache_builds_a_sample(tmp_path, monkeypatch):
+    """The background path never runs under pytest — conftest neuters usage._bg —
+    so it is called directly here or it ships untested."""
+    from periscope import turns
+    now = time.time()
+    jsonl = tmp_path / "sess.jsonl"
+    jsonl.write_text("\n".join([
+        _assistant_line(_iso(now - 600), {"cache_creation_input_tokens": 50_000}),
+        _assistant_line(_iso(now - 60), {"cache_read_input_tokens": 600_000}),
+    ]) + "\n")
+    monkeypatch.setattr(turns, "session_id_for_pane", lambda pid: "sess")
+    monkeypatch.setattr(turns, "jsonl_for_session", lambda sid: jsonl)
+    monkeypatch.setattr(usage, "_base_ctx_cache", {})
+    monkeypatch.setattr(usage, "_cost_in_flight", True)
+
+    usage._refresh_cost_into_cache(["%1"])
+
+    sample = usage._cost_cache[1]["%1"]
+    assert sample.cur_ctx == 600_000
+    assert sample.base_ctx == 50_000
+    assert sample.pace == 2 / 30.0          # 2 calls over the 30-minute window
+    assert usage._cost_in_flight is False    # the finally block released it
+
+
+def test_refresh_cost_into_cache_does_not_memoize_a_zero_base(tmp_path, monkeypatch):
+    """Spec Data flow item 2: only a successful non-zero read is cached, so a
+    brand-new session is retried rather than frozen for its lifetime."""
+    from periscope import turns
+    now = time.time()
+    jsonl = tmp_path / "sess.jsonl"
+    jsonl.write_text(_assistant_line(_iso(now - 60),
+                                     {"output_tokens": 5}) + "\n")
+    monkeypatch.setattr(turns, "session_id_for_pane", lambda pid: "sess")
+    monkeypatch.setattr(turns, "jsonl_for_session", lambda sid: jsonl)
+    monkeypatch.setattr(usage, "_base_ctx_cache", {})
+    monkeypatch.setattr(usage, "_cost_in_flight", True)
+
+    usage._refresh_cost_into_cache(["%1"])
+
+    assert "sess" not in usage._base_ctx_cache
+
+
+def test_pane_cost_pressure_does_not_double_schedule(monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(usage, "_bg", lambda name, fn, *a: scheduled.append(name))
+    monkeypatch.setattr(usage, "_cost_cache", (0.0, {}))
+    monkeypatch.setattr(usage, "_cost_in_flight", True)
+
+    usage.pane_cost_pressure(["%1"])
+
+    assert scheduled == []
+
+
+def test_readers_return_nothing_on_a_usage_free_transcript(tmp_path):
+    path = tmp_path / "s.jsonl"
+    path.write_text(_json.dumps({"type": "user", "timestamp": "x"}) + "\n")
+    assert usage._tail_summary_from_jsonl(path, cutoff=0).cur_ctx is None
+    assert usage._base_ctx_from_jsonl(path) is None
+
+
+def test_readers_survive_a_missing_file(tmp_path):
+    path = tmp_path / "nope.jsonl"
+    assert usage._tail_summary_from_jsonl(path, cutoff=0).cur_ctx is None
+    assert usage._base_ctx_from_jsonl(path) is None
+
+
+# --- annotate_cost_pressure: stamping pane views for the dashboard ----------
+
+import pytest
+
+from periscope import cost_pressure
+
+
+def test_annotate_stamps_three_keys_on_a_pressured_pane(monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(usage, "pane_cost_pressure", lambda ids: {
+        "%1": cost_pressure.CostSample(cur_ctx=600_000, base_ctx=50_000,
+                                       pace=8.0, last_ts=now),
+    })
+    views = [{"pane_id": "%1", "agent": "claude"}]
+    usage.annotate_cost_pressure(views)
+    assert views[0]["ctx_class"] == "hot"
+    assert "clearing" in views[0]["ctx_hint"]
+    assert views[0]["ctx_tokens"] == 600_000
+
+
+def test_annotate_stamps_nothing_without_a_sample(monkeypatch):
+    monkeypatch.setattr(usage, "pane_cost_pressure", lambda ids: {})
+    views = [{"pane_id": "%1", "agent": "claude"}]
+    usage.annotate_cost_pressure(views)
+    assert "ctx_class" not in views[0]
+    assert "ctx_hint" not in views[0]
+    assert "ctx_tokens" not in views[0]
+
+
+def test_annotate_stamps_the_none_sentinel_when_payback_is_too_slow_to_flag(monkeypatch):
+    """'server said plain' must be distinguishable from 'server said nothing'.
+    This pane has real debt (100k - 50k) — it's plain because payback is 20
+    calls, above _PAYBACK_CALLS_WARN, not because debt is zero."""
+    now = time.time()
+    monkeypatch.setattr(usage, "pane_cost_pressure", lambda ids: {
+        "%1": cost_pressure.CostSample(cur_ctx=100_000, base_ctx=50_000,
+                                       pace=1.0, last_ts=now),
+    })
+    views = [{"pane_id": "%1", "agent": "claude"}]
+    usage.annotate_cost_pressure(views)
+    assert views[0]["ctx_class"] == "none"
+
+
+def test_annotate_ignores_shell_panes(monkeypatch):
+    monkeypatch.setattr(usage, "pane_cost_pressure",
+                        lambda ids: pytest.fail("should not be asked"))
+    views = [{"pane_id": "%1", "agent": None}]
+    usage.annotate_cost_pressure(views)
+    assert "ctx_class" not in views[0]
