@@ -25,6 +25,7 @@ class SettingsPatch(BaseModel):
     worktree_layout_overrides: dict[str, str] | None = None
     cleanup_idle_days: int | None = None
     bg_account: str | None = None
+    spawn_account: str | None = None
 
 
 @router.patch("/api/settings")
@@ -72,6 +73,15 @@ def settings_patch(body: SettingsPatch):
         # this whole feature exists to prevent.
         if v is None or any(a.get("id") == v for a in get_accounts()):
             patch["bg_account"] = v
+        else:
+            raise HTTPException(400, f"unknown account id {v!r}")
+
+    if "spawn_account" in sent:
+        v = body.spawn_account
+        # Same write-boundary strictness as bg_account: a typo'd pin routing
+        # EVERY future spawn to the fail-open default is the worst outcome.
+        if v is None or any(a.get("id") == v for a in get_accounts()):
+            patch["spawn_account"] = v
         else:
             raise HTTPException(400, f"unknown account id {v!r}")
 

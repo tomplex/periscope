@@ -111,6 +111,38 @@ html, body {
 }
 @keyframes brand-blink { 50% { opacity: 0; } }
 
+/* Spawn-account pin: segmented auto|A|B next to the usage meters. Letters
+   match .usage-acct-label so "pinned to B" and "B's meter" read as the same
+   thing. */
+.spawn-acct {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: help;
+}
+.spawn-acct-label {
+  font-size: 10px;
+  color: var(--fg-3);
+  letter-spacing: 0.04em;
+  margin-right: 3px;
+}
+.spawn-acct-btn {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg-3);
+  background: var(--bg-2);
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.spawn-acct-btn:hover { color: var(--fg-1); }
+.spawn-acct-btn.is-active {
+  color: var(--bg-0);
+  background: var(--accent);
+}
+
 .usage {
   display: flex;
   flex-wrap: wrap;

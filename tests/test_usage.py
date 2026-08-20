@@ -585,6 +585,25 @@ def test_best_account_falls_back_to_default_when_nothing_is_known(monkeypatch):
     assert usage.best_account() == "default"
 
 
+def test_best_account_honors_the_spawn_pin_over_headroom(monkeypatch, clean_state):
+    # Pin wins even when the pinned account is the FULL one — that's what a
+    # deliberate pin means, and second-guessing it would make the header
+    # control a suggestion.
+    from periscope import store
+    store.update_settings({"spawn_account": "default"})
+    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
+    assert usage.best_account() == "default"
+
+
+def test_best_account_ignores_a_pin_naming_no_registered_account(monkeypatch, clean_state):
+    # account_config_dir fails OPEN on an unknown id, so honoring a stale pin
+    # would silently reroute every spawn to the default account.
+    from periscope import store
+    store.update_settings({"spawn_account": "gone"})
+    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
+    assert usage.best_account() == "b"
+
+
 def test_best_account_breaks_ties_randomly(monkeypatch):
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=20, b=20))
     assert usage.best_account(rand=lambda: 0.0) == "default"

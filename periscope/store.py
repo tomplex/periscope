@@ -87,6 +87,7 @@ class Settings(TypedDict, total=False):
     worktree_layout_overrides: dict[str, str]  # realpath -> "sibling" | "inline"
     cleanup_idle_days: int
     bg_account: str  # account id background commander jobs bill; unset => default
+    spawn_account: str  # account id every unnamed spawn lands on; unset => most headroom
 
 
 class Command(TypedDict):

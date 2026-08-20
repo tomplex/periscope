@@ -23,6 +23,7 @@ export const railSelection = signal(null);    // string highlight-key: "pane:<pi
 export const dragState = signal(null);
 export const usage = signal(null);
 export const updateInfo = signal(null);       // /api/state update summary: { behind, checked_at, running }
+export const spawnAccount = signal(null);     // pinned spawn account id, null = auto (most headroom)
 
 // poll-pause flags (replace state.editingTarget / state.dragging guards):
 export const editingTarget = signal(null);

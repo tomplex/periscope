@@ -13,6 +13,7 @@ import {
   dragState,
   editingTarget,
   projects,
+  spawnAccount,
   syncTabsFromWindows,
   tracks,
   updateInfo,
@@ -52,6 +53,7 @@ function applyState(data) {
   // UsagePill reads { plan, fallback }.
   usage.value = { plan: data.usage_plan, fallback: data.usage };
   updateInfo.value = data.update || null;
+  spawnAccount.value = data.spawn_account || null;
 }
 
 function markOk() {

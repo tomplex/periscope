@@ -34,7 +34,7 @@ import { useEscape } from "../hooks/useEscape.js";
 import * as prefs from "../prefs.js";
 import { PROFILES, profileQuery, sendsProfile } from "../profiles.js";
 import { trackLabel } from "../split/railTree.js";
-import { tracks, usage, windows } from "../store.js";
+import { spawnAccount, tracks, usage, windows } from "../store.js";
 import { track } from "../track.js";
 import { apiCall } from "../util.js";
 
@@ -206,12 +206,15 @@ export function openLauncher(trackId) {
   pickedBranch.value = bs.length ? bs[0].branch : null;
   newBranchName.value = null;
   branchQuery.value = "";
-  // Preselect whichever subscription has the most headroom, re-derived on
-  // every open rather than remembered: the answer changes as limits burn
-  // down, and a stale sticky value would keep routing work at an account
-  // that filled up since. Falls back to the default account when no usage
-  // has been fetched yet, which is the pre-accounts behaviour.
-  account.value = bestAccount(usage.value?.plan, Date.now() / 1000) || "default";
+  // Preselect the header's pinned spawn account when one is set; otherwise
+  // whichever subscription has the most headroom, re-derived on every open
+  // rather than remembered: the answer changes as limits burn down, and a
+  // stale sticky value would keep routing work at an account that filled up
+  // since. Falls back to the default account when no usage has been fetched
+  // yet, which is the pre-accounts behaviour. This seed is only the launcher's
+  // preselect — clicking the other account here still wins for that launch.
+  account.value =
+    spawnAccount.value || bestAccount(usage.value?.plan, Date.now() / 1000) || "default";
   profile.value = prefs.getLaunchProfile();
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.

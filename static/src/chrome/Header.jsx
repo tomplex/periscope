@@ -17,6 +17,7 @@ import { useEscape } from "../hooks/useEscape.js";
 import { windows } from "../store.js";
 import { track } from "../track.js";
 import { FilterBar } from "./FilterBar.jsx";
+import { SpawnAccountPicker } from "./SpawnAccountPicker.jsx";
 import { UpdatePill } from "./UpdatePill.jsx";
 import { UsagePill } from "./UsagePill.jsx";
 
@@ -124,6 +125,10 @@ export function Header() {
         <span class="brand">
           periscope<i class="brand-cursor"></i>
         </span>
+        {/* Before the usage pill: .usage flexes to fill the row, so trailing
+            it would strand the picker far right — leading it keeps the pin
+            adjacent to the A/B meters it names. */}
+        <SpawnAccountPicker />
         <UsagePill />
         <UpdatePill />
         <div class="meta">

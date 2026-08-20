@@ -569,7 +569,15 @@ def annotate_hot_panes(views: list[dict]) -> None:
 
 
 def best_account(*, rand: Callable[[], float] = random.random) -> str:
-    """The account id a new pane should land on: the one with the most headroom.
+    """The account id a new pane should land on: the pinned spawn account when
+    one is set, else the one with the most headroom.
+
+    The pin (`settings.spawn_account`, set from the header's account picker)
+    lives HERE rather than at the call sites because this function is the one
+    choke point every unnamed spawn path shares — launcher New Tab, unified
+    open, MCP spawn_claude/resume_session. A pin naming an account that no
+    longer exists is ignored rather than honored: account_config_dir would
+    fail open to the default, silently rerouting every spawn.
 
     Headroom is measured by each account's BINDING meter — the highest-percent
     one — because that is the limit that stops work first: an account at 2% for
@@ -583,6 +591,9 @@ def best_account(*, rand: Callable[[], float] = random.random) -> str:
     Ties are broken randomly so two equally-free accounts share load instead of
     every spawn stacking onto whichever sorts first.
     """
+    pinned = store.get_settings().get("spawn_account")
+    if pinned and any(a["id"] == pinned for a in store.get_accounts()):
+        return pinned
     best: list[str] = []
     low: float | None = None
     for aid, payload in (cached_plan_usage() or {}).items():
