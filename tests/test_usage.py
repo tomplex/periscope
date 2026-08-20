@@ -1,5 +1,7 @@
 """Claude usage tracking: JSONL parsing + OAuth plan-usage endpoint."""
 
+import json as _json
+
 from periscope.usage import compute_claude_usage, parse_plan_usage
 
 
@@ -227,66 +229,6 @@ def test_projected_recent_and_hot_default_none_false():
 
 
 # --- per-pane burn attribution -------------------------------------------
-
-import json as _json
-from datetime import UTC
-
-from periscope.usage import _weighted_burn_from_jsonl
-
-
-def _jsonl_line(ts_iso, usage):
-    return _json.dumps({"timestamp": ts_iso, "message": {"usage": usage}})
-
-
-def test_weighted_burn_from_jsonl_sums_recent_weighted(tmp_path):
-    """Recent records weighted (out x5, cache_w x1.25, cache_r x0.1);
-    records older than the cutoff and junk lines are skipped."""
-    from datetime import datetime
-    recent = datetime.fromtimestamp(NOW, tz=UTC).isoformat()
-    old = datetime.fromtimestamp(NOW - 7200, tz=UTC).isoformat()
-    f = tmp_path / "s.jsonl"
-    f.write_text("\n".join([
-        _jsonl_line(recent, {"input_tokens": 100, "output_tokens": 10,
-                             "cache_creation_input_tokens": 80,
-                             "cache_read_input_tokens": 1000}),
-        _jsonl_line(old, {"output_tokens": 99999}),
-        "not json",
-        _json.dumps({"timestamp": recent}),  # no usage block
-    ]) + "\n")
-    # 100*1 + 10*5 + 80*1.25 + 1000*0.1 = 350
-    assert _weighted_burn_from_jsonl(f, NOW - 1800) == 350.0
-
-
-def test_annotate_hot_panes_flames_majority_burner(monkeypatch):
-    """Session meter hot -> the pane carrying >=40% of burn gets flamed."""
-    import periscope.usage as usage
-    monkeypatch.setattr(usage, "cached_plan_usage",
-                        lambda: {"default": {"meters": {"session": {"hot": True}}}})
-    monkeypatch.setattr(usage, "pane_burn_rates",
-                        lambda ids: {"%1": 900.0, "%2": 100.0})
-    views = [
-        {"pane_id": "%1", "agent": "claude"},
-        {"pane_id": "%2", "agent": "claude"},
-        {"pane_id": "%3", "agent": None},
-    ]
-    usage.annotate_hot_panes(views)
-    assert views[0].get("burn_hot") is True
-    assert views[0].get("burn_wtpm") == 900
-    assert "burn_hot" not in views[1]
-    assert "burn_hot" not in views[2]
-
-
-def test_annotate_hot_panes_noop_when_meter_not_hot(monkeypatch):
-    import periscope.usage as usage
-    monkeypatch.setattr(usage, "cached_plan_usage",
-                        lambda: {"default": {"meters": {"session": {"hot": False}}}})
-    called = []
-    monkeypatch.setattr(usage, "pane_burn_rates",
-                        lambda ids: called.append(ids) or {})
-    views = [{"pane_id": "%1", "agent": "claude"}]
-    usage.annotate_hot_panes(views)
-    assert not called  # burn never even computed
-    assert "burn_hot" not in views[0]
 
 
 # --- weekly meters: duty-cycle-adjusted recent burn (24h slope) -----------

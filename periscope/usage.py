@@ -457,7 +457,7 @@ def cached_plan_usage() -> dict[str, dict]:
     return out
 
 
-# --- Per-pane burn attribution ---
+# --- Per-pane cost pressure ---
 #
 # Which pane is eating the quota? Each Claude pane maps to its session JSONL
 # (pane_sessions table, via periscope.turns); summing the usage blocks in the
@@ -467,16 +467,10 @@ def cached_plan_usage() -> dict[str, dict]:
 # opaque); only the per-pane SHARES are used, so weighting errors mostly
 # cancel.
 
-PANE_BURN_REFRESH_S = 60.0
-_PANE_BURN_WINDOW_S = 1800
-_BURN_TAIL_BYTES = 4_000_000
 _TAIL_BYTES = 4_000_000
 PANE_COST_REFRESH_S = 60.0
 _PANE_WINDOW_S = 1800
-_HOT_PANE_SHARE = 0.4
-_W_INPUT, _W_CACHE_W, _W_OUT, _W_CACHE_R = 1.0, 1.25, 5.0, 0.1
 
-_burn_cache: tuple[float, dict[str, float]] = (0.0, {})
 _cost_cache: tuple[float, dict[str, CostSample]] = (0.0, {})
 _cost_in_flight = False
 _cost_lock = threading.Lock()
@@ -484,8 +478,6 @@ _cost_lock = threading.Lock()
 # refresh thread that _cost_in_flight guarantees, so it needs no lock — and it
 # must never be read from the request path.
 _base_ctx_cache: dict[str, int] = {}
-_burn_in_flight = False
-_burn_lock = threading.Lock()
 
 
 def _tail_summary_from_jsonl(path: Path, *, cutoff: float) -> TailSummary:
@@ -615,104 +607,6 @@ def annotate_cost_pressure(views: list[dict]) -> None:
         v["ctx_class"] = pressure.band
         v["ctx_hint"] = hint(pressure)
         v["ctx_tokens"] = pressure.cur_ctx
-
-
-def _weighted_burn_from_jsonl(path: Path, cutoff: float) -> float:
-    """Weighted token total from usage records newer than cutoff. Bounded
-    tail read — transcripts can be tens of MB and 4MB comfortably covers a
-    heavy 30 minutes."""
-    try:
-        size = path.stat().st_size
-        with path.open("rb") as f:
-            if size > _BURN_TAIL_BYTES:
-                f.seek(size - _BURN_TAIL_BYTES)
-                f.readline()  # discard the partial line
-            data = f.read()
-    except OSError:
-        return 0.0
-    total = 0.0
-    for line in data.splitlines():
-        try:
-            rec = json.loads(line)
-        except Exception:
-            continue
-        ts_str = rec.get("timestamp")
-        if not isinstance(ts_str, str):
-            continue
-        try:
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
-        except Exception:
-            continue
-        if ts < cutoff:
-            continue
-        u = ((rec.get("message") or {}).get("usage")) or {}
-        if not u:
-            continue
-        total += (_W_INPUT * int(u.get("input_tokens") or 0)
-                  + _W_CACHE_W * int(u.get("cache_creation_input_tokens") or 0)
-                  + _W_OUT * int(u.get("output_tokens") or 0)
-                  + _W_CACHE_R * int(u.get("cache_read_input_tokens") or 0))
-    return total
-
-
-def _refresh_burn_into_cache(pane_ids: list[str]) -> None:
-    global _burn_cache, _burn_in_flight
-    from periscope import turns
-    rates: dict[str, float] = {}
-    try:
-        cutoff = time.time() - _PANE_BURN_WINDOW_S
-        for pid in pane_ids:
-            sid = turns.session_id_for_pane(pid)
-            jsonl = turns.jsonl_for_session(sid) if sid else None
-            if jsonl:
-                rates[pid] = _weighted_burn_from_jsonl(jsonl, cutoff) / (
-                    _PANE_BURN_WINDOW_S / 60.0)
-    finally:
-        with _burn_lock:
-            _burn_cache = (time.time(), rates)
-            _burn_in_flight = False
-
-
-def pane_burn_rates(pane_ids: list[str]) -> dict[str, float]:
-    """Stale-while-revalidate: weighted tokens/min per pane over the last
-    30 minutes. Serves the last computed rates immediately; refreshes in a
-    background thread when older than PANE_BURN_REFRESH_S."""
-    global _burn_in_flight
-    now = time.time()
-    with _burn_lock:
-        ts, rates = _burn_cache
-        if now - ts >= PANE_BURN_REFRESH_S and not _burn_in_flight:
-            _burn_in_flight = True
-            _bg("pane-burn", _refresh_burn_into_cache, list(pane_ids))
-        return rates
-
-
-def annotate_hot_panes(views: list[dict]) -> None:
-    """Stamp burn_hot/burn_wtpm on the pane views eating the quota: only
-    while the session meter is hot, and only on panes carrying >=40% of the
-    current weighted burn across Claude panes (so at most two flames)."""
-    # Default account only. Burn is measured from activity._PROJECTS_DIR
-    # (~/.claude/projects), which holds the default account's transcripts and
-    # nothing else — a second account's hot meter has no measurable panes here,
-    # so gating on it would flame panes that provably aren't the cause. Widen
-    # this when per-account transcript discovery lands.
-    plan = cached_plan_usage().get("default") or {}
-    if not ((plan.get("meters") or {}).get("session") or {}).get("hot"):
-        return
-    ids = [
-        v["pane_id"]
-        for v in views
-        if v.get("agent") == "claude" and v.get("pane_id")
-    ]
-    rates = pane_burn_rates(ids)
-    total = sum(rates.get(i, 0.0) for i in ids)
-    if total <= 0:
-        return
-    for v in views:
-        r = rates.get(v.get("pane_id") or "", 0.0)
-        if r / total >= _HOT_PANE_SHARE:
-            v["burn_hot"] = True
-            v["burn_wtpm"] = round(r)
 
 
 def best_account(*, rand: Callable[[], float] = random.random) -> str:
