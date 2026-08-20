@@ -14,6 +14,7 @@ many calls until that write pays for itself".
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 Band = Literal["none", "warn", "hot"]
@@ -78,3 +79,50 @@ class Pressure:
     cur_ctx: int
     payback_calls: float
     payback_mins: float | None  # None when pace is zero
+
+
+def parse_usage_record(rec: dict) -> UsageRecord | None:
+    """One record from a session JSONL, or None if it is not a real API call.
+
+    Rejecting the right records is the whole job. Claude Code writes an
+    `assistant` record with `model: "<synthetic>"` and a fully-populated but
+    all-zero usage block for interrupts, API errors and rate-limit messages.
+    Unfiltered, those break the signal in both directions, and they land exactly
+    when the user is already looking at the dashboard: one real transcript ends
+    with a zero record reading "You've reached your Fable 5 limit" immediately
+    after a 503,613-token record. Ending on one would report cur_ctx=0 and paint
+    a half-million-token pane plain; beginning on one would report base_ctx=0 and
+    paint it hot instantly.
+
+    Sidechain records need no filter: on Claude Code 2.1.236 subagent transcripts
+    live in a sibling `<session-uuid>/subagents/` directory, and zero of 72,999
+    August usage records in main transcripts carry `isSidechain: true`. Re-verify
+    if record shapes change.
+    """
+    if rec.get("type") != "assistant":
+        return None
+    message = rec.get("message") or {}
+    if message.get("model") == "<synthetic>":
+        return None
+    usage = message.get("usage") or {}
+    if not usage:
+        return None
+
+    ts_str = rec.get("timestamp")
+    if not isinstance(ts_str, str):
+        return None
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+    fresh = int(usage.get("input_tokens") or 0)
+    written = int(usage.get("cache_creation_input_tokens") or 0)
+    read = int(usage.get("cache_read_input_tokens") or 0)
+    out = int(usage.get("output_tokens") or 0)
+    # An all-zero block is a synthetic placeholder even when the model field
+    # doesn't say so. An output-only record is real work and survives.
+    if fresh + written + read + out == 0:
+        return None
+
+    return UsageRecord(ts=ts, ctx_tokens=fresh + written + read)
