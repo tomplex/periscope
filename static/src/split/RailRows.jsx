@@ -214,7 +214,7 @@ export function PaneRow({
   // still not the default, so still shown.
   const acctChip = w.account && w.account !== "default" && (
     <span
-      class="rail-account"
+      class="pane-pill pane-pill-acct"
       title={`running on Claude account ${w.account} — its usage bills that subscription`}
     >@{w.account}</span>
   );

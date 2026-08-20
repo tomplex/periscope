@@ -92,8 +92,8 @@ describe("<Rail> render smoke", () => {
     ];
 
     const html = render(<Rail />);
-    expect(html).toContain('class="rail-account"');
-    expect(html.split('class="rail-account"').length - 1).toBe(1);
+    expect(html).toContain('class="pane-pill pane-pill-acct"');
+    expect(html.split('class="pane-pill pane-pill-acct"').length - 1).toBe(1);
     expect(html).toContain("@b");
   });
 

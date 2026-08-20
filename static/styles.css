@@ -249,9 +249,6 @@ html, body {
   background: color-mix(in oklch, var(--s-danger) 14%, transparent);
   border-color: color-mix(in oklch, var(--s-danger) 45%, transparent);
 }
-/* Which subscription a pane bills; absent on the default account. Quiet like
-   the lineage chip — orientation, not a status. */
-.rail-account { flex: 0 0 auto; font-size: 10px; cursor: help; color: var(--fg-3); }
 /* Wrapper profile (non-default only). Outlined rather than plain text like the
    account chip: the profile changes what the pane can DO, so it should read as
    a badge you notice, not orientation you look up. */
@@ -2019,7 +2016,7 @@ body.modal-open { overflow: hidden; }
    width past the dot gutter — but stays inside the tree-guide indent (the
    row's content box already starts right of the vertical guides).
    .stale = generated >15 min ago (poll keeps it; the work likely moved on). */
-.rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 2px; }
+.rail-row.pane-row { flex-direction: column; align-items: stretch; gap: 3px; }
 .pane-row-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
 /* The meta block stacks: cwd chip, then narrator status, then PR/Linear
    chips — each on its own line, left-aligned down a single edge. All three
@@ -2431,6 +2428,9 @@ body.modal-open { overflow: hidden; }
 /* --- Rail restyle: spacing/typography toward attention-rail mockup --------- */
 
 #rail .rail-row { padding-top: 3px; padding-bottom: 3px; }
+/* Pane CARDS breathe more than structural rows (track/branch/new-tab stay
+   tight — they're chrome, the cards are the content). */
+#rail .pane-row { padding-top: 7px; padding-bottom: 7px; }
 #rail .repo-row { margin-top: 6px; }
 #rail .wt-row { color: #aeb4bf; }
 #rail .child-row { padding-left: calc(10px + 2 * var(--rail-indent) + 6px); }
@@ -2582,7 +2582,7 @@ body.modal-open { overflow: hidden; }
   background: var(--bg-2);
   border-radius: var(--r-md);
   margin: 3px 0;
-  padding-top: 7px; padding-bottom: 7px;
+  padding-top: 9px; padding-bottom: 9px;
   box-shadow: 0 1px 6px oklch(0 0 0 / .25);
 }
 #rail .rail-group-body .pane-expanded.selected {
@@ -2633,6 +2633,9 @@ body.modal-open { overflow: hidden; }
 .pane-pill-pr.is-closed, .wt-meta-pr.is-closed, .header-pr.is-closed { color: var(--fg-3); text-decoration: line-through; }
 .header-pr-state { opacity: 0.7; font-size: 0.9em; }
 .pane-pill-linear { color: oklch(0.7 0.13 280); }
+/* Which subscription a pane bills; absent on the default account. Teal — clear
+   of Linear's purple (280) and the repo-icon blue (232). */
+.pane-pill-acct { color: oklch(0.75 0.11 190); cursor: help; }
 .pane-pill-ctx { color: var(--fg-3); }
 .pane-pill-ctx.ctx-warn { color: var(--s-working); }
 .pane-pill-ctx.ctx-hot { color: var(--s-danger); }
