@@ -47,9 +47,12 @@ function shortModel(m) {
   return m.replace(/\s*\(.*$/, "").trim();
 }
 
-// Today's context-window ramp, kept verbatim for panes the server could not
-// classify: it warns about auto-compact proximity, which is a different thing
-// from cost pressure and still worth showing.
+// Today's context-window ramp: auto-compact proximity, a different hazard
+// from cost pressure ("this is about to lose history" vs "this is expensive
+// to keep carrying"). The two compose — this band still paints when cost
+// pressure has nothing to say (band "none" or no session), so a pane sitting
+// at 90% of its window keeps its red warning even though clearing it
+// wouldn't pay off yet.
 function pctBand(p) {
   if (p == null) return "";
   if (p >= 80) return " ctx-hot";
@@ -58,11 +61,12 @@ function pctBand(p) {
 }
 
 // The server sends "none" | "warn" | "hot", and omits the key entirely when it
-// has nothing to say. It must never send "" — "" and undefined are both falsy,
-// so the two states would collapse here and a cost-classified pane would fall
-// back to the percent bands.
+// has nothing to say. Cost pressure wins only when it actually has something
+// to say (warn/hot); "none" and absent both fall through to the percent
+// bands, so the auto-compact warning isn't silenced for the common case of a
+// classified pane that just isn't cost-pressured.
 export function ctxClass(w) {
-  if (w.ctx_class) return w.ctx_class === "none" ? "" : ` ctx-${w.ctx_class}`;
+  if (w.ctx_class && w.ctx_class !== "none") return ` ctx-${w.ctx_class}`;
   return pctBand(w.context_pct);
 }
 

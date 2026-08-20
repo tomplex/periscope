@@ -327,10 +327,14 @@ describe("ctxClass", () => {
     expect(ctxClass({ ctx_class: "warn" })).toBe(" ctx-warn");
   });
 
-  it("treats an explicit 'none' as plain, NOT as a missing value", () => {
-    // The trap: "" and undefined are both falsy, so a "" sentinel would fall
-    // through to the percent bands and silently mis-colour a classified pane.
-    expect(ctxClass({ ctx_class: "none", context_pct: 95 })).toBe("");
+  it("falls through to the percent band when cost pressure has nothing to say", () => {
+    // "none" means cost pressure is silent, not that the pane should paint
+    // plain — the auto-compact warning still applies at 95%.
+    expect(ctxClass({ ctx_class: "none", context_pct: 95 })).toBe(" ctx-hot");
+  });
+
+  it("lets cost pressure win when it has something to say", () => {
+    expect(ctxClass({ ctx_class: "warn", context_pct: 95 })).toBe(" ctx-warn");
   });
 
   it("falls back to the percent bands when the server said nothing", () => {
