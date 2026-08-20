@@ -797,7 +797,7 @@ def test_spawn_claude_account_sets_config_dir_env(mocker):
     assert args[args.index(env[0]) - 1] == "-e"
 
 
-def test_spawn_claude_default_account_sets_no_env(mocker):
+def test_spawn_claude_default_account_sets_no_env(mocker, clean_state):
     from periscope import channels
     cap = _mock_spawn_plumbing(mocker)
 

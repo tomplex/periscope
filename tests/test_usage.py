@@ -553,14 +553,14 @@ def _plan(**pcts):
     }
 
 
-def test_best_account_picks_the_most_headroom(monkeypatch):
+def test_best_account_picks_the_most_headroom(monkeypatch, clean_state):
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
     assert usage.best_account() == "b"
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=4, b=70))
     assert usage.best_account() == "default"
 
 
-def test_best_account_uses_the_binding_meter_not_the_emptiest_one(monkeypatch):
+def test_best_account_uses_the_binding_meter_not_the_emptiest_one(monkeypatch, clean_state):
     # b's week is nearly free but its 5h window is nearly spent: the limit that
     # binds first is what decides whether work can actually run there.
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: {
@@ -572,13 +572,13 @@ def test_best_account_uses_the_binding_meter_not_the_emptiest_one(monkeypatch):
     assert usage.best_account() == "default"
 
 
-def test_best_account_skips_accounts_with_no_data(monkeypatch):
+def test_best_account_skips_accounts_with_no_data(monkeypatch, clean_state):
     # No data must never read as infinite room.
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=90, b=None))
     assert usage.best_account() == "default"
 
 
-def test_best_account_falls_back_to_default_when_nothing_is_known(monkeypatch):
+def test_best_account_falls_back_to_default_when_nothing_is_known(monkeypatch, clean_state):
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=None, b=None))
     assert usage.best_account() == "default"
     monkeypatch.setattr(usage, "cached_plan_usage", dict)
@@ -604,7 +604,7 @@ def test_best_account_ignores_a_pin_naming_no_registered_account(monkeypatch, cl
     assert usage.best_account() == "b"
 
 
-def test_best_account_breaks_ties_randomly(monkeypatch):
+def test_best_account_breaks_ties_randomly(monkeypatch, clean_state):
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=20, b=20))
     assert usage.best_account(rand=lambda: 0.0) == "default"
     assert usage.best_account(rand=lambda: 0.99) == "b"
