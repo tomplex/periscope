@@ -27,6 +27,7 @@ from pathlib import Path
 import httpx
 
 from periscope import activity, store
+from periscope.cost_pressure import TailSummary, parse_usage_record, summarize_tail
 from periscope.log import _bg, log
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
@@ -462,12 +463,58 @@ def cached_plan_usage() -> dict[str, dict]:
 PANE_BURN_REFRESH_S = 60.0
 _PANE_BURN_WINDOW_S = 1800
 _BURN_TAIL_BYTES = 4_000_000
+_TAIL_BYTES = 4_000_000
 _HOT_PANE_SHARE = 0.4
 _W_INPUT, _W_CACHE_W, _W_OUT, _W_CACHE_R = 1.0, 1.25, 5.0, 0.1
 
 _burn_cache: tuple[float, dict[str, float]] = (0.0, {})
 _burn_in_flight = False
 _burn_lock = threading.Lock()
+
+
+def _tail_summary_from_jsonl(path: Path, *, cutoff: float) -> TailSummary:
+    """Bounded tail read of one transcript. Transcripts run to tens of MB and
+    4MB comfortably covers a heavy 30 minutes."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > _TAIL_BYTES:
+                f.seek(size - _TAIL_BYTES)
+                f.readline()  # discard the partial line
+            data = f.read()
+    except OSError:
+        return TailSummary(cur_ctx=None, last_ts=None, calls=0)
+
+    def _records():
+        for line in data.splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            parsed = parse_usage_record(rec)
+            if parsed is not None:
+                yield parsed
+
+    return summarize_tail(_records(), cutoff=cutoff)
+
+
+def _base_ctx_from_jsonl(path: Path) -> int | None:
+    """The session's FIRST real usage record — what a fresh session costs in this
+    pane, which varies by repo CLAUDE.md, MCP set and wrapper profile. Median 86KB
+    to reach it; stops at the first hit."""
+    try:
+        with path.open("rb") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                parsed = parse_usage_record(rec)
+                if parsed is not None:
+                    return parsed.ctx_tokens
+    except OSError:
+        return None
+    return None
 
 
 def _weighted_burn_from_jsonl(path: Path, cutoff: float) -> float:

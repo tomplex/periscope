@@ -608,3 +608,85 @@ def test_best_account_breaks_ties_randomly(monkeypatch):
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=20, b=20))
     assert usage.best_account(rand=lambda: 0.0) == "default"
     assert usage.best_account(rand=lambda: 0.99) == "b"
+
+
+import time
+
+
+def _iso(epoch):
+    from datetime import UTC, datetime
+    return datetime.fromtimestamp(epoch, UTC).isoformat().replace("+00:00", "Z")
+
+
+def _assistant_line(ts_iso, usage, model="claude-opus-5"):
+    """A well-formed assistant record — the shape parse_usage_record accepts.
+
+    NOTE: this file imports `json as _json` (near line 231), not `json`.
+    """
+    return _json.dumps({
+        "type": "assistant",
+        "timestamp": ts_iso,
+        "message": {"model": model, "usage": usage},
+    })
+
+
+def _synthetic_line(ts_iso):
+    """Claude Code's interrupt/error/limit placeholder: all-zero usage."""
+    return _json.dumps({
+        "type": "assistant",
+        "timestamp": ts_iso,
+        "message": {"model": "<synthetic>", "usage": {
+            "input_tokens": 0, "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0, "output_tokens": 0}},
+    })
+
+
+def test_tail_summary_ignores_a_synthetic_final_record(tmp_path):
+    """A transcript that ends on a limit message must still report its real
+    context, not zero."""
+    path = tmp_path / "s.jsonl"
+    now = time.time()
+    path.write_text("\n".join([
+        _assistant_line(_iso(now - 60), {"input_tokens": 5,
+                                         "cache_read_input_tokens": 503_608}),
+        _synthetic_line(_iso(now - 30)),
+    ]) + "\n")
+    got = usage._tail_summary_from_jsonl(path, cutoff=now - 1800)
+    assert got.cur_ctx == 503_613
+    assert got.calls == 1
+
+
+def test_tail_summary_reports_cur_ctx_for_a_fully_parked_transcript(tmp_path):
+    path = tmp_path / "s.jsonl"
+    now = time.time()
+    path.write_text(_assistant_line(_iso(now - 7200),
+                                    {"cache_read_input_tokens": 600_000}) + "\n")
+    got = usage._tail_summary_from_jsonl(path, cutoff=now - 1800)
+    assert got.cur_ctx == 600_000
+    assert got.calls == 0
+    assert got.last_ts is not None
+
+
+def test_base_ctx_skips_a_synthetic_first_record(tmp_path):
+    path = tmp_path / "s.jsonl"
+    now = time.time()
+    path.write_text("\n".join([
+        _synthetic_line(_iso(now - 300)),
+        _assistant_line(_iso(now - 200), {"input_tokens": 1,
+                                          "cache_creation_input_tokens": 49_999}),
+        _assistant_line(_iso(now - 100), {"cache_read_input_tokens": 400_000}),
+    ]) + "\n")
+    assert usage._base_ctx_from_jsonl(path) == 50_000
+
+
+def test_readers_return_nothing_on_a_usage_free_transcript(tmp_path):
+    path = tmp_path / "s.jsonl"
+    path.write_text(_json.dumps({"type": "user", "timestamp": "x"}) + "\n")
+    assert usage._tail_summary_from_jsonl(path, cutoff=0).cur_ctx is None
+    assert usage._base_ctx_from_jsonl(path) is None
+
+
+def test_readers_survive_a_missing_file(tmp_path):
+    path = tmp_path / "nope.jsonl"
+    assert usage._tail_summary_from_jsonl(path, cutoff=0).cur_ctx is None
+    assert usage._base_ctx_from_jsonl(path) is None
