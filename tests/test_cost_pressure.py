@@ -250,8 +250,9 @@ def test_hint_warn_active_floors_sub_call_payback_at_one():
     p = cp.Pressure(band="warn", active=True, cur_ctx=900_000,
                     payback_calls=0.3, payback_mins=30.0)
     got = cp.hint(p)
-    assert "1 calls" in got
-    assert "~0 calls" not in got
+    assert "~1 call" in got
+    assert "~0 call" not in got
+    assert "1 calls" not in got  # floored to one, and singular reads as one
 
 
 def test_hint_plain_says_clearing_would_not_pay_off_yet():

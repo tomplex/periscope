@@ -135,7 +135,7 @@ def summarize_tail(records: Iterable[UsageRecord], *, cutoff: float) -> TailSumm
     """Reduce one pass over a transcript tail.
 
     `cur_ctx` and `last_ts` IGNORE the cutoff; `calls` respects it. That
-    asymmetry is the parked case: a pane idle longer than the burn window has no
+    asymmetry is the parked case: a pane idle longer than the pace window has no
     records inside it, but its context debt is real and is owed the moment it
     resumes. Filtering everything by the cutoff would silence exactly the panes
     the parked remedy exists for.
@@ -215,6 +215,7 @@ def hint(p: Pressure) -> str:
         return (f"carrying {ctx} of context — write a handoff before resuming "
                 f"rather than picking this up as-is")
     if p.band == "warn":
+        calls = max(1, round(p.payback_calls))
         return (f"carrying {ctx} of context; clearing pays back in "
-                f"~{max(1, round(p.payback_calls))} calls")
+                f"~{calls} call{'' if calls == 1 else 's'}")
     return f"context window used — clearing this wouldn't pay off yet ({ctx})"
