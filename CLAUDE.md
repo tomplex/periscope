@@ -191,6 +191,7 @@ One file per subsystem:
 | `periscope/git_pr.py` | Git state + GitHub PR cache + activity timeline + `prewarm_pr_cache` |
 | `periscope/lgtm.py` | LGTM mirror (poll + per-session SSE) |
 | `periscope/usage.py` | Claude plan usage (JSONL parse + OAuth usage-endpoint fetch) |
+| `periscope/cost_pressure.py` | Pure decision core for per-pane context-cost pressure (record selection, payback math, banding, tooltip copy) |
 | `periscope/rename_ai.py` | Anthropic SDK plumbing for auto-rename (`RENAME_RULES` taste block shared with the narrator) |
 | `periscope/narrator.py` | Per-pane AI status lines + divergence renames (pure decision core + worker-driven tick; see "Narrator" below) |
 | `periscope/open_ops.py` | Unified-open core: `open_target` dispatch (path/branch/pr descriptors → resolve → register → idempotent create-or-focus → server-side rail placement) + `ensure_session` / `worktree_for_branch` / `place_in_rail` / `build_catalog`. No HTTP (see "Unified open" below) |

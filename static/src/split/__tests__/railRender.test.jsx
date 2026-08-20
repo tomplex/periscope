@@ -300,3 +300,61 @@ describe("<Rail> delegation lineage", () => {
     expect(render(<Rail />)).not.toContain("rail-lineage");
   });
 });
+
+describe("<Rail> context chip", () => {
+  it("paints the context chip from tokens when the status line did not parse", () => {
+    projects.value = [];
+    tracks.value = [];
+    windows.value = [{
+      pid: "p1", session: "managed", index: 0, target: "managed:0", name: "worker",
+      agent: "claude", state: "idle", track_id: "t1", track_name: "myproj",
+      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
+      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"), pane_id: "%1",
+      context_pct: null, ctx_tokens: 600000, ctx_class: "hot", ctx_hint: "clearing pays for itself",
+    }];
+    const html = render(<Rail />);
+    expect(html).toContain("600k");
+    expect(html).toContain("ctx-hot");
+    expect(html).toContain("clearing pays for itself");
+  });
+});
+
+import { ctxClass, ctxChipText } from "../RailRows.jsx";
+
+describe("ctxClass", () => {
+  it("uses the server band when present", () => {
+    expect(ctxClass({ ctx_class: "hot" })).toBe(" ctx-hot");
+    expect(ctxClass({ ctx_class: "warn" })).toBe(" ctx-warn");
+  });
+
+  it("falls through to the percent band when cost pressure has nothing to say", () => {
+    // "none" means cost pressure is silent, not that the pane should paint
+    // plain — the auto-compact warning still applies at 95%.
+    expect(ctxClass({ ctx_class: "none", context_pct: 95 })).toBe(" ctx-hot");
+  });
+
+  it("lets cost pressure win when it has something to say", () => {
+    expect(ctxClass({ ctx_class: "warn", context_pct: 95 })).toBe(" ctx-warn");
+  });
+
+  it("falls back to the percent bands when the server said nothing", () => {
+    expect(ctxClass({ context_pct: 95 })).toBe(" ctx-hot");
+    expect(ctxClass({ context_pct: 65 })).toBe(" ctx-warn");
+    expect(ctxClass({ context_pct: 10 })).toBe("");
+    expect(ctxClass({})).toBe("");
+  });
+});
+
+describe("ctxChipText", () => {
+  it("prefers the percentage when the status line parsed", () => {
+    expect(ctxChipText({ context_pct: 72, ctx_tokens: 600000 })).toBe("72%");
+  });
+
+  it("falls back to tokens when the status line did not parse", () => {
+    expect(ctxChipText({ context_pct: null, ctx_tokens: 600000 })).toBe("600k");
+  });
+
+  it("returns null when there is nothing to show", () => {
+    expect(ctxChipText({})).toBe(null);
+  });
+});

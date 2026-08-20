@@ -35,7 +35,7 @@ def _no_plan_usage_refresh(monkeypatch):
     now per account (account id -> (next_attempt, data)), so a seeded entry only
     covers the accounts it names — any account the registry grows, or a test
     that swaps the registry, would still spawn. A no-op _bg closes the hazard by
-    construction for every account and for the sibling pane-burn thread too.
+    construction for every account and for the sibling pane-cost thread too.
     Tests that exercise spawning monkeypatch _bg themselves, which overrides
     this; the fresh cache/in-flight containers keep per-test state from leaking
     into the module globals."""
@@ -46,6 +46,9 @@ def _no_plan_usage_refresh(monkeypatch):
     monkeypatch.setattr(usage, "_plan_cache", {}, raising=False)
     monkeypatch.setattr(usage, "_plan_in_flight", set(), raising=False)
     monkeypatch.setattr(usage, "_bg", lambda *a, **kw: None, raising=False)
+    monkeypatch.setattr(usage, "_cost_cache", (0.0, {}), raising=False)
+    monkeypatch.setattr(usage, "_cost_in_flight", False, raising=False)
+    monkeypatch.setattr(usage, "_base_ctx_cache", {}, raising=False)
 
 
 @pytest.fixture(autouse=True)
