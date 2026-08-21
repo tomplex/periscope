@@ -126,12 +126,15 @@ export function Header() {
         <span class="brand">
           periscope<i class="brand-cursor"></i>
         </span>
-        {/* Before the usage pill: .usage flexes to fill the row, so trailing
-            it would strand the picker far right — leading it keeps the pin
-            adjacent to the A/B meters it names. */}
-        <SpawnAccountPicker />
-        <SpawnModelPicker />
         <UsagePill />
+        {/* The two spawn pins stack as one block to the right of the usage
+            meters (.usage flexes, so this block sits at the meters' far edge):
+            account on top, model below, labels aligned so the chips read as a
+            2-row table. */}
+        <div class="spawn-pins">
+          <SpawnAccountPicker />
+          <SpawnModelPicker />
+        </div>
         <UpdatePill />
         <div class="meta">
           <Counts />
