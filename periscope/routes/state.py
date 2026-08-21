@@ -171,6 +171,7 @@ def build_state() -> dict:
         # Rides the poll (not /api/settings) so the header chip and the
         # launcher's seed stay fresh without a second fetch path.
         "spawn_account": store.get_settings().get("spawn_account"),
+        "spawn_model": store.get_settings().get("spawn_model"),
         "update": updater.summary(),
         # The rail gates its open-in-editor action on this. Read from settings
         # rather than re-scanning /Applications every poll — detection is only

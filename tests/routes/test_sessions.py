@@ -416,6 +416,32 @@ def test_window_new_passes_model_env_to_tmux(client, mocker, fresh_activity_db):
     assert "ANTHROPIC_MODEL=opus" in list(_created(calls)[0])
 
 
+def test_window_new_without_model_honours_the_header_pin(client, mocker, fresh_activity_db):
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+    mocker.patch("periscope.store.get_settings", return_value={"spawn_model": "sonnet"})
+
+    r = client.post("/api/window/new?session=/repo&mode=claude")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["model"] == "sonnet"
+    assert "ANTHROPIC_MODEL=sonnet" in list(_created(calls)[0])
+
+
+def test_window_new_explicit_default_beats_the_header_pin(client, mocker, fresh_activity_db):
+    """The launcher sends `model=default` on purpose: a per-launch opt-out of
+    the pin. Omitting the param is what means "use the pin"."""
+    calls: list[tuple] = []
+    _patch_account_path(mocker, calls)
+    mocker.patch("periscope.store.get_settings", return_value={"spawn_model": "sonnet"})
+
+    r = client.post("/api/window/new?session=/repo&mode=claude&model=default")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["model"] == "default"
+    assert "-e" not in list(_created(calls)[0])
+
+
 def test_window_new_rejects_unsafe_model_string_to_default(client, mocker, fresh_activity_db):
     """Lands in a tmux -e arg and a resurrect shell prefix: anything outside
     the model-id character set fails OPEN to the default, like profile."""

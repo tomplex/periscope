@@ -18,6 +18,7 @@ import { windows } from "../store.js";
 import { track } from "../track.js";
 import { FilterBar } from "./FilterBar.jsx";
 import { SpawnAccountPicker } from "./SpawnAccountPicker.jsx";
+import { SpawnModelPicker } from "./SpawnModelPicker.jsx";
 import { UpdatePill } from "./UpdatePill.jsx";
 import { UsagePill } from "./UsagePill.jsx";
 
@@ -129,6 +130,7 @@ export function Header() {
             it would strand the picker far right — leading it keeps the pin
             adjacent to the A/B meters it names. */}
         <SpawnAccountPicker />
+        <SpawnModelPicker />
         <UsagePill />
         <UpdatePill />
         <div class="meta">

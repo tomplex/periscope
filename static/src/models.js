@@ -1,6 +1,11 @@
-// Model overrides the launcher can spawn a Claude pane with. "default" sends
-// nothing and the pane runs whatever the account's settings.json says; any
+// Model overrides a Claude pane can be spawned with. "default" means no
+// override — the pane runs whatever the account's settings.json says; any
 // other id is set as ANTHROPIC_MODEL on the pane's tmux window.
+//
+// Two surfaces share this list: the header's spawn-model pin (a server
+// setting, the standing default for EVERY spawn path incl. MCP spawn_claude)
+// and the launcher's per-launch picker, which seeds from the pin and sends its
+// value explicitly — "default" included — so one launch can opt out of the pin.
 //
 // Aliases, not full ids: Claude resolves 'fable' / 'opus' / 'sonnet' to the
 // latest of each family, so the list doesn't rot when a model version ships.
@@ -18,10 +23,3 @@ export const MODELS = [
   { id: "opus", label: "opus" },
   { id: "sonnet", label: "sonnet" },
 ];
-
-// model id → the `model` query param, or null to omit it entirely. Omitting
-// keeps the default launch byte-identical to the pre-models URL.
-// Pure: exported for unit tests.
-export function modelQuery(m) {
-  return !m || m === "default" ? null : m;
-}

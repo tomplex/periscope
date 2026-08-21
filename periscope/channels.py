@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TypedDict
 
-from periscope import config, store, tracks, usage
+from periscope import store, tracks, usage
 from periscope import tmux as tmux_mod
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
@@ -669,7 +669,7 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     config_dir = store.account_config_dir(
         arguments.get("account") or usage.best_account()
     )
-    model_env = config.model_env(arguments.get("model"))
+    model_env = store.spawn_model_env(arguments.get("model"))
     code, _ = _run(["tmux", "has-session", "-t", session])
     if code != 0:
         ok, msg = _tmux_mutate(

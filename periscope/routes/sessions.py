@@ -290,7 +290,7 @@ def _window_new_plain(
     repo = row["repo"] if row and row.get("repo") else None
     config_dir = store.account_config_dir(account)
     profile_env = config.profile_env(profile)
-    model_env = config.model_env(model)
+    model_env = store.spawn_model_env(model)
 
     branch = (branch or "").strip()
     if branch and repo:

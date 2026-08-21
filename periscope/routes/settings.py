@@ -5,6 +5,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from periscope import config
 from periscope.editors import detect_editors
 from periscope.store import get_accounts, get_settings, update_settings
 
@@ -30,6 +31,7 @@ class SettingsPatch(BaseModel):
     cleanup_idle_days: int | None = None
     bg_account: str | None = None
     spawn_account: str | None = None
+    spawn_model: str | None = None
     editor: str | None = None
 
 
@@ -89,6 +91,19 @@ def settings_patch(body: SettingsPatch):
             patch["spawn_account"] = v
         else:
             raise HTTPException(400, f"unknown account id {v!r}")
+
+    if "spawn_model" in sent:
+        v = body.spawn_model
+        # Character-set check only (config.model_env): Claude accepts aliases
+        # and full ids alike and the list moves, but a value that fails the
+        # check would fail OPEN to no override at every spawn — reject it here
+        # where the user can see it. "default" clears, same as null.
+        if v is None or v == "default":
+            patch["spawn_model"] = None
+        elif config.model_env(v):
+            patch["spawn_model"] = v
+        else:
+            raise HTTPException(400, f"spawn_model {v!r} is not a model id")
 
     if "editor" in sent:
         v = body.editor

@@ -607,15 +607,23 @@ Consequences worth knowing:
   wrapper is what honours it. It fails safe: an un-updated wrapper ignores the
   var and yields a normal pane, never a wrong-plugin-set one.
 
-**Model override (`ANTHROPIC_MODEL`) rides the same carrier.** The launcher's
-Model picker (sticky, `prefs.ui.launch_model`; registry in `static/src/models.js`)
-and `spawn_claude(model=…)` set `ANTHROPIC_MODEL` on the new window via
-`tmux.env_args` — the third env binding beside the account and profile, scrubbed
-off the session by `scrub_session_env` like the other two. Claude reads it with
-precedence `--model` > `ANTHROPIC_MODEL` > `settings.json`. `config.model_env`
-checks only the character set (it lands in a `-e` arg and a shell prefix) and
-fails open to the default, like `profile_env`; the alias list is not validated
-server-side because it moves. Two things differ from the profile:
+**Model override (`ANTHROPIC_MODEL`) rides the same carrier.** Two surfaces,
+shaped like the account pin: the header's **spawn-model pin**
+(`settings.spawn_model`, a SERVER setting so MCP `spawn_claude` honours it
+too; rides `/api/state` as `spawn_model`) is the standing default for every
+spawn path — launcher New Tab, unified open, `spawn_claude` — and the
+launcher's Model picker is a per-launch override that seeds from the pin and
+is not remembered. `store.spawn_model_env(explicit)` is the one choke point:
+an explicit value wins, INCLUDING an explicit `"default"` (the launcher always
+sends one — that is how a single launch opts out of the pin); `None` falls to
+the pin. The value is set on the new window via `tmux.env_args` — the third
+env binding beside the account and profile, scrubbed off the session by
+`scrub_session_env` like the other two; on the unified-open two-window layout
+only the agent window carries it. Claude reads it with precedence `--model` >
+`ANTHROPIC_MODEL` > `settings.json`. `config.model_env` checks only the
+character set (it lands in a `-e` arg and a shell prefix); the alias list is
+not validated because it moves. Registry: `static/src/models.js`. Two things
+differ from the profile:
 
 - **There is no model chip.** The rail already shows the model parsed off
   Claude's status line (`panes.STATUS_RE` → `w.model`), and that is the truth —

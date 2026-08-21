@@ -31,11 +31,11 @@ import { useEffect } from "preact/hooks";
 import { ACCOUNTS } from "../accounts.js";
 import { bestAccount } from "../chrome/usageSummary.js";
 import { useEscape } from "../hooks/useEscape.js";
-import { MODELS, modelQuery } from "../models.js";
+import { MODELS } from "../models.js";
 import * as prefs from "../prefs.js";
 import { PROFILES, profileQuery, sendsProfile } from "../profiles.js";
 import { trackLabel } from "../split/railTree.js";
-import { spawnAccount, tracks, usage, windows } from "../store.js";
+import { spawnAccount, spawnModel, tracks, usage, windows } from "../store.js";
 import { track } from "../track.js";
 import { apiCall } from "../util.js";
 
@@ -57,8 +57,10 @@ const account = signal("default");
 // for why this one is sticky while the account is re-derived.
 const profile = signal("default");
 
-// Model override for the new pane ("default" | a Claude alias). Sticky like the
-// profile; carried only by Claude agent windows (same guard, `sendsProfile`).
+// Model override for THIS launch ("default" | a Claude alias). Seeded from the
+// header's spawn-model pin on every open — the pin is the standing default;
+// picking here changes one launch and is not remembered. Carried only by
+// Claude agent windows (same guard as the profile, `sendsProfile`).
 const model = signal("default");
 
 // account id → the `account` query param, or null to omit it entirely.
@@ -221,7 +223,7 @@ export function openLauncher(trackId) {
   account.value =
     spawnAccount.value || bestAccount(usage.value?.plan, Date.now() / 1000) || "default";
   profile.value = prefs.getLaunchProfile();
-  model.value = prefs.getLaunchModel();
+  model.value = spawnModel.value || "default";
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.
   catalog.value = null;
@@ -284,8 +286,10 @@ export function LauncherModal() {
     if (acct) qs.set("account", acct);
     const prof = sendsProfile(t) ? profileQuery(profile.value) : null;
     if (prof) qs.set("profile", prof);
-    const mdl = sendsProfile(t) ? modelQuery(model.value) : null;
-    if (mdl) qs.set("model", mdl);
+    // Always explicit, "default" included: the server applies the header pin
+    // only when the param is ABSENT, so sending "default" is the per-launch
+    // opt-out. Omitting it would make the pin un-overridable from here.
+    if (sendsProfile(t)) qs.set("model", model.value);
     const nb = newBranchName.value;
     if (nb?.trim()) {
       qs.set("branch", nb.trim());
@@ -429,9 +433,9 @@ export function LauncherModal() {
                 key={m.id}
                 class={`launcher-branch${model.value === m.id ? " is-active" : ""}`}
                 title={m.id === "default"
-                  ? "whatever the account's settings.json picks"
-                  : `spawn on ${m.label} (ANTHROPIC_MODEL on the pane — a hand re-run claude there keeps it)`}
-                onClick={() => { model.value = m.id; prefs.setLaunchModel(m.id); }}
+                  ? "no override — whatever the account's settings.json picks (this launch only; the header pin is the standing default)"
+                  : `spawn this launch on ${m.label} (ANTHROPIC_MODEL on the pane — a hand re-run claude there keeps it)`}
+                onClick={() => { model.value = m.id; }}
               >
                 {m.label}
               </button>

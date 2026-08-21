@@ -324,15 +324,6 @@ export function setLaunchProfile(id) {
   return patchUI({ launch_profile: id });
 }
 
-// Sticky launcher model override. Sticky for the profile's reason: a run of
-// cheaper-model workers is usually several panes, not one.
-export function getLaunchModel() {
-  return P().ui?.launch_model || "default";
-}
-
-export function setLaunchModel(id) {
-  return patchUI({ launch_model: id });
-}
 
 export function getPinnedPids() {
   return [...(P().ui?.pinned_pids || [])];

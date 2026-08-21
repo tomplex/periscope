@@ -108,6 +108,29 @@ def test_patch_spawn_account_null_clears(client, mocker):
     update_spy.assert_called_once_with({"spawn_account": None})
 
 
+def test_patch_spawn_model_accepts_a_model_id(client, mocker):
+    update_spy = mocker.patch("periscope.routes.settings.update_settings")
+    mocker.patch("periscope.routes.settings.get_settings", return_value={})
+    r = client.patch("/api/settings", json={"spawn_model": "opus"})
+    assert r.status_code == 200
+    update_spy.assert_called_once_with({"spawn_model": "opus"})
+
+
+def test_patch_spawn_model_rejects_non_model_string(client, mocker):
+    r = client.patch("/api/settings", json={"spawn_model": "opus && rm"})
+    assert r.status_code == 400
+
+
+def test_patch_spawn_model_default_and_null_clear(client, mocker):
+    update_spy = mocker.patch("periscope.routes.settings.update_settings")
+    mocker.patch("periscope.routes.settings.get_settings", return_value={})
+    assert client.patch("/api/settings", json={"spawn_model": "default"}).status_code == 200
+    assert client.patch("/api/settings", json={"spawn_model": None}).status_code == 200
+    assert [c.args[0] for c in update_spy.call_args_list] == [
+        {"spawn_model": None}, {"spawn_model": None},
+    ]
+
+
 def test_patch_editor_accepts_a_detected_app(client, mocker):
     update_spy = mocker.patch("periscope.routes.settings.update_settings")
     mocker.patch("periscope.routes.settings.get_settings", return_value={})

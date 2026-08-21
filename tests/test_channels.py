@@ -1551,6 +1551,28 @@ def test_spawn_claude_auto_picks_the_emptiest_account(mocker):
     assert env and env[0].endswith(".claude-b"), args
 
 
+def test_spawn_claude_without_model_honours_the_header_pin(mocker):
+    """MCP spawns never see client prefs — the pin is a server setting so a
+    lead's workers land on the pinned model too."""
+    from periscope import channels, store
+    cap = _mock_spawn_plumbing(mocker)
+    mocker.patch.object(store, "get_settings", return_value={"spawn_model": "sonnet"})
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    assert "ANTHROPIC_MODEL=sonnet" in [str(a) for a in _created_call(cap)]
+
+
+def test_spawn_claude_explicit_model_overrides_the_pin(mocker):
+    from periscope import channels, store
+    cap = _mock_spawn_plumbing(mocker)
+    mocker.patch.object(store, "get_settings", return_value={"spawn_model": "sonnet"})
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go", "model": "opus"}))
+
+    assert "ANTHROPIC_MODEL=opus" in [str(a) for a in _created_call(cap)]
+
+
 def test_spawn_claude_explicit_account_overrides_the_auto_pick(mocker):
     from periscope import channels, usage
     cap = _mock_spawn_plumbing(mocker)

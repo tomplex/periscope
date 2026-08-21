@@ -14,6 +14,7 @@ import {
   editingTarget,
   projects,
   spawnAccount,
+  spawnModel,
   syncTabsFromWindows,
   tracks,
   editor as editorSignal,
@@ -55,6 +56,7 @@ function applyState(data) {
   usage.value = { plan: data.usage_plan, fallback: data.usage };
   updateInfo.value = data.update || null;
   spawnAccount.value = data.spawn_account || null;
+  spawnModel.value = data.spawn_model || null;
   editorSignal.value = data.editor || "";
 }
 
