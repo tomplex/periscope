@@ -32,7 +32,7 @@ export function SpawnModelPicker() {
       title={
         "which model new Claude panes launch on\n" +
         "default — whatever the account's settings.json picks\n" +
-        "fable / opus / sonnet — pin every spawn (New Tab, + new, spawned workers); the launcher can still override one launch"
+        "fable / opus 1m / sonnet — pin every spawn (New Tab, + new, spawned workers); the launcher can still override one launch"
       }
     >
       <span class="spawn-acct-label">model</span>

@@ -12,6 +12,10 @@
 // The server accepts any model-id-shaped string (config.model_env), so a full
 // id typed into prefs by hand also works — the picker just doesn't offer one.
 //
+// The `[1m]` suffix is Claude's extended-context variant, and it composes with
+// the alias — `opus[1m]` is the latest Opus at a 1M window, still version-free.
+// It is not the default: a bare `opus` runs the standard window.
+//
 // Orthogonal to the account (which subscription bills) and the profile (which
 // plugin set runs). Whether a target carries the model at all is the same
 // guard as the profile — `sendsProfile` in profiles.js: only a Claude agent
@@ -20,6 +24,6 @@
 export const MODELS = [
   { id: "default", label: "default" },
   { id: "fable", label: "fable" },
-  { id: "opus", label: "opus" },
+  { id: "opus[1m]", label: "opus 1m" },
   { id: "sonnet", label: "sonnet" },
 ];

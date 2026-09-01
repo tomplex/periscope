@@ -24,9 +24,9 @@ describe("<SpawnModelPicker>", () => {
   });
 
   it("marks the pinned alias active, and only it", () => {
-    spawnModel.value = "opus";
+    spawnModel.value = "opus[1m]";
     const html = render(<SpawnModelPicker />);
-    expect(activeLabel(html)).toBe("opus");
+    expect(activeLabel(html)).toBe("opus 1m");
     expect(html.match(/is-active/g)).toHaveLength(1);
   });
 

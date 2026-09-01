@@ -66,7 +66,7 @@ CLAUDE_PROFILES = ("default", "lab")
 # unless this var is set at launch — which is why resurrect re-emits it only on
 # the session-lost path (see resurrect._rewrite_line).
 MODEL_ENV_VAR = "ANTHROPIC_MODEL"
-_MODEL_OK = re.compile(r"^[A-Za-z0-9._:-]+$")
+_MODEL_OK = re.compile(r"^[A-Za-z0-9._:\[\]-]+$")
 
 
 def profile_env(profile_id: str | None) -> str:
@@ -85,9 +85,12 @@ def model_env(model: str | None) -> str:
     """The MODEL_ENV_VAR value for a picker choice; "" for the default.
 
     Not validated against a list — Claude accepts aliases ('fable', 'opus',
-    'sonnet') and full model ids alike, and the list moves. Only the character
-    set is checked (it lands in a tmux `-e` arg and a resurrect shell prefix);
-    anything else fails OPEN to the default, like `profile_env`.
+    'sonnet'), full model ids, and either carrying an extended-context suffix
+    ('opus[1m]') alike, and the list moves. Only the character set is checked
+    (it lands in a tmux `-e` arg and a resurrect shell prefix); anything else
+    fails OPEN to the default, like `profile_env`. Brackets are in the set for
+    that suffix and are safe unquoted in the prefix — neither zsh nor bash
+    globs the right-hand side of an assignment word.
     """
     m = (model or "").strip()
     if not m or m == "default" or not _MODEL_OK.match(m):

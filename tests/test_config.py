@@ -79,3 +79,16 @@ def test_build_codex_resume_command(monkeypatch):
 def test_build_agent_command_rejects_unknown():
     with pytest.raises(ValueError):
         config.build_agent_command("other", cwd="/repo")  # type: ignore[arg-type]
+
+
+def test_model_env_keeps_the_extended_context_suffix():
+    # 'opus[1m]' is the whole point of the picker's opus chip. A charset that
+    # rejected brackets would fail OPEN to the default — the pane would run the
+    # account's settings.json model with nothing anywhere saying so.
+    assert config.model_env("opus[1m]") == "opus[1m]"
+    assert config.model_env("claude-opus-5[1m]") == "claude-opus-5[1m]"
+
+
+def test_model_env_rejects_shell_metacharacters():
+    for bad in ("opus; rm -rf /", "opus $(id)", "opus`id`", "opus\nsonnet"):
+        assert config.model_env(bad) == ""
