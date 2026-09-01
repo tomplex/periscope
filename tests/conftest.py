@@ -187,11 +187,18 @@ def fresh_activity_db(tmp_path, monkeypatch):
             activity._CONN = None
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def clean_state(tmp_xdg_home, monkeypatch):
     """Reset periscope.store._STATE to a fresh defaults dict for the test.
     Returns the dict so the test can prepopulate fields before exercising
     code-under-test.
+
+    Autouse, because `_STATE` is loaded from the developer's REAL state.json at
+    import and any test that never asked for this fixture read it. The spawn
+    paths made that visible: `store.spawn_model_env(None)` consults
+    `settings.spawn_model`, so a pin set in the live dashboard put an `-e
+    ANTHROPIC_MODEL=...` on windows that four "default sends no env" tests
+    assert are bare — they passed or failed by what Tom had clicked.
 
     All in-tree consumers now go through the typed accessors in
     `periscope.store` (set_window_fields, get_window, update_ui, etc.) or
