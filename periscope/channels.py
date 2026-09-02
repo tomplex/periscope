@@ -49,85 +49,15 @@ user what every Claude session is doing across all their panes at once.
 The pane this channel is attached to is identified by $TMUX_PANE on the
 server side; you don't need to address it explicitly.
 
-You have several tools that mutate periscope's UI for this pane. Use them
-proactively — the user doesn't need to ask. The triggers below are
-specific enough that you won't over-call them:
-
-- link_pr(number): when you identify the user is working on a specific
-  GitHub PR — a #N reference in their message, in `git status` / `git log`
-  / branch name, or in CLAUDE.md — AND periscope's pane card doesn't
-  already show a #PR badge. Periscope auto-detects PRs from Claude's
-  title bar; if you know there's one and it isn't surfaced, link it.
-
-- link_linear(id, title?, status?): when you identify a Linear ticket
-  in the user's message, branch name, or commit history (TEAM-123
-  format, e.g. FAR-456). Periscope doesn't auto-detect Linear tickets,
-  so explicit linking is the only way to surface them on the card. Pass
-  `title` and `status` whenever you know them — if you fetched the
-  ticket through the Linear MCP, you already have both.
-
-- notify(message, kind="done"): when you finish a substantial task the
-  user asked for. One-sentence summary in `message`. Lets the user see
-  at-a-glance that this pane is done and what you did, without opening
-  the modal.
-
-- notify(message, kind="need_human"): when you're blocked and waiting on
-  input. Pulses the pane card with a red border so the user notices the
-  alert across a busy dashboard.
-
-- notify(message, kind="info"): for status updates worth glancing at but
-  not blocking on (e.g., "tests pass, about to commit"). Use sparingly
-  — this is the lowest-signal kind and adds dashboard noise if overused.
-
-- open_document(path, line?): open a file as a preview tab on this
-  pane's periscope card — same as the user clicking it in the Files
-  section. Use when you've produced or substantially edited a document
-  the user will want to read (spec, design doc, report, HTML output).
-  Quiet: the tab appears on this pane without stealing focus.
-
-- set_name(name): label THIS pane on the rail and pin the label. Periscope
-  otherwise infers each pane's name from its activity and re-infers it as
-  the work moves. Call it once, early, when you hold a standing role the
-  user will look for by name (orchestrator, reviewer, owner of one ticket
-  or one piece of a fan-out) — not to narrate progress, since a pinned
-  name never updates itself.
-
-- spawn_claude(prompt, workspace?, session?, cwd?, name?, model?, workspace_id?):
-  launch a fresh Claude session in a new tmux window with the given prompt
-  as its first message. The new window appears on the dashboard. Use when
-  the user asks you to delegate, parallelize, or "spin up another session"
-  — or when the task at hand decomposes into independent sub-tasks that
-  each deserve their own focused context. `workspace` controls where it
-  lands: "same" (default) nests it under YOUR card as fan-out/related
-  sub-work (even if `cwd` is a different worktree); "new" makes it its
-  own top-level dashboard item anchored to `cwd`'s worktree (new tab if
-  that worktree already has a session) — for DISTINCT work tracked on its
-  own. `workspace_id` (distinct from `workspace`) tags the spawned tab
-  into a goal-scoped periscope workspace — get one from list_workspaces.
-  Default `cwd` is your pane's working directory. Keep the returned
-  target/pid so you can refer to the spawned pane later.
-
-- list_workspaces(): list periscope workspaces (goal-scoped rail groups)
-  with their ids, names, base repo/worktree, and live tagged-tab counts.
-  Call to discover a workspace_id to pass to spawn_claude.
-
-- search_history(query, project?, since?, limit?): full-text search
-  over every past Claude session on this machine. Use it before
-  re-debugging an error that smells familiar, when the user references
-  past work ("like we did before", "that thing from last month", "how
-  did we fix X"), or before re-deriving a non-obvious command or
-  procedure a previous session likely worked out. Past sessions only —
-  the current session and other live panes are not indexed. Follow up
-  with get_history_session(session_id) to read the relevant
-  conversation; default is the last 30 messages, page with offset.
-
-- resume_session(session_id, tmux_session?): continue a past session
-  found via search_history — spawns `claude --resume` in a new tmux
-  window in the session's original project directory. Use when the
-  user wants to pick old work back up ("continue where we left off
-  on X"); for merely consulting past work, get_history_session is
-  the right tool. The resumed session shows up on the dashboard;
-  this session keeps running.
+Your periscope tools mutate this pane's card on the dashboard. Call them
+proactively — the user does not need to ask — and read each tool's
+description for exactly when. The ones that fire most: notify
+(kind="done" when a substantial task finishes, "need_human" when blocked
+on the user, "info" sparingly); link_pr / link_linear when you learn what
+this pane is working on and the card does not already show it;
+open_document when you produce a document the user will read; set_name
+once, early, if this pane holds a standing role. spawn_claude,
+search_history and resume_session cover fan-out and past-session recall.
 
 Messages going the other direction (periscope → you) arrive as
 <channel source="periscope" ...> blocks at the start of each turn. A
@@ -1508,10 +1438,13 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
     {
         "name": "notify",
         "description": (
-            "Surface a message in periscope's UI for this pane. "
-            "Use kind=\"need_human\" when blocked and waiting on the user, "
-            "kind=\"done\" when the current task is complete, "
-            "otherwise kind=\"info\"."
+            "Surface a message on this pane's periscope card. "
+            "kind=\"done\": a substantial task the user asked for is finished; "
+            "one-sentence summary so the user sees what happened without "
+            "opening the pane. kind=\"need_human\": blocked and waiting on "
+            "input; pulses the card red so it stands out on a busy dashboard. "
+            "kind=\"info\": a status worth a glance but not blocking (\"tests "
+            "pass, about to commit\"); lowest signal, use sparingly."
         ),
         "inputSchema": {
             "type": "object",
