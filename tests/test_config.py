@@ -52,6 +52,7 @@ def test_is_prod_only_true_on_prod_port_and_not_dev(monkeypatch):
         monkeypatch.setattr(cfg, "PORT", port)
         monkeypatch.setattr(cfg, "DEV", dev)
         assert cfg.is_prod() is expected, f"PORT={port} DEV={dev}"
+import os
 import shlex
 
 import pytest
@@ -101,3 +102,19 @@ def test_model_env_swallows_auto_like_default():
     assert config.model_env("default") == ""
     assert config.model_env("fable") == "fable"
     assert config.model_env("opus[1m]") == "opus[1m]"
+
+
+def test_claude_subprocess_env_strips_api_credit_auth_and_binds_the_account(monkeypatch):
+    # Both are spend-leak guards: an inherited API key outranks the
+    # subscription login (bills API credits), and an inherited
+    # CLAUDE_CONFIG_DIR is an account nobody chose.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-leak")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok-leak")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/leaked")
+    env = config.claude_subprocess_env(config_dir="")
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert "CLAUDE_CONFIG_DIR" not in env
+    env = config.claude_subprocess_env(config_dir="/Users/x/.claude-b")
+    assert env["CLAUDE_CONFIG_DIR"] == "/Users/x/.claude-b"
+    assert env["PATH"] == os.environ["PATH"]   # the rest of the environment is inherited

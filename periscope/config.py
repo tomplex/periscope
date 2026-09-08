@@ -99,6 +99,31 @@ def model_env(model: str | None) -> str:
         return ""
     return m
 
+
+def claude_subprocess_env(*, config_dir: str) -> dict[str, str]:
+    """The environment for a `claude` subprocess periscope runs itself
+    (background-commander jobs, the session poke).
+
+    The Anthropic API-key auth vars are STRIPPED: server.py load_dotenv()s
+    ANTHROPIC_API_KEY into os.environ (for the narrator/rename SDK calls), and
+    an inherited key takes precedence over the claude.ai subscription login —
+    the subprocess must bill on the subscription, not API credits (a spend
+    leak).
+
+    CLAUDE_CONFIG_DIR picks WHICH subscription — same class of decision, so
+    it lives here too. An empty `config_dir` POPS rather than leaving whatever
+    leaked in: a subprocess must never silently run on an account nobody
+    chose (the launchd env never carries the var, but a dev shell might).
+    """
+    env = dict(os.environ)
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(k, None)
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
+    return env
+
 # Claude cycle-hint thresholds (rail ↻ chip): red when a pane's claude RSS
 # crosses BAD, amber at WARN rss or WARN age. Healthy claudes idle around
 # 0.3–0.6GB; the leak class that motivated this shows up as multi-GB RSS on

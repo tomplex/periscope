@@ -153,47 +153,28 @@ def _dispatch_argv() -> list[str]:
     ]
 
 
+def _bg_config_dir() -> str:
+    """The account background jobs bill. EVERY claude subprocess here must
+    agree on it, not just dispatch: `claude agents` and `claude stop` are
+    per-config-dir, so a job dispatched under account B is invisible to a
+    listing taken under the default one. sync_jobs would then see it absent
+    past the grace window, mark it `done` while it kept running, and never
+    call stop() — an unkillable job the dashboard reports as finished. Read
+    from the `bg_account` setting on every call, never from a launch-time
+    chooser (docs/account-routing.md "Not routed")."""
+    return store.account_config_dir(store.get_settings().get("bg_account"))
+
+
 def _dispatch_env(*, handle: str) -> dict[str, str]:
-    """Inherit the process env + a per-command caller handle. channel_shim reads
-    PERISCOPE_CALLER_ID (falling back to TMUX_PANE). The handle is a unique
-    cmdr:<token> — its only jobs are to (a) trip is_commander's prefix check and
-    (b) key _MCP_SESSIONS uniquely across concurrent commanders. It is NOT the
-    claude session id (which isn't known until claude prints it post-spawn).
-
-    The Anthropic API-key auth vars are STRIPPED: server.py load_dotenv()s
-    ANTHROPIC_API_KEY into os.environ (for the narrator/rename SDK calls), and an
-    inherited key takes precedence over the claude.ai subscription login — the
-    commander must bill on the subscription, not API credits (a spend leak).
-
-    CLAUDE_CONFIG_DIR picks WHICH subscription — same class of decision, so it
-    lives here too (see _account_env)."""
-    env = dict(os.environ) | {"PERISCOPE_CALLER_ID": f"cmdr:{handle}"}
-    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-        env.pop(k, None)
-    return _account_env(env)
-
-
-def _account_env(base: dict[str, str]) -> dict[str, str]:
-    """Point a `claude` subprocess at the account background jobs run on.
-
-    EVERY claude subprocess here must agree on the account, not just dispatch:
-    `claude agents` and `claude stop` are per-config-dir, so a job dispatched
-    under account B is invisible to a listing taken under the default one.
-    sync_jobs would then see it absent past the grace window, mark it `done`
-    while it kept running, and never call stop() — an unkillable job the
-    dashboard reports as finished.
-
-    The launchd env never carries CLAUDE_CONFIG_DIR, so without this every job
-    billed the default account forever. Unset `bg_account` POPS rather than
-    leaving whatever leaked in: a job must never silently run on an account
-    nobody chose.
-    """
-    config_dir = store.account_config_dir(store.get_settings().get("bg_account"))
-    if config_dir:
-        base["CLAUDE_CONFIG_DIR"] = config_dir
-    else:
-        base.pop("CLAUDE_CONFIG_DIR", None)
-    return base
+    """Subscription-billing env (config.claude_subprocess_env) + a per-command
+    caller handle. channel_shim reads PERISCOPE_CALLER_ID (falling back to
+    TMUX_PANE). The handle is a unique cmdr:<token> — its only jobs are to
+    (a) trip is_commander's prefix check and (b) key _MCP_SESSIONS uniquely
+    across concurrent commanders. It is NOT the claude session id (which
+    isn't known until claude prints it post-spawn)."""
+    env = config.claude_subprocess_env(config_dir=_bg_config_dir())
+    env["PERISCOPE_CALLER_ID"] = f"cmdr:{handle}"
+    return env
 
 
 def _parse_session_id(stdout: str) -> str | None:
@@ -291,7 +272,7 @@ def _read_agents() -> str:
         return subprocess.run(
             [config.claude_bin(), "agents", "--json", "--all"],
             capture_output=True, text=True, timeout=15,
-            env=_account_env(dict(os.environ)),
+            env=config.claude_subprocess_env(config_dir=_bg_config_dir()),
         ).stdout
     except (subprocess.SubprocessError, OSError) as e:
         log.warning("claude agents read failed: %s", e)
@@ -303,7 +284,7 @@ def _stop_session(session_id: str) -> None:
         subprocess.run(
             [config.claude_bin(), "stop", session_id],
             capture_output=True, text=True, timeout=15,
-            env=_account_env(dict(os.environ)),
+            env=config.claude_subprocess_env(config_dir=_bg_config_dir()),
         )
     except (subprocess.SubprocessError, OSError) as e:
         log.warning("claude stop %s failed: %s", session_id, e)
