@@ -367,6 +367,40 @@ def test_refresh_failure_keeps_data_and_retries_sooner(monkeypatch):
     assert usage._plan_in_flight == set()
 
 
+def test_refresh_plan_usage_now_bypasses_the_ttl_and_returns_the_fresh_payload(monkeypatch):
+    import periscope.usage as usage
+    # `utilization` is required: _refresh_plan_usage_into_cache reads m["utilization"]
+    # for the sample row, and a KeyError there is swallowed into "keep the stale entry".
+    fresh = {"available": True,
+             "meters": {"session": {"percent": 1, "utilization": 0.01, "resets_at": 99}}}
+    monkeypatch.setattr(usage, "fetch_plan_usage", lambda cfg: dict(fresh))
+    monkeypatch.setattr(usage.activity, "record_usage_samples", lambda rows: None)
+    monkeypatch.setattr(usage, "attach_projections", lambda *a, **kw: None)
+    stale = {"available": True, "meters": {}, "fetched_at": 1}
+    monkeypatch.setattr(usage, "_plan_cache", {"b": (9e12, stale)})   # TTL far in the future
+    monkeypatch.setattr(usage, "_plan_in_flight", set())
+    out = usage.refresh_plan_usage_now("b", "/cfg")
+    assert out["meters"]["session"]["resets_at"] == 99
+    assert usage._plan_cache["b"][1] is out
+    assert usage._plan_in_flight == set()
+
+
+def test_refresh_plan_usage_now_yields_to_a_refresh_already_in_flight(monkeypatch):
+    # _refresh_plan_usage_into_cache discards the in-flight marker
+    # unconditionally; a second caller must not drop the first's marker and
+    # let cached_plan_usage fire a duplicate into an endpoint that 429s readily.
+    import periscope.usage as usage
+    calls = []
+    monkeypatch.setattr(usage, "_refresh_plan_usage_into_cache",
+                        lambda a, c: calls.append(a))
+    stale = {"available": True, "meters": {}, "fetched_at": 1}
+    monkeypatch.setattr(usage, "_plan_cache", {"b": (0.0, stale)})
+    monkeypatch.setattr(usage, "_plan_in_flight", {"b"})
+    assert usage.refresh_plan_usage_now("b", "/cfg") is stale
+    assert calls == []
+    assert usage._plan_in_flight == {"b"}
+
+
 def _two_accounts(monkeypatch):
     import periscope.usage as usage
     monkeypatch.setattr(usage.store, "get_accounts", lambda: [

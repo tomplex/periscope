@@ -36,6 +36,7 @@ _V2_EMPTY_DEFAULTS = {
     "projects": {"__main__": _MAIN_PROJECT},
     "workspaces": {},
     "settings": {},
+    "poke_log": {},
 }
 
 
@@ -360,3 +361,22 @@ def test_account_config_dir_resolves(clean_state):
     # unknown id fails OPEN to the default account, never to a guess
     assert store.account_config_dir("nope") == ""
     assert store.account_config_dir(None) == ""
+
+
+def test_poke_log_round_trips_per_account(clean_state):
+    from periscope import store
+    assert store.get_poke_log() == {}
+    entry = {"date": "2026-09-08", "at": 1_800_000_000, "resets_at": 1_800_018_000, "verified": True}
+    store.record_poke("b", entry)
+    assert store.get_poke_log() == {"b": entry}
+    # A copy out, not a reference in.
+    store.get_poke_log()["b"]["verified"] = False
+    assert store.get_poke_log()["b"]["verified"] is True
+
+
+def test_poke_log_tolerates_a_state_file_that_predates_it(clean_state):
+    from periscope import store
+    del store._STATE["poke_log"]
+    assert store.get_poke_log() == {}
+    store.record_poke("default", {"date": "2026-09-08", "at": 1, "resets_at": None, "verified": False})
+    assert store.get_poke_log()["default"]["verified"] is False

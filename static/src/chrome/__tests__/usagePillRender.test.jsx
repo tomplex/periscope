@@ -86,4 +86,19 @@ describe("<UsagePill>", () => {
     };
     expect(render(<UsagePill />)).not.toContain("usage-fallback");
   });
+
+  it("names the morning poke and the reset it anchored in the account tooltip", () => {
+    const at = NOW() - 3600;
+    usage.value = {
+      plan: { b: { available: true, fetched_at: NOW(), meters: meters({ session: 9 }) } },
+      fallback: null,
+      poke: { b: { date: "2026-09-08", at, resets_at: at + 5 * 3600, verified: true } },
+    };
+    expect(render(<UsagePill />)).toMatch(/poked [^→]+ → resets /);
+    usage.value = {
+      ...usage.value,
+      poke: { b: { date: "2026-09-08", at, resets_at: null, verified: false } },
+    };
+    expect(render(<UsagePill />)).toContain("→ not anchored");
+  });
 });

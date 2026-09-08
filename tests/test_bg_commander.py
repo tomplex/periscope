@@ -189,6 +189,20 @@ def test_stop_session_stops_under_the_job_account(monkeypatch):
     assert seen["env"]["CLAUDE_CONFIG_DIR"].endswith("/.claude-b")
 
 
+def test_read_agents_and_stop_strip_api_credit_auth_like_dispatch(monkeypatch):
+    # Every claude subprocess here shares config.claude_subprocess_env, so the
+    # listing/stop calls no longer inherit an API key that would outrank the
+    # subscription login — before the shared helper only dispatch stripped it.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-leak")
+    monkeypatch.setattr("periscope.store.get_settings", dict)
+    seen = _capture_run(monkeypatch, stdout="[]")
+    bgc._read_agents()
+    assert "ANTHROPIC_API_KEY" not in seen["env"]
+    seen = _capture_run(monkeypatch)
+    bgc._stop_session("sess-1")
+    assert "ANTHROPIC_API_KEY" not in seen["env"]
+
+
 def test_read_agents_default_account_carries_no_config_dir(monkeypatch):
     monkeypatch.setattr("periscope.store.get_settings", dict)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/leaked")

@@ -159,3 +159,28 @@ def test_patch_editor_null_clears(client, mocker):
     r = client.patch("/api/settings", json={"editor": None})
     assert r.status_code == 200
     update_spy.assert_called_once_with({"editor": None})
+
+
+def test_patch_poke_at_accepts_hhmm_empty_and_null(client, mocker):
+    update_spy = mocker.patch("periscope.routes.settings.update_settings")
+    mocker.patch("periscope.routes.settings.get_settings", return_value={})
+    assert client.patch("/api/settings", json={"poke_at": "07:30"}).status_code == 200
+    assert client.patch("/api/settings", json={"poke_at": ""}).status_code == 200      # disabled
+    assert client.patch("/api/settings", json={"poke_at": None}).status_code == 200    # back to the default
+    assert [c.args[0] for c in update_spy.call_args_list] == [
+        {"poke_at": "07:30"}, {"poke_at": ""}, {"poke_at": None},
+    ]
+
+
+def test_patch_poke_at_rejects_a_non_clock(client, mocker):
+    for bad in ("8am", "25:00", "08:60", "8:00"):
+        assert client.patch("/api/settings", json={"poke_at": bad}).status_code == 400, bad
+
+
+def test_patch_poke_grace_min_bounds(client, mocker):
+    update_spy = mocker.patch("periscope.routes.settings.update_settings")
+    mocker.patch("periscope.routes.settings.get_settings", return_value={})
+    assert client.patch("/api/settings", json={"poke_grace_min": 45}).status_code == 200
+    assert client.patch("/api/settings", json={"poke_grace_min": 0}).status_code == 400
+    assert client.patch("/api/settings", json={"poke_grace_min": 721}).status_code == 400
+    update_spy.assert_called_once_with({"poke_grace_min": 45})

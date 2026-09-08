@@ -1,6 +1,7 @@
 """Settings endpoints: GET + PATCH the persisted settings block."""
 
 import os
+import re
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ router = APIRouter()
 
 
 _VALID_LAYOUTS = ("sibling", "inline")
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 @router.get("/api/settings")
@@ -33,6 +35,8 @@ class SettingsPatch(BaseModel):
     spawn_account: str | None = None
     spawn_model: str | None = None
     editor: str | None = None
+    poke_at: str | None = None
+    poke_grace_min: int | None = None
 
 
 @router.patch("/api/settings")
@@ -104,6 +108,26 @@ def settings_patch(body: SettingsPatch):
             patch["spawn_model"] = v
         else:
             raise HTTPException(400, f"spawn_model {v!r} is not a model id")
+
+    if "poke_at" in sent:
+        v = body.poke_at
+        # "" disables; null pops the key (back to the 08:00 default) — the two
+        # cannot share a meaning because update_settings deletes null keys.
+        if v is None or v == "" or _HHMM.match(v):
+            patch["poke_at"] = v
+        else:
+            raise HTTPException(400, f"poke_at must be HH:MM (24h) or empty: {v!r}")
+
+    if "poke_grace_min" in sent:
+        v = body.poke_grace_min
+        # Bounded so a typo cannot make the catch-up window span the day: past
+        # ~90 min a late poke shortens the first work block instead of
+        # helping it (periscope.poke), and 12h is already past any useful
+        # value.
+        if v is None or 1 <= v <= 720:
+            patch["poke_grace_min"] = v
+        else:
+            raise HTTPException(400, f"poke_grace_min must be 1..720: {v!r}")
 
     if "editor" in sent:
         v = body.editor

@@ -50,3 +50,28 @@ env — it restores intent, it does not choose.
 Background-commander jobs (`bg_account`): `claude agents` / `claude stop` are
 per-config-dir, and a job whose account is re-resolved between dispatch and
 sync is the unkillable-job incident `bg_commander._account_env` documents.
+
+## Session poke (`poke.py`)
+
+Every day at `settings.poke_at` (default 08:00; `""` disables) periscope runs
+`claude -p ok --model claude-haiku-4-5 --strict-mcp-config` under each
+account's `CLAUDE_CONFIG_DIR` so the 5h session window is anchored at 08:00
+and resets ~13:00 — four hours on each side of the working day. Both
+accounts: with session-pressure rerouting both see daily use, and the second
+call costs nothing.
+
+| Guard | Rule | Why |
+|---|---|---|
+| open window | skip while `session.resets_at` is in the future; re-check every tick | the poke could not move the reset; the window may close inside the grace |
+| grace | fire only inside `[poke_at, poke_at + poke_grace_min)` (default 90 min) | a 10:00 catch-up shortens the first work block instead of helping it |
+| once a day | skip an account whose `poke_log` entry carries today's date | — |
+| in flight | skip an account whose worker thread is running | the 08:00 and 08:01 ticks must not both spend |
+| credential | skip an unavailable account | it could not authenticate either |
+| prod only | the task is registered only under `config.is_prod()` | the dev instance never spends |
+| verify | after the poke, `usage.refresh_plan_usage_now` until the reading's `fetched_at` postdates the poke (one retry after 15s — a refresh already in flight yields the pre-poke cache); `verified` iff `session.resets_at` is within ±5 min of poke + 5h; logged at WARNING when not — "NOT anchored — reset did not move" for a real post-poke reading, "no post-poke reading" when none could be had | "reset did not move" is the signal that the anchoring assumption is wrong, so it must never be logged from a stale reading; the second text keeps the two apart |
+
+The outcome rides `/api/state.poke` and shows in the usage pill's account
+tooltip (`poked 08:01 → resets 13:01`). The poke's env comes from
+`config.claude_subprocess_env`, which also serves background-commander jobs:
+API-key vars stripped (bill the subscription, not API credits) and
+`CLAUDE_CONFIG_DIR` set-or-popped (never an account nobody chose).

@@ -6,8 +6,9 @@
 // tone) are shared with the original usage-pill styling.
 //
 // Reads the `usage` signal, which the poll loop writes as
-// { plan: data.usage_plan, fallback: data.usage } — `plan` being a mapping of
-// account id → that subscription's meters.
+// { plan: data.usage_plan, fallback: data.usage, poke: data.poke } — `plan`
+// being a mapping of account id → that subscription's meters, and `poke`
+// each account's latest session poke, for the tooltip.
 //
 // COLLAPSED IS THE POINT. Two subscriptions exist because one keeps hitting
 // its weekly wall, so the pill's job is "which account has room?", answerable
@@ -108,12 +109,20 @@ function MeterBar({ label, m, resets, pace }) {
 // Collapsing to the binding meter hides the rest from sight, not from reach.
 // Carried on the row rather than the pill because each MeterBar's own title
 // wins on hover — the row's only reliably-hoverable area is its letter.
-function acctTitle(a, expanded) {
+function acctTitle(a, expanded, poke) {
   const lines = a.meters.map(({ m }) =>
     [`${m.label}: ${m.percent}% used`, fmtReset(m.resets_at), ...paceLines(m)]
       .filter(Boolean)
       .join("\n  "),
   );
+  // The morning session poke (periscope.poke): when it fired and whether the
+  // 5h reset actually landed ~5h later. "not anchored" means a window was
+  // already open, or the anchoring assumption broke — the server log has the
+  // detail.
+  if (poke) {
+    const outcome = poke.verified ? `resets ${fmtClock(poke.resets_at)}` : "not anchored";
+    lines.push(`poked ${fmtClock(poke.at)} → ${outcome}`);
+  }
   if (a.stale) lines.push(`⚠ stale — last updated ${relTime(a.fetchedAt)} ago`);
   lines.push(expanded ? "(click to collapse)" : "(click to show every meter)");
   return [`account ${a.label}`, ...lines].join("\n\n");
@@ -142,7 +151,7 @@ export function UsagePill() {
           <div
             key={a.id}
             class={`usage-acct${a.stale ? " is-stale" : ""}`}
-            title={acctTitle(a, expanded)}
+            title={acctTitle(a, expanded, u.poke?.[a.id])}
           >
             <span class="usage-acct-label">{a.label}</span>
             {a.available ? (

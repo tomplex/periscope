@@ -49,6 +49,12 @@ def _no_plan_usage_refresh(monkeypatch):
     monkeypatch.setattr(usage, "_cost_cache", (0.0, {}), raising=False)
     monkeypatch.setattr(usage, "_cost_in_flight", False, raising=False)
     monkeypatch.setattr(usage, "_base_ctx_cache", {}, raising=False)
+    # The session poke's worker thread does the same httpx + record_usage_samples
+    # write through usage.refresh_plan_usage_now — the same leaked-thread class.
+    # It imports _bg into its own namespace, so neuter it by that name too.
+    from periscope import poke
+    monkeypatch.setattr(poke, "_bg", lambda *a, **kw: None, raising=False)
+    monkeypatch.setattr(poke, "_in_flight", set(), raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -215,6 +221,7 @@ def clean_state(tmp_xdg_home, monkeypatch):
         "projects": {},
         "workspaces": {},
         "settings": {},
+        "poke_log": {},
     }
     monkeypatch.setattr(store, "_STATE", fresh)
     return fresh

@@ -69,6 +69,10 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     # narrator Haiku calls, and real renames of real windows. PORT defaults
     # to 8765 here, so the prod-only guard does not protect tests.
     mocker.patch("periscope.activity.run_worker", side_effect=_noop)
+    # The poke loop is prod-gated too and its first tick runs on startup; with
+    # PORT at 8765 here a real tick between 08:00 and 09:30 would spend a
+    # Haiku call on the developer's real subscription.
+    mocker.patch("periscope.poke.run", side_effect=_noop)
     # PORT defaults to 8765 (prod), so the lifespan generates the bg-commander
     # MCP config — stub it so the test doesn't write into the real config dir.
     mocker.patch("periscope.bg_commander.write_mcp_config")
@@ -88,7 +92,7 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     # daemon, writes into whatever per-test ACTIVITY_DB is live when it lands —
     # corrupting unrelated tests' usage_samples and racing fresh_activity_db's
     # connection close (use-after-free → segfault). The autouse
-    # _no_plan_usage_refresh fixture seeds the cache so no spawn happens.
+    # _no_plan_usage_refresh fixture neuters usage._bg so no spawn happens.
     import threading
     assert not any(t.name == "plan-usage" for t in threading.enumerate())
 
@@ -148,6 +152,10 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
     # See test_lifespan_starts_and_shuts_down_cleanly: the real worker
     # fires a live tick against the developer's tmux on every test run.
     mocker.patch("periscope.activity.run_worker", side_effect=_noop)
+    # The poke loop is prod-gated too and its first tick runs on startup; with
+    # PORT at 8765 here a real tick between 08:00 and 09:30 would spend a
+    # Haiku call on the developer's real subscription.
+    mocker.patch("periscope.poke.run", side_effect=_noop)
     # Teardown unlinks MCP_SOCKET_PATH — no-op so we don't touch /tmp.
     mocker.patch("os.unlink")
 
