@@ -555,7 +555,7 @@ def pane_move_account(pid: str, account: str):
 
     result = _window_new_resume(
         RESUME_SESSION, f"{CLAUDE_EXEC} --resume {session_id}", session_id,
-        "resume", account=usage.choose_launch(account).account,
+        "resume", account=account,
     )
     target = result["target"]
     new_pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
