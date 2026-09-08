@@ -53,8 +53,8 @@ function applyState(data) {
   workspaces.value = data.workspaces || [];
   tracks.value = data.tracks || [];
   syncTabsFromWindows(windows.value);
-  // UsagePill reads { plan, fallback }.
-  usage.value = { plan: data.usage_plan, fallback: data.usage };
+  // UsagePill reads { plan, fallback, poke }.
+  usage.value = { plan: data.usage_plan, fallback: data.usage, poke: data.poke || {} };
   updateInfo.value = data.update || null;
   spawnAccount.value = data.spawn_account || null;
   spawnModel.value = data.spawn_model || null;
