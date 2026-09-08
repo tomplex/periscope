@@ -68,7 +68,7 @@ call costs nothing.
 | in flight | skip an account whose worker thread is running | the 08:00 and 08:01 ticks must not both spend |
 | credential | skip an unavailable account | it could not authenticate either |
 | prod only | the task is registered only under `config.is_prod()` | the dev instance never spends |
-| verify | after the poke, `usage.refresh_plan_usage_now` until the reading's `fetched_at` postdates the poke (one retry after 15s — a refresh already in flight yields the pre-poke cache); `verified` iff `session.resets_at` is within ±5 min of poke + 5h; logged at WARNING when not | the warning is the signal that the anchoring assumption is wrong, so it must never fire on a stale reading |
+| verify | after the poke, `usage.refresh_plan_usage_now` until the reading's `fetched_at` postdates the poke (one retry after 15s — a refresh already in flight yields the pre-poke cache); `verified` iff `session.resets_at` is within ±5 min of poke + 5h; logged at WARNING when not — "NOT anchored — reset did not move" for a real post-poke reading, "no post-poke reading" when none could be had | "reset did not move" is the signal that the anchoring assumption is wrong, so it must never be logged from a stale reading; the second text keeps the two apart |
 
 The outcome rides `/api/state.poke` and shows in the usage pill's account
 tooltip (`poked 08:01 → resets 13:01`). The poke's env comes from
