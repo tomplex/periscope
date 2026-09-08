@@ -595,8 +595,9 @@ def _worker(monkeypatch, *, resets_at, returncode=0, raise_subprocess=False):
 
     monkeypatch.setattr(poke.subprocess, "run", fake_run)
     monkeypatch.setattr(poke.usage, "refresh_plan_usage_now",
-                        lambda aid, cfg: {"available": True,
+                        lambda aid, cfg: {"available": True, "fetched_at": int(poke.time.time()) + 1,
                                           "meters": {"session": {"percent": 1, "resets_at": resets_at}}})
+    monkeypatch.setattr(poke.time, "sleep", lambda s: None)
     monkeypatch.setattr(poke.store, "record_poke", lambda aid, e: seen.update(record=(aid, e)))
     monkeypatch.setattr(poke, "_in_flight", {"b"})
     return seen
@@ -624,6 +625,37 @@ def test_poke_account_records_an_unverified_poke_when_the_reset_did_not_move(mon
     poke.poke_account("b", "/Users/x/.claude-b")
     assert seen["record"][1]["verified"] is False
     assert any("poke b" in r.message and r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_poke_account_retries_once_for_a_reading_that_postdates_the_poke(monkeypatch):
+    # A background refresh in flight at verify time makes refresh_plan_usage_now
+    # yield the PRE-poke cache; verifying against that would log a false
+    # "not anchored". The first stale reading is retried once after a wait.
+    at = int(poke.time.time())
+    seen = _worker(monkeypatch, resets_at=at + 5 * 3600)
+    stale = {"available": True, "fetched_at": at - 100,
+             "meters": {"session": {"percent": 0, "resets_at": None}}}
+    fresh = {"available": True, "fetched_at": at + 5,
+             "meters": {"session": {"percent": 1, "resets_at": at + 5 * 3600}}}
+    readings = iter([stale, fresh])
+    monkeypatch.setattr(poke.usage, "refresh_plan_usage_now", lambda aid, cfg: next(readings))
+    slept = []
+    monkeypatch.setattr(poke.time, "sleep", slept.append)
+    poke.poke_account("b", "/Users/x/.claude-b")
+    assert slept == [poke._RETRY_WAIT_S]
+    assert seen["record"][1]["verified"] is True
+
+
+def test_poke_account_gives_up_after_two_stale_readings_without_a_false_alarm(monkeypatch):
+    at = int(poke.time.time())
+    seen = _worker(monkeypatch, resets_at=None)
+    stale = {"available": True, "fetched_at": at - 100,
+             "meters": {"session": {"percent": 0, "resets_at": None}}}
+    monkeypatch.setattr(poke.usage, "refresh_plan_usage_now", lambda aid, cfg: dict(stale))
+    monkeypatch.setattr(poke.time, "sleep", lambda s: None)
+    poke.poke_account("b", "/Users/x/.claude-b")
+    entry = seen["record"][1]
+    assert entry["verified"] is False and entry["resets_at"] is None
 
 
 def test_poke_account_records_even_when_the_subprocess_fails_so_it_does_not_repoke(monkeypatch):
@@ -711,7 +743,12 @@ def poke_account(account_id: str, config_dir: str) -> None:
                             proc.returncode, (proc.stderr or "")[-300:])
         except (subprocess.SubprocessError, OSError) as e:
             log.warning("poke %s: subprocess failed: %s", account_id, e)
-        payload = usage.refresh_plan_usage_now(account_id, config_dir) or {}
+        # refresh_plan_usage_now yields the CACHED payload when a background
+        # refresh already holds the slot (and after a failed fetch) — a
+        # pre-poke reading would log a false "not anchored" WARNING. Insist on
+        # a fetch that postdates the poke; one retry covers a refresh that was
+        # mid-flight when we asked.
+        payload = _post_poke_usage(account_id, config_dir, at=at)
         session = (payload.get("meters") or {}).get("session") or {}
         resets_at = session.get("resets_at")
         ok = verified(resets_at, at=at)
@@ -727,6 +764,22 @@ def poke_account(account_id: str, config_dir: str) -> None:
         })
     finally:
         _in_flight.discard(account_id)
+
+
+_RETRY_WAIT_S = 15
+
+
+def _post_poke_usage(account_id: str, config_dir: str, *, at: int) -> dict:
+    """The account's usage as fetched AFTER `at`, or {} when two attempts
+    could not get one (the verify then records `verified: False` with a
+    null reset — honest, and it does not re-poke)."""
+    for attempt in range(2):
+        payload = usage.refresh_plan_usage_now(account_id, config_dir) or {}
+        if (payload.get("fetched_at") or 0) >= at:
+            return payload
+        if attempt == 0:
+            time.sleep(_RETRY_WAIT_S)
+    return {}
 
 
 def _now() -> datetime:
@@ -988,7 +1041,7 @@ call costs nothing.
 | in flight | skip an account whose worker thread is running | the 08:00 and 08:01 ticks must not both spend |
 | credential | skip an unavailable account | it could not authenticate either |
 | prod only | the task is registered only under `config.is_prod()` | the dev instance never spends |
-| verify | after the poke, `usage.refresh_plan_usage_now`; `verified` iff `session.resets_at` is within ±5 min of poke + 5h; logged at WARNING when not | the warning is the signal that the anchoring assumption is wrong |
+| verify | after the poke, `usage.refresh_plan_usage_now` until the reading's `fetched_at` postdates the poke (one retry after 15s — a refresh already in flight yields the pre-poke cache); `verified` iff `session.resets_at` is within ±5 min of poke + 5h; logged at WARNING when not | the warning is the signal that the anchoring assumption is wrong, so it must never fire on a stale reading |
 
 The outcome rides `/api/state.poke` and shows in the usage pill's account
 tooltip (`poked 08:01 → resets 13:01`). The poke's env comes from
