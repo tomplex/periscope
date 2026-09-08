@@ -177,6 +177,8 @@ def build_state() -> dict:
         # now. Computed from the cache (never blocks) on every poll so the
         # header chip and the launcher's preselect track the meters.
         "launch_default": dataclasses.asdict(usage.choose_launch()),
+        # Each account's most recent session poke; the pill tooltip shows it.
+        "poke": store.get_poke_log(),
         "update": updater.summary(),
         # The rail gates its open-in-editor action on this. Read from settings
         # rather than re-scanning /Applications every poll — detection is only

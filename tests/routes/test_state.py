@@ -281,3 +281,15 @@ def test_state_publishes_the_chooser_answer(client, mocker, clean_state):
     # covers the route's own binding); under clean_state + the autouse
     # no-refresh guard that is {available: False} per account → default, no override.
     assert body["launch_default"] == {"account": "default", "model": None, "reason": "no usage data"}
+
+
+def test_state_carries_the_poke_log(client, mocker, clean_state):
+    from periscope import store
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    store.record_poke("b", {"date": "2026-09-08", "at": 5, "resets_at": 18005, "verified": True})
+    body = client.get("/api/state").json()
+    assert body["poke"] == {"b": {"date": "2026-09-08", "at": 5, "resets_at": 18005, "verified": True}}
