@@ -116,14 +116,18 @@ def settings_patch(body: SettingsPatch):
         if v is None or v == "" or _HHMM.match(v):
             patch["poke_at"] = v
         else:
-            raise HTTPException(400, f"poke_at must be HH:MM (24h) or empty, got {v!r}")
+            raise HTTPException(400, f"poke_at must be HH:MM (24h) or empty: {v!r}")
 
     if "poke_grace_min" in sent:
         v = body.poke_grace_min
+        # Bounded so a typo cannot make the catch-up window span the day: past
+        # ~90 min a late poke shortens the first work block instead of
+        # helping it (periscope.poke), and 12h is already past any useful
+        # value.
         if v is None or 1 <= v <= 720:
             patch["poke_grace_min"] = v
         else:
-            raise HTTPException(400, "poke_grace_min must be 1..720")
+            raise HTTPException(400, f"poke_grace_min must be 1..720: {v!r}")
 
     if "editor" in sent:
         v = body.editor
