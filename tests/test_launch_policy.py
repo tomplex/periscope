@@ -18,6 +18,9 @@ from periscope.launch_policy import (
 
 WED = 1_800_000_000          # B's weekly reset
 SUN = WED + 4 * 86400        # A's weekly reset, 4 days later
+NOW = WED - 10 * 3600        # the launch moment, well inside both weeks
+SOON = NOW + 600             # a projected session wall inside the pressure horizon
+LATER = NOW + 2 * 3600       # a projected wall beyond it — a forecast, not pressure
 
 
 def acct(session=0, week=0, *, resets=None, session_resets=None,
@@ -43,6 +46,7 @@ BASE = LaunchInputs(
     model_arg=None,
     account_pin=None,
     model_pin=None,
+    now=NOW,
 )
 
 
@@ -86,9 +90,10 @@ def test_walled_is_session_or_week_all_at_100_plus_the_models_sublimit():
     assert not walled(acct()["meters"], model="fable")                 # missing meter ≠ wall
 
 
-def test_pressured_is_a_projected_session_wall():
-    assert pressured(acct(limit_at=WED)["meters"])
-    assert not pressured(acct()["meters"])
+def test_pressured_is_a_projected_session_wall_within_the_horizon():
+    assert pressured(acct(limit_at=SOON)["meters"], now=NOW)
+    assert not pressured(acct(limit_at=LATER)["meters"], now=NOW)   # a forecast, not pressure
+    assert not pressured(acct()["meters"], now=NOW)
 
 
 # --- order_accounts -----------------------------------------------------------
@@ -144,12 +149,20 @@ def test_everything_walled_picks_the_soonest_session_reset():
 
 def test_session_pressure_reroutes_new_spawns():
     assert pick(usage={"default": acct(resets=SUN),
-                       "b": acct(resets=WED, limit_at=WED)}) == ("default", "fable")
+                       "b": acct(resets=WED, limit_at=SOON)}) == ("default", "fable")
+
+
+def test_a_wall_projected_beyond_the_horizon_does_not_reroute():
+    # 17:30, B at 61% and burning: the slope says "wall at 19:30" but evening
+    # usage tails off and that wall mostly never arrives. Two hours out is a
+    # forecast; only an imminent wall moves new spawns.
+    assert pick(usage={"default": acct(resets=SUN),
+                       "b": acct(resets=WED, limit_at=LATER)}) == ("b", "fable")
 
 
 def test_all_pressured_ignores_pressure():
-    usage = {"default": acct(resets=SUN, limit_at=SUN),
-              "b": acct(resets=WED, limit_at=WED)}
+    usage = {"default": acct(resets=SUN, limit_at=SOON),
+              "b": acct(resets=WED, limit_at=SOON)}
     assert pick(usage=usage) == ("b", "fable")
     # The second pass starts its own skip list — it must not carry over "b:
     # session on pace to wall" from the first pass, since b is what it picked.
@@ -159,7 +172,7 @@ def test_all_pressured_ignores_pressure():
 def test_explicit_account_is_never_rerouted_by_pressure():
     assert pick(account_arg="b",
                 usage={"default": acct(resets=SUN),
-                       "b": acct(resets=WED, limit_at=WED)}) == ("b", "fable")
+                       "b": acct(resets=WED, limit_at=SOON)}) == ("b", "fable")
 
 
 def test_account_pin_behaves_like_an_explicit_account_and_still_picks_the_model():
