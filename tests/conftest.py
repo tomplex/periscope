@@ -52,10 +52,7 @@ def _no_plan_usage_refresh(monkeypatch):
     # The session poke's worker thread does the same httpx + record_usage_samples
     # write through usage.refresh_plan_usage_now — the same leaked-thread class.
     # It imports _bg into its own namespace, so neuter it by that name too.
-    try:
-        from periscope import poke
-    except ImportError:
-        return
+    from periscope import poke
     monkeypatch.setattr(poke, "_bg", lambda *a, **kw: None, raising=False)
     monkeypatch.setattr(poke, "_in_flight", set(), raising=False)
 

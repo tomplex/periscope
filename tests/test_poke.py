@@ -160,7 +160,7 @@ def test_poke_account_retries_once_for_a_reading_that_postdates_the_poke(monkeyp
     assert seen["record"][1]["verified"] is True
 
 
-def test_poke_account_gives_up_after_two_stale_readings_without_a_false_alarm(monkeypatch):
+def test_poke_account_gives_up_after_two_stale_readings_without_a_false_alarm(monkeypatch, caplog):
     at = int(poke.time.time())
     seen = _worker(monkeypatch, resets_at=None)
     stale = {"available": True, "fetched_at": at - 100,
@@ -170,6 +170,8 @@ def test_poke_account_gives_up_after_two_stale_readings_without_a_false_alarm(mo
     poke.poke_account("b", "/Users/x/.claude-b")
     entry = seen["record"][1]
     assert entry["verified"] is False and entry["resets_at"] is None
+    assert any("no post-poke reading" in r.message for r in caplog.records)
+    assert not any("did not move" in r.message for r in caplog.records)
 
 
 def test_poke_account_records_even_when_the_subprocess_fails_so_it_does_not_repoke(monkeypatch):
@@ -179,6 +181,13 @@ def test_poke_account_records_even_when_the_subprocess_fails_so_it_does_not_repo
     poke.poke_account("b", "/Users/x/.claude-b")
     assert seen["record"][1]["verified"] is False
     assert poke._in_flight == set()
+
+
+def test_poke_account_warns_on_a_nonzero_exit_but_still_records(monkeypatch, caplog):
+    seen = _worker(monkeypatch, resets_at=None, returncode=1)
+    poke.poke_account("b", "/Users/x/.claude-b")
+    assert any("exited 1" in r.message and r.levelname == "WARNING" for r in caplog.records)
+    assert seen["record"][0] == "b"
 
 
 def test_tick_spawns_one_worker_per_due_account_and_marks_it_in_flight(monkeypatch, clean_state):

@@ -36,6 +36,7 @@ _POKE_MODEL = "claude-haiku-4-5"
 _VERIFY_TOLERANCE_S = 300
 _SESSION_WINDOW_S = 5 * 3600
 _SUBPROCESS_TIMEOUT_S = 120
+_RETRY_WAIT_S = 15
 
 # Accounts with a poke thread running. Module state passed INTO `due` (not
 # read inside it) so the decision stays free of globals; conftest resets it.
@@ -134,24 +135,28 @@ def poke_account(account_id: str, config_dir: str) -> None:
         session = (payload.get("meters") or {}).get("session") or {}
         resets_at = session.get("resets_at")
         ok = verified(resets_at, at=at)
+        dt = datetime.fromtimestamp(at)
+        # {} means neither post-poke attempt got a reading that postdates the
+        # poke — distinct from a reading that DID land but showed the window
+        # still open: only the latter means the anchoring assumption is wrong.
+        state = ("anchored" if ok else
+                 "no post-poke reading — usage refresh stale/failed" if not payload else
+                 "NOT anchored — reset did not move")
         (log.info if ok else log.warning)(
             "poke %s at %s: session resets %s (%s)", account_id,
-            datetime.fromtimestamp(at).strftime("%H:%M"),
+            dt.strftime("%H:%M"),
             datetime.fromtimestamp(resets_at).strftime("%H:%M") if resets_at else "—",
-            "anchored" if ok else "NOT anchored — reset did not move",
+            state,
         )
         store.record_poke(account_id, {
-            "date": datetime.fromtimestamp(at).strftime("%Y-%m-%d"),
+            "date": dt.strftime("%Y-%m-%d"),
             "at": at, "resets_at": resets_at, "verified": ok,
         })
     finally:
         _in_flight.discard(account_id)
 
 
-_RETRY_WAIT_S = 15
-
-
-def _post_poke_usage(account_id: str, config_dir: str, *, at: int) -> AccountUsage | dict:
+def _post_poke_usage(account_id: str, config_dir: str, *, at: int) -> AccountUsage:
     """The account's usage as fetched AFTER `at`, or {} when two attempts
     could not get one (the verify then records `verified: False` with a
     null reset — honest, and it does not re-poke)."""
@@ -173,7 +178,11 @@ def _tick() -> None:
                    usage=usage.cached_plan_usage(), in_flight=_in_flight,
                    accounts=store.get_accounts()):
         _in_flight.add(aid)
-        _bg(f"poke:{aid}", poke_account, aid, store.account_config_dir(aid))
+        try:
+            _bg(f"poke:{aid}", poke_account, aid, store.account_config_dir(aid))
+        except Exception:
+            _in_flight.discard(aid)
+            raise
 
 
 async def run() -> None:
