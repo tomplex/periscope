@@ -25,13 +25,15 @@ describe("modalRequest", () => {
     respond(409, { detail: "session looks live (written 12s ago); wait a minute or pick another" });
     const r = await modalRequest("move", "/x");
     expect(r.status).toBe(409);
-    expect(r.error).toMatch(/^session looks live/);
+    expect(r.reason).toMatch(/^session looks live/);
+    expect(r.error).toBe(r.reason);
     expect(r.data).toBeUndefined();
   });
 
   it("has no status on a network failure", async () => {
     vi.stubGlobal("fetch", async () => { throw new Error("offline"); });
     const r = await modalRequest("move", "/x");
+    expect(r.reason).toBe("offline");
     expect(r.error).toBe("move failed: offline");
     expect(r.status).toBeUndefined();
   });

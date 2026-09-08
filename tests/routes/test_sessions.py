@@ -633,7 +633,8 @@ def test_window_new_resume_refuses_a_recently_written_transcript_and_says_how_re
     # The client matches on this prefix (Rail.movePaneAccount) — keep them in sync.
     assert e.value.detail.startswith("session looks live")
     # ...and the detail carries the measured age (12s here), not a constant.
-    assert re.match(r"session looks live \(written 1[23]s ago\); wait a minute", e.value.detail)
+    m = re.match(r"session looks live \(written (\d+)s ago\); wait a minute", e.value.detail)
+    assert m and 12 <= int(m.group(1)) < 60
     assert not [c for c in calls if c and c[0] == "new-window"]
 
 

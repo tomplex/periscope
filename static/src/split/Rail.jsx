@@ -278,7 +278,7 @@ export function Rail() {
     const url =
       `/api/pane/move-account?pid=${encodeURIComponent(w.pid)}&account=${encodeURIComponent(accountId)}` +
       (force ? "&force=1" : "");
-    const { data, error, status } = await modalRequest("move account", url, { method: "POST" });
+    const { data, error, reason, status } = await modalRequest("move account", url, { method: "POST" });
     // apiCall used to emit this on every call; keep the instrumentation event.
     track("api:move account", { path: url, method: "POST", ok: !!data });
     if (data?.pid) {
@@ -289,7 +289,8 @@ export function Rail() {
       prefs.setLastSelected({ kind: "pane", pid: data.pid });
       return;
     }
-    if (status === 409 && !force && error?.startsWith("session looks live")) {
+    // Prefix pinned by routes/sessions._window_new_resume's mtime guard — change both or neither.
+    if (status === 409 && !force && reason?.startsWith("session looks live")) {
       const ok = await confirmDialog(
         `${error}\n\nMove anyway? The original pane stays open; if the session really is mid-turn, the two copies will interleave writes to one transcript.`,
         { okLabel: "Move anyway" }
@@ -297,7 +298,7 @@ export function Rail() {
       if (ok) await movePaneAccount(w, accountId, true);
       return;
     }
-    showToast(`move account failed: ${error || "unknown error"}`, "bad", 6000);
+    showToast(`move account failed: ${reason || "unknown error"}`, "bad", 6000);
   }
   async function renamePane(w, next) {
     if (!w.target) return;
