@@ -12,6 +12,8 @@
 
 **Read before starting:** `CLAUDE.md` (commit-as-you-go, tests must not spawn DB-touching threads), `docs/testing.md`, `docs/wrapper-profiles.md` (the model-override paragraph you will rewrite in Task 9).
 
+**One-time setup in this worktree:** `npm install` (a fresh worktree has no `node_modules`; `npm test` and `npm run build` need it).
+
 **Verification commands used throughout:**
 - `uv run pytest tests/test_launch_policy.py -q` — the decision table
 - `uv run pytest -q` — full suite (~1083 tests; must stay green)
@@ -653,7 +655,7 @@ def choose_launch(account: str | None = None, model: str | None = None) -> Launc
 - [ ] **Step 4: Run the usage tests**
 
 Run: `uv run pytest tests/test_usage.py tests/test_launch_policy.py -q`
-Expected: all pass. (Other test modules that patch `usage.best_account` now fail — Tasks 6 and 7 fix them; do not run the full suite yet.)
+Expected: all pass. (`tests/test_open_ops.py` and `tests/test_channels.py` patch `usage.best_account` and now fail — Task 5 fixes them; do not run the full suite yet.)
 
 - [ ] **Step 5: Commit**
 
@@ -963,7 +965,9 @@ def test_state_publishes_the_chooser_answer(client, mocker, clean_state):
     _patch(mocker, "cached_claude_usage", return_value={})
     _patch(mocker, "cached_plan_usage", return_value={})
     body = client.get("/api/state").json()
-    # clean_state + the autouse no-refresh guard: no usage known → default, no override.
+    # The chooser reads usage.cached_plan_usage directly (the _patch above only
+    # covers the route's own binding); under clean_state + the autouse
+    # no-refresh guard that is {available: False} per account → default, no override.
     assert body["launch_default"] == {"account": "default", "model": None, "reason": "no usage data"}
 ```
 
@@ -974,13 +978,13 @@ Expected: `KeyError: 'launch_default'`
 
 - [ ] **Step 3: Implement**
 
-`periscope/routes/state.py`: add `import dataclasses` above `import time`; add `choose_launch,` to the `from periscope.usage import (...)` list (alphabetical: `annotate_cost_pressure, cached_claude_usage, cached_plan_usage, choose_launch`); and in `build_state`'s dict, directly below the `"spawn_model"` line:
+`periscope/routes/state.py`: add `import dataclasses` above `import time`; change `from periscope import store, updater` to `from periscope import store, updater, usage` (module-qualified so tests can patch `usage.choose_launch` in one place); and in `build_state`'s dict, directly below the `"spawn_model"` line:
 
 ```python
         # The chooser's current answer — what an unnamed spawn would get right
         # now. Computed from the cache (never blocks) on every poll so the
         # header chip and the launcher's preselect track the meters.
-        "launch_default": dataclasses.asdict(choose_launch()),
+        "launch_default": dataclasses.asdict(usage.choose_launch()),
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -1209,9 +1213,11 @@ git commit -m "header pins: launchDefault signal, PIN_MODELS with auto, chips re
 
 - [ ] **Step 1: Update the tests**
 
-`static/src/overlays/__tests__/LauncherModal.test.js` — change line 2 to `import { sendsAccount } from "../LauncherModal.jsx";` (drop `accountQuery`) and delete the whole `describe("accountQuery", ...)` block (lines 8–17).
+`static/src/overlays/__tests__/LauncherModal.test.js` — change line 2 to `import { sendsAccount } from "../LauncherModal.jsx";` (drop `accountQuery`) and delete lines 4–17: the comment block explaining `accountQuery` (lines 4–7) AND the whole `describe("accountQuery", ...)` block (8–17).
 
-`static/src/chrome/__tests__/usageSummary.test.js` — change line 2 to `import { STALE_AFTER_S, summarizeAccounts } from "../usageSummary.js";` and delete the whole `describe("bestAccount", ...)` block (lines 82–113).
+`static/src/__tests__/profiles.test.js:4` — the comment "Same contract as accountQuery" becomes "Same contract as the launcher's `model` param: always sent explicitly".
+
+`static/src/chrome/__tests__/usageSummary.test.js` — change line 2 to `import { STALE_AFTER_S, summarizeAccounts } from "../usageSummary.js";` and delete the whole `describe("bestAccount", ...)` block (lines 81–113).
 
 - [ ] **Step 2: Run to verify the suite still fails for the right reason**
 
@@ -1224,7 +1230,7 @@ Delete `bestAccount` — the doc comment block starting `/** The account with th
 
 - [ ] **Step 4: `LauncherModal.jsx`**
 
-Delete line 32 (`import { bestAccount } from "../chrome/usageSummary.js";`).
+Delete line 32 (`import { bestAccount } from "../chrome/usageSummary.js";`). Line 19's header comment says "see accountQuery" — change that phrase to "see run()".
 
 Line 38: `import { spawnAccount, spawnModel, tracks, usage, windows } from "../store.js";` → `import { launchDefault, tracks, windows } from "../store.js";`
 
@@ -1256,6 +1262,8 @@ with
     // land on B whenever B was the chooser's answer.
     if (sendsAccount(t)) qs.set("account", account.value);
 ```
+
+`run()` is impure (it POSTs and closes the modal), so this line has no unit test; the browser check in Step 7 is its coverage. The trap to know about when touching it: an `if (acct)` truthiness guard here looks like a tidy-up and re-breaks a launch the user aimed at account A — that was the bug.
 
 - [ ] **Step 5: Run the frontend tests and lint**
 
@@ -1333,7 +1341,7 @@ Two measured facts shape the rules (five weeks of prod `usage_samples`,
 | 5 | An account whose session is **on pace to wall** (`limit_at` set) is skipped on the first pass, unless every account is | Session headroom is a rate limit, not a budget: the other window costs nothing to use and two windows in parallel is 2× the daily rate |
 | 6 | Everything walled → the account whose session resets soonest | Blocked either way; minimize the wait |
 | 7 | An explicit account (call arg or header pin) is never rerouted; the model is still chosen within it. An explicit model (arg or pin) fixes the model; the account is chosen against that model's sub-limit | Pins override one axis each |
-| 8 | `spawn_model`: `"auto"` (or unset) = rules 2–3; `"default"` = no `ANTHROPIC_MODEL`; an alias = pinned | Stored literally — coercing `default` to unset would silently turn "no override" into "chooser decides" |
+| 8 | `spawn_model`: `"auto"` (or unset) = rules 2–3; `"default"` = no `ANTHROPIC_MODEL`; an alias = pinned | Stored literally — coercing `default` to unset would silently turn "no override" into "chooser decides". A pin clicked to `default` before this landed was stored as unset and now reads as `auto`; click `default` again to restore it |
 | 9 | No usage data → `default` account, no override (or the explicit account) | A launch never waits on usage |
 
 `choose_launch`'s answer is published as `launch_default` on every
@@ -1349,7 +1357,7 @@ sync is the unkillable-job incident `bg_commander._account_env` documents.
 
 - [ ] **Step 2: `docs/wrapper-profiles.md`**
 
-In the paragraph beginning `**Model override (`ANTHROPIC_MODEL`) rides the same carrier.**`, replace the sentence starting `` `store.spawn_model_env(explicit)` is the one choke point `` through `` `None` falls to the pin. `` with:
+In the paragraph beginning `**Model override (`ANTHROPIC_MODEL`) rides the same carrier.**`, replace the sentence starting `` `store.spawn_model_env(explicit)` is the one choke point `` through `` `None` falls to the pin `` (the real text ends that sentence with a colon, not a period — keep the colon and what follows it) with:
 
 `` `usage.choose_launch(account, model)` is the one choke point on both axes (docs/account-routing.md): an explicit value wins, INCLUDING an explicit `"default"` (the launcher always sends one — that is how a single launch opts out of the pin); `None` falls to the pin, and a pin of `"auto"` (or none) lets `launch_policy` pick fable, then opus[1m]. ``
 
@@ -1357,7 +1365,7 @@ In the paragraph beginning `**Model override (`ANTHROPIC_MODEL`) rides the same 
 
 In the "Reference docs" table add a row after the `narrator.py` row:
 
-`| `launch_policy.py`, `usage.choose_launch`, `spawn_model` / `spawn_account` settings, the header pin pickers | `docs/account-routing.md` — earliest-reset routing, walls vs. session pressure, what `auto`/`default` mean |`
+`| `launch_policy.py`, `usage.py` (`choose_launch`), the spawn/resume paths in `routes/sessions.py`, `open_ops.py`, `channels.py`, the `spawn_model` / `spawn_account` settings and header pin pickers | `docs/account-routing.md` — earliest-reset routing, walls vs. session pressure, what `auto`/`default` mean |`
 
 In the module table change the `git_pr.py / lgtm.py / usage.py / cost_pressure.py` row to:
 
@@ -1379,7 +1387,7 @@ git commit -m "docs: account-routing.md (the rule table + evidence), wrapper-pro
 Run: `uv run pytest -q` — Expected: all pass, 0 failures.
 Run: `npm test` — Expected: all pass.
 Run: `bin/check` — Expected: zero violations.
-Run: `grep -rn "best_account\|spawn_model_env\|accountQuery\|bestAccount" periscope static/src tests docs CLAUDE.md` — Expected: no hits outside `docs/superpowers/` and `tests/conftest.py`'s docstring.
+Run: `grep -rn "best_account\|spawn_model_env\|accountQuery\|bestAccount" periscope static/src tests CLAUDE.md docs/*.md` — Expected: no hits except `tests/conftest.py`'s docstring (which Task 4 reworded). `docs/plans/` and `docs/superpowers/` are historical and excluded on purpose.
 
 - [ ] **Step 2: Working tree clean**
 
