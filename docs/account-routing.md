@@ -75,3 +75,25 @@ tooltip (`poked 08:01 → resets 13:01`). The poke's env comes from
 `config.claude_subprocess_env`, which also serves background-commander jobs:
 API-key vars stripped (bill the subscription, not API credits) and
 `CLAUDE_CONFIG_DIR` set-or-popped (never an account nobody chose).
+
+## Moving a running pane (`/api/pane/move-account`)
+
+A preference flip changes only new spawns. Moving a running pane is manual:
+the rail's move action resumes the same session on the other account in a
+second pane (the original stays open — `~/.claude-b/projects` is a symlink to
+`~/.claude/projects`, so either account can resume it). The server refuses
+with 409 when the transcript was written to in the last 60s, because two
+concurrent appenders would interleave into one JSONL. That guard misreads the
+case it matters most for: Claude writes the *limit-reached* message into the
+transcript, so a walled pane always looks live. `force=1` skips only that
+guard — never the already-resumed-elsewhere one — and the client offers it
+as "Move anyway?" on exactly that 409 (matched on the detail's
+`session looks live` prefix; the server test and the client test pin the
+text together).
+
+## 💤 — Fable budget on pace to go unused
+
+The pill marks an account 💤 when its `week_fable*` meter projects under 100%
+at reset and the reset is within 48h: past that point the remaining budget is
+unlikely to be burned. It is the inverse of 🔥 (on pace to blow), computed on
+the client from the same `projected_percent` field (`usageSummary.wasteMark`).
