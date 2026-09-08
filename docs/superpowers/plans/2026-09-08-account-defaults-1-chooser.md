@@ -289,7 +289,7 @@ def choose(inputs: LaunchInputs) -> Launch:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_launch_policy.py -q`
-Expected: `5 passed`
+Expected: `4 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -518,7 +518,7 @@ def choose(inputs: LaunchInputs) -> Launch:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_launch_policy.py -q`
-Expected: `24 passed`
+Expected: `23 passed`
 
 - [ ] **Step 5: Lint and type-check**
 
@@ -537,7 +537,7 @@ git commit -m "launch_policy: order_accounts (EDF, null last, registry tie-break
 ### Task 3: `usage.choose_launch` shell; delete `best_account`
 
 **Files:**
-- Modify: `periscope/usage.py:17-23` (imports), `:629-668` (delete `best_account`)
+- Modify: `periscope/usage.py:17-23` (imports), `:148` (`_plan_cache`), `:223-238` (`parse_plan_usage`), `:372` (`fetch_plan_usage`), `:431-460` (`cached_plan_usage`), `:629-668` (delete `best_account`)
 - Test: `tests/test_usage.py:481-550`
 
 - [ ] **Step 1: Replace the `best_account` tests**
@@ -547,7 +547,7 @@ Delete everything from the line `# --- best_account: which subscription a new pa
 ```python
 # --- choose_launch: the impure shell over launch_policy.choose ----------------
 
-from periscope import usage
+from periscope import store, usage
 from periscope.launch_policy import Launch
 
 
@@ -593,7 +593,7 @@ def test_choose_launch_falls_back_to_default_when_nothing_is_known(monkeypatch, 
     assert usage.choose_launch().account == "default"
 ```
 
-(`store` is already imported at the top of `tests/test_usage.py`; keep it.)
+(`store` was previously imported only *inside* the deleted `best_account` tests, so the module-level import above is new.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -613,14 +613,17 @@ from collections.abc import Callable
 Add after `from periscope import activity, store`:
 ```python
 from periscope import launch_policy
-from periscope.launch_policy import AccountUsage, Launch
+from periscope.launch_policy import AccountUsage, Launch, Meter
 ```
 
-Annotate `parse_plan_usage`'s signature (`def parse_plan_usage(data: dict) -> dict:`) as:
-```python
-def parse_plan_usage(data: dict) -> AccountUsage:
-```
-and its final `return {"available": bool(meters), "meters": meters}` stays as-is (a dict literal satisfies the TypedDict).
+Thread the `AccountUsage` type through the plan-usage path — `ty` rejects the bare `-> AccountUsage` annotation alone because `meters` is declared `dict[str, dict]` (verified: four `invalid-return-type` / `invalid-argument-type` errors otherwise). Five edits, all annotations, no behavior change:
+
+- line ~148: `_plan_cache: dict[str, tuple[float, AccountUsage | None]] = {}`
+- `parse_plan_usage`: signature `def parse_plan_usage(data: dict) -> AccountUsage:` and, inside it, `meters: dict[str, Meter] = {}`
+- `fetch_plan_usage`: `-> AccountUsage | None`
+- `cached_plan_usage`: `-> dict[str, AccountUsage]` and `out: dict[str, AccountUsage] = {}`
+
+After these, `uv run ty check` must report "All checks passed" — run it before Step 4.
 
 Delete the whole `best_account` function (from `def best_account(` through `return best[int(rand() * len(best))]`) and put this in its place:
 
@@ -756,7 +759,7 @@ git commit -m "spawn_model: auto/default stored literally (unset = auto), model_
 
 **Files:**
 - Modify: `periscope/open_ops.py:199-207`, `periscope/channels.py:35,596-602,911-916`, `periscope/routes/sessions.py:288-293,498-505,540-544`, `periscope/worktree_spawn.py:29,261-265`
-- Test: `tests/test_open_ops.py:393-414`, `tests/test_channels.py:851-861,1543-1547,1577-1583,1591-1597`
+- Test: `tests/test_open_ops.py:393-414`, `tests/test_channels.py:851-861,1543-1547,1577-1583,1591-1597`, `tests/routes/test_sessions.py` (after line 84)
 
 - [ ] **Step 1: Update the existing tests that stub `best_account`**
 
@@ -802,6 +805,26 @@ def test_spawn_claude_sets_the_model_the_chooser_picked(mocker):
 ```
 
 (`_mock_spawn_plumbing` and `_created_call` already exist in that file; `_created_call` (line ~781) returns the tmux argv tuple of the `new-window` / `new-session` call, so a `-e KEY=VALUE` binding appears as the literal element `"ANTHROPIC_MODEL=opus[1m]"` — the same form `test_spawn_claude_account_sets_config_dir_env` asserts for `CLAUDE_CONFIG_DIR`.)
+
+Add one new test to `tests/routes/test_sessions.py` after `test_window_new_resume_unknown_session_id` — the dashboard resume path today passes no account at all, and nothing would go red if a later edit dropped the kwarg again:
+
+```python
+def test_window_new_resume_routes_the_account_through_the_chooser(client, mocker):
+    from periscope.launch_policy import Launch
+    resume = _patch(mocker, "_window_new_resume",
+                    return_value={"ok": True, "session": "resumes", "index": 3,
+                                  "target": "resumes:3", "mode": "resume",
+                                  "resumed_session_id": "abc"})
+    mocker.patch("periscope.usage.choose_launch",
+                 side_effect=lambda account=None, model=None: Launch(account or "b", None, ""))
+    r = client.post("/api/window/new?session=resumes&mode=resume&resume_id=abc")
+    assert r.status_code == 200
+    assert resume.call_args.kwargs.get("account") == "b"        # unnamed → the chooser's pick
+    client.post("/api/window/new?session=resumes&mode=resume&resume_id=abc&account=default")
+    assert resume.call_args.kwargs.get("account") == "default"  # explicit passes through
+```
+
+(`sessions.py` calls `usage.choose_launch` through the module attribute, so patching `periscope.usage.choose_launch` takes effect.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -914,7 +937,7 @@ Expected: zero violations.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add periscope/open_ops.py periscope/channels.py periscope/routes/sessions.py periscope/worktree_spawn.py tests/test_open_ops.py tests/test_channels.py
+git add periscope/open_ops.py periscope/channels.py periscope/routes/sessions.py periscope/worktree_spawn.py tests/test_open_ops.py tests/test_channels.py tests/routes/test_sessions.py
 git commit -m "spawn paths: every launch and resume resolves through usage.choose_launch — dashboard resume now picks an account instead of billing the default"
 ```
 
