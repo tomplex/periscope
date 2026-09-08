@@ -16,7 +16,7 @@
 //                      when it doesn't)
 //   - cwd=<path>     → land the tab in a worktree path we already know
 // With neither, the backend uses the track's repo (or ~/dev for a loose track).
-// An optional `account` picks the Claude subscription (see run()).
+// The `account` param picks the Claude subscription (see run()).
 //
 // The opener (__periscopeOpenLauncher) takes the track id — the rail's "+ New
 // tab" row calls window.__periscopeOpenLauncher(trackId) (see Rail.jsx).
@@ -56,10 +56,10 @@ const account = signal("default");
 // for why this one is sticky while the account is re-derived.
 const profile = signal("default");
 
-// Model override for THIS launch ("default" | a Claude alias). Seeded from the
-// header's spawn-model pin on every open — the pin is the standing default;
-// picking here changes one launch and is not remembered. Carried only by
-// Claude agent windows (same guard as the profile, `sendsProfile`).
+// Model override for THIS launch ("default" | a Claude alias). Seeded from
+// launch_default (what an unnamed launch would get) on every open — picking
+// here changes one launch and is not remembered. Carried only by Claude agent
+// windows (same guard as the profile, `sendsProfile`).
 const model = signal("default");
 
 // Whether a launch target should carry the account at all.
@@ -70,7 +70,8 @@ const model = signal("default");
 // subscription silently — and invisibly, because the rail's account chip is
 // derived from a live claude process, which a shell window has none of. Benign
 // while the picker defaulted to "default"; a live trap once it started
-// preselecting the emptiest account. Codex has no Claude subscription.
+// preselecting the chooser's current answer (launch_default). Codex has no
+// Claude subscription.
 // Pure: exported for unit tests.
 export function sendsAccount(t) {
   return t?.mode === "agent" && (t.agent || "claude") === "claude";

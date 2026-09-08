@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { profileLabel, profileQuery, sendsProfile } from "../profiles.js";
 
-// The launcher's profile → query-param mapping. Same contract as the
-// launcher's `model` param: always sent explicitly. The default profile must
-// produce NO `profile=` param, because the server fails OPEN on an unknown id
-// (config.profile_env) and omitting keeps the default launch byte-identical
-// to the pre-profiles URL.
+// The launcher's profile → query-param mapping. Unlike `account` and `model`,
+// which the launcher always sends, `profile` is omitted for the default — a
+// default-profile launch must stay byte-identical to a hand-typed `claude`.
 describe("profileQuery", () => {
   it("omits the param for the default profile", () => {
     expect(profileQuery("default")).toBe(null);

@@ -25,13 +25,13 @@ describe("<SpawnModelPicker>", () => {
     expect(activeLabel(render(<SpawnModelPicker />))).toBe("auto → fable");
   });
 
-  it("reads auto → default before the first poll", () => {
-    expect(activeLabel(render(<SpawnModelPicker />))).toBe("auto → default");
+  it("reads plain auto before the first poll", () => {
+    expect(activeLabel(render(<SpawnModelPicker />))).toBe("auto");
   });
 
   it("marks a stored auto pin active exactly like unset", () => {
     spawnModel.value = "auto";
-    expect(activeLabel(render(<SpawnModelPicker />))).toBe("auto → default");
+    expect(activeLabel(render(<SpawnModelPicker />))).toBe("auto");
   });
 
   it("marks the pinned alias active, and only it", () => {

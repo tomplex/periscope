@@ -50,7 +50,7 @@ export function SpawnModelPicker() {
           title={m.id === "auto" ? auto?.reason : undefined}
           onClick={() => pick(m.id)}
         >
-          {m.id === "auto" && cur === "auto" ? `auto → ${auto?.model ?? "default"}` : m.label}
+          {m.id === "auto" && cur === "auto" && auto ? `auto → ${auto.model ?? "default"}` : m.label}
         </button>
       ))}
     </div>
