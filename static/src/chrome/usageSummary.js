@@ -78,14 +78,21 @@ export function summarizeAccounts(plan, nowSec) {
 //
 // The prefix scan mirrors launch_policy.sublimit on the server: sub-limit keys
 // are slugified display names, so "Fable 5.1" would arrive as week_fable_5_1.
-// Duplicated here in four lines rather than stamped server-side so this
-// display rule ships without a Python change; move it if a second rule appears.
+// Kept client-side rather than stamped by the server so this display rule
+// ships without a Python change. `isFableKey` is the one home of the rule;
+// the pill's tooltip line uses it too.
 export const WASTE_HORIZON_S = 48 * 3600;
+
+export function isFableKey(k) {
+  return k === "week_fable" || k.startsWith("week_fable_");
+}
 
 export function wasteMark(entry, nowSec) {
   const meters = (entry?.available && entry.meters) || {};
-  const key = Object.keys(meters).find((k) => k === "week_fable" || k.startsWith("week_fable_"));
+  const key = Object.keys(meters).find(isFableKey);
   const m = key && meters[key];
   if (!m || m.projected_percent == null || !m.resets_at) return false;
-  return m.projected_percent < 100 && m.resets_at - nowSec < WASTE_HORIZON_S;
+  // A reset already in the past is stale data, not a budget about to expire.
+  const left = m.resets_at - nowSec;
+  return m.projected_percent < 100 && left > 0 && left < WASTE_HORIZON_S;
 }

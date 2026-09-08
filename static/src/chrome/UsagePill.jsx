@@ -19,7 +19,7 @@
 import { useState } from "preact/hooks";
 import { usage } from "../store.js";
 import { relTime } from "../util.js";
-import { summarizeAccounts, wasteMark } from "./usageSummary.js";
+import { isFableKey, summarizeAccounts, wasteMark } from "./usageSummary.js";
 
 function fmtTokens(n) {
   if (!n) return "0";
@@ -124,7 +124,7 @@ function acctTitle(a, expanded, poke, waste) {
     lines.push(`poked ${fmtClock(poke.at)} → ${outcome}`);
   }
   if (waste) {
-    const f = a.meters.find(({ key }) => key === "week_fable" || key.startsWith("week_fable_"));
+    const f = a.meters.find(({ key }) => isFableKey(key));
     if (f) lines.push(`💤 fable on pace for ${f.m.projected_percent}% at reset — burn it or lose it`);
   }
   if (a.stale) lines.push(`⚠ stale — last updated ${relTime(a.fetchedAt)} ago`);

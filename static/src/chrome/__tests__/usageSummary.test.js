@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STALE_AFTER_S, summarizeAccounts, wasteMark } from "../usageSummary.js";
+import { STALE_AFTER_S, summarizeAccounts, WASTE_HORIZON_S, wasteMark } from "../usageSummary.js";
 
 const NOW = 1_800_000_000;
 
@@ -98,7 +98,12 @@ describe("wasteMark", () => {
   });
 
   it("stays quiet while there is more than 48h to burn it", () => {
-    expect(wasteMark(fable(18, 49 * H), NOW)).toBe(false);
+    expect(wasteMark(fable(18, WASTE_HORIZON_S + H), NOW)).toBe(false);
+    expect(wasteMark(fable(18, WASTE_HORIZON_S - H), NOW)).toBe(true);
+  });
+
+  it("stays quiet on a reset already in the past — stale data, not an expiring budget", () => {
+    expect(wasteMark(fable(18, -H), NOW)).toBe(false);
   });
 
   it("stays quiet when the pace reaches 100%", () => {

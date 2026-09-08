@@ -23,7 +23,7 @@ export async function modalRequest(label, path, opts = {}) {
     // (no `${label} failed:` prefix) so a caller can match on it without
     // re-parsing `error`. Every existing caller reads only `.error` / `.data`.
     const reason = data.detail || `HTTP ${res.status}`;
-    return { error: data.detail || `${label} failed: HTTP ${res.status}`, reason, status: res.status };
+    return { error: data.detail || `${label} failed: ${reason}`, reason, status: res.status };
   }
   return { data };
 }
