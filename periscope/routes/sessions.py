@@ -36,6 +36,7 @@ from periscope import (
     session_binding_db,
     store,
     tracks,
+    usage,
 )
 from periscope import tmux as tmux_mod
 from periscope.channels import _resolve_window_by_pid, dismiss_dev_channels_consent_bg
@@ -285,12 +286,16 @@ def _window_new_plain(
          client already knows, e.g. straight from the open catalog).
       3. else → the track's repo (repo-default track id == repo path), or
          ~/dev for a goal/loose track (repo None) or an unknown id.
+
+    `account` and `model` arrive RESOLVED (window_new ran them through
+    `usage.choose_launch`); `model` is the ANTHROPIC_MODEL value or None for
+    no override.
     """
     row = activity.get_track(track_id)
     repo = row["repo"] if row and row.get("repo") else None
     config_dir = store.account_config_dir(account)
     profile_env = config.profile_env(profile)
-    model_env = store.spawn_model_env(model)
+    model_env = config.model_env(model)
 
     branch = (branch or "").strip()
     if branch and repo:
@@ -497,8 +502,17 @@ def window_new(
             exec_cmd = f"{CLAUDE_EXEC} --resume {resume_id}"
 
     if mode == "resume":
-        result = _window_new_resume(session, exec_cmd, resume_id, mode)
+        # The dashboard's own resume button. Account only (a resumed session
+        # keeps its own model); before this it passed nothing and billed the
+        # default account regardless of headroom.
+        result = _window_new_resume(
+            session, exec_cmd, resume_id, mode,
+            account=usage.choose_launch(account).account,
+        )
         return {**result, "agent": "claude"}
+    if agent == "claude":
+        launch = usage.choose_launch(account, model)
+        account, model = launch.account, launch.model
     return _window_new_plain(
         session, exec_cmd, mode, cwd_param=cwd, branch=branch, agent=agent,
         account=account, profile=profile, model=model,
@@ -541,7 +555,7 @@ def pane_move_account(pid: str, account: str):
 
     result = _window_new_resume(
         RESUME_SESSION, f"{CLAUDE_EXEC} --resume {session_id}", session_id,
-        "resume", account=account,
+        "resume", account=usage.choose_launch(account).account,
     )
     target = result["target"]
     new_pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()

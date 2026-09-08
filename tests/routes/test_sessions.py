@@ -84,6 +84,21 @@ def test_window_new_resume_unknown_session_id(client, mocker):
     assert "unknown session_id" in r.json()["detail"]
 
 
+def test_window_new_resume_routes_the_account_through_the_chooser(client, mocker):
+    from periscope.launch_policy import Launch
+    resume = _patch(mocker, "_window_new_resume",
+                    return_value={"ok": True, "session": "resumes", "index": 3,
+                                  "target": "resumes:3", "mode": "resume",
+                                  "resumed_session_id": "abc"})
+    mocker.patch("periscope.usage.choose_launch",
+                 side_effect=lambda account=None, model=None: Launch(account or "b", None, ""))
+    r = client.post("/api/window/new?session=resumes&mode=resume&resume_id=abc")
+    assert r.status_code == 200
+    assert resume.call_args.kwargs.get("account") == "b"        # unnamed → the chooser's pick
+    client.post("/api/window/new?session=resumes&mode=resume&resume_id=abc&account=default")
+    assert resume.call_args.kwargs.get("account") == "default"  # explicit passes through
+
+
 def test_window_new_resume_honours_caller_exec_cmd(mocker):
     """The create-session branch used to rebuild the command from scratch and
     throw the caller's away — silently dropping whatever flags the caller

@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TypedDict
 
-from periscope import store, tracks, usage
+from periscope import config, store, tracks, usage
 from periscope import tmux as tmux_mod
 from periscope.config import MCP_SOCKET_PATH
 from periscope.log import log
@@ -594,12 +594,11 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     # An omitted account means "wherever there is room", not "the default": a
     # spawning Claude cannot see either subscription's limits, and the second
     # one exists precisely so work lands where the first has none left.
-    # best_account degrades to "default" when usage is unknown, so a spawn is
+    # choose_launch degrades to "default" when usage is unknown, so a spawn is
     # never blocked or delayed on it.
-    config_dir = store.account_config_dir(
-        arguments.get("account") or usage.best_account()
-    )
-    model_env = store.spawn_model_env(arguments.get("model"))
+    launch = usage.choose_launch(arguments.get("account"), arguments.get("model"))
+    config_dir = store.account_config_dir(launch.account)
+    model_env = config.model_env(launch.model)
     code, _ = _run(["tmux", "has-session", "-t", session])
     if code != 0:
         ok, msg = _tmux_mutate(
@@ -910,9 +909,9 @@ def _do_resume_session_tool(pane: str, arguments: dict):
         result = _window_new_resume(
             tmux_session, f"{CLAUDE_EXEC} --resume {session_id}",
             session_id, "resume",
-            # Resuming is a Claude launch like any other: unnamed account means
-            # "where there is room", not the exhausted default.
-            account=arguments.get("account") or usage.best_account(),
+            # Account only, never a model: --resume restores the session's own
+            # model unless ANTHROPIC_MODEL is set at launch.
+            account=usage.choose_launch(arguments.get("account")).account,
         )
     except HTTPException as e:
         return _tool_result({"ok": False, "error": str(e.detail)})

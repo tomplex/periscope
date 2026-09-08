@@ -392,7 +392,9 @@ def _capture_layout(monkeypatch):
 def test_ensure_session_auto_picks_the_emptiest_account(monkeypatch):
     from periscope import usage
     seen = _capture_layout(monkeypatch)
-    monkeypatch.setattr(usage, "best_account", lambda: "b")
+    from periscope.launch_policy import Launch
+    monkeypatch.setattr(usage, "choose_launch",
+                        lambda account=None, model=None: Launch(account or "b", None, ""))
     open_ops.ensure_session({}, "/repo")
     assert seen.get("account") == "b"
 
@@ -400,7 +402,9 @@ def test_ensure_session_auto_picks_the_emptiest_account(monkeypatch):
 def test_ensure_session_explicit_account_wins(monkeypatch):
     from periscope import usage
     seen = _capture_layout(monkeypatch)
-    monkeypatch.setattr(usage, "best_account", lambda: "b")
+    from periscope.launch_policy import Launch
+    monkeypatch.setattr(usage, "choose_launch",
+                        lambda account=None, model=None: Launch(account or "b", None, ""))
     open_ops.ensure_session({}, "/repo", account="default")
     assert seen.get("account") == "default"
 
@@ -409,6 +413,8 @@ def test_ensure_session_never_auto_picks_for_codex(monkeypatch):
     """Codex has no Claude subscription — binding one would be meaningless."""
     from periscope import usage
     seen = _capture_layout(monkeypatch)
-    monkeypatch.setattr(usage, "best_account", lambda: "b")
+    from periscope.launch_policy import Launch
+    monkeypatch.setattr(usage, "choose_launch",
+                        lambda account=None, model=None: Launch(account or "b", None, ""))
     open_ops.ensure_session({}, "/repo", agent="codex")
     assert seen.get("account") in (None, "")
