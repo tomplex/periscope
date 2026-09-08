@@ -43,10 +43,12 @@ shaped like the account pin: the header's **spawn-model pin**
 too; rides `/api/state` as `spawn_model`) is the standing default for every
 spawn path — launcher New Tab, unified open, `spawn_claude` — and the
 launcher's Model picker is a per-launch override that seeds from the pin and
-is not remembered. `store.spawn_model_env(explicit)` is the one choke point:
-an explicit value wins, INCLUDING an explicit `"default"` (the launcher always
-sends one — that is how a single launch opts out of the pin); `None` falls to
-the pin. The value is set on the new window via `tmux.env_args` — the third
+is not remembered. `usage.choose_launch(account, model)` is the one choke
+point on both axes (docs/account-routing.md): an explicit value wins,
+INCLUDING an explicit `"default"` (the launcher always sends one — that is
+how a single launch opts out of the pin); `None` falls to the pin, and a pin
+of `"auto"` (or none) lets `launch_policy` pick fable, then opus[1m]. The
+value is set on the new window via `tmux.env_args` — the third
 env binding beside the account and profile, scrubbed off the session by
 `scrub_session_env` like the other two; on the unified-open two-window layout
 only the agent window carries it. Claude reads it with precedence `--model` >
