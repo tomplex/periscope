@@ -121,13 +121,16 @@ def test_patch_spawn_model_rejects_non_model_string(client, mocker):
     assert r.status_code == 400
 
 
-def test_patch_spawn_model_default_and_null_clear(client, mocker):
+def test_patch_spawn_model_stores_auto_and_default_literally_and_null_clears(client, mocker):
+    # "default" (no override) and "auto" (chooser decides) are now different
+    # launches; coercing either to unset would silently turn one into the other.
     update_spy = mocker.patch("periscope.routes.settings.update_settings")
     mocker.patch("periscope.routes.settings.get_settings", return_value={})
     assert client.patch("/api/settings", json={"spawn_model": "default"}).status_code == 200
+    assert client.patch("/api/settings", json={"spawn_model": "auto"}).status_code == 200
     assert client.patch("/api/settings", json={"spawn_model": None}).status_code == 200
     assert [c.args[0] for c in update_spy.call_args_list] == [
-        {"spawn_model": None}, {"spawn_model": None},
+        {"spawn_model": "default"}, {"spawn_model": "auto"}, {"spawn_model": None},
     ]
 
 

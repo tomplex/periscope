@@ -87,8 +87,8 @@ class Settings(TypedDict, total=False):
     worktree_layout_overrides: dict[str, str]  # realpath -> "sibling" | "inline"
     cleanup_idle_days: int
     bg_account: str  # account id background commander jobs bill; unset => default
-    spawn_account: str  # account id every unnamed spawn lands on; unset => most headroom
-    spawn_model: str  # ANTHROPIC_MODEL every unnamed spawn launches with; unset => account default
+    spawn_account: str  # account id every unnamed spawn lands on; unset => launch_policy (earliest weekly reset)
+    spawn_model: str  # "auto" | "default" | ANTHROPIC_MODEL value; unset => "auto" (launch_policy: fable, then opus[1m])
     editor: str  # display name of a KNOWN_EDITORS entry; unset => no open-in-editor action
 
 
@@ -350,21 +350,6 @@ def account_config_dir(account_id: str | None) -> str:
         if a.get("id") == account_id:
             return a.get("config_dir", "")
     return ""
-
-
-def spawn_model_env(model: str | None) -> str:
-    """ANTHROPIC_MODEL for a new pane, or "" for no override.
-
-    An explicit choice wins — the launcher's per-launch picker or a tool's
-    `model` arg, INCLUDING an explicit "default", which is how a launch opts
-    out of the pin. Absent (None) falls to the header pin
-    (`settings.spawn_model`). The choke point every spawn path shares —
-    launcher New Tab, unified open, MCP spawn_claude — so the pin is honored
-    server-side and MCP spawns see it without any client pref.
-    """
-    if model is not None:
-        return config.model_env(model)
-    return config.model_env(get_settings().get("spawn_model"))
 
 
 _DEFAULT_COMMANDS = [

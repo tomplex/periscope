@@ -88,12 +88,14 @@ def model_env(model: str | None) -> str:
     'sonnet'), full model ids, and either carrying an extended-context suffix
     ('opus[1m]') alike, and the list moves. Only the character set is checked
     (it lands in a tmux `-e` arg and a resurrect shell prefix); anything else
-    fails OPEN to the default, like `profile_env`. Brackets are in the set for
+    fails OPEN to the default, like `profile_env`. "auto" is the header pin's
+    "chooser decides" value; it is resolved by launch_policy before any
+    launch and must never reach the env. Brackets are in the set for
     that suffix and are safe unquoted in the prefix — neither zsh nor bash
     globs the right-hand side of an assignment word.
     """
     m = (model or "").strip()
-    if not m or m == "default" or not _MODEL_OK.match(m):
+    if not m or m in ("default", "auto") or not _MODEL_OK.match(m):
         return ""
     return m
 
