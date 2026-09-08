@@ -34,7 +34,7 @@
 ### Task 1: `force` on `_window_new_resume` and `/api/pane/move-account`
 
 **Files:**
-- Modify: `periscope/routes/sessions.py:151-152,170-180,508-509,540-544`
+- Modify: `periscope/routes/sessions.py:151-152,170-180,508-509,542-545`
 - Test: `tests/routes/test_sessions.py` (after `test_window_new_resume_unknown_everywhere_still_404s`, and after `test_move_account_rejects_unknown_account`)
 
 - [ ] **Step 1: Write the failing tests**
@@ -189,7 +189,7 @@ git commit -m "move-account: force=1 skips only the transcript-mtime guard (a wa
 ### Task 2: `modalRequest` reports the status; `Rail.movePaneAccount` confirms and retries
 
 **Files:**
-- Modify: `static/src/overlays/modalRequest.js`, `static/src/split/Rail.jsx:27-31,263-278`
+- Modify: `static/src/overlays/modalRequest.js`, `static/src/split/Rail.jsx:27-31,262-279`
 - Test: `static/src/overlays/__tests__/modalRequest.test.js` (NEW)
 
 - [ ] **Step 1: Write the failing test**
@@ -317,7 +317,7 @@ git commit -m "rail: 'session looks live' 409 on move-account becomes a Move-any
 ### Task 3: `wasteMark` + 💤 on the usage pill
 
 **Files:**
-- Modify: `static/src/chrome/usageSummary.js` (append), `static/src/chrome/UsagePill.jsx:111-120,140-165`, `static/styles.css:237`
+- Modify: `static/src/chrome/usageSummary.js` (append), `static/src/chrome/UsagePill.jsx:111-120,141-166`, `static/styles.css:237`
 - Test: `static/src/chrome/__tests__/usageSummary.test.js`, `static/src/chrome/__tests__/usagePillRender.test.jsx`
 
 - [ ] **Step 1: Write the failing tests**
