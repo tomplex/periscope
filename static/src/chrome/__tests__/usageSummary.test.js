@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STALE_AFTER_S, summarizeAccounts } from "../usageSummary.js";
+import { STALE_AFTER_S, summarizeAccounts, wasteMark } from "../usageSummary.js";
 
 const NOW = 1_800_000_000;
 
@@ -76,5 +76,39 @@ describe("summarizeAccounts", () => {
   it("labels an unregistered account id with the id itself, sorted after the known two", () => {
     const rows = summarizeAccounts({ zz: acct({ week_all: 5 }), b: acct({ week_all: 2 }) }, NOW);
     expect(rows.map((r) => r.label)).toEqual(["B", "zz"]);
+  });
+});
+
+describe("wasteMark", () => {
+  const H = 3600;
+  const fable = (projected, resetsIn, key = "week_fable") => ({
+    available: true,
+    meters: {
+      week_all: { percent: 9, projected_percent: 11, resets_at: NOW + resetsIn },
+      [key]: { percent: 14, projected_percent: projected, resets_at: NOW + resetsIn },
+    },
+  });
+
+  it("marks a Fable budget on pace to go unused within 48h of its reset", () => {
+    expect(wasteMark(fable(18, 30 * H), NOW)).toBe(true);
+  });
+
+  it("matches the sub-limit by prefix, like the server's sublimit()", () => {
+    expect(wasteMark(fable(18, 30 * H, "week_fable_5_1"), NOW)).toBe(true);
+  });
+
+  it("stays quiet while there is more than 48h to burn it", () => {
+    expect(wasteMark(fable(18, 49 * H), NOW)).toBe(false);
+  });
+
+  it("stays quiet when the pace reaches 100%", () => {
+    expect(wasteMark(fable(100, 30 * H), NOW)).toBe(false);
+    expect(wasteMark(fable(140, 30 * H), NOW)).toBe(false);
+  });
+
+  it("needs a projection and a Fable meter", () => {
+    expect(wasteMark(fable(null, 30 * H), NOW)).toBe(false);
+    expect(wasteMark({ available: true, meters: { week_all: { percent: 9, projected_percent: 11, resets_at: NOW + 30 * H } } }, NOW)).toBe(false);
+    expect(wasteMark({ available: false }, NOW)).toBe(false);
   });
 });

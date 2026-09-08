@@ -69,3 +69,23 @@ export function summarizeAccounts(plan, nowSec) {
     };
   });
 }
+
+// Whether an account's Fable budget is on pace to go unused: its week_fable*
+// meter projects under 100% at reset AND the reset is within 48h — past the
+// point where the remaining budget is likely to be burned. The inverse of the
+// server's 🔥 signal, from the same projected_percent field. Takes the raw
+// plan entry (not a summarizeAccounts row) so it composes with either.
+//
+// The prefix scan mirrors launch_policy.sublimit on the server: sub-limit keys
+// are slugified display names, so "Fable 5.1" would arrive as week_fable_5_1.
+// Duplicated here in four lines rather than stamped server-side so this
+// display rule ships without a Python change; move it if a second rule appears.
+export const WASTE_HORIZON_S = 48 * 3600;
+
+export function wasteMark(entry, nowSec) {
+  const meters = (entry?.available && entry.meters) || {};
+  const key = Object.keys(meters).find((k) => k === "week_fable" || k.startsWith("week_fable_"));
+  const m = key && meters[key];
+  if (!m || m.projected_percent == null || !m.resets_at) return false;
+  return m.projected_percent < 100 && m.resets_at - nowSec < WASTE_HORIZON_S;
+}
