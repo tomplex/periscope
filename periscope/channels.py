@@ -1676,17 +1676,22 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                     "description": (
                         "Which Claude subscription to run the spawned pane on. "
                         "OMIT THIS unless the user named an account: omitting "
-                        "picks whichever subscription has the most remaining "
-                        "usage, which is almost always what you want."
+                        "lets periscope's launch policy pick — the account "
+                        "whose weekly budget expires soonest, skipping one "
+                        "only when it is at its limit (docs/account-routing.md). "
+                        "Do not pass an account to chase the emptier one."
                     ),
                 },
                 "model": {
                     "type": "string",
                     "description": (
                         "Model for the spawned session — an alias ('fable', "
-                        "'opus', 'sonnet') or a full model id. Omit to use the "
-                        "account's default. Set as ANTHROPIC_MODEL on the pane, "
-                        "so a hand re-run `claude` there keeps it."
+                        "'opus', 'sonnet') or a full model id. Omit to let the "
+                        "launch policy pick (fable, or opus once fable's weekly "
+                        "sub-limit is full; the header pin overrides). Pass "
+                        "'default' for the account's own settings.json model. "
+                        "Set as ANTHROPIC_MODEL on the pane, so a hand re-run "
+                        "`claude` there keeps it."
                     ),
                 },
                 "workspace_id": {
@@ -1809,8 +1814,10 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                     "description": (
                         "Which Claude subscription to run the resumed pane on. "
                         "OMIT THIS unless the user named an account: omitting "
-                        "picks whichever subscription has the most remaining "
-                        "usage, which is almost always what you want."
+                        "lets periscope's launch policy pick — the account "
+                        "whose weekly budget expires soonest, skipping one "
+                        "only when it is at its limit (docs/account-routing.md). "
+                        "Do not pass an account to chase the emptier one."
                     ),
                 },
             },

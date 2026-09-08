@@ -310,9 +310,9 @@ export function setLastSelected(sel) {
   return patchUI({ last_selected: sel });
 }
 
-// Sticky launcher profile. Unlike the account — which is re-derived on every
-// open from live usage headroom, because the emptiest subscription changes as
-// limits burn down — the profile is a standing intent: a lab session is usually
+// Sticky launcher profile. Unlike the account and model — preselected on every
+// open from the server's launch_default, because the right answer moves as
+// budgets burn and weeks reset — the profile is a standing intent: a lab session is usually
 // several panes, and re-picking each time is the friction this remembers away.
 // A forgotten value is the cost; the launcher shows the current one and the
 // rail chips it afterwards.
