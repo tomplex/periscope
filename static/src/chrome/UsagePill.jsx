@@ -19,7 +19,7 @@
 import { useState } from "preact/hooks";
 import { usage } from "../store.js";
 import { relTime } from "../util.js";
-import { summarizeAccounts } from "./usageSummary.js";
+import { isFableKey, summarizeAccounts, wasteMark } from "./usageSummary.js";
 
 function fmtTokens(n) {
   if (!n) return "0";
@@ -109,7 +109,7 @@ function MeterBar({ label, m, resets, pace }) {
 // Collapsing to the binding meter hides the rest from sight, not from reach.
 // Carried on the row rather than the pill because each MeterBar's own title
 // wins on hover — the row's only reliably-hoverable area is its letter.
-function acctTitle(a, expanded, poke) {
+function acctTitle(a, expanded, poke, waste) {
   const lines = a.meters.map(({ m }) =>
     [`${m.label}: ${m.percent}% used`, fmtReset(m.resets_at), ...paceLines(m)]
       .filter(Boolean)
@@ -123,6 +123,10 @@ function acctTitle(a, expanded, poke) {
     const outcome = poke.verified ? `resets ${fmtClock(poke.resets_at)}` : "not anchored";
     lines.push(`poked ${fmtClock(poke.at)} → ${outcome}`);
   }
+  if (waste) {
+    const f = a.meters.find(({ key }) => isFableKey(key));
+    if (f) lines.push(`💤 fable on pace for ${f.m.projected_percent}% at reset — burn it or lose it`);
+  }
   if (a.stale) lines.push(`⚠ stale — last updated ${relTime(a.fetchedAt)} ago`);
   lines.push(expanded ? "(click to collapse)" : "(click to show every meter)");
   return [`account ${a.label}`, ...lines].join("\n\n");
@@ -134,7 +138,9 @@ export function UsagePill() {
   const [expanded, setExpanded] = useState(false);
   const u = usage.value || {};
   const fallback = u.fallback;
-  const accounts = summarizeAccounts(u.plan, Math.floor(Date.now() / 1000));
+  const nowSec = Math.floor(Date.now() / 1000);
+  const accounts = summarizeAccounts(u.plan, nowSec);
+  const waste = new Set(Object.keys(u.plan || {}).filter((id) => wasteMark(u.plan[id], nowSec)));
 
   // Prefer the server-fetched plan percentages. Fall back to the JSONL-derived
   // 5h pill only when NO account has meters — before the first fetch completes,
@@ -151,7 +157,7 @@ export function UsagePill() {
           <div
             key={a.id}
             class={`usage-acct${a.stale ? " is-stale" : ""}`}
-            title={acctTitle(a, expanded, u.poke?.[a.id])}
+            title={acctTitle(a, expanded, u.poke?.[a.id], waste.has(a.id))}
           >
             <span class="usage-acct-label">{a.label}</span>
             {a.available ? (
@@ -171,6 +177,9 @@ export function UsagePill() {
               </span>
             )}
             {a.stale && <span class="usage-stale-mark">⚠</span>}
+            {waste.has(a.id) && (
+              <span class="usage-acct-waste" title="Fable budget on pace to go unused at reset">💤</span>
+            )}
           </div>
         ))}
       </div>

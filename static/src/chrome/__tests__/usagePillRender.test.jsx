@@ -101,4 +101,26 @@ describe("<UsagePill>", () => {
     };
     expect(render(<UsagePill />)).toContain("→ not anchored");
   });
+
+  it("marks an account 💤 when its Fable budget is on pace to go unused", () => {
+    const soon = NOW() + 30 * 3600;
+    usage.value = {
+      plan: {
+        default: {
+          available: true, fetched_at: NOW(),
+          meters: { week_all: { label: "w", percent: 4, projected_percent: 13, resets_at: NOW() + 100 * 3600 },
+                    week_fable: { label: "f", percent: 4, projected_percent: 13, resets_at: NOW() + 100 * 3600 } },
+        },
+        b: {
+          available: true, fetched_at: NOW(),
+          meters: { week_all: { label: "w", percent: 9, projected_percent: 11, resets_at: soon },
+                    week_fable: { label: "f", percent: 14, projected_percent: 18, resets_at: soon } },
+        },
+      },
+      fallback: null,
+    };
+    const html = render(<UsagePill />);
+    expect(html.match(/usage-acct-waste/g)).toHaveLength(1);
+    expect(html).toContain("on pace for 18% at reset");
+  });
 });

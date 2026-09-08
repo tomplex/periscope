@@ -605,6 +605,68 @@ def test_window_new_resume_unknown_everywhere_still_404s(mocker):
     assert e.value.status_code == 404
 
 
+def _live_jsonl(tmp_path, *, age_s):
+    """A transcript on disk written `age_s` seconds ago (the liveness guard reads mtime)."""
+    import json
+    import os
+    import time
+    jsonl = tmp_path / "abc.jsonl"
+    jsonl.write_text(json.dumps({"type": "user", "cwd": str(tmp_path)}) + "\n")
+    os.utime(jsonl, (time.time() - age_s, time.time() - age_s))
+    return jsonl
+
+
+def test_window_new_resume_refuses_a_recently_written_transcript_and_says_how_recent(mocker, tmp_path):
+    import re
+
+    import pytest
+    from fastapi import HTTPException
+
+    from periscope.routes import sessions
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls)
+    mocker.patch("history.search.get_session", return_value=None)
+    _patch(mocker, "jsonl_for_session", return_value=_live_jsonl(tmp_path, age_s=12))
+    with pytest.raises(HTTPException) as e:
+        sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+    assert e.value.status_code == 409
+    # The client matches on this prefix (Rail.movePaneAccount) — keep them in sync.
+    assert e.value.detail.startswith("session looks live")
+    # ...and the detail carries the measured age (12s here), not a constant.
+    m = re.match(r"session looks live \(written (\d+)s ago\); wait a minute", e.value.detail)
+    assert m and 12 <= int(m.group(1)) < 60
+    assert not [c for c in calls if c and c[0] == "new-window"]
+
+
+def test_window_new_resume_force_skips_only_the_mtime_guard(mocker, tmp_path):
+    """Claude writes the limit-reached message INTO the transcript, so a walled
+    pane — the one the user most wants to move — always looks live. `force`
+    is the override for exactly that; it must not widen anything else."""
+    import pytest
+    from fastapi import HTTPException
+
+    from periscope.routes import sessions
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls)
+    mocker.patch("history.search.get_session", return_value=None)
+    _patch(mocker, "jsonl_for_session", return_value=_live_jsonl(tmp_path, age_s=12))
+
+    result = sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume",
+                                         force=True)
+    assert result["ok"] is True
+    assert [c for c in calls if c and c[0] == "new-window"]
+
+    # The already-resumed-elsewhere guard is NOT behind force: two concurrent
+    # appenders interleaving into one JSONL is a different failure entirely.
+    # The successful call above registered the session (sessions.py:253-254).
+    assert "abc" in sessions._resuming
+    with pytest.raises(HTTPException) as e:
+        sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume",
+                                    force=True)
+    assert e.value.status_code == 409
+    assert "already resumed" in e.value.detail
+
+
 def _patch_move_account(mocker, session_id="sess-abc", track="tk_1"):
     resume = _patch(mocker, "_window_new_resume",
                     return_value={"ok": True, "session": "resumes", "index": 3,
@@ -653,6 +715,23 @@ def test_move_account_rejects_unknown_account(client, mocker):
 
     assert r.status_code == 400
     assert "nope" in r.json()["detail"]
+    resume.assert_not_called()
+
+
+def test_move_account_passes_force_through_and_defaults_it_off(client, mocker):
+    resume, _move = _patch_move_account(mocker)
+    r = client.post("/api/pane/move-account?pid=aa11&account=b")
+    assert r.status_code == 200
+    assert resume.call_args.kwargs.get("force") is False
+    r = client.post("/api/pane/move-account?pid=aa11&account=b&force=1")
+    assert r.status_code == 200
+    assert resume.call_args.kwargs.get("force") is True
+
+
+def test_move_account_force_does_not_widen_the_account_check(client, mocker):
+    resume, _move = _patch_move_account(mocker)
+    r = client.post("/api/pane/move-account?pid=aa11&account=nope&force=1")
+    assert r.status_code == 400
     resume.assert_not_called()
 
 

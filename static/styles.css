@@ -235,6 +235,7 @@ html, body {
 .usage-acct.is-stale { opacity: 0.55; }
 .usage-acct.is-stale .usage-item-fill { background: var(--fg-3); }
 .usage-stale-mark { cursor: help; }
+.usage-acct-waste { cursor: help; opacity: 0.8; }
 
 /* "N behind → update" pill. Absent (returns null) when the checkout is
    current, so it only ever draws when there is something to say. Accent-tinted

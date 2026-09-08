@@ -25,6 +25,8 @@
 import { useRef, useState } from "preact/hooks";
 import { passesFilter } from "../filter.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
+import { modalRequest } from "../overlays/modalRequest.js";
+import { showToast } from "../overlays/Toast.jsx";
 import * as prefs from "../prefs.js";
 import { currentFilter, dismissedAlertIds, dragState, editor as editorSignal, projects, railSelection, tracks, windows, workspaces } from "../store.js";
 import { track } from "../track.js";
@@ -263,18 +265,40 @@ export function Rail() {
   // Re-open a pane's Claude session on the other subscription. NOT a migration:
   // the server spawns a SECOND pane resuming the same transcript under the
   // target account and leaves this one running, so nothing is lost if the
-  // resume doesn't take. Failures (no recorded session, transcript still live)
-  // surface as apiCall's toast.
-  async function movePaneAccount(w, accountId) {
-    const data = await apiCall("move account",
-      `/api/pane/move-account?pid=${encodeURIComponent(w.pid)}&account=${encodeURIComponent(accountId)}`,
-      { method: "POST" });
-    if (!data?.pid) return;
-    // Select the pane we just made — same reason /api/open does it: a spawn the
-    // user can't see reads as a no-op. It lands in this pane's own track, so
-    // the selection moves one row, not across the rail.
-    railSelection.value = `pane:${data.pid}`;
-    prefs.setLastSelected({ kind: "pane", pid: data.pid });
+  // resume doesn't take.
+  //
+  // Goes through modalRequest, not apiCall: apiCall toasts every failure and
+  // returns null, and the one failure this action must READ is the 409 "session
+  // looks live" — Claude writes the limit-reached message into the transcript,
+  // so a walled pane (the one most worth moving) always trips the server's
+  // 60s mtime guard. That 409 becomes a confirm and one forced retry; the
+  // `force` parameter bounds the recursion to a single level. Not
+  // `danger: true`: the move is additive (the original pane stays open).
+  async function movePaneAccount(w, accountId, force = false) {
+    const url =
+      `/api/pane/move-account?pid=${encodeURIComponent(w.pid)}&account=${encodeURIComponent(accountId)}` +
+      (force ? "&force=1" : "");
+    const { data, error, reason, status } = await modalRequest("move account", url, { method: "POST" });
+    // apiCall used to emit this on every call; keep the instrumentation event.
+    track("api:move account", { path: url, method: "POST", ok: !!data });
+    if (data?.pid) {
+      // Select the pane we just made — same reason /api/open does it: a spawn
+      // the user can't see reads as a no-op. It lands in this pane's own
+      // track, so the selection moves one row, not across the rail.
+      railSelection.value = `pane:${data.pid}`;
+      prefs.setLastSelected({ kind: "pane", pid: data.pid });
+      return;
+    }
+    // Prefix pinned by routes/sessions._window_new_resume's mtime guard — change both or neither.
+    if (status === 409 && !force && reason?.startsWith("session looks live")) {
+      const ok = await confirmDialog(
+        `${error}\n\nMove anyway? The original pane stays open; if the session really is mid-turn, the two copies will interleave writes to one transcript.`,
+        { okLabel: "Move anyway" }
+      );
+      if (ok) await movePaneAccount(w, accountId, true);
+      return;
+    }
+    showToast(`move account failed: ${reason || "unknown error"}`, "bad", 6000);
   }
   async function renamePane(w, next) {
     if (!w.target) return;

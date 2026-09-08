@@ -5,20 +5,25 @@
 // open/close + body-class half of createModalShell is now each modal's own
 // open signal + useEscape, so only the request half survives here.
 //
-// Returns the parsed body on success, or null on failure (HTTP error,
-// network error, or unparseable body) so callers early-return on null.
-// Routes report errors as HTTPException → `{detail}`.
+// Returns {data} on success, or {error, reason, status?} on failure (status
+// only for an HTTP error, not a network one) so callers early-return on a
+// missing data. Routes report errors as HTTPException → `{detail}`.
 export async function modalRequest(label, path, opts = {}) {
   let res;
   try {
     res = await fetch(path, opts);
   } catch (err) {
-    return { error: `${label} failed: ${err.message}` };
+    return { error: `${label} failed: ${err.message}`, reason: err.message };
   }
   let data = {};
   try { data = await res.json(); } catch (_) {}
   if (!res.ok) {
-    return { error: data.detail || `${label} failed: HTTP ${res.status}` };
+    // `status` rides along so a caller can treat one code specially (Rail's
+    // move-account turns a 409 into a confirm); `reason` is the bare cause
+    // (no `${label} failed:` prefix) so a caller can match on it without
+    // re-parsing `error`. Every existing caller reads only `.error` / `.data`.
+    const reason = data.detail || `HTTP ${res.status}`;
+    return { error: data.detail || `${label} failed: ${reason}`, reason, status: res.status };
   }
   return { data };
 }

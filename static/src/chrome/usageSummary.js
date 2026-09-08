@@ -69,3 +69,30 @@ export function summarizeAccounts(plan, nowSec) {
     };
   });
 }
+
+// Whether an account's Fable budget is on pace to go unused: its week_fable*
+// meter projects under 100% at reset AND the reset is within 48h — past the
+// point where the remaining budget is likely to be burned. The inverse of the
+// server's 🔥 signal, from the same projected_percent field. Takes the raw
+// plan entry (not a summarizeAccounts row) so it composes with either.
+//
+// The prefix scan mirrors launch_policy.sublimit on the server: sub-limit keys
+// are slugified display names, so "Fable 5.1" would arrive as week_fable_5_1.
+// Kept client-side rather than stamped by the server so this display rule
+// ships without a Python change. `isFableKey` is the one home of the rule;
+// the pill's tooltip line uses it too.
+export const WASTE_HORIZON_S = 48 * 3600;
+
+export function isFableKey(k) {
+  return k === "week_fable" || k.startsWith("week_fable_");
+}
+
+export function wasteMark(entry, nowSec) {
+  const meters = (entry?.available && entry.meters) || {};
+  const key = Object.keys(meters).find(isFableKey);
+  const m = key && meters[key];
+  if (!m || m.projected_percent == null || !m.resets_at) return false;
+  // A reset already in the past is stale data, not a budget about to expire.
+  const left = m.resets_at - nowSec;
+  return m.projected_percent < 100 && left > 0 && left < WASTE_HORIZON_S;
+}

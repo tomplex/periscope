@@ -32,7 +32,7 @@ applies. Read the relevant doc before editing, not after the tests go red.
 | `resurrect.py`, `tmux_persist.py`, `bin/periscope install-tmux` | `docs/tmux-persistence.md` — save-file rewrite, periscope-driven continuum save, healthz `resurrect` block |
 | `channels.py`, `channel_shim.py`, `turns.py`, `pane_session_hook.py`, `codex_pane_session_hook.py` | `docs/channels.md` — MCP tools, shim reconnect protocol, pane→session mapping (live sid first, `pane_sessions` fallback) |
 | `narrator.py`, `rename_ai.py`, `/api/rename`, `/api/name-pin` | `docs/narrator.md` — regeneration rules, humans win renames, name pinning |
-| `launch_policy.py`, `usage.py` (`choose_launch`), `poke.py`, the spawn/resume paths in `routes/sessions.py`, `open_ops.py`, `channels.py`, the `spawn_model` / `spawn_account` settings and header pin pickers | `docs/account-routing.md` — earliest-reset routing, walls vs. session pressure, what `auto`/`default` mean |
+| `launch_policy.py`, `usage.py` (`choose_launch`), `poke.py`, the spawn/resume paths in `routes/sessions.py` (incl. move-account), `open_ops.py`, `channels.py`, the `spawn_model` / `spawn_account` settings, header pin pickers, `UsagePill` / `usageSummary.js` | `docs/account-routing.md` — earliest-reset routing, walls vs. session pressure, what `auto`/`default` mean, the session poke, the move-anyway override, the 💤 waste marker |
 | `lgtm.py`, Review tab, LGTM iframes | `docs/lgtm.md` — HTTP/SSE contract, debugging a blank Review tab |
 | `src-tauri/` | `docs/tauri-shell.md` — build via `.app` not `cargo tauri dev`, webview recycling |
 | `bin/periscope update`, `updater.py`, the launchd plist | `docs/updating.md` — why pull+restart is not `update`, the bootout guards |
