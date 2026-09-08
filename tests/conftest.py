@@ -195,7 +195,7 @@ def clean_state(tmp_xdg_home, monkeypatch):
 
     Autouse, because `_STATE` is loaded from the developer's REAL state.json at
     import and any test that never asked for this fixture read it. The spawn
-    paths made that visible: `store.spawn_model_env(None)` consults
+    paths made that visible: `usage.choose_launch()` consults
     `settings.spawn_model`, so a pin set in the live dashboard put an `-e
     ANTHROPIC_MODEL=...` on windows that four "default sends no env" tests
     assert are bare — they passed or failed by what Tom had clicked.

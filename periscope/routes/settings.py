@@ -97,10 +97,10 @@ def settings_patch(body: SettingsPatch):
         # Character-set check only (config.model_env): Claude accepts aliases
         # and full ids alike and the list moves, but a value that fails the
         # check would fail OPEN to no override at every spawn — reject it here
-        # where the user can see it. "default" clears, same as null.
-        if v is None or v == "default":
-            patch["spawn_model"] = None
-        elif config.model_env(v):
+        # where the user can see it. "auto" (launch_policy decides) and
+        # "default" (no override) are stored LITERALLY: they are different
+        # launches, and unset reads as "auto".
+        if v is None or v in ("auto", "default") or config.model_env(v):
             patch["spawn_model"] = v
         else:
             raise HTTPException(400, f"spawn_model {v!r} is not a model id")

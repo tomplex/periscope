@@ -16,7 +16,7 @@
 //                      when it doesn't)
 //   - cwd=<path>     → land the tab in a worktree path we already know
 // With neither, the backend uses the track's repo (or ~/dev for a loose track).
-// An optional `account` picks the Claude subscription (see accountQuery).
+// The `account` param picks the Claude subscription (see run()).
 //
 // The opener (__periscopeOpenLauncher) takes the track id — the rail's "+ New
 // tab" row calls window.__periscopeOpenLauncher(trackId) (see Rail.jsx).
@@ -29,13 +29,12 @@
 import { computed, signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { ACCOUNTS } from "../accounts.js";
-import { bestAccount } from "../chrome/usageSummary.js";
 import { useEscape } from "../hooks/useEscape.js";
 import { MODELS } from "../models.js";
 import * as prefs from "../prefs.js";
 import { PROFILES, profileQuery, sendsProfile } from "../profiles.js";
 import { trackLabel } from "../split/railTree.js";
-import { spawnAccount, spawnModel, tracks, usage, windows } from "../store.js";
+import { launchDefault, tracks, windows } from "../store.js";
 import { track } from "../track.js";
 import { apiCall } from "../util.js";
 
@@ -57,20 +56,11 @@ const account = signal("default");
 // for why this one is sticky while the account is re-derived.
 const profile = signal("default");
 
-// Model override for THIS launch ("default" | a Claude alias). Seeded from the
-// header's spawn-model pin on every open — the pin is the standing default;
-// picking here changes one launch and is not remembered. Carried only by
-// Claude agent windows (same guard as the profile, `sendsProfile`).
+// Model override for THIS launch ("default" | a Claude alias). Seeded from
+// launch_default (what an unnamed launch would get) on every open — picking
+// here changes one launch and is not remembered. Carried only by Claude agent
+// windows (same guard as the profile, `sendsProfile`).
 const model = signal("default");
-
-// account id → the `account` query param, or null to omit it entirely.
-// The server fails OPEN on an unknown id (store.account_config_dir), so a
-// param is the risky direction: omitting it keeps the default launch
-// byte-identical to the pre-accounts URL.
-// Pure: exported for unit tests.
-export function accountQuery(acct) {
-  return !acct || acct === "default" ? null : acct;
-}
 
 // Whether a launch target should carry the account at all.
 //
@@ -80,7 +70,8 @@ export function accountQuery(acct) {
 // subscription silently — and invisibly, because the rail's account chip is
 // derived from a live claude process, which a shell window has none of. Benign
 // while the picker defaulted to "default"; a live trap once it started
-// preselecting the emptiest account. Codex has no Claude subscription.
+// preselecting the chooser's current answer (launch_default). Codex has no
+// Claude subscription.
 // Pure: exported for unit tests.
 export function sendsAccount(t) {
   return t?.mode === "agent" && (t.agent || "claude") === "claude";
@@ -213,17 +204,16 @@ export function openLauncher(trackId) {
   pickedBranch.value = bs.length ? bs[0].branch : null;
   newBranchName.value = null;
   branchQuery.value = "";
-  // Preselect the header's pinned spawn account when one is set; otherwise
-  // whichever subscription has the most headroom, re-derived on every open
-  // rather than remembered: the answer changes as limits burn down, and a
-  // stale sticky value would keep routing work at an account that filled up
-  // since. Falls back to the default account when no usage has been fetched
-  // yet, which is the pre-accounts behaviour. This seed is only the launcher's
-  // preselect — clicking the other account here still wins for that launch.
-  account.value =
-    spawnAccount.value || bestAccount(usage.value?.plan, Date.now() / 1000) || "default";
+  // Preselect what an unnamed launch would get right now — the server's
+  // launch_default, re-read on every open rather than remembered: the answer
+  // changes as meters burn down and weeks reset, and a stale sticky value
+  // would keep routing work at an account that walled since. Pins are already
+  // folded in server-side. Falls back to the default account / no override
+  // before the first poll. Clicking another chip here still wins for this
+  // launch: both values are sent explicitly.
+  account.value = launchDefault.value?.account || "default";
+  model.value = launchDefault.value?.model || "default";
   profile.value = prefs.getLaunchProfile();
-  model.value = spawnModel.value || "default";
   track("overlay.open", { which: "launcher" });
   // Fetch fresh each open: worktrees and branches change outside periscope.
   catalog.value = null;
@@ -282,8 +272,11 @@ export function LauncherModal() {
       mode: t.mode,
     });
     if (t.mode === "shell" && t.exec) qs.set("exec", t.exec);
-    const acct = sendsAccount(t) ? accountQuery(account.value) : null;
-    if (acct) qs.set("account", acct);
+    // Always explicit, "default" included, like `model` below: the server
+    // re-runs the chooser when the param is ABSENT, so omitting it for
+    // account A (as accountQuery used to) let a launch the user pointed at A
+    // land on B whenever B was the chooser's answer.
+    if (sendsAccount(t)) qs.set("account", account.value);
     const prof = sendsProfile(t) ? profileQuery(profile.value) : null;
     if (prof) qs.set("profile", prof);
     // Always explicit, "default" included: the server applies the header pin

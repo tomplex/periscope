@@ -266,3 +266,18 @@ def test_state_includes_alerts_so_the_dashboard_needs_no_alert_poll(
     assert body["alerts"] == [
         {"id": "a1", "kind": "need_human", "message": "blocked"}
     ]
+
+
+def test_state_publishes_the_chooser_answer(client, mocker, clean_state):
+    # The header chip and the launcher preselect read this; it must be the
+    # SAME function a spawn resolves through, so the two never disagree.
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    body = client.get("/api/state").json()
+    # The chooser reads usage.cached_plan_usage directly (the _patch above only
+    # covers the route's own binding); under clean_state + the autouse
+    # no-refresh guard that is {available: False} per account → default, no override.
+    assert body["launch_default"] == {"account": "default", "model": None, "reason": "no usage data"}

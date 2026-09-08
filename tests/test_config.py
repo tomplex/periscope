@@ -92,3 +92,12 @@ def test_model_env_keeps_the_extended_context_suffix():
 def test_model_env_rejects_shell_metacharacters():
     for bad in ("opus; rm -rf /", "opus $(id)", "opus`id`", "opus\nsonnet"):
         assert config.model_env(bad) == ""
+
+
+def test_model_env_swallows_auto_like_default():
+    # "auto" passes the character-set check, so without this a raw pin that
+    # reached model_env would launch a pane with ANTHROPIC_MODEL=auto.
+    assert config.model_env("auto") == ""
+    assert config.model_env("default") == ""
+    assert config.model_env("fable") == "fable"
+    assert config.model_env("opus[1m]") == "opus[1m]"

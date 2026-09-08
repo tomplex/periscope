@@ -15,18 +15,16 @@ The dashboard prefers (2) when available, falls back to (1).
 import contextlib
 import hashlib
 import json
-import random
 import re
 import subprocess
 import threading
 import time
-from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
 import httpx
 
-from periscope import activity, store
+from periscope import activity, launch_policy, store
 from periscope.cost_pressure import (
     CostSample,
     TailSummary,
@@ -35,6 +33,7 @@ from periscope.cost_pressure import (
     score,
     summarize_tail,
 )
+from periscope.launch_policy import AccountUsage, Launch, Meter
 from periscope.log import _bg, log
 
 # --- Claude Code plan usage (parsed from session JSONL files) -------------
@@ -145,7 +144,7 @@ _OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 # account because each subscription has its own credential and its own meters;
 # a single tuple would have whichever account refreshed last overwrite the
 # other's numbers every 5 minutes.
-_plan_cache: dict[str, tuple[float, dict | None]] = {}
+_plan_cache: dict[str, tuple[float, AccountUsage | None]] = {}
 _plan_in_flight: set[str] = set()
 _plan_lock = threading.Lock()
 
@@ -220,7 +219,7 @@ _warned_unknown_fields: set[str] = set()
 _warned_missing_token: set[str] = set()
 
 
-def parse_plan_usage(data: dict) -> dict:
+def parse_plan_usage(data: dict) -> AccountUsage:
     """Map the OAuth usage response onto the dashboard's meters shape."""
     # The response carries codename fields for unreleased meters (all null
     # until Anthropic ships them — seven_day_opus appeared this way). Warn
@@ -234,7 +233,7 @@ def parse_plan_usage(data: dict) -> dict:
             _warned_unknown_fields.add(field)
             log.warning("usage endpoint has live unmapped meter %r: %s",
                         field, entry)
-    meters: dict[str, dict] = {}
+    meters: dict[str, Meter] = {}
     for field, key, label in _PLAN_METERS:
         entry = data.get(field)
         if not isinstance(entry, dict) or entry.get("utilization") is None:
@@ -369,7 +368,7 @@ def attach_projections(meters: dict, now: float, samples_for=None,
             m["limit_at"] = int(eta)
 
 
-def fetch_plan_usage(config_dir: str = "") -> dict | None:
+def fetch_plan_usage(config_dir: str = "") -> AccountUsage | None:
     # Failures warn rather than pass silently: a broken token or endpoint
     # would otherwise serve stale meters forever with zero log evidence
     # (httpx only logs requests that get a response). Attempt rate is capped
@@ -428,7 +427,7 @@ def _refresh_plan_usage_into_cache(account: str, config_dir: str) -> None:
         _plan_in_flight.discard(account)
 
 
-def cached_plan_usage() -> dict[str, dict]:
+def cached_plan_usage() -> dict[str, AccountUsage]:
     """Stale-while-revalidate, per account: {account_id: {available, meters,
     fetched_at}}. Serves each account's last successful fetch immediately and
     kicks off that account's background refresh whenever its next-attempt time
@@ -442,7 +441,7 @@ def cached_plan_usage() -> dict[str, dict]:
     shape stands in; the dashboard's next poll sees the real numbers.
     """
     now = time.time()
-    out: dict[str, dict] = {}
+    out: dict[str, AccountUsage] = {}
     for acct in store.get_accounts():
         aid = acct.get("id")
         if not aid:
@@ -626,43 +625,23 @@ def annotate_cost_pressure(views: list[dict]) -> None:
         v["ctx_tokens"] = pressure.cur_ctx
 
 
-def best_account(*, rand: Callable[[], float] = random.random) -> str:
-    """The account id a new pane should land on: the pinned spawn account when
-    one is set, else the one with the most headroom.
+def choose_launch(account: str | None = None, model: str | None = None) -> Launch:
+    """The account and model a new pane lands on. The one choke point every
+    unnamed spawn path shares — launcher New Tab, unified open, MCP
+    spawn_claude / resume_session — so the header pins are honored
+    server-side and MCP spawns see them without any client pref.
 
-    The pin (`settings.spawn_account`, set from the header's account picker)
-    lives HERE rather than at the call sites because this function is the one
-    choke point every unnamed spawn path shares — launcher New Tab, unified
-    open, MCP spawn_claude/resume_session. A pin naming an account that no
-    longer exists is ignored rather than honored: account_config_dir would
-    fail open to the default, silently rerouting every spawn.
-
-    Headroom is measured by each account's BINDING meter — the highest-percent
-    one — because that is the limit that stops work first: an account at 2% for
-    the week but 96% of its 5-hour window has no room right now.
-
-    An account with no usable meters is skipped rather than treated as empty;
-    no data must never read as infinite room. With nothing known at all this
-    returns "default", so a spawn never fails or stalls on usage being
-    unavailable — the caller gets the same account it would have had before.
-
-    Ties are broken randomly so two equally-free accounts share load instead of
-    every spawn stacking onto whichever sorts first.
+    Explicit args win over the pins (an explicit "default" model means no
+    override — that is how a single launch opts out of a model pin). The
+    policy itself is `launch_policy.choose`; this gathers its inputs.
+    `cached_plan_usage` never blocks, so a launch never waits on usage.
     """
-    pinned = store.get_settings().get("spawn_account")
-    if pinned and any(a["id"] == pinned for a in store.get_accounts()):
-        return pinned
-    best: list[str] = []
-    low: float | None = None
-    for aid, payload in (cached_plan_usage() or {}).items():
-        meters = payload.get("meters") or {}
-        if not payload.get("available") or not meters:
-            continue
-        binding = max((m.get("percent") or 0) for m in meters.values())
-        if low is None or binding < low:
-            low, best = binding, [aid]
-        elif binding == low:
-            best.append(aid)
-    if not best:
-        return "default"
-    return best[int(rand() * len(best))]
+    settings = store.get_settings()
+    return launch_policy.choose(launch_policy.LaunchInputs(
+        accounts=tuple(a["id"] for a in store.get_accounts() if a.get("id")),
+        usage=cached_plan_usage(),
+        account_arg=account,
+        model_arg=model,
+        account_pin=settings.get("spawn_account"),
+        model_pin=settings.get("spawn_model"),
+    ))

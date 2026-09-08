@@ -26,7 +26,7 @@ from typing import Literal
 
 from fastapi import HTTPException
 
-from periscope import store, worktrees
+from periscope import config, store, worktrees
 from periscope import tmux as tmux_mod
 from periscope.gitutil import detect_default_branch
 from periscope.log import log
@@ -241,6 +241,10 @@ def _layout_two_window(
     fresh worktree, and an unbound shell would silently land on the default
     account.
 
+    `model` is the already-resolved ANTHROPIC_MODEL value (or None): callers
+    run `usage.choose_launch` first — this layout primitive applies no pin of
+    its own.
+
     Returns `(claude_pid, shell_pid)` — both windows stamped (by window id).
     Phase 4's PR-review endpoint uses claude_pid to write
     state.windows[pid].linked_pr synchronously; other callers can ignore the
@@ -262,7 +266,7 @@ def _layout_two_window(
     # Only the agent window carries the model (the shell below gets the account
     # alone): a hand-typed `claude` in the shell would otherwise run on the
     # override with nothing on the card saying so.
-    model_env = store.spawn_model_env(model) if agent == "claude" else ""
+    model_env = config.model_env(model) if agent == "claude" else ""
     if not _tmux_mutate("has-session", "-t", tmux_session)[0]:
         ok, claude_win = _tmux_mutate(
             "new-session", "-d", "-s", tmux_session, "-c", pinned_dir,

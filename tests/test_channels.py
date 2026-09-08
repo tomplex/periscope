@@ -849,12 +849,14 @@ def test_resume_session_passes_account_through(mocker):
 
 
 def test_resume_session_binds_nothing_when_the_default_account_is_emptiest(mocker):
-    """An omitted account resolves through best_account, which names an id
+    """An omitted account resolves through choose_launch, which names an id
     rather than passing None — but naming the DEFAULT must still bind no
     config dir, so the command stays byte-identical to the pre-accounts one."""
     from periscope import usage
     from periscope.channels import _do_resume_session_tool
-    mocker.patch.object(usage, "best_account", return_value="default")
+    from periscope.launch_policy import Launch
+    mocker.patch.object(usage, "choose_launch",
+                        side_effect=lambda account=None, model=None: Launch(account or "default", None, ""))
     resume = mocker.patch(
         "periscope.routes.sessions._window_new_resume",
         return_value={"ok": True, "target": "resumes:3", "session": "resumes",
@@ -1542,7 +1544,9 @@ def test_spawn_claude_auto_picks_the_emptiest_account(mocker):
     """
     from periscope import channels, usage
     cap = _mock_spawn_plumbing(mocker)
-    mocker.patch.object(usage, "best_account", return_value="b")
+    from periscope.launch_policy import Launch
+    mocker.patch.object(usage, "choose_launch",
+                        side_effect=lambda account=None, model=None: Launch(account or "b", None, ""))
 
     asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
@@ -1576,7 +1580,9 @@ def test_spawn_claude_explicit_model_overrides_the_pin(mocker):
 def test_spawn_claude_explicit_account_overrides_the_auto_pick(mocker):
     from periscope import channels, usage
     cap = _mock_spawn_plumbing(mocker)
-    mocker.patch.object(usage, "best_account", return_value="b")
+    from periscope.launch_policy import Launch
+    mocker.patch.object(usage, "choose_launch",
+                        side_effect=lambda account=None, model=None: Launch(account or "b", None, ""))
 
     asyncio.run(channels._do_spawn_claude_tool(
         "%1", {"prompt": "go", "account": "default"}))
@@ -1590,7 +1596,9 @@ def test_resume_session_auto_picks_the_emptiest_account(mocker):
     should land where there is room, not on the exhausted default."""
     from periscope import channels, usage
     seen = {}
-    mocker.patch.object(usage, "best_account", return_value="b")
+    from periscope.launch_policy import Launch
+    mocker.patch.object(usage, "choose_launch",
+                        side_effect=lambda account=None, model=None: Launch(account or "b", None, ""))
     mocker.patch.object(
         channels, "_resolve_window_by_pid", return_value=None, create=True)
     mocker.patch("periscope.routes.sessions._window_new_resume",
@@ -1825,3 +1833,16 @@ def test_send_to_reports_queued_not_delivered(mocker):
     assert body["ok"] is True
     assert body["delivery"] == "queued"
     assert "peek" in body["verify"]
+
+
+def test_spawn_claude_sets_the_model_the_chooser_picked(mocker):
+    from periscope import channels, usage
+    from periscope.launch_policy import Launch
+    cap = _mock_spawn_plumbing(mocker)
+    mocker.patch.object(usage, "choose_launch",
+                        return_value=Launch("b", "opus[1m]", "b · fable walled"))
+
+    asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
+
+    args = _created_call(cap)
+    assert "ANTHROPIC_MODEL=opus[1m]" in args

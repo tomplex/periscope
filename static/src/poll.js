@@ -12,6 +12,7 @@ import {
   alerts,
   dragState,
   editingTarget,
+  launchDefault,
   projects,
   spawnAccount,
   spawnModel,
@@ -57,6 +58,7 @@ function applyState(data) {
   updateInfo.value = data.update || null;
   spawnAccount.value = data.spawn_account || null;
   spawnModel.value = data.spawn_model || null;
+  launchDefault.value = data.launch_default || null;
   editorSignal.value = data.editor || "";
 }
 

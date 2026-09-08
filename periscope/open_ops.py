@@ -196,14 +196,15 @@ def ensure_session(
         if existing:
             return session, existing
     if agent == "claude":
-        # No account named -> the subscription with the most headroom. This is
-        # periscope's primary launch path (⌘K omnibox, POST /api/open, PR
-        # review); pinning it to the default account would send every open to
-        # the subscription that fills up first. Codex is excluded below: it has
-        # no Claude subscription to choose between. best_account degrades to
-        # "default" when usage is unknown, so an open never waits on it.
+        # No account named → launch_policy decides. This is periscope's
+        # primary launch path (⌘K omnibox, POST /api/open, PR review); pinning
+        # it to the default account would send every open to the subscription
+        # that fills up first. Codex is excluded below: it has no Claude
+        # subscription to choose between. choose_launch degrades to "default"
+        # when usage is unknown, so an open never waits on it.
+        launch = usage.choose_launch(account)
         agent_pid, _ = _layout_two_window(
-            session, pinned_dir, account=account or usage.best_account()
+            session, pinned_dir, account=launch.account, model=launch.model
         )
     else:
         agent_pid, _ = _layout_two_window(

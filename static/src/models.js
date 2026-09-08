@@ -2,10 +2,12 @@
 // override — the pane runs whatever the account's settings.json says; any
 // other id is set as ANTHROPIC_MODEL on the pane's tmux window.
 //
-// Two surfaces share this list: the header's spawn-model pin (a server
-// setting, the standing default for EVERY spawn path incl. MCP spawn_claude)
-// and the launcher's per-launch picker, which seeds from the pin and sends its
-// value explicitly — "default" included — so one launch can opt out of the pin.
+// Two surfaces, two lists: the header's spawn-model pin (a server setting,
+// the standing default for EVERY spawn path incl. MCP spawn_claude) offers
+// PIN_MODELS below (auto first); the launcher's per-launch picker offers this
+// list and preselects from `launch_default` (what auto currently resolves
+// to), sending its value explicitly — "default" included — so one launch can
+// differ from the pin.
 //
 // Aliases, not full ids: Claude resolves 'fable' / 'opus' / 'sonnet' to the
 // latest of each family, so the list doesn't rot when a model version ships.
@@ -27,3 +29,9 @@ export const MODELS = [
   { id: "opus[1m]", label: "opus 1m" },
   { id: "sonnet", label: "sonnet" },
 ];
+
+// The header pin's list: "auto" first — launch_policy picks fable, then
+// opus[1m], per account — then the same aliases the launcher offers. Two
+// named lists rather than one plus a filter: the launcher never offers auto
+// (it preselects the resolved answer and sends it explicitly).
+export const PIN_MODELS = [{ id: "auto", label: "auto" }, ...MODELS];

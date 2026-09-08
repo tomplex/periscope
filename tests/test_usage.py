@@ -478,13 +478,15 @@ def test_missing_token_warns_once_per_account(caplog, monkeypatch):
     assert len(msgs) == 2  # one per distinct keychain item, not per attempt
 
 
-# --- best_account: which subscription a new pane should land on -------------
+# --- choose_launch: the impure shell over launch_policy.choose ----------------
 
-from periscope import usage
+from periscope import store, usage
+from periscope.launch_policy import Launch
 
 
 def _plan(**pcts):
-    """account id -> plan payload; None means 'no usable data'."""
+    """account id -> plan payload; None means 'no usable data'. Session-only
+    meters: enough for the shell tests, which check plumbing, not policy."""
     return {
         aid: ({"available": False} if p is None else
               {"available": True, "meters": {"session": {"percent": p}}, "fetched_at": 1})
@@ -492,61 +494,44 @@ def _plan(**pcts):
     }
 
 
-def test_best_account_picks_the_most_headroom(monkeypatch, clean_state):
+def test_choose_launch_feeds_the_registry_and_cache_to_the_policy(monkeypatch, clean_state):
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
-    assert usage.best_account() == "b"
-    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=4, b=70))
-    assert usage.best_account() == "default"
+    launch = usage.choose_launch()
+    assert isinstance(launch, Launch)
+    assert launch.account == "b"          # default is session-walled
 
 
-def test_best_account_uses_the_binding_meter_not_the_emptiest_one(monkeypatch, clean_state):
-    # b's week is nearly free but its 5h window is nearly spent: the limit that
-    # binds first is what decides whether work can actually run there.
-    monkeypatch.setattr(usage, "cached_plan_usage", lambda: {
-        "default": {"available": True, "fetched_at": 1,
-                    "meters": {"session": {"percent": 30}, "week_all": {"percent": 30}}},
-        "b": {"available": True, "fetched_at": 1,
-              "meters": {"session": {"percent": 96}, "week_all": {"percent": 2}}},
-    })
-    assert usage.best_account() == "default"
-
-
-def test_best_account_skips_accounts_with_no_data(monkeypatch, clean_state):
-    # No data must never read as infinite room.
-    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=90, b=None))
-    assert usage.best_account() == "default"
-
-
-def test_best_account_falls_back_to_default_when_nothing_is_known(monkeypatch, clean_state):
-    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=None, b=None))
-    assert usage.best_account() == "default"
-    monkeypatch.setattr(usage, "cached_plan_usage", dict)
-    assert usage.best_account() == "default"
-
-
-def test_best_account_honors_the_spawn_pin_over_headroom(monkeypatch, clean_state):
-    # Pin wins even when the pinned account is the FULL one — that's what a
-    # deliberate pin means, and second-guessing it would make the header
-    # control a suggestion.
-    from periscope import store
+def test_choose_launch_honors_the_account_pin(monkeypatch, clean_state):
     store.update_settings({"spawn_account": "default"})
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
-    assert usage.best_account() == "default"
+    assert usage.choose_launch().account == "default"
 
 
-def test_best_account_ignores_a_pin_naming_no_registered_account(monkeypatch, clean_state):
-    # account_config_dir fails OPEN on an unknown id, so honoring a stale pin
-    # would silently reroute every spawn to the default account.
-    from periscope import store
+def test_choose_launch_ignores_a_pin_naming_no_registered_account(monkeypatch, clean_state):
     store.update_settings({"spawn_account": "gone"})
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
-    assert usage.best_account() == "b"
+    assert usage.choose_launch().account == "b"
 
 
-def test_best_account_breaks_ties_randomly(monkeypatch, clean_state):
-    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=20, b=20))
-    assert usage.best_account(rand=lambda: 0.0) == "default"
-    assert usage.best_account(rand=lambda: 0.99) == "b"
+def test_choose_launch_honors_the_model_pin(monkeypatch, clean_state):
+    # The one input no other shell test drives: a wrong settings key here would
+    # leave the header's model pin silently inert with the suite green.
+    store.update_settings({"spawn_model": "sonnet"})
+    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
+    assert usage.choose_launch().model == "sonnet"
+
+
+def test_choose_launch_passes_explicit_args_through(monkeypatch, clean_state):
+    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
+    launch = usage.choose_launch("default", "sonnet")
+    assert (launch.account, launch.model) == ("default", "sonnet")
+
+
+def test_choose_launch_falls_back_to_default_when_nothing_is_known(monkeypatch, clean_state):
+    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=None, b=None))
+    assert usage.choose_launch().account == "default"
+    monkeypatch.setattr(usage, "cached_plan_usage", dict)
+    assert usage.choose_launch().account == "default"
 
 
 # --- per-pane cost pressure: transcript readers and the refresh cache -----
