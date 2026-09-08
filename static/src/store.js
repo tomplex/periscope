@@ -23,8 +23,9 @@ export const railSelection = signal(null);    // string highlight-key: "pane:<pi
 export const dragState = signal(null);
 export const usage = signal(null);
 export const updateInfo = signal(null);       // /api/state update summary: { behind, checked_at, running }
-export const spawnAccount = signal(null);     // pinned spawn account id, null = auto (most headroom)
-export const spawnModel = signal(null);       // pinned spawn model (ANTHROPIC_MODEL), null = account default
+export const spawnAccount = signal(null);     // pinned spawn account id, null = auto (launch_policy)
+export const spawnModel = signal(null);       // pinned spawn model (ANTHROPIC_MODEL), null = auto (launch_policy)
+export const launchDefault = signal(null);    // /api/state launch_default: { account, model, reason } — what an unnamed spawn gets right now
 export const editor = signal("");              // /api/state preferred editor display name; "" => action hidden
 
 // poll-pause flags (replace state.editingTarget / state.dragging guards):

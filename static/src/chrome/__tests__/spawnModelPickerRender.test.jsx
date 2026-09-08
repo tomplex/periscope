@@ -4,12 +4,13 @@
 
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it } from "vitest";
-import { MODELS } from "../../models.js";
-import { spawnModel } from "../../store.js";
+import { PIN_MODELS } from "../../models.js";
+import { launchDefault, spawnModel } from "../../store.js";
 import { SpawnModelPicker } from "../SpawnModelPicker.jsx";
 
 afterEach(() => {
   spawnModel.value = null;
+  launchDefault.value = null;
 });
 
 function activeLabel(html) {
@@ -18,9 +19,19 @@ function activeLabel(html) {
 }
 
 describe("<SpawnModelPicker>", () => {
-  it("marks default active when no pin is set", () => {
+  it("marks auto active when no pin is set and shows what auto resolves to", () => {
     spawnModel.value = null;
-    expect(activeLabel(render(<SpawnModelPicker />))).toBe("default");
+    launchDefault.value = { account: "b", model: "fable", reason: "b · week resets Wed 22:59 · fable" };
+    expect(activeLabel(render(<SpawnModelPicker />))).toBe("auto → fable");
+  });
+
+  it("reads auto → default before the first poll", () => {
+    expect(activeLabel(render(<SpawnModelPicker />))).toBe("auto → default");
+  });
+
+  it("marks a stored auto pin active exactly like unset", () => {
+    spawnModel.value = "auto";
+    expect(activeLabel(render(<SpawnModelPicker />))).toBe("auto → default");
   });
 
   it("marks the pinned alias active, and only it", () => {
@@ -30,8 +41,13 @@ describe("<SpawnModelPicker>", () => {
     expect(html.match(/is-active/g)).toHaveLength(1);
   });
 
-  it("renders one chip per registry entry", () => {
+  it("marks a literal default pin active", () => {
+    spawnModel.value = "default";
+    expect(activeLabel(render(<SpawnModelPicker />))).toBe("default");
+  });
+
+  it("renders one chip per pin entry", () => {
     const html = render(<SpawnModelPicker />);
-    expect(html.match(/spawn-acct-btn/g).length).toBe(MODELS.length);
+    expect(html.match(/spawn-acct-btn/g).length).toBe(PIN_MODELS.length);
   });
 });

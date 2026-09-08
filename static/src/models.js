@@ -27,3 +27,9 @@ export const MODELS = [
   { id: "opus[1m]", label: "opus 1m" },
   { id: "sonnet", label: "sonnet" },
 ];
+
+// The header pin's list: "auto" first — launch_policy picks fable, then
+// opus[1m], per account — then the same aliases the launcher offers. Two
+// named lists rather than one plus a filter: the launcher never offers auto
+// (it preselects the resolved answer and sends it explicitly).
+export const PIN_MODELS = [{ id: "auto", label: "auto" }, ...MODELS];

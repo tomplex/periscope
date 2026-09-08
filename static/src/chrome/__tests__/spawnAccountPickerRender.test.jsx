@@ -5,11 +5,12 @@
 
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it } from "vitest";
-import { spawnAccount } from "../../store.js";
+import { launchDefault, spawnAccount } from "../../store.js";
 import { SpawnAccountPicker } from "../SpawnAccountPicker.jsx";
 
 afterEach(() => {
   spawnAccount.value = null;
+  launchDefault.value = null;
 });
 
 function activeLabel(html) {
@@ -18,8 +19,13 @@ function activeLabel(html) {
 }
 
 describe("<SpawnAccountPicker>", () => {
-  it("marks auto active when no pin is set", () => {
+  it("marks auto active when no pin is set and shows the account auto resolves to", () => {
     spawnAccount.value = null;
+    launchDefault.value = { account: "b", model: "fable", reason: "b · week resets Wed 22:59 · fable" };
+    expect(activeLabel(render(<SpawnAccountPicker />))).toBe("auto → B");
+  });
+
+  it("reads plain auto before the first poll", () => {
     expect(activeLabel(render(<SpawnAccountPicker />))).toBe("auto");
   });
 
