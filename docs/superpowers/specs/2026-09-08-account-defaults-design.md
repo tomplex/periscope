@@ -241,8 +241,10 @@ Resolution:
    (`ignore_pressure` or not pressured) → return. Second pass: same without
    the pressure check. Third (everything walled): the candidate account with
    the soonest `session.resets_at`, first candidate model.
-5. No candidate accounts (no usage data) → `Launch("default", <explicit model
-   or None>, "no usage data")`.
+5. No candidate accounts (no usage data) → `Launch(<explicit account, else
+   "default">, <explicit model or None>, "no usage data")`. An explicit
+   account is honored even blind — sending a launch the user pointed at B to
+   the default account is the exact failure D5 names for the launcher.
 
 There is no hysteresis: every transition on the weekly axis is monotone until
 a reset, and flicker on the session axis is just balancing.
