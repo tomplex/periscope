@@ -456,6 +456,28 @@ def cached_plan_usage() -> dict[str, AccountUsage]:
     return out
 
 
+def refresh_plan_usage_now(account: str, config_dir: str) -> AccountUsage | None:
+    """Synchronous, TTL-bypassing refresh of one account — the poke's
+    verification step. BLOCKING (a live httpx call + an activity-DB write):
+    call it from a worker thread, never from the event loop or a request
+    handler.
+
+    Claims the account's in-flight slot first and yields (returning whatever
+    is cached) when a background refresh already holds it:
+    `_refresh_plan_usage_into_cache` discards the marker unconditionally, so
+    an unguarded second caller would drop the first's marker and the next
+    `cached_plan_usage` poll would fire a duplicate into an endpoint that
+    429s readily.
+    """
+    with _plan_lock:
+        if account in _plan_in_flight:
+            return _plan_cache.get(account, (0.0, None))[1]
+        _plan_in_flight.add(account)
+    _refresh_plan_usage_into_cache(account, config_dir)
+    with _plan_lock:
+        return _plan_cache.get(account, (0.0, None))[1]
+
+
 # --- Per-pane cost pressure ---
 #
 # Which pane is expensive to keep carrying? Each Claude pane maps to its
