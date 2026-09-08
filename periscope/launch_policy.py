@@ -1,6 +1,7 @@
 """Launch policy: which account and model an unnamed Claude launch lands on.
 
-Pure — no I/O, no threads, no clock. `usage.choose_launch` gathers the inputs
+Pure — no I/O, no threads; the only environment read is the local timezone,
+for the hover string. `usage.choose_launch` gathers the inputs
 (cached plan usage, the two header pins, the account registry) and calls
 `choose`; every spawn path goes through that shell so the policy has one home
 (docs/account-routing.md).
@@ -105,7 +106,7 @@ def walled(meters: Mapping[str, Meter], *, model: str | None = None) -> bool:
     sub-limit is. A missing meter is never a wall."""
     if _pct(meters.get("session")) >= 100 or _pct(meters.get("week_all")) >= 100:
         return True
-    if model is None or model == "default":
+    if model is None:
         return False
     return _pct(sublimit(meters, model)) >= 100
 
@@ -168,8 +169,8 @@ def choose(inputs: LaunchInputs) -> Launch:
     models = (explicit_model,) if explicit_model else FALLBACK_MODELS
 
     candidates = (explicit_account,) if explicit_account else order_accounts(inputs)
-    with_data = tuple(a for a in candidates if _meters(inputs, a) is not None)
-    if not with_data:
+    pairs = tuple((a, m) for a in candidates if (m := _meters(inputs, a)) is not None)
+    if not pairs:
         return Launch(explicit_account or "default", _out(explicit_model), "no usage data")
 
     # An explicitly chosen account is never rerouted by session pressure; an
@@ -177,8 +178,7 @@ def choose(inputs: LaunchInputs) -> Launch:
     passes = (True,) if explicit_account else (False, True)
     for ignore_pressure in passes:
         skipped: list[str] = []
-        for aid in with_data:
-            meters = _meters(inputs, aid) or {}
+        for aid, meters in pairs:
             if not ignore_pressure and pressured(meters):
                 skipped.append(f"{aid}: session on pace to wall")
                 continue
@@ -189,11 +189,7 @@ def choose(inputs: LaunchInputs) -> Launch:
                 return Launch(aid, _out(model), _reason(aid, model, meters, skipped))
 
     # Everything is walled: the user is blocked either way, so minimize the wait.
-    def session_reset(aid: str) -> float:
-        m = (_meters(inputs, aid) or {}).get("session") or {}
-        return m.get("resets_at") or float("inf")
-
-    aid = min(with_data, key=session_reset)
-    soonest = session_reset(aid)
-    when = _clock(None if soonest == float("inf") else int(soonest))
+    aid, meters = min(pairs, key=lambda p: (p[1].get("session") or {}).get("resets_at") or float("inf"))
+    soonest = (meters.get("session") or {}).get("resets_at")
+    when = _clock(soonest)
     return Launch(aid, _out(models[0]), f"{aid} · every meter walled; session resets {when}")

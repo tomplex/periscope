@@ -7,7 +7,6 @@ produces and `/api/state` serializes."""
 from dataclasses import replace
 
 from periscope.launch_policy import (
-    Launch,
     LaunchInputs,
     choose,
     model_family,
@@ -202,6 +201,6 @@ def test_no_usage_data_falls_back_to_default_without_waiting():
 
 def test_reason_names_the_account_and_the_model():
     launch = choose(BASE)
-    assert launch == Launch("b", "fable", launch.reason)
+    assert (launch.account, launch.model) == ("b", "fable")
     assert launch.reason.startswith("b · week resets ")
     assert launch.reason.endswith(" · fable")
