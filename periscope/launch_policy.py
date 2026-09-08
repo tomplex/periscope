@@ -116,9 +116,84 @@ def pressured(meters: Mapping[str, Meter]) -> bool:
     return (meters.get("session") or {}).get("limit_at") is not None
 
 
+def _meters(inputs: LaunchInputs, aid: str) -> dict[str, Meter] | None:
+    """An account's meters, or None when it has no usable data. No data must
+    never read as infinite room, so such an account is not a candidate."""
+    payload = inputs.usage.get(aid) or {}
+    if not payload.get("available") or not payload.get("meters"):
+        return None
+    return payload["meters"]
+
+
 def order_accounts(inputs: LaunchInputs) -> tuple[str, ...]:
-    raise NotImplementedError  # Task 2
+    """Candidate accounts, soonest weekly reset first.
+
+    A null `week_all.resets_at` sorts LAST: the endpoint reports null whenever
+    utilization is 0, i.e. the account reset most recently and is the later
+    deadline. Registry order breaks ties — deterministic, so the value
+    published on /api/state and the value a spawn resolves agree.
+    """
+    rows = []
+    for idx, aid in enumerate(inputs.accounts):
+        meters = _meters(inputs, aid)
+        if meters is None:
+            continue
+        resets = (meters.get("week_all") or {}).get("resets_at")
+        rows.append((resets is None, resets or 0, idx, aid))
+    return tuple(aid for *_, aid in sorted(rows))
+
+
+def _out(model: str | None) -> str | None:
+    return None if model in (None, "default") else model
+
+
+def _clock(ts: int | None) -> str:
+    return datetime.fromtimestamp(ts).strftime("%a %H:%M") if ts else "—"
+
+
+def _reason(aid: str, model: str | None, meters: Mapping[str, Meter],
+            skipped: list[str]) -> str:
+    resets = (meters.get("week_all") or {}).get("resets_at")
+    head = f"{aid} · week resets {_clock(resets)} · {model or 'default'}"
+    return head if not skipped else f"{head} (skipped {', '.join(skipped)})"
 
 
 def choose(inputs: LaunchInputs) -> Launch:
-    raise NotImplementedError  # Task 2
+    """Resolve (account, model) for one launch. See the module docstring for
+    the policy; docs/account-routing.md for the table this implements."""
+    pin = inputs.account_pin if inputs.account_pin in inputs.accounts else None
+    explicit_account = inputs.account_arg or pin
+    model_pin = inputs.model_pin if inputs.model_pin not in (None, "", "auto") else None
+    explicit_model = inputs.model_arg or model_pin
+    models = (explicit_model,) if explicit_model else FALLBACK_MODELS
+
+    candidates = (explicit_account,) if explicit_account else order_accounts(inputs)
+    with_data = tuple(a for a in candidates if _meters(inputs, a) is not None)
+    if not with_data:
+        return Launch(explicit_account or "default", _out(explicit_model), "no usage data")
+
+    # An explicitly chosen account is never rerouted by session pressure; an
+    # automatic pick honors pressure on the first pass and drops it on the second.
+    passes = (True,) if explicit_account else (False, True)
+    skipped: list[str] = []
+    for ignore_pressure in passes:
+        for aid in with_data:
+            meters = _meters(inputs, aid) or {}
+            if not ignore_pressure and pressured(meters):
+                skipped.append(f"{aid}: session on pace to wall")
+                continue
+            for model in models:
+                if walled(meters, model=model):
+                    skipped.append(f"{aid}: {model} walled")
+                    continue
+                return Launch(aid, _out(model), _reason(aid, model, meters, skipped))
+
+    # Everything is walled: the user is blocked either way, so minimize the wait.
+    def session_reset(aid: str) -> float:
+        m = (_meters(inputs, aid) or {}).get("session") or {}
+        return m.get("resets_at") or float("inf")
+
+    aid = min(with_data, key=session_reset)
+    soonest = session_reset(aid)
+    when = _clock(None if soonest == float("inf") else int(soonest))
+    return Launch(aid, _out(models[0]), f"{aid} · every meter walled; session resets {when}")
