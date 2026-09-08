@@ -224,7 +224,11 @@ Resolution:
    `week_<family>_*`. Sub-limit keys are slugified display names
    (`parse_plan_usage`), so an exact `week_fable` lookup would silently stop
    walling the day the display name becomes "Fable 5.1". A missing meter is
-   not a wall. `pressured(acct)` = `session.limit_at is not None` (the
+   not a wall. The check is one generic rule, not per-model branches: on
+   this host only `week_fable` has ever been reported (`week_opus` /
+   `week_sonnet` appear in none of 6,679 samples), so the Opus case is
+   exercised by a synthetic meter in tests, never asserted against real
+   fixtures. `pressured(acct)` = `session.limit_at is not None` (the
    existing 1h-slope projection; `_SLOPE_WINDOW_S` defines it for `session`).
 4. First pass: for acct in candidates, for model in models: not walled and
    (`ignore_pressure` or not pressured) → return. Second pass: same without
