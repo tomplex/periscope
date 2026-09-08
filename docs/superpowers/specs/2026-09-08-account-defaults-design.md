@@ -106,8 +106,12 @@ and an unset pin means `auto`. `default` keeps its current meaning (no
 settings route and `SpawnModelPicker` coerce `"default"` to unset, which
 under the new reading would silently turn "no override" into "chooser
 decides" — both stop coercing, and the validator accepts the two words
-alongside model-id-shaped strings. `config.model_env` never sees either word:
-the chooser resolves them first (`default` → no override).
+alongside model-id-shaped strings. The chooser resolves both words before
+anything reaches `config.model_env` (`default` → no override), and
+`model_env` itself maps `"auto"` to no override the way it already maps
+`"default"` — its character-set check would otherwise accept the literal and
+a path that forwarded a raw pin would launch a pane with
+`ANTHROPIC_MODEL=auto`, which Claude rejects silently.
 
 The launcher's per-launch pickers send explicit, already-resolved values on
 **both** axes. Today the launcher omits the `account` param for account A
@@ -161,12 +165,15 @@ original pane still stays open, as today.
 
 ### D8 — Waste indicator on the usage pill
 
-The objective made visible: each weekly meter's tooltip line shows its
-projected end-of-week value when it is under 100% ("on pace for 18% at
-reset"). An account row gets a 💤 marker when its Fable meter projects under
-100% **and** its reset is within 48h — the point past which the remaining
-budget is unlikely to be burned. The inverse of the existing 🔥 signal, from
-the same `projected_percent` field.
+The objective made visible. The tooltip already renders each meter's
+projected end-of-window value (`UsagePill.paceLines`: "window average → 18%
+at reset"), including the dynamically keyed Fable sub-limit, so no server
+change and no new field. What is added: an account row gets a 💤 marker when
+its Fable meter projects under 100% **and** its reset is within 48h — the
+point past which the remaining budget is unlikely to be burned. The inverse
+of the existing 🔥 signal, from the same `projected_percent` field. A
+four-line client display rule, deliberately not stamped by the server so
+unit 3 touches no Python (D9).
 
 ### D9 — Three independently shippable units
 
@@ -274,8 +281,11 @@ account is always explicit).
 _task("poke", poke.run()) if config.is_prod() else None` beside `mcp_task`,
 cancelled in the lifespan `finally` with the others; 60s tick.
 
-- Settings: `poke_at: "08:00"` (`null` disables), `poke_grace_min: 90`. Both
-  through `PATCH /api/settings`.
+- Settings: `poke_at` — unset reads `"08:00"`, the **empty string disables**
+  (`update_settings` pops null keys, so null and unset are one state and
+  cannot carry opposite meanings); `poke_grace_min: 90`. Both through
+  `PATCH /api/settings`, which accepts `""`, null (back to the default), or
+  `HH:MM`.
 - Persisted log in `state.json`: `poke_log: {account_id: {date, at,
   resets_at, verified}}` — `date` is what "already poked today" reads.
 - `due(now, settings, log, usage, in_flight) -> list[account_id]` is pure:
@@ -287,14 +297,22 @@ cancelled in the lifespan `finally` with the others; 60s tick.
   "claude-haiku-4-5", "--strict-mcp-config"], env=...)` — the full id, as
   `rename_ai.py` uses, because `claude --help` documents only `fable`/`opus`/
   `sonnet` as aliases and a rejected alias would fail silently every morning.
-  `CLAUDE_CONFIG_DIR` from `store.account_config_dir`;
-  `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` stripped (the same spend-leak
-  guard as `bg_commander._dispatch_env`; shared, not duplicated); 120s
-  timeout; in `_bg`. The binary is resolved the way
+  Env from a new `config.claude_subprocess_env(config_dir=…)`: the
+  `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` strip and the set-or-pop of
+  `CLAUDE_CONFIG_DIR` move there out of `bg_commander._dispatch_env` /
+  `_account_env` with their incident comments — both are spend-leak guards
+  that now have two consumers, and `config.py` already owns the sibling env
+  plumbing (`model_env`, `profile_env`). 120s timeout; in `_bg`, imported
+  into `poke`'s own namespace so `conftest`'s autouse guard can neuter
+  `poke._bg` beside `usage._bg`. The binary is resolved the way
   `bg_commander._dispatch_argv` does, never via the zsh wrapper.
 - Then `usage.refresh_plan_usage_now(account)` — a thin synchronous wrapper
-  over the existing `_refresh_plan_usage_into_cache`, called inside the poke's
-  own `_bg` thread, never from a request handler — and verify
+  over the existing `_refresh_plan_usage_into_cache` that first claims the
+  account's `_plan_in_flight` slot under `_plan_lock` and returns the cached
+  value if the slot is taken (the inner function discards the marker
+  unconditionally, so an unguarded call would drop a concurrent refresh's
+  marker and double-hit an endpoint that 429s readily); called inside the
+  poke's own `_bg` thread, never from a request handler — and verify
   `session.resets_at ∈ [now+5h−5m, now+5h+5m]`. Write the log entry either
   way with `verified` set accordingly. It does a live httpx call and an
   activity-DB write, so `tests/test_poke.py` patches it outright
@@ -312,9 +330,11 @@ cancelled in the lifespan `finally` with the others; 60s tick.
   guard only. The 409 detail includes the age: `"session looks live (written
   12s ago); wait a minute or pick another"`.
 - `POST /api/pane/move-account?pid&account&force=1` passes it through.
-- `Rail.movePaneAccount` uses a raw `fetch` rather than `apiCall`: `apiCall`
-  toasts every non-OK response and returns null, so the 409 detail never
-  reaches the caller. On a 409 whose detail starts with `session looks live`,
+- `Rail.movePaneAccount` uses `overlays/modalRequest.js` rather than
+  `apiCall`: `apiCall` toasts every non-OK response and returns null, so the
+  409 detail never reaches the caller; `modalRequest` already returns
+  `{data}` or `{error}` without toasting and gains an additive `status`
+  field. On a 409 whose detail starts with `session looks live`,
   `confirmDialog("…written to 12s ago — move anyway? The original pane stays
   open.")` → retry with `force=1`. Any other failure toasts as before.
 
