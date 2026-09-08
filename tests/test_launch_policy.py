@@ -149,8 +149,12 @@ def test_session_pressure_reroutes_new_spawns():
 
 
 def test_all_pressured_ignores_pressure():
-    assert pick(usage={"default": acct(resets=SUN, limit_at=SUN),
-                       "b": acct(resets=WED, limit_at=WED)}) == ("b", "fable")
+    usage = {"default": acct(resets=SUN, limit_at=SUN),
+              "b": acct(resets=WED, limit_at=WED)}
+    assert pick(usage=usage) == ("b", "fable")
+    # The second pass starts its own skip list — it must not carry over "b:
+    # session on pace to wall" from the first pass, since b is what it picked.
+    assert "skipped" not in choose(replace(BASE, usage=usage)).reason
 
 
 def test_explicit_account_is_never_rerouted_by_pressure():

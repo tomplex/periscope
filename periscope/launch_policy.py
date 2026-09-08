@@ -175,8 +175,8 @@ def choose(inputs: LaunchInputs) -> Launch:
     # An explicitly chosen account is never rerouted by session pressure; an
     # automatic pick honors pressure on the first pass and drops it on the second.
     passes = (True,) if explicit_account else (False, True)
-    skipped: list[str] = []
     for ignore_pressure in passes:
+        skipped: list[str] = []
         for aid in with_data:
             meters = _meters(inputs, aid) or {}
             if not ignore_pressure and pressured(meters):
