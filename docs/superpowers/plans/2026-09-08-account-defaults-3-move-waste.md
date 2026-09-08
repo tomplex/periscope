@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI / pytest, Preact / vitest, Vite build to the committed `static/dist/app.js`.
 
-**Spec:** `docs/superpowers/specs/2026-09-08-account-defaults-design.md` (D7, D8, §Move-account override). **Structure:** `docs/superpowers/specs/2026-09-08-account-defaults-structure.md` (Unit 3, P7, P8, C4–C6). **Independent of Units 1 and 2** — can land in any order.
+**Spec:** `docs/superpowers/specs/2026-09-08-account-defaults-design.md` (D7, D8, §Move-account override). **Structure:** `docs/superpowers/specs/2026-09-08-account-defaults-structure.md` (Unit 3, P7, P8, C4–C6). **Code is independent of Units 1 and 2**; the one coupling is documentation — Task 4 appends to `docs/account-routing.md`, which Unit 1 creates. This pipeline runs Unit 3 after Unit 1, so Task 4 appends; the step says what to do if the file is absent.
 
 **Read before starting:** `CLAUDE.md`, `docs/testing.md`, `docs/second-account-setup.md` (why a session resumes on either account).
 
@@ -54,6 +54,8 @@ def _live_jsonl(tmp_path, *, age_s):
 
 
 def test_window_new_resume_refuses_a_recently_written_transcript_and_says_how_recent(mocker, tmp_path):
+    import re
+
     import pytest
     from fastapi import HTTPException
 
@@ -66,8 +68,9 @@ def test_window_new_resume_refuses_a_recently_written_transcript_and_says_how_re
         sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
     assert e.value.status_code == 409
     # The client matches on this prefix (Rail.movePaneAccount) — keep them in sync.
-    assert e.value.detail.startswith("session looks live (written 1")
-    assert "wait a minute or pick another" in e.value.detail
+    assert e.value.detail.startswith("session looks live")
+    # ...and the detail carries the measured age (12s here), not a constant.
+    assert re.match(r"session looks live \(written 1[23]s ago\); wait a minute", e.value.detail)
     assert not [c for c in calls if c and c[0] == "new-window"]
 
 
@@ -91,7 +94,8 @@ def test_window_new_resume_force_skips_only_the_mtime_guard(mocker, tmp_path):
 
     # The already-resumed-elsewhere guard is NOT behind force: two concurrent
     # appenders interleaving into one JSONL is a different failure entirely.
-    sessions._resuming["abc"] = {"target": "resumes:3", "started_at": 0}
+    # The successful call above registered the session (sessions.py:253-254).
+    assert "abc" in sessions._resuming
     with pytest.raises(HTTPException) as e:
         sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume",
                                     force=True)
@@ -119,7 +123,7 @@ def test_move_account_force_does_not_widen_the_account_check(client, mocker):
     resume.assert_not_called()
 ```
 
-(`_resuming` entries are `{"target": ..., "started_at": ...}` — `sessions.py:227`; the guard reads only `existing["target"]`.)
+(`_resuming` entries are `{"target": ..., "started_at": ...}` — `sessions.py:227,254`; the guard reads only `existing["target"]`. `track` is already imported in `Rail.jsx:30`.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -272,6 +276,8 @@ Replace `movePaneAccount`:
       `/api/pane/move-account?pid=${encodeURIComponent(w.pid)}&account=${encodeURIComponent(accountId)}` +
       (force ? "&force=1" : "");
     const { data, error, status } = await modalRequest("move account", url, { method: "POST" });
+    // apiCall used to emit this on every call; keep the instrumentation event.
+    track("api:move account", { path: url, method: "POST", ok: !!data });
     if (data?.pid) {
       // Select the pane we just made — same reason /api/open does it: a spawn
       // the user can't see reads as a no-op. It lands in this pane's own
@@ -288,7 +294,7 @@ Replace `movePaneAccount`:
       if (ok) await movePaneAccount(w, accountId, true);
       return;
     }
-    showToast(error || "move account failed", "bad", 6000);
+    showToast(`move account failed: ${error || "unknown error"}`, "bad", 6000);
   }
 ```
 
@@ -413,12 +419,12 @@ export function wasteMark(entry, nowSec) {
 
 Import (line 21): `import { summarizeAccounts } from "./usageSummary.js";` → `import { summarizeAccounts, wasteMark } from "./usageSummary.js";`
 
-In `UsagePill`, after `const accounts = summarizeAccounts(...)`, add:
+In `UsagePill`, replace the line `const accounts = summarizeAccounts(u.plan, Math.floor(Date.now() / 1000));` with these three, in this order (`nowSec` must be declared before both uses):
 ```js
   const nowSec = Math.floor(Date.now() / 1000);
+  const accounts = summarizeAccounts(u.plan, nowSec);
   const waste = new Set(Object.keys(u.plan || {}).filter((id) => wasteMark(u.plan[id], nowSec)));
 ```
-(and reuse `nowSec` in the `summarizeAccounts` call instead of the inline `Math.floor(...)`).
 
 In the account row, after `{a.stale && <span class="usage-stale-mark">⚠</span>}`:
 ```jsx
@@ -468,6 +474,8 @@ Run the dev server (`PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py`), ope
 - The usage pill shows 💤 on an account only when its Fable line reads a projection under 100% with the reset inside 48h (with the live numbers from 2026-09-08 that is B, resetting Wed 23:00 at ~18% projected).
 
 - [ ] **Step 2: Append to `docs/account-routing.md`**
+
+(Unit 1 creates this file and its `CLAUDE.md` index row. If it is absent because Unit 3 is being run first, create it with the heading `# Account & model routing` and this one-paragraph preamble before the sections below — "Periscope pools two Claude subscriptions, A (`~/.claude`) and B (`~/.claude-b`). `~/.claude-b/projects` symlinks to `~/.claude/projects`, so a session started on either account resumes on the other." — and add a `CLAUDE.md` reference-docs row: `| the move-account route in `routes/sessions.py`, `UsagePill` | `docs/account-routing.md` |`.)
 
 ```markdown
 ## Moving a running pane (`/api/pane/move-account`)
