@@ -90,6 +90,16 @@ class Settings(TypedDict, total=False):
     spawn_account: str  # account id every unnamed spawn lands on; unset => launch_policy decides
     spawn_model: str  # "auto" | "default" | ANTHROPIC_MODEL value; unset => "auto" (launch_policy decides)
     editor: str  # display name of a KNOWN_EDITORS entry; unset => no open-in-editor action
+    poke_at: str  # local HH:MM the session poke fires; unset => "08:00", "" => disabled
+    poke_grace_min: int  # minutes past poke_at a missed poke may still fire; unset => 90
+
+
+class PokeEntry(TypedDict):
+    """One account's most recent session poke (periscope.poke)."""
+    date: str          # local YYYY-MM-DD — what "already poked today" reads
+    at: int            # epoch of the poke
+    resets_at: int | None   # the 5h session reset observed right after
+    verified: bool     # resets_at landed within tolerance of at + 5h
 
 
 class Command(TypedDict):
@@ -116,6 +126,7 @@ _STATE_DEFAULTS: dict = {
     "projects": {},
     "workspaces": {},
     "settings": {},
+    "poke_log": {},
 }
 
 
@@ -524,6 +535,19 @@ def update_settings(patch: dict) -> None:
                 cur.pop(k, None)
             else:
                 cur[k] = v
+        _write_state(_STATE)
+
+
+def get_poke_log() -> dict[str, PokeEntry]:
+    """Snapshot of state['poke_log'] (copies of each entry). `.get` because a
+    state file written before the key existed loads without it."""
+    with _STATE_LOCK:
+        return {k: cast(PokeEntry, dict(v)) for k, v in (_STATE.get("poke_log") or {}).items()}
+
+
+def record_poke(account_id: str, entry: PokeEntry) -> None:
+    with _STATE_LOCK:
+        _STATE.setdefault("poke_log", {})[account_id] = dict(entry)
         _write_state(_STATE)
 
 

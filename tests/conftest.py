@@ -215,6 +215,7 @@ def clean_state(tmp_xdg_home, monkeypatch):
         "projects": {},
         "workspaces": {},
         "settings": {},
+        "poke_log": {},
     }
     monkeypatch.setattr(store, "_STATE", fresh)
     return fresh
