@@ -288,9 +288,19 @@ cancelled in the lifespan `finally` with the others; 60s tick.
   guard as `bg_commander._dispatch_env`; shared, not duplicated); 120s
   timeout; in `_bg`. The binary is resolved the way
   `bg_commander._dispatch_argv` does, never via the zsh wrapper.
-- Then `usage.refresh_plan_usage_now(account)` (new: bypasses the cache TTL
-  for one account) and verify `session.resets_at ∈ [now+5h−5m, now+5h+5m]`.
-  Write the log entry either way with `verified` set accordingly.
+- Then `usage.refresh_plan_usage_now(account)` — a thin synchronous wrapper
+  over the existing `_refresh_plan_usage_into_cache`, called inside the poke's
+  own `_bg` thread, never from a request handler — and verify
+  `session.resets_at ∈ [now+5h−5m, now+5h+5m]`. Write the log entry either
+  way with `verified` set accordingly. It does a live httpx call and an
+  activity-DB write, so `tests/test_poke.py` patches it outright
+  (`conftest` neuters `usage._bg`, which this path does not go through).
+- `poke_log` is a new top-level `state.json` key; it is added to
+  `_STATE_DEFAULTS` and read with `.get` so a state file predating it, and
+  `clean_state`'s fresh dict in tests, both work.
+- A separate lifespan task rather than a branch in `activity.py`'s 30s
+  worker loop (the only existing tick loop): D9 keeps the three units free of
+  shared code, and the activity worker's cadence and prod gate are its own.
 
 ## Move-account override
 
