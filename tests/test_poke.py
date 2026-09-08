@@ -93,3 +93,103 @@ def test_skips_an_account_with_no_usable_credential():
 ])
 def test_verified_is_within_five_minutes_of_now_plus_5h(resets_at, ok):
     assert poke.verified(resets_at, at=1_800_000_000) is ok
+
+
+# --- poke_account: subprocess → refetch → verify → record --------------------
+
+def _worker(monkeypatch, *, resets_at, returncode=0, raise_subprocess=False):
+    """Patch the two I/O seams; return the captured argv/env and the record."""
+    seen = {}
+
+    def fake_run(argv, **kw):
+        if raise_subprocess:
+            raise OSError("no claude binary")
+        seen["argv"], seen["env"], seen["cwd"] = argv, kw.get("env"), kw.get("cwd")
+        return type("R", (), {"returncode": returncode, "stdout": "ok", "stderr": ""})()
+
+    monkeypatch.setattr(poke.subprocess, "run", fake_run)
+    monkeypatch.setattr(poke.usage, "refresh_plan_usage_now",
+                        lambda aid, cfg: {"available": True, "fetched_at": int(poke.time.time()) + 1,
+                                          "meters": {"session": {"percent": 1, "resets_at": resets_at}}})
+    monkeypatch.setattr(poke.time, "sleep", lambda s: None)
+    monkeypatch.setattr(poke.store, "record_poke", lambda aid, e: seen.update(record=(aid, e)))
+    monkeypatch.setattr(poke, "_in_flight", {"b"})
+    return seen
+
+
+def test_poke_account_runs_haiku_headless_on_the_account_and_records_a_verified_poke(monkeypatch):
+    at = int(poke.time.time())
+    seen = _worker(monkeypatch, resets_at=at + 5 * 3600 + 10)
+    poke.poke_account("b", "/Users/x/.claude-b")
+    argv = seen["argv"]
+    assert argv[1:] == ["-p", "ok", "--model", "claude-haiku-4-5", "--strict-mcp-config"]
+    assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/Users/x/.claude-b"
+    assert "ANTHROPIC_API_KEY" not in seen["env"]
+    assert seen["cwd"] == poke.os.path.expanduser("~")
+    aid, entry = seen["record"]
+    assert aid == "b"
+    assert entry["verified"] is True
+    assert entry["resets_at"] == at + 5 * 3600 + 10
+    assert entry["date"] == poke.datetime.fromtimestamp(entry["at"]).strftime("%Y-%m-%d")
+    assert poke._in_flight == set()
+
+
+def test_poke_account_records_an_unverified_poke_when_the_reset_did_not_move(monkeypatch, caplog):
+    seen = _worker(monkeypatch, resets_at=None)
+    poke.poke_account("b", "/Users/x/.claude-b")
+    assert seen["record"][1]["verified"] is False
+    assert any("poke b" in r.message and r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_poke_account_retries_once_for_a_reading_that_postdates_the_poke(monkeypatch):
+    # A background refresh in flight at verify time makes refresh_plan_usage_now
+    # yield the PRE-poke cache; verifying against that would log a false
+    # "not anchored". The first stale reading is retried once after a wait.
+    at = int(poke.time.time())
+    seen = _worker(monkeypatch, resets_at=at + 5 * 3600)
+    stale = {"available": True, "fetched_at": at - 100,
+             "meters": {"session": {"percent": 0, "resets_at": None}}}
+    fresh = {"available": True, "fetched_at": at + 5,
+             "meters": {"session": {"percent": 1, "resets_at": at + 5 * 3600}}}
+    readings = iter([stale, fresh])
+    monkeypatch.setattr(poke.usage, "refresh_plan_usage_now", lambda aid, cfg: next(readings))
+    slept = []
+    monkeypatch.setattr(poke.time, "sleep", slept.append)
+    poke.poke_account("b", "/Users/x/.claude-b")
+    assert slept == [poke._RETRY_WAIT_S]
+    assert seen["record"][1]["verified"] is True
+
+
+def test_poke_account_gives_up_after_two_stale_readings_without_a_false_alarm(monkeypatch):
+    at = int(poke.time.time())
+    seen = _worker(monkeypatch, resets_at=None)
+    stale = {"available": True, "fetched_at": at - 100,
+             "meters": {"session": {"percent": 0, "resets_at": None}}}
+    monkeypatch.setattr(poke.usage, "refresh_plan_usage_now", lambda aid, cfg: dict(stale))
+    monkeypatch.setattr(poke.time, "sleep", lambda s: None)
+    poke.poke_account("b", "/Users/x/.claude-b")
+    entry = seen["record"][1]
+    assert entry["verified"] is False and entry["resets_at"] is None
+
+
+def test_poke_account_records_even_when_the_subprocess_fails_so_it_does_not_repoke(monkeypatch):
+    # A failed spawn re-tried every tick for 90 minutes is a warning storm and,
+    # if the failure was transient, a double spend.
+    seen = _worker(monkeypatch, resets_at=None, raise_subprocess=True)
+    poke.poke_account("b", "/Users/x/.claude-b")
+    assert seen["record"][1]["verified"] is False
+    assert poke._in_flight == set()
+
+
+def test_tick_spawns_one_worker_per_due_account_and_marks_it_in_flight(monkeypatch, clean_state):
+    spawned = []
+    monkeypatch.setattr(poke, "_bg", lambda name, fn, *a: spawned.append((name, a)))
+    monkeypatch.setattr(poke, "_in_flight", set())
+    monkeypatch.setattr(poke.store, "get_accounts", lambda: ACCOUNTS)
+    monkeypatch.setattr(poke.usage, "cached_plan_usage", lambda: usage())
+    monkeypatch.setattr(poke, "_now", lambda: T0)
+    poke._tick()
+    assert spawned == [("poke:default", ("default", "")), ("poke:b", ("b", "/Users/x/.claude-b"))]
+    assert poke._in_flight == {"default", "b"}
+    poke._tick()                       # in flight → nothing new
+    assert len(spawned) == 2

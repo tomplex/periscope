@@ -14,17 +14,18 @@ A Sun 10:00) regardless of use — see docs/account-routing.md.
 thread body; `run` is the prod-only lifespan tick loop (app.lifespan).
 """
 
+import asyncio
+import os
+import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 
+from periscope import config, store, usage
 from periscope.launch_policy import AccountUsage
+from periscope.log import _bg, log
 from periscope.store import Account, PokeEntry, Settings
-
-# (Task 5 adds: `import asyncio`, `import subprocess`, `import time`,
-# `from periscope import config, store, usage`, `from periscope.log import
-# _bg, log`. They are not imported here because ruff F401/F811 would fail the
-# pre-commit gate on the Task 4 commit while nothing uses them yet.)
 
 TICK_S = 60.0
 DEFAULT_POKE_AT = "08:00"
@@ -99,8 +100,91 @@ def verified(resets_at: int | None, *, at: float) -> bool:
 
 
 def poke_account(account_id: str, config_dir: str) -> None:
-    raise NotImplementedError  # Task 5
+    """Worker-thread body: send the message, force a usage refetch, check the
+    reset moved, persist the outcome. Records an entry even when the
+    subprocess fails — a skipped entry would re-poke on the next tick for the
+    rest of the grace window (a warning storm, or a double spend if the
+    failure was transient). Always releases the in-flight slot."""
+    at = int(time.time())
+    try:
+        argv = [config.claude_bin(), "-p", "ok", "--model", _POKE_MODEL,
+                # No --mcp-config → zero MCP servers: a one-word prompt must
+                # not spin up the channel shim.
+                "--strict-mcp-config"]
+        try:
+            proc = subprocess.run(
+                argv, env=config.claude_subprocess_env(config_dir=config_dir),
+                # Never periscope's own cwd: from the prod checkout the poke
+                # would load that project's CLAUDE.md and project hooks every
+                # morning. bg_commander pins its cwd for the same reason.
+                cwd=os.path.expanduser("~"),
+                capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_S,
+            )
+            if proc.returncode != 0:
+                log.warning("poke %s: claude exited %d: %s", account_id,
+                            proc.returncode, (proc.stderr or "")[-300:])
+        except (subprocess.SubprocessError, OSError) as e:
+            log.warning("poke %s: subprocess failed: %s", account_id, e)
+        # refresh_plan_usage_now yields the CACHED payload when a background
+        # refresh already holds the slot (and after a failed fetch) — a
+        # pre-poke reading would log a false "not anchored" WARNING. Insist on
+        # a fetch that postdates the poke; one retry covers a refresh that was
+        # mid-flight when we asked.
+        payload = _post_poke_usage(account_id, config_dir, at=at)
+        session = (payload.get("meters") or {}).get("session") or {}
+        resets_at = session.get("resets_at")
+        ok = verified(resets_at, at=at)
+        (log.info if ok else log.warning)(
+            "poke %s at %s: session resets %s (%s)", account_id,
+            datetime.fromtimestamp(at).strftime("%H:%M"),
+            datetime.fromtimestamp(resets_at).strftime("%H:%M") if resets_at else "—",
+            "anchored" if ok else "NOT anchored — reset did not move",
+        )
+        store.record_poke(account_id, {
+            "date": datetime.fromtimestamp(at).strftime("%Y-%m-%d"),
+            "at": at, "resets_at": resets_at, "verified": ok,
+        })
+    finally:
+        _in_flight.discard(account_id)
+
+
+_RETRY_WAIT_S = 15
+
+
+def _post_poke_usage(account_id: str, config_dir: str, *, at: int) -> AccountUsage | dict:
+    """The account's usage as fetched AFTER `at`, or {} when two attempts
+    could not get one (the verify then records `verified: False` with a
+    null reset — honest, and it does not re-poke)."""
+    for attempt in range(2):
+        payload = usage.refresh_plan_usage_now(account_id, config_dir) or {}
+        if (payload.get("fetched_at") or 0) >= at:
+            return payload
+        if attempt == 0:
+            time.sleep(_RETRY_WAIT_S)
+    return {}
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _tick() -> None:
+    for aid in due(now=_now(), settings=store.get_settings(), log=store.get_poke_log(),
+                   usage=usage.cached_plan_usage(), in_flight=_in_flight,
+                   accounts=store.get_accounts()):
+        _in_flight.add(aid)
+        _bg(f"poke:{aid}", poke_account, aid, store.account_config_dir(aid))
 
 
 async def run() -> None:
-    raise NotImplementedError  # Task 5
+    """Lifespan task (prod only — registered in app.lifespan, cancelled in
+    its finally). The tick is cheap and non-blocking: it reads caches and
+    hands any real work to a thread."""
+    while True:
+        try:
+            _tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("poke tick failed")
+        await asyncio.sleep(TICK_S)

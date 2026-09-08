@@ -133,8 +133,15 @@ async def lifespan(_app: FastAPI):
             bg_commander.write_mcp_config()
         except Exception:
             log.warning("bg_commander.write_mcp_config failed", exc_info=True)
+        # Session poke (periscope.poke): one Haiku message per account each
+        # morning. Prod only — it spends. Gated HERE, at registration, not
+        # inside the coroutine: a gate inside would still leave a live task
+        # behind on every dev --reload.
+        from periscope import poke
+        poke_task = _task("poke", poke.run())
     else:
         activity_task = None
+        poke_task = None
     # One-shot single-session consolidation: physically move every managed
     # window into MANAGED_SESSION, then seed tracks. Self-gated (is_prod +
     # persisted flag), so call it unconditionally. Synchronous + pre-serve so
@@ -176,6 +183,8 @@ async def lifespan(_app: FastAPI):
         lgtm_task.cancel()
         if activity_task is not None:
             activity_task.cancel()
+        if poke_task is not None:
+            poke_task.cancel()
         for t in list(_LGTM_SSE_TASKS.values()):
             t.cancel()
         if mcp_task is not None:
