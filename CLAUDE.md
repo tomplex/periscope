@@ -32,7 +32,7 @@ applies. Read the relevant doc before editing, not after the tests go red.
 | `resurrect.py`, `tmux_persist.py`, `bin/periscope install-tmux` | `docs/tmux-persistence.md` — save-file rewrite, periscope-driven continuum save, healthz `resurrect` block |
 | `channels.py`, `channel_shim.py`, `turns.py`, `pane_session_hook.py`, `codex_pane_session_hook.py` | `docs/channels.md` — MCP tools, shim reconnect protocol, pane→session mapping (live sid first, `pane_sessions` fallback) |
 | `narrator.py`, `rename_ai.py`, `/api/rename`, `/api/name-pin` | `docs/narrator.md` — regeneration rules, humans win renames, name pinning |
-| `launch_policy.py`, `usage.py` (`choose_launch`), the spawn/resume paths in `routes/sessions.py`, `open_ops.py`, `channels.py`, the `spawn_model` / `spawn_account` settings and header pin pickers | `docs/account-routing.md` — earliest-reset routing, walls vs. session pressure, what `auto`/`default` mean |
+| `launch_policy.py`, `usage.py` (`choose_launch`), `poke.py`, the spawn/resume paths in `routes/sessions.py`, `open_ops.py`, `channels.py`, the `spawn_model` / `spawn_account` settings and header pin pickers | `docs/account-routing.md` — earliest-reset routing, walls vs. session pressure, what `auto`/`default` mean |
 | `lgtm.py`, Review tab, LGTM iframes | `docs/lgtm.md` — HTTP/SSE contract, debugging a blank Review tab |
 | `src-tauri/` | `docs/tauri-shell.md` — build via `.app` not `cargo tauri dev`, webview recycling |
 | `bin/periscope update`, `updater.py`, the launchd plist | `docs/updating.md` — why pull+restart is not `update`, the bootout guards |
@@ -122,6 +122,7 @@ would double-load every global.
 | `session_status.py` | Authoritative Claude-session state from `<config_dir>/sessions/<pid>.json` |
 | `turns.py` | Pane transcript view (`GET /api/pane/turns`) |
 | `bg_commander.py` | Background command jobs + status sync |
+| `poke.py` | Daily session poke: one Haiku message per account at 08:00 so the 5h window resets ~13:00; verified, logged, prod-only |
 | `resurrect.py` / `tmux_persist.py` | Save-file `--resume` rewrite + `save_now()` / provisioning the tmux side of continuation-over-reboot |
 | `git_pr.py` / `lgtm.py` / `usage.py` / `launch_policy.py` / `cost_pressure.py` | Git state + PR cache / LGTM mirror / plan usage + `choose_launch` shell / pure account-and-model routing policy / per-pane context-cost pressure |
 | `narrator.py` / `rename_ai.py` | Per-pane AI status lines + divergence renames / Anthropic SDK plumbing |
