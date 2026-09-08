@@ -152,7 +152,10 @@ git commit -m "config.claude_subprocess_env: the API-credit strip and CLAUDE_CON
 ```python
 def test_refresh_plan_usage_now_bypasses_the_ttl_and_returns_the_fresh_payload(monkeypatch):
     import periscope.usage as usage
-    fresh = {"available": True, "meters": {"session": {"percent": 1, "resets_at": 99}}}
+    # `utilization` is required: _refresh_plan_usage_into_cache reads m["utilization"]
+    # for the sample row, and a KeyError there is swallowed into "keep the stale entry".
+    fresh = {"available": True,
+             "meters": {"session": {"percent": 1, "utilization": 0.01, "resets_at": 99}}}
     monkeypatch.setattr(usage, "fetch_plan_usage", lambda cfg: dict(fresh))
     monkeypatch.setattr(usage.activity, "record_usage_samples", lambda rows: None)
     monkeypatch.setattr(usage, "attach_projections", lambda *a, **kw: None)
@@ -457,17 +460,17 @@ A Sun 10:00) regardless of use — see docs/account-routing.md.
 thread body; `run` is the prod-only lifespan tick loop (app.lifespan).
 """
 
-import asyncio
-import subprocess
-import time
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 
-from periscope import config, store, usage
 from periscope.launch_policy import AccountUsage
-from periscope.log import _bg, log
 from periscope.store import Account, PokeEntry, Settings
+
+# (Task 5 adds: `import asyncio`, `import subprocess`, `import time`,
+# `from periscope import config, store, usage`, `from periscope.log import
+# _bg, log`. They are not imported here because ruff F401/F811 would fail the
+# pre-commit gate on the Task 4 commit while nothing uses them yet.)
 
 TICK_S = 60.0
 DEFAULT_POKE_AT = "08:00"
@@ -556,7 +559,7 @@ Expected: `15 passed` (9 `due` cases + 6 parametrized `verified` cases).
 
 - [ ] **Step 6: Lint**
 
-Run: `bin/check` — Expected: zero violations (ruff may want `subprocess`/`time`/`asyncio`/`_bg`/`usage`/`config` imports used — they are used in Task 5; if it flags them now, leave the imports and proceed to Task 5 before committing, or commit after Task 5's Step 4 instead).
+Run: `bin/check` — Expected: zero violations (the module imports only what Task 4 uses; verified against the repo's ruff config).
 
 - [ ] **Step 7: Commit**
 
@@ -645,13 +648,14 @@ def test_tick_spawns_one_worker_per_due_account_and_marks_it_in_flight(monkeypat
     assert len(spawned) == 2
 ```
 
-In `tests/test_app.py::test_lifespan_starts_and_shuts_down_cleanly`, after the `mocker.patch("periscope.activity.run_worker", side_effect=_noop)` line add:
+In `tests/test_app.py`, in BOTH lifespan tests that run with the prod port — `test_lifespan_starts_and_shuts_down_cleanly` (after its `mocker.patch("periscope.activity.run_worker", side_effect=_noop)` line) and `test_lifespan_binds_mcp_on_prod_port` (after its own `run_worker` patch at ~line 150) — add:
 ```python
     # The poke loop is prod-gated too and its first tick runs on startup; with
-    # PORT defaulting to 8765 here a real tick between 08:00 and 09:30 would
-    # spend a Haiku call on the developer's real subscription.
+    # PORT at 8765 here a real tick between 08:00 and 09:30 would spend a
+    # Haiku call on the developer's real subscription.
     mocker.patch("periscope.poke.run", side_effect=_noop)
 ```
+Also fix the stale comment at `tests/test_app.py:88` — the autouse fixture no longer "seeds the cache"; it neuters `usage._bg`. Change that sentence to `The autouse _no_plan_usage_refresh fixture neuters usage._bg so no spawn happens.`
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -659,6 +663,24 @@ Run: `uv run pytest tests/test_poke.py -q`
 Expected: the four new tests fail with `NotImplementedError` / `AttributeError: ... '_tick'`.
 
 - [ ] **Step 3: Replace the stubs in `poke.py`**
+
+First add the I/O imports at the top of the module (and delete the parenthetical comment Task 4 left there), so the import block reads:
+```python
+import asyncio
+import subprocess
+import time
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from datetime import datetime
+
+from periscope import config, store, usage
+from periscope.launch_policy import AccountUsage
+from periscope.log import _bg, log
+from periscope.store import Account, PokeEntry, Settings
+```
+(`due`'s `log=` / `usage=` parameters shadow the module-level `log` / `usage` inside that one function only; ruff accepts it once both are used elsewhere in the module — verified.)
+
+Then replace the two stubs:
 
 ```python
 def poke_account(account_id: str, config_dir: str) -> None:
@@ -720,6 +742,8 @@ async def run() -> None:
     while True:
         try:
             _tick()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             log.exception("poke tick failed")
         await asyncio.sleep(TICK_S)
@@ -994,16 +1018,16 @@ Run: `git status --short` — Expected: empty.
 
 - [ ] **Step 2: One manual poke against the real binary (the one place a mock could hide a production failure)**
 
-Run in the worktree, from a shell with the same env launchd would give (no `ANTHROPIC_API_KEY`):
+Run in the worktree under a SCRATCH config dir. `store.record_poke` and the usage refetch write `state.json` and `periscope.db` wholesale, and prod is running on the real ones — a second process writing them is the two-instances-one-store clobber `config.instance_file` exists to prevent. `XDG_CONFIG_HOME` redirects both (`config.config_dir()`), while the account registry and the keychain lookup still resolve the real `~/.claude-b`:
 ```bash
-uv run python -c "
+XDG_CONFIG_HOME=$(mktemp -d) uv run python -c "
 from periscope import poke, store
 poke._in_flight.add('b')
 poke.poke_account('b', store.account_config_dir('b'))
 print(store.get_poke_log())
 "
 ```
-Expected: within ~30s, one log line `poke b at HH:MM: session resets HH:MM (anchored)` if B's window was closed, or `(NOT anchored — reset did not move)` if one was open, and `get_poke_log()` prints the entry with `verified` matching. Then `uv run python -c "from periscope import usage; print(usage.cached_plan_usage()['b']['meters']['session'])"` shows the same `resets_at`.
+Expected: within ~30s, one log line `poke b at HH:MM: session resets HH:MM (anchored)` if B's window was closed, or `(NOT anchored — reset did not move)` if one was open, and the printed log entry has `verified` matching. Then confirm against prod's own view: `curl -s http://127.0.0.1:8765/api/state | python3 -c "import json,sys; print(json.load(sys.stdin)['usage_plan']['b']['meters']['session'])"` shows the same `resets_at` (allow up to 5 min for prod's next refresh).
 
 Note in the completion message which outcome you observed and the exact log line — this is the evidence the spec's anchoring assumption holds on the real endpoint.
 
