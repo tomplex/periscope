@@ -150,7 +150,7 @@ def _session_from_disk(resume_id: str) -> dict | None:
 
 
 def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode: str,
-                       account: str | None = None) -> dict:
+                       account: str | None = None, force: bool = False) -> dict:
     """`mode=resume`: look up the original session's project dir via the
     history index and run `claude --resume <id>` there. The sentinel
     `session` is auto-created on first use. Returns the standard
@@ -160,6 +160,12 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
     CLAUDE_CONFIG_DIR=…` on the tmux window (see `tmux.env_args`) — process
     env, not a command-string prefix, so a user who exits and re-runs `claude`
     by hand in that pane stays on the same account.
+
+    `force` skips ONLY the transcript-mtime liveness guard. Claude writes the
+    limit-reached message into the JSONL, so a walled pane — the one the user
+    most wants to move off an exhausted subscription — always looks live to
+    that guard. The already-resumed-elsewhere guard is never skipped: two
+    concurrent appenders interleaving into one JSONL is a different failure.
     """
     if not resume_id:
         raise HTTPException(400, "resume_id required for mode=resume")
@@ -170,12 +176,17 @@ def _window_new_resume(session: str, exec_cmd: str, resume_id: str | None, mode:
         raise HTTPException(404, f"unknown session_id: {resume_id}")
     # Liveness guard: refuse if the jsonl was written to in the last 60s
     # (the session may be currently active in another window/process, and
-    # two concurrent appenders would interleave into the same JSONL).
+    # two concurrent appenders would interleave into the same JSONL). The
+    # detail's "session looks live" prefix is what Rail.movePaneAccount
+    # matches to offer "move anyway" — change both or neither.
     if resume_sess["jsonl_path"] and os.path.isfile(resume_sess["jsonl_path"]):
         mtime_age = time.time() - os.path.getmtime(resume_sess["jsonl_path"])
-        if mtime_age < 60:
-            raise HTTPException(409, "session looks live; wait a minute or pick another")
-    # Already resumed elsewhere in this periscope process?
+        if not force and mtime_age < 60:
+            raise HTTPException(
+                409, f"session looks live (written {int(mtime_age)}s ago); "
+                     "wait a minute or pick another")
+    # Already resumed elsewhere in this periscope process? Deliberately NOT
+    # behind `force`.
     if resume_id in _resuming:
         existing = _resuming[resume_id]
         raise HTTPException(409, f"already resumed in {existing['target']}")
@@ -520,7 +531,7 @@ def window_new(
 
 
 @router.post("/api/pane/move-account")
-def pane_move_account(pid: str, account: str):
+def pane_move_account(pid: str, account: str, force: bool = False):
     """Re-open this pane's Claude session on another subscription.
 
     NOT a live migration. `~/.claude-b/projects` symlinks to
@@ -532,7 +543,9 @@ def pane_move_account(pid: str, account: str):
 
     Guards that live in `_window_new_resume` still apply — a transcript written
     to in the last 60s 409s (two concurrent appenders would interleave into the
-    same JSONL), as does a session already resumed elsewhere.
+    same JSONL), as does a session already resumed elsewhere. `force=1` bypasses
+    the mtime guard only — the client sends it after the user confirms "move
+    anyway" on that 409.
     """
     # `store.account_config_dir` fails OPEN to the DEFAULT account on an id no
     # registered account claims — correct at spawn time (an unauthenticated
@@ -555,7 +568,7 @@ def pane_move_account(pid: str, account: str):
 
     result = _window_new_resume(
         RESUME_SESSION, f"{CLAUDE_EXEC} --resume {session_id}", session_id,
-        "resume", account=account,
+        "resume", account=account, force=force,
     )
     target = result["target"]
     new_pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
