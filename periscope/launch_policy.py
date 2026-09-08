@@ -11,7 +11,7 @@ weekly-all meter are both at 100%. Any headroom at reset is waste. So the
 account whose week expires soonest is drained first (earliest-deadline-first),
 Fable before Opus within it, and an account is skipped only when it literally
 cannot work — or, on the 5h session axis only, when it is on pace to wall
-before the window resets (the other account's session window costs nothing
+within the next hour (the other account's session window costs nothing
 to use, so two windows burning in parallel is twice the daily rate).
 """
 
@@ -65,6 +65,15 @@ class LaunchInputs:
     model_arg: str | None                  # a call site's explicit model
     account_pin: str | None                # settings.spawn_account
     model_pin: str | None                  # settings.spawn_model, incl. "auto"
+    now: float                             # epoch seconds; the pressure horizon is measured from here
+
+
+# A projected session wall counts as pressure only when it is this close. The
+# 1h burn slope behind `limit_at` is reliable about an hour out and no
+# further: usage is bursty and tails off, so a wall projected two hours ahead
+# at 17:30 mostly never arrives — rerouting on it moved evening spawns off the
+# account that was about to be fine (2026-09-08).
+PRESSURE_HORIZON_S = 3600
 
 
 def model_family(model: str) -> str | None:
@@ -111,10 +120,13 @@ def walled(meters: Mapping[str, Meter], *, model: str | None = None) -> bool:
     return _pct(sublimit(meters, model)) >= 100
 
 
-def pressured(meters: Mapping[str, Meter]) -> bool:
-    """On pace to wall the 5h session before it resets (`attach_projections`
-    sets `limit_at` only when the projected crossing precedes `resets_at`)."""
-    return (meters.get("session") or {}).get("limit_at") is not None
+def pressured(meters: Mapping[str, Meter], *, now: float) -> bool:
+    """On pace to wall the 5h session within PRESSURE_HORIZON_S of `now`
+    (`attach_projections` sets `limit_at` only when the projected crossing
+    precedes `resets_at`; a crossing further out than the horizon is a
+    forecast, not pressure)."""
+    limit_at = (meters.get("session") or {}).get("limit_at")
+    return limit_at is not None and limit_at - now <= PRESSURE_HORIZON_S
 
 
 def _meters(inputs: LaunchInputs, aid: str) -> dict[str, Meter] | None:
@@ -179,7 +191,7 @@ def choose(inputs: LaunchInputs) -> Launch:
     for ignore_pressure in passes:
         skipped: list[str] = []
         for aid, meters in pairs:
-            if not ignore_pressure and pressured(meters):
+            if not ignore_pressure and pressured(meters, now=inputs.now):
                 skipped.append(f"{aid}: session on pace to wall")
                 continue
             for model in models:

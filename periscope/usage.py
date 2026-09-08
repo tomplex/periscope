@@ -671,4 +671,5 @@ def choose_launch(account: str | None = None, model: str | None = None) -> Launc
         model_arg=model,
         account_pin=settings.get("spawn_account"),
         model_pin=settings.get("spawn_model"),
+        now=time.time(),
     ))
