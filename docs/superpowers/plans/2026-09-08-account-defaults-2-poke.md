@@ -590,7 +590,7 @@ def _worker(monkeypatch, *, resets_at, returncode=0, raise_subprocess=False):
     def fake_run(argv, **kw):
         if raise_subprocess:
             raise OSError("no claude binary")
-        seen["argv"], seen["env"] = argv, kw.get("env")
+        seen["argv"], seen["env"], seen["cwd"] = argv, kw.get("env"), kw.get("cwd")
         return type("R", (), {"returncode": returncode, "stdout": "ok", "stderr": ""})()
 
     monkeypatch.setattr(poke.subprocess, "run", fake_run)
@@ -610,6 +610,7 @@ def test_poke_account_runs_haiku_headless_on_the_account_and_records_a_verified_
     assert argv[1:] == ["-p", "ok", "--model", "claude-haiku-4-5", "--strict-mcp-config"]
     assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/Users/x/.claude-b"
     assert "ANTHROPIC_API_KEY" not in seen["env"]
+    assert seen["cwd"] == poke.os.path.expanduser("~")
     aid, entry = seen["record"]
     assert aid == "b"
     assert entry["verified"] is True
@@ -667,6 +668,7 @@ Expected: the four new tests fail with `NotImplementedError` / `AttributeError: 
 First add the I/O imports at the top of the module (and delete the parenthetical comment Task 4 left there), so the import block reads:
 ```python
 import asyncio
+import os
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -698,6 +700,10 @@ def poke_account(account_id: str, config_dir: str) -> None:
         try:
             proc = subprocess.run(
                 argv, env=config.claude_subprocess_env(config_dir=config_dir),
+                # Never periscope's own cwd: from the prod checkout the poke
+                # would load that project's CLAUDE.md and project hooks every
+                # morning. bg_commander pins its cwd for the same reason.
+                cwd=os.path.expanduser("~"),
                 capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_S,
             )
             if proc.returncode != 0:
@@ -908,10 +914,11 @@ Append inside the `describe("<UsagePill>", ...)` block:
       fallback: null,
       poke: { b: { date: "2026-09-08", at, resets_at: at + 5 * 3600, verified: true } },
     };
-    const html = render(<UsagePill />);
-    expect(html).toMatch(/poked [^→]+ → resets /);
-    usage.value.poke.b.verified = false;
-    usage.value = { ...usage.value };
+    expect(render(<UsagePill />)).toMatch(/poked [^→]+ → resets /);
+    usage.value = {
+      ...usage.value,
+      poke: { b: { date: "2026-09-08", at, resets_at: null, verified: false } },
+    };
     expect(render(<UsagePill />)).toContain("→ not anchored");
   });
 ```
@@ -928,7 +935,7 @@ Expected: the new case fails (no "poked" text).
   usage.value = { plan: data.usage_plan, fallback: data.usage, poke: data.poke || {} };
 ```
 
-`static/src/chrome/UsagePill.jsx` — change `acctTitle`'s signature to `function acctTitle(a, expanded, poke)` and, after the `lines` map and before the `if (a.stale)` line, add:
+`static/src/chrome/UsagePill.jsx` — the file's header comment describes the poll payload as `{ plan, fallback }`; extend it to `{ plan, fallback, poke }` with `poke` = "each account's latest session poke, for the tooltip". Change `acctTitle`'s signature to `function acctTitle(a, expanded, poke)` and, after the `lines` map and before the `if (a.stale)` line, add:
 ```js
   // The morning session poke (periscope.poke): when it fired and whether the
   // 5h reset actually landed ~5h later. "not anchored" means a window was
