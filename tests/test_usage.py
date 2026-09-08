@@ -494,7 +494,7 @@ def _plan(**pcts):
     }
 
 
-def test_choose_launch_feeds_the_registry_pins_and_cache_to_the_policy(monkeypatch, clean_state):
+def test_choose_launch_feeds_the_registry_and_cache_to_the_policy(monkeypatch, clean_state):
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
     launch = usage.choose_launch()
     assert isinstance(launch, Launch)
@@ -511,6 +511,14 @@ def test_choose_launch_ignores_a_pin_naming_no_registered_account(monkeypatch, c
     store.update_settings({"spawn_account": "gone"})
     monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
     assert usage.choose_launch().account == "b"
+
+
+def test_choose_launch_honors_the_model_pin(monkeypatch, clean_state):
+    # The one input no other shell test drives: a wrong settings key here would
+    # leave the header's model pin silently inert with the suite green.
+    store.update_settings({"spawn_model": "sonnet"})
+    monkeypatch.setattr(usage, "cached_plan_usage", lambda: _plan(default=100, b=8))
+    assert usage.choose_launch().model == "sonnet"
 
 
 def test_choose_launch_passes_explicit_args_through(monkeypatch, clean_state):

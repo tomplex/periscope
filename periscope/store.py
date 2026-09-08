@@ -87,8 +87,8 @@ class Settings(TypedDict, total=False):
     worktree_layout_overrides: dict[str, str]  # realpath -> "sibling" | "inline"
     cleanup_idle_days: int
     bg_account: str  # account id background commander jobs bill; unset => default
-    spawn_account: str  # account id every unnamed spawn lands on; unset => launch_policy (earliest weekly reset)
-    spawn_model: str  # "auto" | "default" | ANTHROPIC_MODEL value; unset => "auto" (launch_policy: fable, then opus[1m])
+    spawn_account: str  # account id every unnamed spawn lands on; unset => launch_policy decides
+    spawn_model: str  # "auto" | "default" | ANTHROPIC_MODEL value; unset => "auto" (launch_policy decides)
     editor: str  # display name of a KNOWN_EDITORS entry; unset => no open-in-editor action
 
 
