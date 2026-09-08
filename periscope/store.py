@@ -90,7 +90,7 @@ class Settings(TypedDict, total=False):
     spawn_account: str  # account id every unnamed spawn lands on; unset => launch_policy decides
     spawn_model: str  # "auto" | "default" | ANTHROPIC_MODEL value; unset => "auto" (launch_policy decides)
     editor: str  # display name of a KNOWN_EDITORS entry; unset => no open-in-editor action
-    poke_at: str  # local HH:MM the session poke fires; unset => "08:00", "" => disabled
+    poke_at: str  # local HH:MM the session poke fires; unset => "08:00", "" => disabled (validated by PATCH /api/settings)
     poke_grace_min: int  # minutes past poke_at a missed poke may still fire; unset => 90
 
 

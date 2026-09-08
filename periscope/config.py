@@ -114,6 +114,10 @@ def claude_subprocess_env(*, config_dir: str) -> dict[str, str]:
     it lives here too. An empty `config_dir` POPS rather than leaving whatever
     leaked in: a subprocess must never silently run on an account nobody
     chose (the launchd env never carries the var, but a dev shell might).
+
+    Everything else in the launchd/parent environment is inherited on
+    purpose — the subprocess needs PATH, HOME and the keychain session;
+    only the two billing-affecting vars are managed here.
     """
     env = dict(os.environ)
     for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
@@ -123,6 +127,7 @@ def claude_subprocess_env(*, config_dir: str) -> dict[str, str]:
     else:
         env.pop("CLAUDE_CONFIG_DIR", None)
     return env
+
 
 # Claude cycle-hint thresholds (rail ↻ chip): red when a pane's claude RSS
 # crosses BAD, amber at WARN rss or WARN age. Healthy claudes idle around

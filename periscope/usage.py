@@ -468,6 +468,11 @@ def refresh_plan_usage_now(account: str, config_dir: str) -> AccountUsage | None
     an unguarded second caller would drop the first's marker and the next
     `cached_plan_usage` poll would fire a duplicate into an endpoint that
     429s readily.
+
+    The return is NOT guaranteed fresh: when the slot is already held this
+    yields whatever is cached, and a failed refresh keeps the previous
+    entry. A caller that needs a post-event reading must compare the
+    payload's `fetched_at` against its event time and retry.
     """
     with _plan_lock:
         if account in _plan_in_flight:
