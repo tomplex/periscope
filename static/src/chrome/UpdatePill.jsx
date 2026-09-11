@@ -23,10 +23,13 @@ const POLL_MS = 2000;
 // then waits for healthz. Past this, stop polling and let the banner speak.
 const GIVE_UP_MS = 120_000;
 
-// `commits` null = still loading; [] = the hourly check hasn't recorded any.
+// `commits` null = still loading; "error" = the status request failed;
+// [] = the server never got a git-log answer (its count came from rev-list,
+// so with behind > 0 an empty list is only ever a failed probe, not "nothing").
 export function CommitList({ commits, behind }) {
   if (!commits) return <div class="update-commit is-muted">loading…</div>;
-  if (!commits.length) return <div class="update-commit is-muted">no commit list yet — the hourly check hasn't run</div>;
+  if (commits === "error") return <div class="update-commit is-muted">couldn't load the commit list</div>;
+  if (!commits.length) return <div class="update-commit is-muted">no commit list recorded — git log failed on the last check</div>;
   const more = behind - commits.length;
   return (
     <>
@@ -58,9 +61,17 @@ export function UpdatePill() {
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
   const info = updateInfo.value;
+  const behind = info?.behind || 0;
+  // The pill can vanish while the popover is open (an external pull lands,
+  // behind drops to 0). Close it, or the Escape handler + document listener
+  // stay registered against an invisible popover and eat one Escape meant
+  // for whatever overlay is underneath.
+  useEffect(() => {
+    if (!behind) setOpen(false);
+  }, [behind]);
 
   // No info yet (dev instance, or pre-first-check), current, and not mid-run.
-  if (!info || (!info.behind && !info.running && !busy && !error)) return null;
+  if (!info || (!behind && !info.running && !busy && !error)) return null;
 
   async function toggle() {
     if (open) return setOpen(false);
@@ -68,9 +79,9 @@ export function UpdatePill() {
     setCommits(null);
     try {
       const res = await fetch("/api/update/status");
-      setCommits(res.ok ? (await res.json()).commits || [] : []);
+      setCommits(res.ok ? (await res.json()).commits || [] : "error");
     } catch (_) {
-      setCommits([]);
+      setCommits("error");
     }
   }
 

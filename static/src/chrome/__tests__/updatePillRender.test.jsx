@@ -31,7 +31,7 @@ describe("<UpdatePill>", () => {
     expect(html).toContain("12 commits behind origin");
     // The popover exists closed; nothing has been fetched yet.
     expect(html).toContain('aria-expanded="false"');
-    expect(html).toContain("hidden");
+    expect(html).toContain('role="dialog" hidden>');
   });
 
   it("singularizes a single commit", () => {
@@ -67,8 +67,9 @@ describe("<CommitList>", () => {
     expect(html).not.toContain("more");
   });
 
-  it("distinguishes loading from an empty list", () => {
+  it("distinguishes loading, a failed request and an unrecorded list", () => {
     expect(render(<CommitList commits={null} behind={3} />)).toContain("loading");
-    expect(render(<CommitList commits={[]} behind={3} />)).toContain("no commit list yet");
+    expect(render(<CommitList commits="error" behind={3} />)).toContain("couldn't load");
+    expect(render(<CommitList commits={[]} behind={3} />)).toContain("git log failed");
   });
 });

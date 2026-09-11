@@ -49,12 +49,17 @@ def test_check_records_commit_subjects(monkeypatch):
     assert "commits" not in updater.summary()
 
 
-def test_check_keeps_last_commits_when_it_cannot_answer(monkeypatch):
+@pytest.mark.parametrize("broken", [
+    {"rev-parse": "origin/main", "fetch": None},
+    # rev-list answered, git log didn't: the count refreshes, the list stands.
+    {"rev-parse": "origin/main", "fetch": "", "rev-list": "3", "log": None},
+])
+def test_check_keeps_last_commits_when_it_cannot_answer(monkeypatch, broken):
     monkeypatch.setattr(updater, "_git", _git_stub({
         "rev-parse": "origin/main", "fetch": "", "rev-list": "1", "log": "abc1234\x1fone",
     }))
     updater.check()
-    monkeypatch.setattr(updater, "_git", _git_stub({"rev-parse": "origin/main", "fetch": None}))
+    monkeypatch.setattr(updater, "_git", _git_stub(broken))
     updater.check(force=True)
     assert updater.status()["commits"] == [{"sha": "abc1234", "subject": "one"}]
 

@@ -87,12 +87,14 @@ def check(force: bool = False) -> int:
     behind = int(count)
     # Local read — the fetch above already brought the objects in. %x1f keeps
     # a subject containing a tab or space from splitting.
-    raw = _git("log", "--format=%h\x1f%s", "-n", str(COMMITS_LIMIT), f"HEAD..{upstream}") or ""
-    commits = [{"sha": sha, "subject": subject}
-               for sha, _, subject in (line.partition("\x1f") for line in raw.splitlines()) if sha]
+    raw = _git("log", "--format=%h\x1f%s", "-n", str(COMMITS_LIMIT), f"HEAD..{upstream}")
     with _LOCK:
         _behind = behind
-        _commits = commits
+        # Same rule as the count: a probe that can't answer leaves the last
+        # list standing. "" (nothing to list) is an answer; None is not.
+        if raw is not None:
+            _commits = [{"sha": sha, "subject": subject}
+                        for sha, _, subject in (line.partition("\x1f") for line in raw.splitlines()) if sha]
     return behind
 
 
@@ -131,9 +133,11 @@ def status() -> dict:
     """summary() plus what the update would pull and the current run's
     transcript — for the on-demand /api/update/status probe (the popover
     opening, the post-click watch), the only callers that need either."""
+    log_tail = tail()                 # disk read stays outside the lock
     with _LOCK:
-        commits = list(_commits)
-    return {**summary(), "commits": commits, "log": tail()}
+        return {"behind": _behind, "checked_at": _checked_at,
+                "running": _running_locked(), "commits": list(_commits),
+                "log": log_tail}
 
 
 def tail(limit: int = 40) -> list[str]:

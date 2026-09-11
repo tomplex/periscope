@@ -1,13 +1,17 @@
 """Tests for /api/update + /api/update/status."""
 
 
-def test_status_reports_behind(client, mocker):
-    mocker.patch("periscope.updater.status", return_value={
-        "behind": 7, "checked_at": 0.0, "running": False, "log": [],
-    })
+def test_status_reports_behind_and_commits(client, mocker, monkeypatch):
+    """Runs the real status(): it is the popover's only transport for the
+    commit list, and a mocked shape would drift silently."""
+    from periscope import updater
+    monkeypatch.setattr(updater, "_behind", 7)
+    monkeypatch.setattr(updater, "_commits", [{"sha": "abc1234", "subject": "one"}])
+    mocker.patch("periscope.updater.tail", return_value=[])
     r = client.get("/api/update/status")
     assert r.status_code == 200
     assert r.json()["behind"] == 7
+    assert r.json()["commits"] == [{"sha": "abc1234", "subject": "one"}]
 
 
 def test_post_starts_update(client, mocker):
