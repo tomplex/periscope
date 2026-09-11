@@ -31,9 +31,14 @@ CHECK_INTERVAL_S = 3600
 # only ever restarted BY this feature.
 STALE_PROC_S = 15 * 60
 
+# Subjects listed in the dashboard popover. The count is exact regardless;
+# past this the UI says "…and N more".
+COMMITS_LIMIT = 30
+
 _LOCK = threading.Lock()
 _checked_at = 0.0
 _behind = 0
+_commits: list[dict] = []
 _proc: subprocess.Popen | None = None
 _started_at = 0.0
 
@@ -63,7 +68,7 @@ def check(force: bool = False) -> int:
     resetting to zero: going offline doesn't make the checkout less behind, and
     publishing 0 would claim "up to date", which is the one wrong answer.
     """
-    global _checked_at, _behind
+    global _checked_at, _behind, _commits
     with _LOCK:
         if not force and time.time() - _checked_at < CHECK_INTERVAL_S:
             return _behind
@@ -80,8 +85,14 @@ def check(force: bool = False) -> int:
     if not (count and count.isdigit()):
         return known
     behind = int(count)
+    # Local read — the fetch above already brought the objects in. %x1f keeps
+    # a subject containing a tab or space from splitting.
+    raw = _git("log", "--format=%h\x1f%s", "-n", str(COMMITS_LIMIT), f"HEAD..{upstream}") or ""
+    commits = [{"sha": sha, "subject": subject}
+               for sha, _, subject in (line.partition("\x1f") for line in raw.splitlines()) if sha]
     with _LOCK:
         _behind = behind
+        _commits = commits
     return behind
 
 
@@ -117,9 +128,12 @@ def summary() -> dict:
 
 
 def status() -> dict:
-    """summary() plus the current run's transcript — for the on-demand
-    /api/update/status probe, which is the only caller that needs the log."""
-    return {**summary(), "log": tail()}
+    """summary() plus what the update would pull and the current run's
+    transcript — for the on-demand /api/update/status probe (the popover
+    opening, the post-click watch), the only callers that need either."""
+    with _LOCK:
+        commits = list(_commits)
+    return {**summary(), "commits": commits, "log": tail()}
 
 
 def tail(limit: int = 40) -> list[str]:

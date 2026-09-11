@@ -61,7 +61,10 @@ can't answer (offline, no upstream) LEAVES THE LAST COUNT STANDING — going
 offline doesn't make the checkout less behind, and publishing 0 would render as
 "up to date", the one wrong answer. Assert that through `summary()`, not
 `check()`'s return value: the caller discards the return, so a test on it
-passes even while `_behind` is being clobbered. Clicking it
+passes even while `_behind` is being clobbered. The same check records the
+subjects of the commits it would pull (`git log HEAD..@{u}`, capped at
+`COMMITS_LIMIT`); they ride `/api/update/status` only — never `/api/state` —
+and the pill's popover fetches them on open. Its Update button
 POSTs `/api/update`, which spawns the script **detached**
 (`start_new_session=True`) — non-negotiable, because the script's `bootout`
 tears down the launchd job and would otherwise kill the very process running

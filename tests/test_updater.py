@@ -13,6 +13,7 @@ def _reset(monkeypatch):
     """updater keeps module-level cache/handle state; reset between tests."""
     monkeypatch.setattr(updater, "_checked_at", 0.0)
     monkeypatch.setattr(updater, "_behind", 0)
+    monkeypatch.setattr(updater, "_commits", [])
     monkeypatch.setattr(updater, "_proc", None)
     monkeypatch.setattr(updater, "_started_at", 0.0)
 
@@ -32,6 +33,30 @@ def test_check_counts_commits_behind(monkeypatch):
     }))
     assert updater.check() == 12
     assert updater.summary()["behind"] == 12
+
+
+def test_check_records_commit_subjects(monkeypatch):
+    monkeypatch.setattr(updater, "_git", _git_stub({
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "2",
+        "log": "abc1234\x1ffix the thing: a b\ndef5678\x1fsecond",
+    }))
+    updater.check()
+    assert updater.status()["commits"] == [
+        {"sha": "abc1234", "subject": "fix the thing: a b"},
+        {"sha": "def5678", "subject": "second"},
+    ]
+    # Popover-only: /api/state's 3s payload must not grow.
+    assert "commits" not in updater.summary()
+
+
+def test_check_keeps_last_commits_when_it_cannot_answer(monkeypatch):
+    monkeypatch.setattr(updater, "_git", _git_stub({
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "1", "log": "abc1234\x1fone",
+    }))
+    updater.check()
+    monkeypatch.setattr(updater, "_git", _git_stub({"rev-parse": "origin/main", "fetch": None}))
+    updater.check(force=True)
+    assert updater.status()["commits"] == [{"sha": "abc1234", "subject": "one"}]
 
 
 def test_check_is_throttled(monkeypatch):

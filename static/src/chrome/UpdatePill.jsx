@@ -1,14 +1,20 @@
-// "N behind → update" pill. Hidden entirely when the checkout is current, so
-// it costs nothing in the normal case. See CLAUDE.md > "Updating" for the
-// design; the consequence that shapes THIS file is that POST /api/update
-// cannot report success — a successful update kills the server mid-request —
-// so the two outcomes are read from opposite signals:
+// "N behind" pill → popover listing what the update would pull → Update.
+// Hidden entirely when the checkout is current, so it costs nothing in the
+// normal case. See CLAUDE.md > "Updating" for the design; the consequence that
+// shapes THIS file is that POST /api/update cannot report success — a
+// successful update kills the server mid-request — so the two outcomes are
+// read from opposite signals:
 //
 //   success — server dies, connection banner shows, next poll carries
 //             behind:0, pill vanishes. Its ABSENCE is the success signal.
 //   failure — the pull aborts before launchd is touched, so the server is
 //             still alive and /api/update/status has the reason.
-import { useState } from "preact/hooks";
+//
+// The commit list is fetched when the popover opens, not carried on
+// /api/state: it's only wanted at the moment of deciding, and the 3s poll
+// shouldn't grow by thirty subjects.
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useEscape } from "../hooks/useEscape.js";
 import { updateInfo } from "../store.js";
 import { apiCall } from "../util.js";
 
@@ -17,13 +23,56 @@ const POLL_MS = 2000;
 // then waits for healthz. Past this, stop polling and let the banner speak.
 const GIVE_UP_MS = 120_000;
 
+// `commits` null = still loading; [] = the hourly check hasn't recorded any.
+export function CommitList({ commits, behind }) {
+  if (!commits) return <div class="update-commit is-muted">loading…</div>;
+  if (!commits.length) return <div class="update-commit is-muted">no commit list yet — the hourly check hasn't run</div>;
+  const more = behind - commits.length;
+  return (
+    <>
+      {commits.map((c) => (
+        <div class="update-commit" key={c.sha} title={c.subject}>
+          <code>{c.sha}</code>
+          <span>{c.subject}</span>
+        </div>
+      ))}
+      {more > 0 && <div class="update-commit is-muted">…and {more} more</div>}
+    </>
+  );
+}
+
 export function UpdatePill() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [commits, setCommits] = useState(null);
+  const ref = useRef(null);
+  const close = useCallback(() => setOpen(false), []);
+  useEscape(close, open);
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [open]);
   const info = updateInfo.value;
 
   // No info yet (dev instance, or pre-first-check), current, and not mid-run.
   if (!info || (!info.behind && !info.running && !busy && !error)) return null;
+
+  async function toggle() {
+    if (open) return setOpen(false);
+    setOpen(true);
+    setCommits(null);
+    try {
+      const res = await fetch("/api/update/status");
+      setCommits(res.ok ? (await res.json()).commits || [] : []);
+    } catch (_) {
+      setCommits([]);
+    }
+  }
 
   // Poll the status endpoint until the updater exits. If it exits with the
   // server still answering, the update FAILED — surface the log tail.
@@ -59,6 +108,7 @@ export function UpdatePill() {
   }
 
   async function start() {
+    setOpen(false);
     setError(null);
     setBusy(true);
     // apiCall already toasts on failure (409 for a dev instance or an update
@@ -69,21 +119,37 @@ export function UpdatePill() {
   }
 
   const running = busy || info.running;
+  const n = info.behind;
+  const plural = `${n} commit${n === 1 ? "" : "s"} behind origin`;
   const title = error
     ? `update failed:\n${error}`
     : running
       ? "updating — periscope will restart itself"
-      : `${info.behind} commit${info.behind === 1 ? "" : "s"} behind origin — click to pull, re-provision and restart`;
+      : `${plural} — click to see what's changing`;
 
   return (
-    <button
-      type="button"
-      class={`update-pill${running ? " is-running" : ""}${error ? " is-error" : ""}`}
-      title={title}
-      disabled={running}
-      onClick={running ? undefined : start}
-    >
-      {running ? "updating…" : error ? "⚠ update failed" : `↑ ${info.behind} behind`}
-    </button>
+    <div class="update-dd" ref={ref}>
+      <button
+        type="button"
+        class={`update-pill${running ? " is-running" : ""}${error ? " is-error" : ""}`}
+        title={title}
+        aria-haspopup="dialog"
+        aria-expanded={open ? "true" : "false"}
+        disabled={running}
+        onClick={running ? undefined : toggle}
+      >
+        {running ? "updating…" : error ? "⚠ update failed" : `↑ ${n} behind`}
+      </button>
+      <div class="tb-dd-menu update-menu" role="dialog" hidden={!open}>
+        <div class="update-menu-head">{plural}</div>
+        {error && <pre class="update-menu-error">{error}</pre>}
+        <div class="update-commits">
+          <CommitList commits={commits} behind={n} />
+        </div>
+        <button type="button" class="update-pill update-menu-go" onClick={start}>
+          {error ? "retry — " : ""}pull, re-provision and restart
+        </button>
+      </div>
+    </div>
   );
 }

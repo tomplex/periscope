@@ -259,6 +259,18 @@ html, body {
   background: color-mix(in oklch, var(--s-danger) 14%, transparent);
   border-color: color-mix(in oklch, var(--s-danger) 45%, transparent);
 }
+/* What the update would pull: popover under the pill, right-anchored so a
+   long subject list grows away from the header's edge. */
+.update-dd { position: relative; display: inline-flex; align-self: center; }
+.update-menu { left: auto; right: 0; min-width: 340px; max-width: min(600px, 90vw); gap: 0; padding: 6px; }
+.update-menu-head { padding: 2px 6px 6px; font-size: 11px; color: var(--fg-3); }
+.update-menu-error { margin: 0 0 6px; padding: 4px 6px; font-size: 11px; white-space: pre-wrap; color: var(--s-danger); }
+.update-commits { max-height: 50vh; overflow-y: auto; }
+.update-commit { display: flex; gap: 8px; padding: 3px 6px; font-size: 12px; color: var(--fg-1); white-space: nowrap; }
+.update-commit code { flex: 0 0 auto; font-family: var(--mono); color: var(--fg-3); }
+.update-commit span { overflow: hidden; text-overflow: ellipsis; }
+.update-commit.is-muted { color: var(--fg-3); font-style: italic; }
+.update-menu-go { margin-top: 6px; align-self: stretch; border-radius: var(--r-sm); padding: 6px 10px; }
 /* Wrapper profile (non-default only). Outlined rather than plain text like the
    account chip: the profile changes what the pane can DO, so it should read as
    a badge you notice, not orientation you look up. */

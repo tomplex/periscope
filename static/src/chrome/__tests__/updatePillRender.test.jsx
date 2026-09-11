@@ -7,7 +7,7 @@
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it } from "vitest";
 import { updateInfo } from "../../store.js";
-import { UpdatePill } from "../UpdatePill.jsx";
+import { CommitList, UpdatePill } from "../UpdatePill.jsx";
 
 afterEach(() => {
   updateInfo.value = null;
@@ -29,6 +29,9 @@ describe("<UpdatePill>", () => {
     const html = render(<UpdatePill />);
     expect(html).toContain("↑ 12 behind");
     expect(html).toContain("12 commits behind origin");
+    // The popover exists closed; nothing has been fetched yet.
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("hidden");
   });
 
   it("singularizes a single commit", () => {
@@ -44,5 +47,28 @@ describe("<UpdatePill>", () => {
     expect(html).toContain("updating…");
     expect(html).toContain("is-running");
     expect(html).toContain("disabled");
+  });
+});
+
+describe("<CommitList>", () => {
+  it("lists sha and subject, and counts what the server capped off", () => {
+    const commits = [
+      { sha: "abc1234", subject: "first" },
+      { sha: "def5678", subject: "second <b>" },
+    ];
+    const html = render(<CommitList commits={commits} behind={5} />);
+    expect(html).toContain("abc1234");
+    expect(html).toContain("second &lt;b"); // subjects are text, never markup
+    expect(html).toContain("…and 3 more");
+  });
+
+  it("omits the overflow line when the list is complete", () => {
+    const html = render(<CommitList commits={[{ sha: "a", subject: "x" }]} behind={1} />);
+    expect(html).not.toContain("more");
+  });
+
+  it("distinguishes loading from an empty list", () => {
+    expect(render(<CommitList commits={null} behind={3} />)).toContain("loading");
+    expect(render(<CommitList commits={[]} behind={3} />)).toContain("no commit list yet");
   });
 });
