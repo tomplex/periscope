@@ -217,7 +217,7 @@ def instance_file(name: str) -> Path:
     Both stores are read wholesale into memory at boot and written back
     wholesale, so two instances sharing one file is last-writer-wins: a dev
     server started at T silently reverts every prod change made after T, with
-    no error on either side. Observed 2026-07-23 — a dev server on the dev port
+    no error on either side. Observed 2026-07-23 — a dev server on :8766 (then the dev port)
     reverted prod's state.json repeatedly over several hours, undoing edits
     that had been verified correct seconds earlier.
 

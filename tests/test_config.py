@@ -4,6 +4,8 @@ These tests are written against `server` for Peel 1's first half;
 Task 1.5 re-points them at `periscope.config` after the move.
 """
 
+from pathlib import Path
+
 from periscope.config import MCP_SOCKET_PATH, STATIC
 
 
@@ -27,20 +29,39 @@ def test_PORT_defaults_to_PROD_PORT(monkeypatch):
     assert periscope.config.PORT == periscope.config.PROD_PORT
 
 
+def test_port_literals_outside_python_agree_with_config():
+    """config.py is the one home of the port numbers, but the Tauri shell,
+    the CLI, dev.sh and vite can't import it and carry literals. Editing
+    PROD_PORT alone would pass every other test while the .app silently
+    loaded a dead port."""
+    import periscope.config as cfg
+    root = Path(__file__).resolve().parents[1]
+    prod = [
+        "src-tauri/tauri.conf.json", "src-tauri/capabilities/default.json",
+        "src-tauri/dist/index.html", "src-tauri/src/recycle.rs", "bin/periscope",
+    ]
+    dev = ["dev.sh", "vite.config.js"]
+    for rel, port in [(f, cfg.PROD_PORT) for f in prod] + [(f, cfg.DEV_PORT) for f in dev]:
+        text = (root / rel).read_text()
+        assert re.search(rf"\b{port}\b", text), f"{rel} does not name port {port}"
+        assert not re.search(r"\b876[56]\b", text), f"{rel} still names the old port"
+
+
 def test_PORT_reads_PERISCOPE_PORT_env(monkeypatch):
-    monkeypatch.setenv("PERISCOPE_PORT", "17375")
+    monkeypatch.setenv("PERISCOPE_PORT", "9999")
     import importlib
 
     import periscope.config
     importlib.reload(periscope.config)
-    assert periscope.config.PORT == 17375
+    assert periscope.config.PORT == 9999
 
 
 def test_is_prod_only_true_on_prod_port_and_not_dev(monkeypatch):
     """is_prod() gates all Claude-spending / singleton-owning work. It must be
     true ONLY for the real launchd prod instance: PROD_PORT AND not a dev
-    process. The dev-on-PROD_PORT case (dev.sh's old default) must read False so a
-    developer's instance never spends Haiku."""
+    process. dev.sh historically left PERISCOPE_PORT unset and so landed on
+    the prod port; that case must read False so a developer's instance never
+    spends Haiku."""
     import periscope.config as cfg
     cases = {
         (cfg.PROD_PORT, False): True,   # prod
@@ -53,6 +74,7 @@ def test_is_prod_only_true_on_prod_port_and_not_dev(monkeypatch):
         monkeypatch.setattr(cfg, "DEV", dev)
         assert cfg.is_prod() is expected, f"PORT={port} DEV={dev}"
 import os
+import re
 import shlex
 
 import pytest
