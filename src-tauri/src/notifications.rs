@@ -7,7 +7,7 @@
 //
 // The pane target rides in the notification's identifier
 // ("periscope-route|{seq}|{target}") and is recovered there. The webview
-// is a remote origin (localhost:8765) and can't invoke Rust commands, so
+// is a remote origin (localhost:17374) and can't invoke Rust commands, so
 // both directions cross the Tauri event bus — the IPC surface core:default
 // already grants it: "periscope:notify" carries a banner in,
 // "periscope:notification-clicked" carries a click back out.

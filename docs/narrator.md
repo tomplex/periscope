@@ -37,6 +37,6 @@ Invariants worth knowing before touching it:
   shared cwd a wrong-session status is worse than none; the hook
   self-corrects on the next prompt.
 - **The lifespan tests mock `activity.run_worker`.** The real worker's
-  first tick runs immediately, and in tests `PORT` defaults to 8765 — an
+  first tick runs immediately, and in tests `PORT` defaults to 17374 — an
   unmocked worker executes a LIVE narrator tick (real Haiku, real
   renames of real windows) on every pytest run. This actually happened.

@@ -26,7 +26,7 @@ npm install && npm run build   # one-time / whenever static/src/ changes
 uv run server.py
 ```
 
-Open <http://127.0.0.1:8765/>. Polls every 3s; the modal opens a live
+Open <http://127.0.0.1:17374/>. Polls every 3s; the modal opens a live
 WebSocket bridge to the selected pane.
 
 For the always-on / launchd-managed setup and the prod/dev port split,
@@ -110,13 +110,13 @@ npm run dev        # then visit http://127.0.0.1:5174/
 `npm run dev` runs the FastAPI server **and** Vite together via
 `concurrently`; ctrl+c stops both. Vite proxies `/api/*` and `/ws/*` to
 FastAPI, so only one URL matters in the browser. There's no build step —
-production still loads `static/` as-is from FastAPI on :8765.
+production still loads `static/` as-is from FastAPI on :17374.
 
 ## Native app (macOS)
 
 Periscope can run as a native `.app` — its own Dock icon and Cmd-Tab
 entry instead of a browser tab. The app is a thin [Tauri](https://tauri.app)
-shell that loads the dashboard from `http://127.0.0.1:8765`, so the
+shell that loads the dashboard from `http://127.0.0.1:17374`, so the
 server still has to be running (`uv run server.py`, or the launchd
 service via `bin/periscope install`).
 

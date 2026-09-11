@@ -167,30 +167,37 @@ def build_agent_command(
         return argv
     raise ValueError(f"unsupported agent: {agent}")
 
-# Port the FastAPI server binds. Default 8765 = "prod" (launchd-managed).
-# Override via PERISCOPE_PORT=8766 for a dev instance running alongside
-# prod. Read once at module load — server.py invokes load_dotenv before
-# importing anything else, so .env is honored. Modules that need to react
-# to test-time monkeypatching access this as `config.PORT`, not via
+# The prod port. 17374 is "PERI" on a phone keypad with a leading 1 to keep
+# it out of the 4-digit range where every ad-hoc dev server lands — 8765 was
+# grabbed by other tools often enough that periscope moved. Dev runs on the
+# next port up (dev.sh, vite.config.js).
+PROD_PORT = 17374
+DEV_PORT = 17375
+
+# Port the FastAPI server binds. Default PROD_PORT = "prod" (launchd-managed).
+# Override via PERISCOPE_PORT for a dev instance running alongside prod.
+# Read once at module load — server.py invokes load_dotenv before importing
+# anything else, so .env is honored. Modules that need to react to test-time
+# monkeypatching access this as `config.PORT`, not via
 # `from periscope.config import PORT` (which would snapshot the value).
-PORT = int(os.environ.get("PERISCOPE_PORT", "8765"))
+PORT = int(os.environ.get("PERISCOPE_PORT", str(PROD_PORT)))
 
 # Every dev flow (dev.sh, the worktree workflow) exports PERISCOPE_DEV=1;
 # the prod launchd plist sets only PATH/HOME. So DEV is the authoritative
 # "is this a developer's instance" signal — more reliable than PORT, which
-# dev.sh historically left at the 8765 default and thus spent Haiku.
+# dev.sh historically left at the prod default and thus spent Haiku.
 DEV = bool(os.environ.get("PERISCOPE_DEV"))
 
 def is_prod() -> bool:
     """True only for the real prod instance: on the prod port AND not a dev
     process. Gates everything that costs money or owns a singleton resource
     (Claude-spending activity worker, MCP socket). A dev instance never
-    trips this even if it somehow lands on 8765.
+    trips this even if it somehow lands on PROD_PORT.
 
     A function, not a constant: reads module globals PORT/DEV at call time so
     tests that monkeypatch `config.PORT` observe the new value — the same
     live-access contract PORT itself documents above."""
-    return PORT == 8765 and not DEV
+    return PORT == PROD_PORT and not DEV
 
 
 def config_dir() -> Path:
@@ -210,7 +217,7 @@ def instance_file(name: str) -> Path:
     Both stores are read wholesale into memory at boot and written back
     wholesale, so two instances sharing one file is last-writer-wins: a dev
     server started at T silently reverts every prod change made after T, with
-    no error on either side. Observed 2026-07-23 — a dev server on :8766
+    no error on either side. Observed 2026-07-23 — a dev server on the dev port
     reverted prod's state.json repeatedly over several hours, undoing edits
     that had been verified correct seconds earlier.
 

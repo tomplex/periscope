@@ -94,7 +94,7 @@ These are the non-obvious behaviors worth preserving:
     *different* window, so the duplicate that triggered the re-mint is
     never cleared and the next poll re-mints again: a self-sustaining
     loop (observed 683 times on one window across three days, in
-    `~/.config/periscope/periscope-8765.log`). A re-mint changes a
+    `~/.config/periscope/periscope-17374.log`). A re-mint changes a
     window's identity, and `railSelection` is keyed `pane:<pid>` — so the
     detail pane silently detaches. Historically reported as "detail pane
     closes on cd". Regression signal on the log: same-poll duplicates

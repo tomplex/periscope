@@ -11,7 +11,7 @@ The raw request body is parsed by hand rather than via a Pydantic body
 model: a model would raise 422 BEFORE the handler runs, so the handler
 could not swallow it. dev is the inverse of config.is_prod() (prod port
 AND not PERISCOPE_DEV), so a dev instance is flagged even if it lands
-on 8765. Real-usage queries filter dev=0.
+on 17374. Real-usage queries filter dev=0.
 """
 
 import json

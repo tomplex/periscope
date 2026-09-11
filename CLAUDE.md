@@ -42,13 +42,13 @@ applies. Read the relevant doc before editing, not after the tests go red.
 ## Running
 
 ```sh
-uv run server.py     # http://127.0.0.1:8765/
-npm install && npm run dev   # frontend HMR at http://127.0.0.1:5174/, backend on :8766
+uv run server.py     # http://127.0.0.1:17374/
+npm install && npm run dev   # frontend HMR at http://127.0.0.1:5174/, backend on :17375
 ```
 
 `npm run dev` runs `dev.sh`: `uv run server.py` + vite under one process
 group (ctrl+c kills both), with `PERISCOPE_DEV=1` (uvicorn `--reload`) and
-`PERISCOPE_PORT=8766` — the dev backend never reclaims prod, never binds the
+`PERISCOPE_PORT=17375` — the dev backend never reclaims prod, never binds the
 MCP socket, never runs the Claude-spending activity worker (`config.is_prod()`).
 Vite builds the committed `static/dist/app.js`; production serves that bundle
 with no build step at boot.
@@ -177,9 +177,9 @@ messages; split unrelated concerns; don't ask "should I commit?".
 
 ## Development workflow (prod + dev split)
 
-- **Prod** — launchd (`com.tom.periscope`), port 8765, runs `main` from this
+- **Prod** — launchd (`com.tom.periscope`), port 17374, runs `main` from this
   checkout. Never edit files in the prod tree. `bin/periscope {start|stop|restart|status|tail}`.
-- **Dev** — a worktree on port 8766 with its own `state-dev.json` +
+- **Dev** — a worktree on port 17375 with its own `state-dev.json` +
   `periscope-dev.db` (seeded once from prod). Doesn't bind the MCP socket —
   Claude's channels always talk to prod.
 
@@ -188,8 +188,8 @@ Standard loop:
 1. **Push `main` first** — `EnterWorktree` branches from `origin/main`, and
    local `main` is routinely ahead.
 2. `EnterWorktree(name: …)` → `.claude/worktrees/<name>`.
-3. `PERISCOPE_PORT=8766 PERISCOPE_DEV=1 uv run server.py`; edit, test at
-   :8766, commit as you go; `npm run build` + commit `static/dist/` if
+3. `PERISCOPE_PORT=17375 PERISCOPE_DEV=1 uv run server.py`; edit, test at
+   :17375, commit as you go; `npm run build` + commit `static/dist/` if
    `static/src/` changed.
 4. Merge without leaving the worktree: `git -C ~/dev/periscope merge <branch>`.
 5. `bin/periscope restart` — always respawns prod from `~/dev/periscope`

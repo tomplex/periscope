@@ -1,7 +1,7 @@
 #!/bin/bash
 # Rebuild the Tauri shell .app and reopen it — the typical dev loop after
 # editing src-tauri/* or capabilities/*. Frontend-only changes under
-# static/* don't need this: the .app loads localhost:8765 fresh on each
+# static/* don't need this: the .app loads localhost:17374 fresh on each
 # Cmd-R, so editing JS/CSS and reloading the window is enough.
 #
 # cargo tauri dev is broken on this macOS (AMFI kills the raw debug binary

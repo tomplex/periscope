@@ -17,7 +17,7 @@
 //
 // The WebContent pid comes from WKWebView's private `_webProcessIdentifier`
 // selector — exact, where pid-guessing via lsof breaks as soon as a browser
-// tab is also open on :8765. Private API is acceptable here: personal
+// tab is also open on :17374. Private API is acceptable here: personal
 // debug-build app, guarded by respondsToSelector so an OS that drops the
 // selector degrades to "manual recycle only" instead of crashing.
 
@@ -30,7 +30,7 @@ use tauri::{AppHandle, Manager, WebviewUrl};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
 const CHECK_INTERVAL_S: u64 = 60;
-const DASHBOARD_URL: &str = "http://127.0.0.1:8765";
+const DASHBOARD_URL: &str = "http://127.0.0.1:17374";
 
 // Set while a recycle is mid-flight so the ExitRequested handler in main.rs
 // can veto the "last window closed → quit" path between destroy and rebuild.

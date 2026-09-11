@@ -52,7 +52,7 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     # harmless read; _pane_sessions_housekeeping already reads real tmux.)
     mocker.patch("periscope.tracks.seed_tracks", return_value=0)
     # The single-session migration is a prod-gated lifespan side-effect, and
-    # PORT defaults to 8765 here so is_prod() is True — without this mock the
+    # PORT defaults to PROD_PORT here so is_prod() is True — without this mock the
     # migration runs a LIVE `tmux move-window` against the developer's real
     # tmux server (no isolated socket in this test), consolidating every real
     # window into one session. Same hazard as run_worker below. This actually
@@ -67,13 +67,13 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     # the real one, every pytest run on this machine executed a live tick
     # against the developer's actual tmux server: real capture-pane, real
     # narrator Haiku calls, and real renames of real windows. PORT defaults
-    # to 8765 here, so the prod-only guard does not protect tests.
+    # to PROD_PORT here, so the prod-only guard does not protect tests.
     mocker.patch("periscope.activity.run_worker", side_effect=_noop)
     # The poke loop is prod-gated too and its first tick runs on startup; with
-    # PORT at 8765 here a real tick between 08:00 and 09:30 would spend a
+    # PORT at PROD_PORT here a real tick between 08:00 and 09:30 would spend a
     # Haiku call on the developer's real subscription.
     mocker.patch("periscope.poke.run", side_effect=_noop)
-    # PORT defaults to 8765 (prod), so the lifespan generates the bg-commander
+    # PORT defaults to PROD_PORT (prod), so the lifespan generates the bg-commander
     # MCP config — stub it so the test doesn't write into the real config dir.
     mocker.patch("periscope.bg_commander.write_mcp_config")
     # Lifespan teardown still calls os.unlink(MCP_SOCKET_PATH) regardless
@@ -98,10 +98,10 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
 
 
 def test_lifespan_skips_mcp_on_dev_port(mocker, monkeypatch, caplog):
-    """When PORT != 8765, lifespan must not call _mcp_listener and must
+    """When PORT != PROD_PORT, lifespan must not call _mcp_listener and must
     log that it's skipping."""
     import periscope.config
-    monkeypatch.setattr(periscope.config, "PORT", 8766)
+    monkeypatch.setattr(periscope.config, "PORT", periscope.config.DEV_PORT)
 
     called = {"count": 0}
     async def fake_listener():
@@ -127,9 +127,9 @@ def test_lifespan_skips_mcp_on_dev_port(mocker, monkeypatch, caplog):
 
 
 def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
-    """When PORT == 8765, lifespan calls _mcp_listener exactly once."""
+    """When PORT == PROD_PORT, lifespan calls _mcp_listener exactly once."""
     import periscope.config
-    monkeypatch.setattr(periscope.config, "PORT", 8765)
+    monkeypatch.setattr(periscope.config, "PORT", periscope.config.PROD_PORT)
 
     called = {"count": 0}
     async def fake_listener():
@@ -142,7 +142,7 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
     # tests don't write the real periscope.db. (Its list_windows() arg is a
     # harmless read; _pane_sessions_housekeeping already reads real tmux.)
     mocker.patch("periscope.tracks.seed_tracks", return_value=0)
-    # Prod-gated single-session migration: PORT is forced to 8765 here, so
+    # Prod-gated single-session migration: PORT is forced to PROD_PORT here, so
     # without this mock it runs a LIVE tmux move-window against the dev's real
     # server. See test_lifespan_starts_and_shuts_down_cleanly. Never unmock.
     mocker.patch("periscope.migrate_single_session.run_if_needed")
@@ -153,7 +153,7 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
     # fires a live tick against the developer's tmux on every test run.
     mocker.patch("periscope.activity.run_worker", side_effect=_noop)
     # The poke loop is prod-gated too and its first tick runs on startup; with
-    # PORT at 8765 here a real tick between 08:00 and 09:30 would spend a
+    # PORT at PROD_PORT here a real tick between 08:00 and 09:30 would spend a
     # Haiku call on the developer's real subscription.
     mocker.patch("periscope.poke.run", side_effect=_noop)
     # Teardown unlinks MCP_SOCKET_PATH — no-op so we don't touch /tmp.

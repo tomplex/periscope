@@ -97,7 +97,7 @@ async def lifespan(_app: FastAPI):
     # has PR badges and the usage bars populated.
     _bg("prewarm-pr", prewarm_pr_cache)
     _bg("prewarm-usage", cached_plan_usage)
-    # MCP unix-socket listener bound only by the :8765 (prod) instance.
+    # MCP unix-socket listener bound only by the :17374 (prod) instance.
     # channel_shim.py hardcodes /tmp/periscope-mcp.sock, so Claude's
     # channels always talk to prod. Dev periscopes on other ports leave
     # the socket alone — see spec §"Dev never serves channels."
@@ -120,7 +120,7 @@ async def lifespan(_app: FastAPI):
     # Activity worker: context-reset detection + narrator (semantic status
     # + auto-rename). Prod only — the narrator spends Haiku per pane, and
     # periscope.db is a single shared file. Gated on IS_PROD (not bare
-    # PORT==8765) because dev.sh historically ran on the default 8765 and
+    # PORT==PROD_PORT) because dev.sh historically ran on the prod default and
     # spent Haiku on every narrator tick. Same guard as the MCP listener.
     # NB: _task's signature is _task(name, coro).
     if config.is_prod():

@@ -115,7 +115,7 @@ class LiveProc:
 
 
 def test_start_refuses_when_already_running(monkeypatch):
-    monkeypatch.setattr(config, "PORT", 8765)
+    monkeypatch.setattr(config, "PORT", config.PROD_PORT)
     monkeypatch.setattr(config, "DEV", False)
     monkeypatch.setattr(updater, "_proc", LiveProc())
     monkeypatch.setattr(updater, "_started_at", time.time())
@@ -127,7 +127,7 @@ def test_start_kills_a_wedged_updater(monkeypatch, tmp_path):
     """A `git pull` blocked on the network would otherwise pin running() true
     forever, 409ing every later attempt until the server restarts — on a box
     that is only ever restarted BY this feature."""
-    monkeypatch.setattr(config, "PORT", 8765)
+    monkeypatch.setattr(config, "PORT", config.PROD_PORT)
     monkeypatch.setattr(config, "DEV", False)
     monkeypatch.setattr(updater, "log_path", lambda: tmp_path / "update.log")
     wedged = LiveProc()
@@ -144,7 +144,7 @@ def test_start_spawns_detached(monkeypatch, tmp_path):
     """The load-bearing detail: the updater calls `launchctl bootout`, which
     tears down the launchd job. Without start_new_session the child is in that
     job's process group and gets killed by the teardown it just requested."""
-    monkeypatch.setattr(config, "PORT", 8765)
+    monkeypatch.setattr(config, "PORT", config.PROD_PORT)
     monkeypatch.setattr(config, "DEV", False)
     monkeypatch.setattr(updater, "log_path", lambda: tmp_path / "update.log")
     seen = {}

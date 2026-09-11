@@ -1,5 +1,5 @@
 -- UI instrumentation readout. DB: ~/.config/periscope/periscope.db, table ui_events.
--- WHERE dev=0 excludes events logged by a dev instance (PORT != 8765).
+-- WHERE dev=0 excludes events logged by a dev instance (PORT != 17374).
 -- NEVER COUNT/SUM across the api:<label> namespace and the dotted gesture
 -- namespace as one total — group within a namespace, or compare deliberately.
 

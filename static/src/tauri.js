@@ -1,5 +1,5 @@
 // Bridge from the browser-style dashboard to Tauri's native APIs.
-// No-ops in a regular browser (Chrome/Safari at localhost:8765) — the
+// No-ops in a regular browser (Chrome/Safari at localhost:17374) — the
 // dashboard keeps working unchanged. Only the Tauri shell .app has
 // window.__TAURI_INTERNALS__, which is the runtime-injected IPC entry.
 //

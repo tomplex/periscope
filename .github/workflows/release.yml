@@ -34,7 +34,7 @@ jobs:
             Native macOS shell for periscope (universal — Apple Silicon + Intel).
 
             The app is a thin Tauri shell that loads the dashboard from
-            `http://127.0.0.1:8765`, so the periscope server still has to be
+            `http://127.0.0.1:17374`, so the periscope server still has to be
             running — `uv run server.py`, or the launchd service via
             `bin/periscope install`.
 

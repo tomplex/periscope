@@ -10,7 +10,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PLIST_DST="$HOME/Library/LaunchAgents/com.tom.periscope.plist"
 LABEL="gui/$(id -u)/com.tom.periscope"
 CONFIG_DIR="$HOME/.config/periscope"
-LOG="$CONFIG_DIR/periscope-8765.log"
+LOG="$CONFIG_DIR/periscope-17374.log"
 
 # Everything is wrapped in main() so `sh` parses the WHOLE file before running
 # any of it. `update` rewrites this very script mid-execution via git pull; an
@@ -177,7 +177,7 @@ case "$1" in
     # download dependencies before the port ever opens.
     i=0
     while [ "$i" -lt 180 ]; do
-      SERVING="$(curl -fsS "http://127.0.0.1:8765/api/healthz" 2>/dev/null \
+      SERVING="$(curl -fsS "http://127.0.0.1:17374/api/healthz" 2>/dev/null \
         | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null)"
       if [ "$SERVING" = "$NEW" ]; then
         echo "updated $OLD -> $NEW"

@@ -8,7 +8,7 @@ from periscope import activity, config
 @pytest.fixture(autouse=True)
 def isolated_db(fresh_activity_db, monkeypatch):
     """DB isolation via the shared fixture; force prod port (dev=0) by default."""
-    monkeypatch.setattr(config, "PORT", 8765)
+    monkeypatch.setattr(config, "PORT", config.PROD_PORT)
 
 
 def _count(name=None):
@@ -53,7 +53,7 @@ def test_post_events_caps_batch_at_1000(client):
 
 
 def test_post_events_dev_flag_from_port(client, monkeypatch):
-    monkeypatch.setattr(config, "PORT", 8766)
+    monkeypatch.setattr(config, "PORT", config.DEV_PORT)
     client.post("/api/events", json={"events": [{"name": "x", "t": 1}]})
     c = activity._conn()
     assert c.execute("SELECT dev FROM ui_events").fetchone()[0] == 1

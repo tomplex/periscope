@@ -11,7 +11,7 @@
       {
         "label": "main",
         "title": "Periscope",
-        "url": "http://127.0.0.1:8765",
+        "url": "http://127.0.0.1:17374",
         "width": 1400,
         "height": 900,
         "minWidth": 900,

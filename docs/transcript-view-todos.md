@@ -29,7 +29,7 @@ Each item below is self-contained enough to pick up in a fresh session.
 - CSS: the `.transcript*`, `.turn*`, `.tc*`, `.md-*`, `.term-scroll-bottom`
   blocks at the end of `static/styles.css`.
 - Frontend convention: no frontend test suite — verify in the browser on the dev
-  instance (`PERISCOPE_PORT=8766 PERISCOPE_DEV=1 PERISCOPE_NO_RECLAIM=1 uv run
+  instance (`PERISCOPE_PORT=17375 PERISCOPE_DEV=1 PERISCOPE_NO_RECLAIM=1 uv run
   server.py`); rebuild + commit `static/dist/app.js` after `static/src/` changes.
 
 ---

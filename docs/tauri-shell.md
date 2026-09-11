@@ -2,7 +2,7 @@
 
 Optional native `.app` wrapper for periscope, so it shows up as its
 own entry in Cmd-Tab / Dock instead of living inside a browser tab.
-The shell is just a Tauri 2 window that loads `http://127.0.0.1:8765`
+The shell is just a Tauri 2 window that loads `http://127.0.0.1:17374`
 — launchd still manages the FastAPI server, the GUI app is a pure
 presentation layer. Quitting the app doesn't stop the dashboard;
 killing the server doesn't kill the app (it just shows a connection
@@ -26,7 +26,7 @@ affected. So the dev loop is "build --debug + open .app" rather
 than watch-mode HMR — incremental rebuilds are 5-10s once warm.
 
 Frontend (`static/*`) changes don't need any rebuild — the shell
-loads `localhost:8765`, so editing JS/CSS and reloading the window
+loads `localhost:17374`, so editing JS/CSS and reloading the window
 (Cmd-R inside the app) picks up changes immediately. Only changes
 to `src-tauri/src/*.rs` or config need a rebuild.
 
