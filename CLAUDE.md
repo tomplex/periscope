@@ -191,11 +191,14 @@ Standard loop:
 3. `PERISCOPE_PORT=17375 PERISCOPE_DEV=1 uv run server.py`; edit, test at
    :17375, commit as you go; `npm run build` + commit `static/dist/` if
    `static/src/` changed.
-4. Merge without leaving the worktree: `git -C ~/dev/periscope merge <branch>`.
+4. `ExitWorktree(action: "keep")`, then `git merge <branch>` on `main`. The
+   harness refuses `git -C ~/dev/periscope …` from inside a worktree, so the
+   merge can't happen without leaving first.
 5. `bin/periscope restart` — always respawns prod from `~/dev/periscope`
    (the plist pins `WorkingDirectory`); step 4 is what makes the code live.
-6. `ExitWorktree(action: "remove")` — only succeeds after the merge; that
-   refusal is the safety net, don't `discard_changes` past it.
+6. `git worktree remove .claude/worktrees/<name>` + `git branch -d <branch>`
+   — both refuse while anything is unmerged; that refusal is the safety
+   net, don't `--force` past it.
 
 `bin/periscope install` generates the launchd plist and loads it;
 `bin/periscope update` is pull + re-provision + restart (see `docs/updating.md`
