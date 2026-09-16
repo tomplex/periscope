@@ -293,3 +293,31 @@ def test_state_carries_the_poke_log(client, mocker, clean_state):
     store.record_poke("b", {"date": "2026-09-08", "at": 5, "resets_at": 18005, "verified": True})
     body = client.get("/api/state").json()
     assert body["poke"] == {"b": {"date": "2026-09-08", "at": 5, "resets_at": 18005, "verified": True}}
+
+
+def test_state_serves_the_registry_without_config_dirs_and_move_targets(client, mocker, clean_state):
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    mocker.patch("periscope.usage.cached_plan_usage", return_value={})
+    clean_state["accounts"].append({"id": "c", "config_dir": "/x/.claude-c"})
+
+    body = client.get("/api/state").json()
+    assert body["accounts"] == [{"id": "default", "label": "A"}, {"id": "b", "label": "B"},
+                                {"id": "c", "label": "c"}]
+    # No usage data: each account moves to the first other registered one.
+    assert body["move_targets"] == {"default": "b", "b": "default", "c": "default"}
+
+
+def test_state_has_no_move_targets_with_one_account(client, mocker, clean_state):
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    mocker.patch("periscope.usage.cached_plan_usage", return_value={})
+    clean_state["accounts"] = clean_state["accounts"][:1]
+
+    body = client.get("/api/state").json()
+    assert body["accounts"] == [{"id": "default", "label": "A"}]
+    assert body["move_targets"] == {}

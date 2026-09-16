@@ -213,12 +213,17 @@ def choose_move(inputs: LaunchInputs, current: str) -> str | None:
     pins ignored — a pin says where new work starts, a move is escaping the
     account a pane is already on. None when there is no other account.
 
-    `choose` degrades to "default" without usage data, which may be `current`
-    itself; a move must never target its own account, so that case falls to
-    the first other account in registry order."""
+    With no usage data for any other account the pick is the first other
+    account in registry order — `choose` would degrade to the literal
+    "default", which may be `current` itself or sit anywhere in the registry.
+    When every other account with data is walled, the move follows `choose`
+    rule 6 (soonest session reset), even if an account without data exists:
+    no data never reads as room."""
     others = tuple(a for a in inputs.accounts if a != current)
     if not others:
         return None
+    if all(_meters(inputs, a) is None for a in others):
+        return others[0]
     pick = choose(LaunchInputs(
         accounts=others, usage=inputs.usage, account_arg=None, model_arg=None,
         account_pin=None, model_pin=None, now=inputs.now,

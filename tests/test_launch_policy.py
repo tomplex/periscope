@@ -245,10 +245,22 @@ def test_move_ignores_both_pins():
     assert choose_move(replace(THREE, account_pin="c"), "default") == "b"
 
 
-def test_move_without_usage_data_takes_the_next_registered_account_never_itself():
-    # choose() degrades to "default" when blind — which is the current account here.
+def test_move_without_usage_data_takes_the_first_other_account_in_registry_order():
+    # choose() degrades to the literal "default" when blind — the current
+    # account here, and not necessarily first in a hand-ordered registry.
     assert choose_move(replace(THREE, usage={}), "default") == "b"
     assert choose_move(replace(THREE, usage={}), "c") == "default"
+    reordered = replace(THREE, accounts=("b", "c", "default"), usage={})
+    assert choose_move(reordered, "c") == "b"
+
+
+def test_move_onto_a_walled_account_when_every_other_account_with_data_is_walled():
+    # Rule 6 (soonest session reset), same as a launch — and an account with no
+    # data is still not a candidate: no data never reads as room.
+    usage = {"default": acct(resets=SUN),
+             "b": acct(session=100, resets=WED, session_resets=NOW + 3600),
+             "c": NO_DATA}
+    assert choose_move(replace(THREE, usage=usage), "default") == "b"
 
 
 def test_move_has_no_target_with_a_single_account():
