@@ -41,10 +41,20 @@ inferred from docs — they contradict most public advice, so don't "fix" them:
 
 ## Step 1 — build the shell
 
-**The path must be exactly `~/.claude-b`.** It is hardcoded in
-`periscope/store.py` (`_DEFAULT_ACCOUNTS`) and in `bin/periscope`
-(`install-claude-hook`). A different path means periscope cannot see the account
-at all.
+**Periscope sees an account only through its registry** — the `accounts` list
+in `~/.config/periscope/state.json` (`store.get_accounts`). The registry is
+seeded once, the first time periscope boots without one: account A, plus
+`~/.claude-b` if that dir exists at that moment. So:
+
+- periscope has never booted with a registry → use `~/.claude-b` and the seed
+  registers it;
+- otherwise (or for any other path) → after step 1, **stop periscope**
+  (`bin/periscope stop` — a running server rewrites `state.json` within
+  seconds), append `{"id": "b", "label": "B", "config_dir": "/Users/<you>/.claude-b"}`
+  to `accounts`, and start it again.
+
+`bin/periscope install-hook` (step 5) reads the same registry, so register
+before running it.
 
 ```sh
 set -euo pipefail
@@ -209,7 +219,9 @@ option must be live in the **running** server, not merely correct in the file.
 In the dashboard: the header's **spawn-account pin** sets the standing default
 for every spawn path (launcher, unified open, MCP `spawn_claude`); the launcher's
 Account picker overrides one launch; a rail row's move-account action resumes a
-pane onto the other subscription.
+pane onto whichever other account the launch policy picks. All of these, and
+the usage pill's account letters, stay hidden while only one account is
+registered.
 
 ## Gotchas to hand the human
 

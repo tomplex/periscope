@@ -79,9 +79,19 @@ API-key vars stripped (bill the subscription, not API credits) and
 ## Moving a running pane (`/api/pane/move-account`)
 
 A preference flip changes only new spawns. Moving a running pane is manual:
-the rail's move action resumes the same session on the other account in a
-second pane (the original stays open — `~/.claude-b/projects` is a symlink to
-`~/.claude/projects`, so either account can resume it). The server refuses
+the rail's move action resumes the same session on another account in a
+second pane (the original stays open — every account dir's `projects` is a
+symlink to `~/.claude/projects`, so any account can resume it).
+
+The destination is `launch_policy.choose_move`: the rules above applied to
+every account except the pane's own, with both pins ignored — a pin says where
+new work starts, a move is escaping the account a pane is on. Without usage
+data it is the first other account in registry order, never the pane's own.
+`/api/state.move_targets` publishes the pick per account, the chip is labeled
+with it (`→ C`), and the click sends exactly that id. With one registered
+account there is no target and no chip.
+
+The server refuses
 with 409 when the transcript was written to in the last 60s, because two
 concurrent appenders would interleave into one JSONL. That guard misreads the
 case it matters most for: Claude writes the *limit-reached* message into the
