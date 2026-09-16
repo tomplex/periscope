@@ -138,6 +138,20 @@ def _tool_result(body: dict) -> list:
     return [types.TextContent(type="text", text=json.dumps(body))]
 
 
+def _unknown_account_error(arguments: dict) -> list | None:
+    """A tool-result error when `account` names no registered account, else
+    None. The tool schemas carry no enum: a Claude session reads them once at
+    connect, so a list baked in there goes stale as accounts are registered.
+    Without this check an unknown id reaches `store.account_config_dir`, which
+    fails open to the default account — silently billing the wrong one."""
+    account = arguments.get("account")
+    ids = [a["id"] for a in store.get_accounts() if a.get("id")]
+    if account is None or account in ids:
+        return None
+    return _tool_result({"ok": False,
+                         "error": f"unknown account {account!r}; registered: {', '.join(ids)}"})
+
+
 def _channel_gc(known_pane_ids: set[str]) -> None:
     """Drop alert state for panes that no longer exist. Session registry is
     GC'd by the connection handler on disconnect, not here."""
@@ -521,6 +535,8 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
     if not prompt:
         body = {"ok": False, "error": "prompt is required and must be non-empty"}
         return _tool_result(body)
+    if err := _unknown_account_error(arguments):
+        return err
 
     # Caller's pane → its session + cwd. Commanders have no pane (cmdr:<id> is
     # not a tmux target), so skip the derivation — they always pass explicit cwd.
@@ -895,6 +911,8 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     session_id = str(arguments.get("session_id", "")).strip()
     if not session_id:
         return _tool_result({"ok": False, "error": "session_id is required"})
+    if err := _unknown_account_error(arguments):
+        return err
     tmux_session = str(arguments.get("tmux_session") or "resumes").strip()
     ws_id = str(arguments.get("workspace_id") or "").strip()
 
@@ -1672,10 +1690,9 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                 },
                 "account": {
                     "type": "string",
-                    "enum": ["default", "b"],
                     "description": (
                         "Which Claude subscription to run the spawned pane on. "
-                        "OMIT THIS unless the user named an account: omitting "
+                        "An account id ('default' is account A; an unknown id errors with the registered list). OMIT THIS unless the user named an account: omitting "
                         "lets periscope's launch policy pick — the account "
                         "whose weekly budget expires soonest, skipping one "
                         "only when it is at its limit (docs/account-routing.md). "
@@ -1810,10 +1827,9 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                 },
                 "account": {
                     "type": "string",
-                    "enum": ["default", "b"],
                     "description": (
                         "Which Claude subscription to run the resumed pane on. "
-                        "OMIT THIS unless the user named an account: omitting "
+                        "An account id ('default' is account A; an unknown id errors with the registered list). OMIT THIS unless the user named an account: omitting "
                         "lets periscope's launch policy pick — the account "
                         "whose weekly budget expires soonest, skipping one "
                         "only when it is at its limit (docs/account-routing.md). "

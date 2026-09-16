@@ -492,6 +492,25 @@ def test_resume_session_tool_maps_http_errors(mocker):
     assert "looks live" in body["error"]
 
 
+def test_resume_session_tool_rejects_an_unregistered_account():
+    # No schema enum to catch it, and store.account_config_dir fails OPEN to
+    # the default account — so the handler must refuse, naming the valid ids.
+    from periscope.channels import _do_resume_session_tool
+    body = _body(_do_resume_session_tool("%5", {"session_id": "abc123", "account": "zz"}))
+    assert body["ok"] is False
+    assert "unknown account 'zz'" in body["error"]
+    assert "default, b" in body["error"]
+
+
+def test_spawn_claude_tool_rejects_an_unregistered_account():
+    import asyncio
+
+    from periscope.channels import _do_spawn_claude_tool
+    body = _body(asyncio.run(_do_spawn_claude_tool("%5", {"prompt": "hi", "account": "zz"})))
+    assert body["ok"] is False
+    assert "unknown account 'zz'" in body["error"]
+
+
 def test_resume_session_tool_requires_session_id():
     from periscope.channels import _do_resume_session_tool
     body = _body(_do_resume_session_tool("%5", {"session_id": ""}))
