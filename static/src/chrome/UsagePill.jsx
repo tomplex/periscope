@@ -17,6 +17,7 @@
 // percent) with the existing ok/warn/danger tone. A pinned red bar next to a
 // near-empty one reads at a glance. Click expands to every meter per account.
 import { useState } from "preact/hooks";
+import { multiAccount } from "../accounts.js";
 import { usage } from "../store.js";
 import { relTime } from "../util.js";
 import { isFableKey, summarizeAccounts, wasteMark } from "./usageSummary.js";
@@ -140,8 +141,8 @@ export function UsagePill() {
   const fallback = u.fallback;
   const nowSec = Math.floor(Date.now() / 1000);
   const accounts = summarizeAccounts(u.plan, nowSec);
-  // One subscription: the pill is a plain usage meter, no account letter.
-  const multi = accounts.length > 1;
+  // One registered subscription: the pill is a plain usage meter, no letter.
+  const multi = multiAccount();
   const waste = new Set(Object.keys(u.plan || {}).filter((id) => wasteMark(u.plan[id], nowSec)));
 
   // Prefer the server-fetched plan percentages. Fall back to the JSONL-derived
