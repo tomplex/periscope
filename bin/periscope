@@ -35,16 +35,18 @@ require_uv() {
 # Newline-separated settings.json paths for every Claude config dir periscope
 # launches under: ~/.claude plus each registered account's dir from state.json.
 # A state file with no registry yet (periscope never booted since the registry
-# moved there) yields ~/.claude alone; boot seeds it.
+# moved there) yields ~/.claude alone; boot seeds it. An unreadable state file
+# (mid-write, corrupt) must still yield ~/.claude: an empty list makes install
+# and uninstall silent no-ops for every account.
 account_settings_files() {
     python3 - "$CONFIG_DIR/state.json" <<'PY'
 import json, os, sys
 dirs = [os.path.expanduser("~/.claude")]
 try:
     with open(sys.argv[1]) as f:
-        dirs += [a["config_dir"] for a in json.load(f).get("accounts", []) if a.get("config_dir")]
-except FileNotFoundError:
-    pass
+        dirs += [a["config_dir"] for a in (json.load(f).get("accounts") or []) if a.get("config_dir")]
+except (OSError, ValueError) as e:
+    print(f"account registry unreadable ({e}); using ~/.claude only", file=sys.stderr)
 print("\n".join(os.path.join(d, "settings.json") for d in dirs))
 PY
 }
