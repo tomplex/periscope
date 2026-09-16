@@ -6,7 +6,6 @@ function mutates panes._completed_at and _prev_state as a side effect;
 tests assert against those mutations directly when relevant.
 """
 
-from pathlib import Path
 
 import pytest
 
@@ -152,7 +151,7 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
 
 # --- account attribution ---------------------------------------------------
 
-_ACCOUNT_B_DIR = str(Path.home() / ".claude-b")
+_ACCOUNT_B_DIR = "/Users/x/.claude-b"  # conftest clean_state registry
 
 
 def test_view_reports_account_for_second_subscription_pane(

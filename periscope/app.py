@@ -54,6 +54,8 @@ from periscope.usage import cached_plan_usage
 async def lifespan(_app: FastAPI):
     from periscope import config
     log.info("periscope starting (pid=%d, port=%d)", os.getpid(), config.PORT)
+    from periscope import store
+    store.seed_accounts_if_missing()
     # Bound periscope.db growth — drop events older than 30 days, import the
     # legacy pane_sessions/ directory if present, then drop pane_sessions rows
     # whose tmux pane is gone.

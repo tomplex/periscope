@@ -348,14 +348,15 @@ def _initial_accounts() -> list[Account]:
     return accts
 
 
-def _seed_accounts_if_missing() -> None:
+def seed_accounts_if_missing() -> None:
+    """Persist `_initial_accounts()` when state.json has no registry. Called
+    from the app lifespan, NOT at import: pytest imports this module during
+    collection, before any fixture redirects XDG_CONFIG_HOME, so an
+    import-time write lands in the developer's real prod state.json."""
     with _STATE_LOCK:
         if "accounts" not in _STATE:
             _STATE["accounts"] = _initial_accounts()
             _write_state(_STATE)
-
-
-_seed_accounts_if_missing()
 
 
 def get_accounts() -> list[Account]:
