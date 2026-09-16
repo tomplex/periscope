@@ -32,6 +32,23 @@ require_uv() {
   }
 }
 
+# Newline-separated settings.json paths for every Claude config dir periscope
+# launches under: ~/.claude plus each registered account's dir from state.json.
+# A state file with no registry yet (periscope never booted since the registry
+# moved there) yields ~/.claude alone; boot seeds it.
+account_settings_files() {
+    python3 - "$CONFIG_DIR/state.json" <<'PY'
+import json, os, sys
+dirs = [os.path.expanduser("~/.claude")]
+try:
+    with open(sys.argv[1]) as f:
+        dirs += [a["config_dir"] for a in json.load(f).get("accounts", []) if a.get("config_dir")]
+except FileNotFoundError:
+    pass
+print("\n".join(os.path.join(d, "settings.json") for d in dirs))
+PY
+}
+
 write_plist() {
     mkdir -p "$CONFIG_DIR"
     cat > "$PLIST_DST" <<EOF
@@ -220,15 +237,13 @@ case "$1" in
     # pane whose settings.json lacks these writes no pane_sessions row — and the
     # transcript view, the narrator (which has no cwd fallback by design),
     # per-pane burn, and resurrect's --resume rewrite all go dark for it, with no
-    # error anywhere. Dirs are kept in step with store.py's _DEFAULT_ACCOUNTS;
-    # ones that don't exist on this machine are skipped.
-    python3 - "$REPO" \
-      "$HOME/.claude/settings.json" \
-      "$HOME/.claude-b/settings.json" <<'PY'
+    # error anywhere. The dirs are the account registry in prod's state.json
+    # (store.get_accounts); ones that don't exist on this machine are skipped.
+    python3 - "$REPO" "$(account_settings_files)" <<'PY'
 import json, os, sys
 repo = sys.argv[1]
 cmd = f"python3 {repo}/pane_session_hook.py"
-for p in sys.argv[2:]:
+for p in sys.argv[2].splitlines():
     if not os.path.isdir(os.path.dirname(p)):
         continue          # that account isn't set up on this machine
     try:
@@ -265,10 +280,9 @@ PY
   uninstall-claude-hook)
     # Mirrors install-claude-hook: every account config dir, not just ~/.claude,
     # or uninstall leaves the second account's panes still firing the hook.
-    python3 - "$HOME/.claude/settings.json" \
-             "$HOME/.claude-b/settings.json" <<'PY'
+    python3 - "$(account_settings_files)" <<'PY'
 import json, os, sys
-for p in sys.argv[1:]:
+for p in sys.argv[1].splitlines():
     try:
         with open(p) as f: d = json.load(f)
     except FileNotFoundError:
