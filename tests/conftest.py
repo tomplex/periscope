@@ -222,6 +222,12 @@ def clean_state(tmp_xdg_home, monkeypatch):
         "workspaces": {},
         "settings": {},
         "poke_log": {},
+        # Two accounts, so account-B paths are exercisable by default; the
+        # seeding rule itself is tested in test_store.py.
+        "accounts": [
+            {"id": "default", "label": "A", "config_dir": ""},
+            {"id": "b", "label": "B", "config_dir": "/Users/tom/.claude-b"},
+        ],
     }
     monkeypatch.setattr(store, "_STATE", fresh)
     return fresh

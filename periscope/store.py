@@ -331,19 +331,37 @@ class Account(TypedDict, total=False):
     config_dir: str  # "" for the default account, else an absolute path
 
 
-# Exactly two accounts (see spec "Not doing"). A list, so widening is
-# mechanical. `config_dir` is the de-facto primary key: the Claude credential
-# binds to the PATH, so changing it orphans that account's login.
-_DEFAULT_ACCOUNTS: list[Account] = [
-    {"id": "default", "label": "account A", "config_dir": ""},
-    {"id": "b", "label": "account B", "config_dir": str(Path.home() / ".claude-b")},
-]
+# The registry lives in state.json under "accounts". `config_dir` is the
+# de-facto primary key: the Claude credential binds to the PATH, so changing it
+# orphans that account's login. The default account is always present.
+_DEFAULT_ACCOUNT: Account = {"id": "default", "label": "A", "config_dir": ""}
+
+
+def _initial_accounts() -> list[Account]:
+    """The registry a state file with none gets: the default account, plus
+    ~/.claude-b when that dir exists — the second account machines set up by
+    hand before the registry was stored (docs/second-account-setup.md)."""
+    accts: list[Account] = [cast(Account, dict(_DEFAULT_ACCOUNT))]
+    b = Path.home() / ".claude-b"
+    if b.is_dir():
+        accts.append({"id": "b", "label": "B", "config_dir": str(b)})
+    return accts
+
+
+def _seed_accounts_if_missing() -> None:
+    with _STATE_LOCK:
+        if "accounts" not in _STATE:
+            _STATE["accounts"] = _initial_accounts()
+            _write_state(_STATE)
+
+
+_seed_accounts_if_missing()
 
 
 def get_accounts() -> list[Account]:
     """Snapshot of the account registry (copies of each entry)."""
     with _STATE_LOCK:
-        accts = _STATE.get("accounts") or _DEFAULT_ACCOUNTS
+        accts = _STATE.get("accounts") or [_DEFAULT_ACCOUNT]
         return [cast(Account, dict(a)) for a in accts]
 
 

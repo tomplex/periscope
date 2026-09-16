@@ -205,3 +205,22 @@ def choose(inputs: LaunchInputs) -> Launch:
     soonest = (meters.get("session") or {}).get("resets_at")
     when = _clock(soonest)
     return Launch(aid, _out(models[0]), f"{aid} · every meter walled; session resets {when}")
+
+
+def choose_move(inputs: LaunchInputs, current: str) -> str | None:
+    """Where "move this pane to another subscription" sends a pane now on
+    `current`: the launch policy's pick among every OTHER account, with both
+    pins ignored — a pin says where new work starts, a move is escaping the
+    account a pane is already on. None when there is no other account.
+
+    `choose` degrades to "default" without usage data, which may be `current`
+    itself; a move must never target its own account, so that case falls to
+    the first other account in registry order."""
+    others = tuple(a for a in inputs.accounts if a != current)
+    if not others:
+        return None
+    pick = choose(LaunchInputs(
+        accounts=others, usage=inputs.usage, account_arg=None, model_arg=None,
+        account_pin=None, model_pin=None, now=inputs.now,
+    )).account
+    return pick if pick in others else others[0]

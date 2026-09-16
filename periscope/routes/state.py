@@ -177,6 +177,12 @@ def build_state() -> dict:
         # now. Computed from the cache (never blocks) on every poll so the
         # header chip and the launcher's preselect track the meters.
         "launch_default": dataclasses.asdict(usage.choose_launch()),
+        # The registry minus config dirs. Every account-naming surface reads
+        # this, and hides itself when it holds a single account.
+        "accounts": [{"id": a["id"], "label": a.get("label") or a["id"]}
+                     for a in store.get_accounts() if a.get("id")],
+        # current account id -> where the rail's move chip sends a pane on it.
+        "move_targets": usage.move_targets(),
         # Each account's most recent session poke; the pill tooltip shows it.
         "poke": store.get_poke_log(),
         "update": updater.summary(),

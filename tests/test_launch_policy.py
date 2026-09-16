@@ -9,6 +9,7 @@ from dataclasses import replace
 from periscope.launch_policy import (
     LaunchInputs,
     choose,
+    choose_move,
     model_family,
     order_accounts,
     pressured,
@@ -217,3 +218,38 @@ def test_reason_names_the_account_and_the_model():
     assert (launch.account, launch.model) == ("b", "fable")
     assert launch.reason.startswith("b · week resets ")
     assert launch.reason.endswith(" · fable")
+
+
+# --- choose_move: where the rail's move chip sends a pane --------------------
+
+THREE = replace(BASE, accounts=("default", "b", "c"),
+                usage={"default": acct(resets=SUN), "b": acct(resets=WED),
+                       "c": acct(resets=WED + 86400)})
+
+
+def test_move_is_the_policy_pick_among_the_other_accounts():
+    # From A: B's week resets soonest. From B: B is excluded, so C (Thu) beats A (Sun).
+    assert choose_move(THREE, "default") == "b"
+    assert choose_move(THREE, "b") == "c"
+
+
+def test_move_skips_a_walled_account():
+    walled_b = replace(THREE, usage={**THREE.usage, "b": acct(session=100, resets=WED)})
+    assert choose_move(walled_b, "default") == "c"
+
+
+def test_move_ignores_both_pins():
+    # A pin says where new work starts; a pane escaping its account must not
+    # be sent back to it (pin == current) or held to a pinned account.
+    assert choose_move(replace(THREE, account_pin="default"), "default") == "b"
+    assert choose_move(replace(THREE, account_pin="c"), "default") == "b"
+
+
+def test_move_without_usage_data_takes_the_next_registered_account_never_itself():
+    # choose() degrades to "default" when blind — which is the current account here.
+    assert choose_move(replace(THREE, usage={}), "default") == "b"
+    assert choose_move(replace(THREE, usage={}), "c") == "default"
+
+
+def test_move_has_no_target_with_a_single_account():
+    assert choose_move(replace(BASE, accounts=("default",)), "default") is None

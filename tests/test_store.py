@@ -347,11 +347,31 @@ def test_dev_state_seed_is_noop_for_prod(tmp_xdg_home, monkeypatch):
     assert not target.exists()
 
 
-def test_default_accounts_present(clean_state):
+def test_initial_accounts_is_default_alone_on_a_fresh_machine(tmp_path, monkeypatch):
     import periscope.store as store
-    accts = store.get_accounts()
-    assert [a["id"] for a in accts] == ["default", "b"]
-    assert accts[0]["config_dir"] == ""
+    monkeypatch.setattr(store.Path, "home", classmethod(lambda cls: tmp_path))
+    assert store._initial_accounts() == [{"id": "default", "label": "A", "config_dir": ""}]
+
+
+def test_initial_accounts_registers_an_existing_claude_b(tmp_path, monkeypatch):
+    import periscope.store as store
+    (tmp_path / ".claude-b").mkdir()
+    monkeypatch.setattr(store.Path, "home", classmethod(lambda cls: tmp_path))
+    assert [(a["id"], a["label"], a["config_dir"]) for a in store._initial_accounts()] == [
+        ("default", "A", ""), ("b", "B", str(tmp_path / ".claude-b"))]
+
+
+def test_seed_accounts_writes_only_when_the_registry_is_missing(clean_state, tmp_path, monkeypatch):
+    import periscope.store as store
+    monkeypatch.setattr(store.Path, "home", classmethod(lambda cls: tmp_path))
+    clean_state["accounts"] = [{"id": "default", "label": "A", "config_dir": ""},
+                               {"id": "c", "label": "C", "config_dir": "/x/.claude-c"}]
+    store._seed_accounts_if_missing()
+    assert [a["id"] for a in store.get_accounts()] == ["default", "c"]
+
+    del clean_state["accounts"]
+    store._seed_accounts_if_missing()
+    assert [a["id"] for a in store.get_accounts()] == ["default"]
 
 
 def test_account_config_dir_resolves(clean_state):

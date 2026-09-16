@@ -652,6 +652,19 @@ def annotate_cost_pressure(views: list[dict]) -> None:
         v["ctx_tokens"] = pressure.cur_ctx
 
 
+def move_targets() -> dict[str, str]:
+    """Registered account id -> the account a pane on it would move to right
+    now (`launch_policy.choose_move`). Empty with fewer than two accounts.
+    Published on /api/state so the rail's move chip names its destination and
+    the click sends exactly that id."""
+    ids = tuple(a["id"] for a in store.get_accounts() if a.get("id"))
+    base = launch_policy.LaunchInputs(
+        accounts=ids, usage=cached_plan_usage(), account_arg=None, model_arg=None,
+        account_pin=None, model_pin=None, now=time.time(),
+    )
+    return {aid: t for aid in ids if (t := launch_policy.choose_move(base, aid))}
+
+
 def choose_launch(account: str | None = None, model: str | None = None) -> Launch:
     """The account and model a new pane lands on. The one choke point every
     unnamed spawn path shares — launcher New Tab, unified open, MCP
