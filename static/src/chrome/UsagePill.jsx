@@ -140,6 +140,8 @@ export function UsagePill() {
   const fallback = u.fallback;
   const nowSec = Math.floor(Date.now() / 1000);
   const accounts = summarizeAccounts(u.plan, nowSec);
+  // One subscription: the pill is a plain usage meter, no account letter.
+  const multi = accounts.length > 1;
   const waste = new Set(Object.keys(u.plan || {}).filter((id) => wasteMark(u.plan[id], nowSec)));
 
   // Prefer the server-fetched plan percentages. Fall back to the JSONL-derived
@@ -159,7 +161,7 @@ export function UsagePill() {
             class={`usage-acct${a.stale ? " is-stale" : ""}`}
             title={acctTitle(a, expanded, u.poke?.[a.id], waste.has(a.id))}
           >
-            <span class="usage-acct-label">{a.label}</span>
+            {multi && <span class="usage-acct-label">{a.label}</span>}
             {a.available ? (
               (expanded ? a.meters : [a.headline]).map(({ key, label, m }) => (
                 <MeterBar

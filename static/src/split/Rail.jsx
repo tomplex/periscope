@@ -262,7 +262,7 @@ export function Rail() {
     if (!ok) return;
     await apiCall("close tab", `/api/window?${targetQuery(w.target)}`, { method: "DELETE" });
   }
-  // Re-open a pane's Claude session on the other subscription. NOT a migration:
+  // Re-open a pane's Claude session on another subscription. NOT a migration:
   // the server spawns a SECOND pane resuming the same transcript under the
   // target account and leaves this one running, so nothing is lost if the
   // resume doesn't take.

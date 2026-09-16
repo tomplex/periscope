@@ -5,8 +5,8 @@
 // mounting components elsewhere.
 
 import render from "preact-render-to-string";
-import { afterEach, describe, expect, it } from "vitest";
-import { usage } from "../../store.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { accounts, usage } from "../../store.js";
 import { UsagePill } from "../UsagePill.jsx";
 
 const NOW = () => Math.floor(Date.now() / 1000);
@@ -17,8 +17,13 @@ function meters(pairs) {
   return m;
 }
 
+beforeEach(() => {
+  accounts.value = [{ id: "default", label: "A" }, { id: "b", label: "B" }];
+});
+
 afterEach(() => {
   usage.value = null;
+  accounts.value = [];
 });
 
 describe("<UsagePill>", () => {
@@ -44,6 +49,17 @@ describe("<UsagePill>", () => {
     expect(html).toContain("usage-item-fill ok");
     expect(html).toContain("<b>100%</b>");
     expect(html).toContain("<b>19%</b>"); // B's session, its highest meter
+  });
+
+  it("drops the account letter when only one account is registered", () => {
+    accounts.value = [{ id: "default", label: "A" }];
+    usage.value = {
+      plan: { default: { available: true, fetched_at: NOW(), meters: meters({ session: 40 }) } },
+      fallback: null,
+    };
+    const html = render(<UsagePill />);
+    expect(html).not.toContain("usage-acct-label");
+    expect(html).toContain("<b>40%</b>");
   });
 
   it("shows a credential-less account rather than dropping it", () => {

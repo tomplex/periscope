@@ -16,7 +16,7 @@
 // <input>; Enter/blur commit, Escape cancels. A `settled` guard reproduces the
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { moveAccountTarget } from "../accounts.js";
+import { accountLabel, moveAccountTarget, multiAccount } from "../accounts.js";
 import { profileLabel } from "../profiles.js";
 import { AGENT_META, memHint, paneLabel, prStateMeta, prUrl, relTime } from "../util.js";
 import { canOpenInEditor, openInEditorTitle } from "./openInEditor.js";
@@ -186,7 +186,7 @@ export function PaneRow({
   // an hour stops looking like one that just asked.
   const waitTierCls = awaitingSince
     ? waitTier(awaitingSince, Math.floor(Date.now() / 1000)) : null;
-  // Capacity pooling: one subscription runs out weeks before the other, and the
+  // Capacity pooling: one subscription runs out before the others, and the
   // work stuck on the exhausted one has to keep going. null on shell panes and
   // on an unrecognised config dir (see moveAccountTarget).
   const moveAcct = moveAccountTarget(w);
@@ -210,13 +210,15 @@ export function PaneRow({
   // Account + wrapper-profile chips ride the bottom line (compact meta strip /
   // expanded footer), not the name line — they're orientation, not attention.
   // Only for non-default values: a chip on every pane would say nothing.
-  // "unknown" account = a CLAUDE_CONFIG_DIR no registered account claims —
-  // still not the default, so still shown.
-  const acctChip = w.account && w.account !== "default" && (
+  // Hidden with a single registered account — there is nothing to tell apart —
+  // EXCEPT "unknown": a CLAUDE_CONFIG_DIR no registered account claims is a
+  // pane demonstrably not on the one account, which is worth saying either way.
+  const acctChip = w.account && w.account !== "default" &&
+    (multiAccount() || w.account === "unknown") && (
     <span
       class="pane-pill pane-pill-acct"
-      title={`running on Claude account ${w.account} — its usage bills that subscription`}
-    >@{w.account}</span>
+      title={`running on Claude account ${accountLabel(w.account)} — its usage bills that subscription`}
+    >@{accountLabel(w.account)}</span>
   );
   const profChip = w.profile && w.profile !== "default" && (
     <span
@@ -291,7 +293,7 @@ export function PaneRow({
       )}
       {/* Hover-only actions, zero footprint at rest (absolute + faded). */}
       <div class="pane-actions">
-        {/* Re-open this pane's session on the OTHER subscription. Labeled with
+        {/* Re-open this pane's session on another subscription. Labeled with
             the destination, never the current account: "→ B" is unambiguous
             where a bare "move" is not. Hover-only because it's a rare,
             deliberate act — unlike the account chip, which is orientation. */}

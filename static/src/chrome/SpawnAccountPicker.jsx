@@ -9,11 +9,9 @@
 // The value is a server setting (settings.spawn_account), not a client pref:
 // MCP spawns never see client prefs. It rides /api/state as `spawn_account`,
 // so this control writes optimistically and lets the poll confirm.
-import { ACCOUNTS, accountLabel } from "../accounts.js";
-import { launchDefault, spawnAccount } from "../store.js";
+import { accountLabel, multiAccount } from "../accounts.js";
+import { accounts, launchDefault, spawnAccount } from "../store.js";
 import { apiCall } from "../util.js";
-
-const CHOICES = [{ id: null, label: "auto" }, ...ACCOUNTS];
 
 async function pick(id) {
   const prev = spawnAccount.value;
@@ -27,6 +25,8 @@ async function pick(id) {
 }
 
 export function SpawnAccountPicker() {
+  if (!multiAccount()) return null;
+  const choices = [{ id: null, label: "auto" }, ...accounts.value];
   const cur = spawnAccount.value || null;
   const auto = launchDefault.value;
   return (
@@ -35,11 +35,11 @@ export function SpawnAccountPicker() {
       title={
         "which account new Claude panes launch on\n" +
         "auto — the account whose weekly reset is soonest (drain it before it resets)\n" +
-        "A / B — pin every spawn (New Tab, + new, spawned workers) to one subscription"
+        "a letter — pin every spawn (New Tab, + new, spawned workers) to one subscription"
       }
     >
       <span class="spawn-acct-label">spawn</span>
-      {CHOICES.map((c) => (
+      {choices.map((c) => (
         <button
           type="button"
           key={c.id ?? "auto"}

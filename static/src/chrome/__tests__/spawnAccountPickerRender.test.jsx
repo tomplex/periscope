@@ -4,11 +4,16 @@
 // is browser-verified.
 
 import render from "preact-render-to-string";
-import { afterEach, describe, expect, it } from "vitest";
-import { launchDefault, spawnAccount } from "../../store.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { accounts, launchDefault, spawnAccount } from "../../store.js";
 import { SpawnAccountPicker } from "../SpawnAccountPicker.jsx";
 
+beforeEach(() => {
+  accounts.value = [{ id: "default", label: "A" }, { id: "b", label: "B" }];
+});
+
 afterEach(() => {
+  accounts.value = [];
   spawnAccount.value = null;
   launchDefault.value = null;
 });
@@ -35,6 +40,11 @@ describe("<SpawnAccountPicker>", () => {
     expect(activeLabel(html)).toBe("B");
     // Exactly one chip is active.
     expect(html.match(/is-active/g)).toHaveLength(1);
+  });
+
+  it("renders nothing with a single registered account", () => {
+    accounts.value = [{ id: "default", label: "A" }];
+    expect(render(<SpawnAccountPicker />)).toBe("");
   });
 
   it("renders one chip per account plus auto", () => {

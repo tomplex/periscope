@@ -5,7 +5,8 @@
 // why each account collapses to a single `headline` meter (its highest-percent
 // one, i.e. the limit that actually binds right now) while `meters` keeps the
 // full ordered set for the expanded view.
-import { ACCOUNTS, accountLabel } from "../accounts.js";
+import { accountLabel } from "../accounts.js";
+import { accounts } from "../store.js";
 
 // Stale once the fetch is two refresh intervals old (server refreshes every
 // 5 min on success) — beyond that the server is failing to fetch, not just
@@ -35,11 +36,11 @@ function orderMeters(meters) {
     .map((k) => ({ key: k, label: meterLabel(k), m: meters[k] }));
 }
 
-// Registered accounts first, in their canonical A/B order; anything else
-// (a hand-edited registry) sorted after, so an unknown id is visible rather
+// Registered accounts first, in registry order; anything else (a meter set for
+// an id no longer registered) sorted after, so an unknown id is visible rather
 // than silently dropped.
 function orderAccounts(ids) {
-  const known = ACCOUNTS.map((a) => a.id).filter((id) => ids.includes(id));
+  const known = accounts.value.map((a) => a.id).filter((id) => ids.includes(id));
   const rest = ids.filter((id) => !known.includes(id)).sort();
   return [...known, ...rest];
 }

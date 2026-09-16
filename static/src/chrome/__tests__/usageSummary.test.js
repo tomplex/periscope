@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { accounts } from "../../store.js";
 import { STALE_AFTER_S, summarizeAccounts, WASTE_HORIZON_S, wasteMark } from "../usageSummary.js";
 
 const NOW = 1_800_000_000;
@@ -11,6 +12,10 @@ function acct(meters, fetchedAt = NOW) {
 }
 
 describe("summarizeAccounts", () => {
+  beforeEach(() => {
+    accounts.value = [{ id: "default", label: "A" }, { id: "b", label: "B" }];
+  });
+
   it("returns one row per account, in A/B order, whatever the key order", () => {
     const rows = summarizeAccounts({ b: acct({ week_all: 2 }), default: acct({ week_all: 100 }) }, NOW);
     expect(rows.map((r) => [r.id, r.label])).toEqual([

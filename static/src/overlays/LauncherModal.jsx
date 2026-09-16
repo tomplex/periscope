@@ -28,13 +28,13 @@
 // added in styles.css.
 import { computed, signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { ACCOUNTS } from "../accounts.js";
+import { multiAccount } from "../accounts.js";
 import { useEscape } from "../hooks/useEscape.js";
 import { MODELS } from "../models.js";
 import * as prefs from "../prefs.js";
 import { PROFILES, profileQuery, sendsProfile } from "../profiles.js";
 import { trackLabel } from "../split/railTree.js";
-import { launchDefault, tracks, windows } from "../store.js";
+import { accounts, launchDefault, tracks, windows } from "../store.js";
 import { track } from "../track.js";
 import { apiCall } from "../util.js";
 
@@ -48,7 +48,7 @@ const newBranchName = signal(null);
 // list. Transient, cleared on every open.
 const branchQuery = signal("");
 
-// Which Claude subscription the new pane runs on ("default" | "b").
+// Which Claude subscription the new pane runs on (a registered account id).
 const account = signal("default");
 
 // Which `claude` wrapper profile the new pane runs under ("default" | "lab").
@@ -385,20 +385,22 @@ export function LauncherModal() {
           </div>
         )}
 
-        <div class="launcher-section">
-          <div class="launcher-section-label">Account</div>
-          <div class="launcher-branches">
-            {ACCOUNTS.map((a) => (
-              <button
-                key={a.id}
-                class={`launcher-branch${account.value === a.id ? " is-active" : ""}`}
-                onClick={() => { account.value = a.id; }}
-              >
-                {a.label}
-              </button>
-            ))}
+        {multiAccount() && (
+          <div class="launcher-section">
+            <div class="launcher-section-label">Account</div>
+            <div class="launcher-branches">
+              {accounts.value.map((a) => (
+                <button
+                  key={a.id}
+                  class={`launcher-branch${account.value === a.id ? " is-active" : ""}`}
+                  onClick={() => { account.value = a.id; }}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         <div class="launcher-section">
           <div class="launcher-section-label">Profile</div>

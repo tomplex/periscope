@@ -8,7 +8,7 @@
 
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { alerts, dismissedAlertIds, projects, tracks, windows } from "../../store.js";
+import { accounts, alerts, dismissedAlertIds, moveTargets, projects, tracks, windows } from "../../store.js";
 import { PaneHeader } from "../Detail.jsx";
 import { Rail } from "../Rail.jsx";
 
@@ -18,7 +18,11 @@ afterEach(() => {
   vi.useRealTimers();
   alerts.value = [];
   dismissedAlertIds.value = new Set();
+  accounts.value = [];
+  moveTargets.value = {};
 });
+
+const TWO_ACCOUNTS = [{ id: "default", label: "A" }, { id: "b", label: "B" }];
 
 describe("<Rail> render smoke", () => {
   it("renders track groups, chips, and single-branch flat tabs", () => {
@@ -91,10 +95,15 @@ describe("<Rail> render smoke", () => {
       pane({ pid: "ondefault", index: 1, target: "managed:1", account: "default", pane_id: "%2" }),
     ];
 
+    accounts.value = TWO_ACCOUNTS;
     const html = render(<Rail />);
     expect(html).toContain('class="pane-pill pane-pill-acct"');
     expect(html.split('class="pane-pill pane-pill-acct"').length - 1).toBe(1);
-    expect(html).toContain("@b");
+    expect(html).toContain("@B");
+
+    // One registered account: nothing to tell apart, so no chip at all.
+    accounts.value = TWO_ACCOUNTS.slice(0, 1);
+    expect(render(<Rail />)).not.toContain("pane-pill-acct");
   });
 
   it("chips the wrapper profile only on panes off the default profile", () => {
@@ -136,6 +145,8 @@ describe("<Rail> render smoke", () => {
       pane({ pid: "sh", index: 2, target: "managed:2", agent: null, pane_id: "%3" }),
     ];
 
+    accounts.value = TWO_ACCOUNTS;
+    moveTargets.value = { default: "b", b: "default" };
     const html = render(<Rail />);
 
     expect(html.split("rail-move-acct").length - 1).toBe(2);  // not on the shell pane

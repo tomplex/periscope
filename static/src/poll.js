@@ -9,10 +9,12 @@
 // consecutive REST failures (≈6s); a WS drop alone doesn't trip it because the
 // REST fallback keeps data flowing.
 import {
+  accounts,
   alerts,
   dragState,
   editingTarget,
   launchDefault,
+  moveTargets,
   projects,
   spawnAccount,
   spawnModel,
@@ -56,6 +58,8 @@ function applyState(data) {
   // UsagePill reads { plan, fallback, poke }.
   usage.value = { plan: data.usage_plan, fallback: data.usage, poke: data.poke || {} };
   updateInfo.value = data.update || null;
+  accounts.value = data.accounts || [];
+  moveTargets.value = data.move_targets || {};
   spawnAccount.value = data.spawn_account || null;
   spawnModel.value = data.spawn_model || null;
   launchDefault.value = data.launch_default || null;
