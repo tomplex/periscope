@@ -22,7 +22,7 @@ export const activeTarget = signal(null);     // detail-pane focused pane "sessi
 export const railSelection = signal(null);    // string highlight-key: "pane:<pid>" | "review:<worktree>" | null
 export const dragState = signal(null);
 export const usage = signal(null);
-export const updateInfo = signal(null);       // /api/state update summary: { behind, checked_at, running }
+export const updateInfo = signal(null);       // /api/state update summary: { behind, ahead, checked_at, running }
 export const accounts = signal([]);           // /api/state accounts: [{ id, label }] — the registry, in order
 export const moveTargets = signal({});        // /api/state move_targets: current account id -> move destination id
 export const spawnAccount = signal(null);     // pinned spawn account id, null = auto (launch_policy)

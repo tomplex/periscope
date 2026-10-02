@@ -13,6 +13,16 @@
 // The commit list is fetched when the popover opens, not carried on
 // /api/state: it's only wanted at the moment of deciding, and the 3s poll
 // shouldn't grow by thirty subjects.
+//
+// `ahead` rides on /api/state alongside `behind` because it decides whether the
+// button can work AT ALL: the update fast-forwards to @{u}, which refuses once
+// the checkout has local commits AND upstream has moved. Behind-only, the pill
+// armed a button that was arithmetically incapable of succeeding and gave no
+// reason.
+// The button stays ENABLED anyway — the count is up to an hour stale, so an
+// external rebase may already have fixed it, and a refused pull aborts before
+// launchd is touched (see docs/updating.md > "Ordering is the safety
+// property"). Warn, don't block.
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
 import { updateInfo } from "../store.js";
@@ -62,6 +72,7 @@ export function UpdatePill() {
   }, [open]);
   const info = updateInfo.value;
   const behind = info?.behind || 0;
+  const ahead = info?.ahead || 0;
   // The pill can vanish while the popover is open (an external pull lands,
   // behind drops to 0). Close it, or the Escape handler + document listener
   // stay registered against an invisible popover and eat one Escape meant
@@ -132,11 +143,19 @@ export function UpdatePill() {
   const running = busy || info.running;
   const n = info.behind;
   const plural = `${n} commit${n === 1 ? "" : "s"} behind origin`;
+  // Only meaningful while the pill is up (behind > 0): ahead alone is a pull
+  // with nothing to do, which fast-forwards fine.
+  const blocked = n > 0 && ahead > 0;
+  const localPlural = `${ahead} local commit${ahead === 1 ? "" : "s"}`;
+  const warn = `${localPlural} not on origin — the update's fast-forward will refuse. `
+    + "Rebase (`git pull`) or push first.";
   const title = error
     ? `update failed:\n${error}`
     : running
       ? "updating — periscope will restart itself"
-      : `${plural} — click to see what's changing`;
+      : blocked
+        ? `${plural}, but ${warn}`
+        : `${plural} — click to see what's changing`;
 
   return (
     <div class="update-dd" ref={ref}>
@@ -149,10 +168,11 @@ export function UpdatePill() {
         disabled={running}
         onClick={running ? undefined : toggle}
       >
-        {running ? "updating…" : error ? "⚠ update failed" : `↑ ${n} behind`}
+        {running ? "updating…" : error ? "⚠ update failed" : `↑ ${n} behind${blocked ? " ⚠" : ""}`}
       </button>
       <div class="tb-dd-menu update-menu" role="dialog" hidden={!open}>
         <div class="update-menu-head">{plural}</div>
+        {blocked && <div class="update-menu-warn">{warn}</div>}
         {error && <pre class="update-menu-error">{error}</pre>}
         <div class="update-commits">
           <CommitList commits={commits} behind={n} />

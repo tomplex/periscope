@@ -15,17 +15,30 @@ exists:
   leaves those panes unhooked, and the transcript view / narrator / resurrect
   go dark for them with no error anywhere.
 
-**Ordering is the safety property.** `git pull --ff-only` runs before anything
+**Ordering is the safety property.** The fetch + fast-forward runs before anything
 touches launchd, so the common failures (dirty tree, diverged branch) abort
 with the running server completely untouched. That's what makes the
 dashboard-driven path viable: a failed update leaves the server alive to serve
 the reason back. Verified by running the verb with a dirty tree and on a branch
 with no upstream — both exit 1 with prod's pid unchanged.
 
+**Why `merge --ff-only @{u}` and not `git pull --ff-only`.** On git 2.33,
+`git pull --ff-only` dies `Not possible to fast-forward, aborting.` whenever the
+checkout is merely AHEAD of upstream — even with nothing to fetch. pull.c asks
+"is the fetched head a descendant of HEAD" and never reaches an
+already-up-to-date case, so being ahead by one local commit is fatal on its own.
+On a fork checkout that can't push to `origin/main`, that wedged the verb
+permanently: every update failed, including the ones with nothing to pull.
+An explicit `git fetch` followed by `git merge --ff-only '@{u}'` answers all
+three cases correctly — no-op when ahead only, fast-forward when behind, refuse
+on genuine divergence — and keeps the refusal ahead of anything touching
+launchd. Verified against both: `pull --ff-only` exits 128 where
+`merge --ff-only @{u}` prints "Already up to date."
+
 The verb deliberately does **not** run `npm run build`: `static/dist/app.js` is
 committed, so the pull already carries it, and a build against drifted
 `node_modules` can emit a different bundle — dirtying the tree and breaking the
-NEXT `--ff-only` pull. It ends by polling `/api/healthz` until the served SHA
+NEXT fast-forward. It ends by polling `/api/healthz` until the served SHA
 matches what it pulled, so "updated" is evidence rather than a claim (and
 treats healthz's `unknown` — git absent from the launchd PATH — as success, or
 it would report a timeout for an update that landed).
@@ -55,8 +68,18 @@ to answer a credential or host-key prompt, and a wedged `git pull` would pin
 than refusing forever.
 
 **From the dashboard.** `updater.check()` runs on the activity worker's tick
-(self-throttled hourly) and counts commits behind the tracked upstream; the
-count rides `/api/state` as `update` and renders as a header pill. A probe that
+(self-throttled hourly) and counts commits behind AND ahead of the tracked
+upstream — one `rev-list --count --left-right @{u}...HEAD`; the counts ride
+`/api/state` as `update` and render as a header pill. **`ahead` is what makes
+the pill honest.** The update fast-forwards to `@{u}`, which refuses once the
+checkout carries local commits AND upstream has moved, so a behind-only pill
+armed a button
+that was arithmetically incapable of succeeding and gave no reason — the
+reported "I can't get the update button to work" on a fork checkout whose
+`main` held one unpushed commit while origin moved 10 ahead. With both counts
+the popover names the blocker. The button stays ENABLED: the count is up to an
+hour stale (an external rebase may already have cleared it), and a refused pull
+aborts before launchd is touched. Warn, don't block. A probe that
 can't answer (offline, no upstream) LEAVES THE LAST COUNT STANDING — going
 offline doesn't make the checkout less behind, and publishing 0 would render as
 "up to date", the one wrong answer. Assert that through `summary()`, not
@@ -75,7 +98,7 @@ failure = the server is still alive and `/api/update/status` has the log tail.
 
 Both `check()` (worker-gated) and `start()` (explicitly gated) are prod-only. A
 dev instance runs from a worktree on a feature branch, where `git pull
---ff-only` would fail or pull the WRONG branch over work in progress; `POST
+fast-forward would fail or pull the WRONG branch over work in progress; `POST
 /api/update` 409s there. This also means the pill is invisible in dev by
 construction — hence the render test in
 `static/src/chrome/__tests__/updatePillRender.test.jsx`, since the browser

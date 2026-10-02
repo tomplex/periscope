@@ -127,7 +127,7 @@ case "$1" in
     # Deliberately does NOT run `npm run build`: static/dist/app.js is
     # committed, so the pull already carries it, and a build against drifted
     # node_modules can emit a different bundle — dirtying the tree and breaking
-    # the NEXT `git pull --ff-only`.
+    # the NEXT fast-forward.
     # `uv` is a precondition of write_plist, so resolve it BEFORE the pull. A
     # pull that lands and then aborts at write_plist leaves the new committed
     # bundle (served per-request from disk) talking to the old Python — a
@@ -154,8 +154,21 @@ case "$1" in
       echo "working tree is dirty — commit or stash before updating" >&2
       exit 1
     }
-    git -C "$REPO" pull --ff-only || {
-      echo "git pull --ff-only failed — the checkout has diverged from origin" >&2
+    # NOT `git pull --ff-only`: on git 2.33 that dies "Not possible to
+    # fast-forward, aborting." whenever the checkout is merely AHEAD of
+    # upstream, even with nothing to fetch — pull.c checks "is the fetched head
+    # a descendant of HEAD" and never reaches an already-up-to-date case. On a
+    # fork checkout carrying local commits that wedged the verb permanently:
+    # every update failed, including the one that had nothing to pull.
+    # fetch + `merge --ff-only` answers all three cases correctly — no-op when
+    # ahead only, fast-forward when behind, refuse on GENUINE divergence, which
+    # is the ordering guarantee that keeps launchd untouched on failure.
+    git -C "$REPO" fetch --quiet || {
+      echo "git fetch failed — can't reach origin" >&2
+      exit 1
+    }
+    git -C "$REPO" merge --ff-only '@{u}' || {
+      echo "fast-forward to @{u} failed — the checkout has diverged from origin" >&2
       exit 1
     }
     NEW="$(git -C "$REPO" rev-parse --short HEAD)"

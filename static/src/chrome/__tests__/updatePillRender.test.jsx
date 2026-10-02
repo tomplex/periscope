@@ -39,6 +39,33 @@ describe("<UpdatePill>", () => {
     expect(render(<UpdatePill />)).toContain("1 commit behind origin");
   });
 
+  it("warns when local commits make the fast-forward impossible", () => {
+    // The failure this exists for: the update's fast-forward refuses once the
+    // checkout carries local commits AND upstream has moved, so "↑ 10 behind"
+    // alone armed a button that could not succeed and said nothing about why.
+    updateInfo.value = { behind: 10, ahead: 1, checked_at: 1, running: false };
+    const html = render(<UpdatePill />);
+    expect(html).toContain("↑ 10 behind ⚠");
+    expect(html).toContain("1 local commit");
+    expect(html).toContain("will refuse");
+    // Still armed: the count can be stale (an external rebase already fixed
+    // it), and a failed update is harmless — it aborts before touching launchd.
+    expect(html).toContain("pull, re-provision and restart");
+  });
+
+  it("pluralizes the local-commit warning", () => {
+    updateInfo.value = { behind: 3, ahead: 4, checked_at: 1, running: false };
+    expect(render(<UpdatePill />)).toContain("4 local commits");
+  });
+
+  it("says nothing about local commits when there are none", () => {
+    updateInfo.value = { behind: 10, ahead: 0, checked_at: 1, running: false };
+    const html = render(<UpdatePill />);
+    expect(html).not.toContain("will refuse");
+    expect(html).toContain("↑ 10 behind");
+    expect(html).not.toContain("⚠");
+  });
+
   it("shows a disabled running state when an update is already in flight", () => {
     // `running` arrives from the server, so a second tab must show the state
     // an update started in the first one — not an armed button.

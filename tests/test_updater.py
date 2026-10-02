@@ -13,6 +13,7 @@ def _reset(monkeypatch):
     """updater keeps module-level cache/handle state; reset between tests."""
     monkeypatch.setattr(updater, "_checked_at", 0.0)
     monkeypatch.setattr(updater, "_behind", 0)
+    monkeypatch.setattr(updater, "_ahead", 0)
     monkeypatch.setattr(updater, "_commits", [])
     monkeypatch.setattr(updater, "_proc", None)
     monkeypatch.setattr(updater, "_started_at", 0.0)
@@ -29,15 +30,43 @@ def _git_stub(responses):
 
 def test_check_counts_commits_behind(monkeypatch):
     monkeypatch.setattr(updater, "_git", _git_stub({
-        "rev-parse": "origin/main", "fetch": "", "rev-list": "12",
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "12\t0",
     }))
     assert updater.check() == 12
     assert updater.summary()["behind"] == 12
 
 
+def test_check_counts_local_commits_ahead(monkeypatch):
+    """`ahead` is why the Update button refuses, so the pill has to know it.
+
+    The update fast-forwards to `@{u}`, which refuses once the checkout carries
+    local commits AND upstream has moved. Counting only `behind` rendered
+    "↑ 10 behind" over a button that could not possibly succeed, with the
+    reason nowhere in the UI (the fdy fork: one unpushed commit sat on `main`
+    for two weeks while origin moved 10 ahead).
+    """
+    monkeypatch.setattr(updater, "_git", _git_stub({
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "10\t1",
+    }))
+    assert updater.check() == 10
+    assert updater.summary()["ahead"] == 1
+    assert updater.status()["ahead"] == 1
+
+
+def test_check_keeps_last_ahead_when_it_cannot_answer(monkeypatch):
+    # Same rule as the count it travels with: a failed probe leaves it standing.
+    monkeypatch.setattr(updater, "_git", _git_stub({
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "4\t2",
+    }))
+    updater.check()
+    monkeypatch.setattr(updater, "_git", _git_stub({"rev-parse": "origin/main", "fetch": None}))
+    updater.check(force=True)
+    assert updater.summary()["ahead"] == 2
+
+
 def test_check_records_commit_subjects(monkeypatch):
     monkeypatch.setattr(updater, "_git", _git_stub({
-        "rev-parse": "origin/main", "fetch": "", "rev-list": "2",
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "2\t0",
         "log": "abc1234\x1ffix the thing: a b\ndef5678\x1fsecond",
     }))
     updater.check()
@@ -52,11 +81,11 @@ def test_check_records_commit_subjects(monkeypatch):
 @pytest.mark.parametrize("broken", [
     {"rev-parse": "origin/main", "fetch": None},
     # rev-list answered, git log didn't: the count refreshes, the list stands.
-    {"rev-parse": "origin/main", "fetch": "", "rev-list": "3", "log": None},
+    {"rev-parse": "origin/main", "fetch": "", "rev-list": "3\t0", "log": None},
 ])
 def test_check_keeps_last_commits_when_it_cannot_answer(monkeypatch, broken):
     monkeypatch.setattr(updater, "_git", _git_stub({
-        "rev-parse": "origin/main", "fetch": "", "rev-list": "1", "log": "abc1234\x1fone",
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "1\t0", "log": "abc1234\x1fone",
     }))
     updater.check()
     monkeypatch.setattr(updater, "_git", _git_stub(broken))
@@ -69,7 +98,7 @@ def test_check_is_throttled(monkeypatch):
 
     def fake(*args, **kwargs):
         calls.append(args[0])
-        return {"rev-parse": "origin/main", "fetch": "", "rev-list": "3"}.get(args[0])
+        return {"rev-parse": "origin/main", "fetch": "", "rev-list": "3\t0"}.get(args[0])
 
     monkeypatch.setattr(updater, "_git", fake)
     assert updater.check() == 3
@@ -82,14 +111,14 @@ def test_check_is_throttled(monkeypatch):
 
 def test_check_force_bypasses_throttle(monkeypatch):
     monkeypatch.setattr(updater, "_git", _git_stub({
-        "rev-parse": "origin/main", "fetch": "", "rev-list": "1",
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "1\t0",
     }))
     updater.check()
     calls = []
 
     def fake(*args, **kwargs):
         calls.append(args[0])
-        return {"rev-parse": "origin/main", "fetch": "", "rev-list": "1"}.get(args[0])
+        return {"rev-parse": "origin/main", "fetch": "", "rev-list": "1\t0"}.get(args[0])
 
     monkeypatch.setattr(updater, "_git", fake)
     updater.check(force=True)
@@ -107,6 +136,7 @@ def test_check_silent_without_upstream(monkeypatch):
     {"rev-parse": "origin/main", "fetch": None},                    # offline
     {"rev-parse": None},                                            # no upstream
     {"rev-parse": "origin/main", "fetch": "", "rev-list": ""},      # bad count
+    {"rev-parse": "origin/main", "fetch": "", "rev-list": "9"},     # one-sided count
 ])
 def test_check_keeps_last_count_when_it_cannot_answer(monkeypatch, broken):
     """A failed probe must LEAVE THE COUNT STANDING, not reset it to 0.
@@ -117,7 +147,7 @@ def test_check_keeps_last_count_when_it_cannot_answer(monkeypatch, broken):
     pass even if _behind were being clobbered.
     """
     monkeypatch.setattr(updater, "_git", _git_stub({
-        "rev-parse": "origin/main", "fetch": "", "rev-list": "9",
+        "rev-parse": "origin/main", "fetch": "", "rev-list": "9\t0",
     }))
     updater.check()
     assert updater.summary()["behind"] == 9
@@ -131,7 +161,7 @@ def test_check_keeps_last_count_when_it_cannot_answer(monkeypatch, broken):
 
 def test_start_refuses_on_dev_instance(monkeypatch):
     # A dev instance runs from a worktree on a feature branch: `git pull
-    # --ff-only` there would fail, or pull the WRONG branch over live work.
+    # forward there would fail, or pull the WRONG branch over live work.
     monkeypatch.setattr(config, "DEV", True)
     with pytest.raises(RuntimeError, match="prod-only"):
         updater.start()
