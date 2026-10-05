@@ -71,6 +71,34 @@ def _cached_worktrees(repo: str) -> list[tuple[str, str | None]]:
     return fresh
 
 
+def for_branch(repo: str, branch: str) -> str | None:
+    """Path of the worktree of `repo` currently on `branch`, or None. Read
+    FRESH — never through the 60s cache.
+
+    The cache only ever learns about branch moves periscope itself made. A
+    plain `git switch` inside a worktree moves one with nothing invalidated, so
+    a cached answer to "where is branch X checked out?" is wrong in BOTH
+    directions: it names a worktree that has since drifted off the branch (the
+    new tab lands in unrelated work), and it misses one that has drifted onto
+    it (`git worktree add` then dies `already checked out`, or — when the
+    branch is free for that instant — a duplicate `<slug>-N` gets minted;
+    `.worktrees/master-2` … `-5` on a repo whose owner branches off inside the
+    master worktree by habit). Every caller is a create-or-reuse decision
+    behind one explicit user action, where a `git worktree list` costs nothing.
+    The cache is for the 3s /api/state poll, not for this.
+
+    Repopulates the cache on the way past, so the affiliation chips that DO
+    read it get the fresh list for free.
+    """
+    fresh = _list_worktrees(repo)
+    with _lock:
+        _cache[os.path.realpath(repo)] = (time.time(), fresh)
+    for path, wt_branch in fresh:
+        if wt_branch == branch:
+            return path                   # already realpath'd by _list_worktrees
+    return None
+
+
 def invalidate(repo: str) -> None:
     """Drop the cache entry for this repo. Call after `git worktree add`
     or `git worktree remove`."""

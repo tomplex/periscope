@@ -8,9 +8,14 @@ Caller passes a repo path + new branch name + optional base. We:
      ref on failure, surface a warning).
   4. `git worktree add -b <branch> <path> origin/<base>`. Path layout
      is hardcoded sibling: `~/dev/worktrees/<repo-basename>/<branch>`
-     (with `/` in branch → `-` for path safety).
+     (with `/` in branch → `-` for path safety), suffixed `-2`, `-3`, …
+     when a drifted worktree already squats that name.
   5. Invalidate the worktrees cache for the repo so the next
      /api/state poll re-runs `git worktree list`.
+
+Idempotent: step 4 is skipped and the existing path returned when `branch`
+is already checked out in some worktree of the repo (git permits only one),
+decided under the lock off a FRESH `git worktree list`.
 
 Local default-branch ref is NOT touched. Local main-checkout HEAD is
 NOT touched. See the workflow-management spec §Verb 1 + the v1
@@ -105,6 +110,28 @@ def worktree_path(repo: str, slug: str) -> str:
     return str(WORKTREES_DIR / repo_name / safe)
 
 
+def free_worktree_path(repo: str, slug: str) -> str:
+    """First unoccupied worktree path for `slug`, suffixing `-2`, `-3`, ….
+
+    The directory name is a fossil of the branch the worktree was FORKED for,
+    never of the branch currently checked out there — one `git switch` inside a
+    worktree drifts the two apart. fdy's `.worktrees/master` had been sitting on
+    a feature branch for weeks, so deriving the path from the slug alone made
+    `master` unopenable from BOTH open surfaces: "+ New tab → master" 409'd with
+    "worktree path already exists". Nothing ever reads a path back to a branch
+    (`open_ops.worktree_for_branch` asks `git worktree list`), so a de-collided
+    directory name costs nothing.
+    """
+    base = worktree_path(repo, slug)
+    if not Path(base).exists():
+        return base
+    for n in range(2, 51):
+        cand = f"{base}-{n}"
+        if not Path(cand).exists():
+            return cand
+    raise ValueError(f"worktree path already exists: {base}")
+
+
 def _branch_exists(repo: str, branch: str) -> bool:
     """True when `branch` is already a local ref in `repo`."""
     code, _ = _run(
@@ -135,13 +162,15 @@ def spawn_worktree(
         "path": <absolute worktree path>,
         "base_branch": <resolved base branch name>,
         "branch": <new branch name as created>,
+        "reused": <True when an existing worktree on `branch` was returned
+                   rather than a new one created>,
         "warning": <optional message about non-fatal fetch failure>,
       }
 
     Raises:
-      ValueError if `branch` is empty, `repo` doesn't exist, the
-      computed worktree path already exists, or `git worktree add`
-      fails.
+      ValueError if `branch` is empty, `repo` doesn't exist, every
+      de-collided path candidate is taken (see `free_worktree_path`),
+      or `git worktree add` fails.
     """
     if not branch:
         raise ValueError("branch is required")
@@ -155,16 +184,10 @@ def spawn_worktree(
 
     base = base_branch or detect_default_branch(repo)
 
-    wt_path_str = worktree_path(repo, branch)
-    wt_path = Path(wt_path_str)
-
-    if wt_path.exists():
-        raise ValueError(f"worktree path already exists: {wt_path_str}")
-
     # Branch-name safety: reject anything that would be interpreted as a
     # git flag. `--` after the flag/path positional arguments doesn't help
     # here because -b takes the branch as its value — a leading `-` in
-    # the branch name still trips git. Reject it.
+    # the branch name still trips git. Reject it. Checked before any git call.
     if branch.startswith("-"):
         raise ValueError(f"branch name cannot start with '-': {branch!r}")
 
@@ -185,6 +208,26 @@ def spawn_worktree(
             log.warning("worktree_spawn: %s", warning)
 
     with repo_lock(repo):
+        # Idempotent: a branch already checked out somewhere comes back as THAT
+        # worktree. git allows a branch in only one worktree, so without this
+        # a second spawn either died `already checked out` (no "already
+        # exists" in the message, so the launcher showed a bare 400) or — when
+        # the branch was free for that instant — quietly minted the next slug,
+        # which is where `.worktrees/master-2` … `-5` came from. The route's
+        # pre-check cannot be the guard: it runs outside this lock, so two
+        # clicks race straight past it.
+        existing = worktrees.for_branch(repo, branch)
+        if existing:
+            result = {"path": existing, "base_branch": base,
+                      "branch": branch, "reused": True}
+            if warning:
+                result["warning"] = warning
+            return result
+
+        # Path resolution belongs under the lock too: two concurrent spawns
+        # would otherwise both see the same slug free and race onto it.
+        wt_path_str = free_worktree_path(repo, branch)
+        wt_path = Path(wt_path_str)
         # Ensure parent dir exists for both layouts. mkdir(parents=True)
         # handles arbitrary depth.
         wt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,7 +251,8 @@ def spawn_worktree(
 
     worktrees.invalidate(repo)
 
-    result = {"path": wt_path_str, "base_branch": base, "branch": branch}
+    result = {"path": wt_path_str, "base_branch": base, "branch": branch,
+              "reused": False}
     if warning:
         result["warning"] = warning
     return result

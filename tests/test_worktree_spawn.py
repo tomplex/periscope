@@ -174,3 +174,54 @@ def test_spawn_worktree_still_creates_a_brand_new_branch(tmp_git_repo, tmp_workt
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert head == "brand-new"
+
+
+def test_spawn_worktree_de_collides_a_drifted_slug(tmp_git_repo, tmp_worktrees):
+    """A worktree dir keeps the slug of the branch it was FORKED for; the
+    branch INSIDE it drifts the moment anyone runs `git switch` there. Opening
+    the original branch then found its slug path occupied and hard-failed —
+    fdy's `.worktrees/master` had been sitting on a feature branch for weeks,
+    which made "+ New tab → master" 409 with "worktree path already exists".
+    """
+    import subprocess
+
+    from periscope.worktree_spawn import spawn_worktree
+    repo = str(tmp_git_repo)
+
+    first = spawn_worktree(repo, "wip", fetch=False)
+    # Drift: the dir is still called `wip`, the branch in it is not.
+    subprocess.run(["git", "-C", first["path"], "switch", "-q", "-c", "drifted"],
+                   check=True)
+
+    res = spawn_worktree(repo, "wip", fetch=False)
+
+    assert res["path"] != first["path"]
+    head = subprocess.run(
+        ["git", "-C", res["path"], "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == "wip"
+
+
+def test_spawn_worktree_reuses_the_worktree_already_on_the_branch(tmp_git_repo, tmp_worktrees):
+    """A branch already checked out somewhere must come back as THAT worktree,
+    never as a second directory for the same branch.
+
+    git refuses the second checkout — `fatal: 'master' is already checked out
+    at …` — and that message carries no "already exists", so it surfaced in the
+    launcher as a bare 400. Worse, when the branch happened to be free at that
+    instant `free_worktree_path` quietly minted the next slug instead, which is
+    where `.worktrees/master-2` … `-5` came from. The route's pre-check reads a
+    60s cache and cannot be the guard; the authoritative one belongs here,
+    under the repo lock that already serializes the mutation.
+    """
+    from periscope.worktree_spawn import spawn_worktree
+    repo = str(tmp_git_repo)
+
+    first = spawn_worktree(repo, "feat", fetch=False)
+    again = spawn_worktree(repo, "feat", fetch=False)
+
+    assert again["path"] == first["path"]
+    assert again["reused"] is True
+    # No second directory was minted for the same branch.
+    assert sorted(p.name for p in (tmp_worktrees / "repo").iterdir()) == ["feat"]
