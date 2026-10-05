@@ -57,12 +57,10 @@ class OpenResult:
 
 def worktree_for_branch(repo: str, branch: str) -> str | None:
     """Path of an existing worktree checked out on `branch`, or None.
-    Authoritative source is `git worktree list` (via the 60s cache), not a
-    recomputed path."""
-    for path, wt_branch in worktrees._cached_worktrees(repo):
-        if wt_branch == branch:
-            return os.path.realpath(path)
-    return None
+    Authoritative source is `git worktree list`, read fresh — see
+    `worktrees.for_branch` for why the 60s cache is the wrong answer to a
+    create-or-reuse question."""
+    return worktrees.for_branch(repo, branch)
 
 
 def _git_toplevel(path: str) -> str:

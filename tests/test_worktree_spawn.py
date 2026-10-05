@@ -201,3 +201,27 @@ def test_spawn_worktree_de_collides_a_drifted_slug(tmp_git_repo, tmp_worktrees):
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert head == "wip"
+
+
+def test_spawn_worktree_reuses_the_worktree_already_on_the_branch(tmp_git_repo, tmp_worktrees):
+    """A branch already checked out somewhere must come back as THAT worktree,
+    never as a second directory for the same branch.
+
+    git refuses the second checkout — `fatal: 'master' is already checked out
+    at …` — and that message carries no "already exists", so it surfaced in the
+    launcher as a bare 400. Worse, when the branch happened to be free at that
+    instant `free_worktree_path` quietly minted the next slug instead, which is
+    where `.worktrees/master-2` … `-5` came from. The route's pre-check reads a
+    60s cache and cannot be the guard; the authoritative one belongs here,
+    under the repo lock that already serializes the mutation.
+    """
+    from periscope.worktree_spawn import spawn_worktree
+    repo = str(tmp_git_repo)
+
+    first = spawn_worktree(repo, "feat", fetch=False)
+    again = spawn_worktree(repo, "feat", fetch=False)
+
+    assert again["path"] == first["path"]
+    assert again["reused"] is True
+    # No second directory was minted for the same branch.
+    assert sorted(p.name for p in (tmp_worktrees / "repo").iterdir()) == ["feat"]

@@ -53,6 +53,22 @@ Invariants worth knowing before touching it:
   fails outright on a branch git already knows, so a branch that exists with no
   worktree used to be unreachable from BOTH surfaces. `_branch_exists` picks
   `worktree add <path> <branch>` (checkout) vs `-b` (fork) accordingly.
+- **`spawn_worktree` is idempotent, and that check is the only trustworthy
+  one.** git allows a branch in exactly one worktree, so a spawn for a branch
+  already checked out returns THAT worktree (`reused: True`) instead of adding.
+  It decides under the repo lock off a fresh `git worktree list`, because the
+  route's `worktree_for_branch` pre-check runs outside the lock and two clicks
+  race straight past it. Before this, the loser of that race died
+  `fatal: 'master' is already checked out at …` — a message with no "already
+  exists" in it, so it surfaced as a bare 400 — and whenever the branch WAS
+  free for that instant, `free_worktree_path` quietly minted the next slug.
+  That is where `.worktrees/master-2` … `-5` came from.
+- **Nothing answers "where is branch X checked out?" from the cache.**
+  `worktrees.for_branch` reads fresh. The 60s cache only learns the branch
+  moves periscope itself made; a plain `git switch` inside a worktree moves one
+  silently, which made the cached answer wrong in both directions — naming a
+  worktree that had drifted off the branch, and missing one that had drifted
+  onto it. The cache stays for the 3s poll's affiliation chips.
 - **`_layout_two_window` stamps BOTH windows** (claude + shell) so the full
   pane list is known synchronously — `place_in_rail` needs it without waiting
   for the next poll's `resolve_pids`.

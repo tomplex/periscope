@@ -418,3 +418,25 @@ def test_ensure_session_never_auto_picks_for_codex(monkeypatch):
                         lambda account=None, model=None: Launch(account or "b", None, ""))
     open_ops.ensure_session({}, "/repo", agent="codex")
     assert seen.get("account") in (None, "")
+
+
+def test_worktree_for_branch_does_not_answer_from_a_stale_cache(tmp_git_repo, tmp_path):
+    """A `git switch` inside a worktree moves a branch with NO invalidation.
+
+    The 60s worktrees cache exists for the 3s /api/state poll, not for a
+    create-or-reuse decision. Reading it here answered wrong in both
+    directions: naming a worktree that had since drifted OFF the branch (the
+    new tab lands in unrelated work), and missing one that had drifted ONTO it
+    — which is how `.worktrees/master-2`, `-3`, `-4`, `-5` got minted on a repo
+    whose owner branches off inside the master worktree as a matter of habit.
+    """
+    repo = str(tmp_git_repo)
+    wt = tmp_path / "wt-feat"
+    subprocess.run(["git", "-C", repo, "worktree", "add", "-q", "-b", "feat", str(wt)],
+                   check=True, capture_output=True)
+    assert open_ops.worktree_for_branch(repo, "feat") == os.path.realpath(wt)
+
+    subprocess.run(["git", "-C", str(wt), "switch", "-q", "-c", "elsewhere"],
+                   check=True, capture_output=True)
+    assert open_ops.worktree_for_branch(repo, "feat") is None
+    assert open_ops.worktree_for_branch(repo, "elsewhere") == os.path.realpath(wt)
