@@ -29,20 +29,17 @@ python -m history stats
 
 ## Hook installation
 
-Append to `~/.claude/settings.json`:
+`bin/periscope install-hook` registers the `SessionEnd` hook
+(`cd <repo> && uv run python -m history hook`) in every account's
+`settings.json` alongside the pane-session hooks; `bin/periscope install`
+runs it. The hook reads a JSON event from stdin with a `transcript_path`
+field. Errors are swallowed — the hook never blocks Claude Code shutdown.
 
-```jsonc
-{
-  "hooks": {
-    "SessionEnd": [
-      { "command": "python -m history hook" }
-    ]
-  }
-}
-```
-
-The hook reads a JSON event from stdin with a `transcript_path` field.
-Errors are swallowed — the hook never blocks Claude Code shutdown.
+Summaries need `ANTHROPIC_API_KEY` in the repo's `.env` (the hook
+`load_dotenv`s it, same as `server.py`). Without it the hook still indexes
+the mechanical fields (FTS over first/last messages, project, branch) with
+`summary=NULL`; `python -m history resummarize --missing` fills those in
+once a key is set.
 
 ## Storage
 
