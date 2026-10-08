@@ -54,7 +54,7 @@ sync is the unkillable-job incident `bg_commander._account_env` documents.
 ## Session poke (`poke.py`)
 
 Every day at `settings.poke_at` (default 08:00; `""` disables) periscope runs
-`claude -p ok --model claude-haiku-4-5 --strict-mcp-config` under each
+`claude -p ok --model claude-haiku-5-5 --strict-mcp-config` under each
 account's `CLAUDE_CONFIG_DIR` so the 5h session window is anchored at 08:00
 and resets ~13:00 — four hours on each side of the working day. Both
 accounts: with session-pressure rerouting both see daily use, and the second

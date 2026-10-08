@@ -8,7 +8,7 @@ from history.search import _build_fts_query, search
 
 def _seed_session(conn, session_id, summary, tags, project, branch="main",
                    first_user="hello", final_asst="done", started_at=1000,
-                   summary_model="claude-haiku-4-5"):
+                   summary_model="claude-haiku-5-5"):
     """Insert a row representing a Haiku-summarized (non-trivial) session.
     Pass summary_model=None for a row that should be filtered by the default
     `include_trivial=False`."""

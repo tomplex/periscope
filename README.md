@@ -139,7 +139,7 @@ xattr -dr com.apple.quarantine /Applications/Periscope.app
 
 ## Auto-rename (optional)
 
-The ✨ button on each session header asks Haiku 4.5 to suggest fresh,
+The ✨ button on each session header asks Haiku 5.5 to suggest fresh,
 descriptive names for every window in the session based on current pane
 content. Requires an Anthropic API key:
 

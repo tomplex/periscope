@@ -122,7 +122,7 @@ def test_poke_account_runs_haiku_headless_on_the_account_and_records_a_verified_
     seen = _worker(monkeypatch, resets_at=at + 5 * 3600 + 10)
     poke.poke_account("b", "/Users/x/.claude-b")
     argv = seen["argv"]
-    assert argv[1:] == ["-p", "ok", "--model", "claude-haiku-4-5", "--strict-mcp-config"]
+    assert argv[1:] == ["-p", "ok", "--model", "claude-haiku-5-5", "--strict-mcp-config"]
     assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/Users/x/.claude-b"
     assert "ANTHROPIC_API_KEY" not in seen["env"]
     assert seen["cwd"] == poke.os.path.expanduser("~")

@@ -559,7 +559,7 @@ def tick_env(fresh_activity_db, tmp_path, monkeypatch):
         "live_name": "claude",
     }
 
-    def fake_complete(prompt, model="claude-haiku-4-5"):
+    def fake_complete(prompt, model="claude-haiku-5-5"):
         env["haiku_calls"].append(prompt)
         r = env["response"]
         if isinstance(r, Exception):

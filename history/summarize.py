@@ -128,7 +128,7 @@ def build_summary_prompt(rec: SessionRecord) -> str:
 
 
 def call_summarizer(client, rec: SessionRecord, *,
-                    model: str = "claude-haiku-4-5",
+                    model: str = "claude-haiku-5-5",
                     max_retries: int = 3) -> SummaryResult | None:
     """Single Haiku call with forced tool-use. Returns None on persistent failure
     (caller stores summary=NULL and logs)."""
