@@ -55,7 +55,12 @@ it's being run from a linked worktree.
 
 `bin/periscope install-hook` merges Periscope's Claude and Codex lifecycle
 hooks into their existing user configuration; it does not replace unrelated
-hooks. Provider-specific commands are also available:
+hooks. On the Claude side that is the pane→session mapping hooks
+(`SessionStart`, `UserPromptSubmit`) and the `SessionEnd` history indexer
+that feeds `/history` — the latter summarizes with Haiku and needs
+`ANTHROPIC_API_KEY` in `.env` (see [Auto-rename](#auto-rename-optional));
+without it sessions are indexed but unsummarized. Provider-specific commands
+are also available:
 
 ```sh
 bin/periscope install-claude-hook

@@ -231,8 +231,10 @@ case "$1" in
     # pane -> session). SessionStart fires at startup AND on /clear (immediate,
     # before the first prompt — a fresh pane shows its OWN transcript at once);
     # UserPromptSubmit catches every prompt (migrates pre-hook panes on next
-    # message). Idempotent merge — joins existing hook groups, preserves
-    # everything else.
+    # message). SessionEnd runs the history indexer (`history/`) so the
+    # finished transcript is summarized into ~/.claude/history.db — without
+    # it the /history search UI has nothing behind it. Idempotent merge —
+    # joins existing hook groups, preserves everything else.
     #
     # Runs for EVERY account config dir, not just ~/.claude. Claude reads hooks
     # from whichever CLAUDE_CONFIG_DIR it was launched under, so a second-account
@@ -244,7 +246,15 @@ case "$1" in
     python3 - "$REPO" "$(account_settings_files)" <<'PY'
 import json, os, sys
 repo = sys.argv[1]
-cmd = f"python3 {repo}/pane_session_hook.py"
+pane_cmd = f"python3 {repo}/pane_session_hook.py"
+# `cd` + `uv run`: Claude fires hooks from the pane's cwd, and `-m history`
+# only resolves from the checkout with its venv.
+hist_cmd = f"cd {repo} && uv run python -m history hook"
+wanted = (
+    ("SessionStart", pane_cmd, "pane_session_hook.py", 5),
+    ("UserPromptSubmit", pane_cmd, "pane_session_hook.py", 5),
+    ("SessionEnd", hist_cmd, "-m history hook", 120),
+)
 for p in sys.argv[2].splitlines():
     if not os.path.isdir(os.path.dirname(p)):
         continue          # that account isn't set up on this machine
@@ -254,12 +264,12 @@ for p in sys.argv[2].splitlines():
         d = {}
     hooks = d.setdefault("hooks", {})
     added = []
-    for ev in ("SessionStart", "UserPromptSubmit"):
+    for ev, cmd, marker, timeout in wanted:
         groups = hooks.setdefault(ev, [])
-        if any(h.get("command", "").endswith("pane_session_hook.py")
+        if any(marker in h.get("command", "")
                for g in groups for h in g.get("hooks", [])):
             continue
-        entry = {"type": "command", "command": cmd, "timeout": 5}
+        entry = {"type": "command", "command": cmd, "timeout": timeout}
         if groups:
             groups[0].setdefault("hooks", []).append(entry)   # join an existing group
         else:
@@ -267,9 +277,9 @@ for p in sys.argv[2].splitlines():
         added.append(ev)
     if added:
         with open(p, "w") as f: json.dump(d, f, indent=2)
-        print(f"installed pane-session hook in {p} on: {', '.join(added)}")
+        print(f"installed periscope hooks in {p} on: {', '.join(added)}")
     else:
-        print(f"pane-session hook already installed in {p}")
+        print(f"periscope hooks already installed in {p}")
 PY
     ;;
   install-codex-hook)
@@ -290,17 +300,19 @@ for p in sys.argv[1].splitlines():
     except FileNotFoundError:
         continue
     h = d.get("hooks", {})
-    for ev in ("SessionStart", "UserPromptSubmit"):
+    for ev in ("SessionStart", "UserPromptSubmit", "SessionEnd"):
         groups = h.get(ev, [])
         for g in groups:
-            g["hooks"] = [x for x in g.get("hooks", []) if not x.get("command", "").endswith("pane_session_hook.py")]
+            g["hooks"] = [x for x in g.get("hooks", [])
+                          if "pane_session_hook.py" not in x.get("command", "")
+                          and "-m history hook" not in x.get("command", "")]
         groups = [g for g in groups if g.get("hooks")]
         if groups:
             h[ev] = groups
         else:
             h.pop(ev, None)
     with open(p, "w") as f: json.dump(d, f, indent=2)
-    print(f"removed pane-session hook from {p}")
+    print(f"removed periscope hooks from {p}")
 PY
     ;;
   uninstall-codex-hook)
