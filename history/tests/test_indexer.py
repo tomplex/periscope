@@ -38,7 +38,7 @@ def test_index_one_creates_row_and_fts(temp_db, fixture_dir):
     assert row is not None
     assert row["summary"].startswith("A test summary")
     assert row["tags"] == "test,fixture,stub"
-    assert row["summary_model"] == "claude-haiku-4-5"
+    assert row["summary_model"] == "claude-haiku-5-5"
     assert row["summary_input_hash"] is not None
     fts = conn.execute("SELECT * FROM sessions_fts WHERE session_id = 'normal-001'").fetchone()
     assert fts is not None
@@ -111,16 +111,16 @@ def test_index_one_handles_summarizer_failure(temp_db, fixture_dir):
 
 
 def test_row_needs_resummary_logic():
-    row = {"summary_input_hash": "h1", "summary_model": "claude-haiku-4-5", "summary": "x"}
-    assert _row_needs_resummary(row, new_hash="h1", target_model="claude-haiku-4-5") is False
-    assert _row_needs_resummary(row, new_hash="h2", target_model="claude-haiku-4-5") is True
+    row = {"summary_input_hash": "h1", "summary_model": "claude-haiku-5-5", "summary": "x"}
+    assert _row_needs_resummary(row, new_hash="h1", target_model="claude-haiku-5-5") is False
+    assert _row_needs_resummary(row, new_hash="h2", target_model="claude-haiku-5-5") is True
     # A default-model change alone does NOT trigger resummary — a valid
     # summary stays cached; a deliberate model switch goes through
     # `resummarize --all`, which NULLs the hash to force re-summary.
     assert _row_needs_resummary(row, new_hash="h1", target_model="claude-haiku-5") is False
     # NULL summary -> always needs resummary
-    row_null = {"summary_input_hash": "h1", "summary_model": "claude-haiku-4-5", "summary": None}
-    assert _row_needs_resummary(row_null, new_hash="h1", target_model="claude-haiku-4-5") is True
+    row_null = {"summary_input_hash": "h1", "summary_model": "claude-haiku-5-5", "summary": None}
+    assert _row_needs_resummary(row_null, new_hash="h1", target_model="claude-haiku-5-5") is True
 
 
 def test_index_one_archives_source_jsonl(temp_db, fixture_dir, tmp_path, monkeypatch):

@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .db import MECHANICAL_VERSION, connect, get_meta
+from .db import DEFAULT_HAIKU_MODEL, MECHANICAL_VERSION, connect, get_meta
 from .extract import (
     SessionRecord,
     compute_summary_input_hash,
@@ -232,7 +232,7 @@ def index_one(jsonl_path: str, *, db_path: Path | str | None = None,
 
     conn = connect(db_path)
     try:
-        target_model = model or get_meta(conn, "haiku_model") or "claude-haiku-4-5"
+        target_model = model or get_meta(conn, "haiku_model") or DEFAULT_HAIKU_MODEL
         row = conn.execute(
             "SELECT summary, tags, summary_input_hash, summary_model, "
             "outcome, category, notable, topics FROM sessions WHERE session_id = ?",

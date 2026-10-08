@@ -419,7 +419,7 @@ def _rerank(rows: list[dict], query: str) -> list[dict]:
     } for r in rows]
     try:
         msg = client.messages.create(
-            model="claude-haiku-4-5",
+            model="claude-haiku-5-5",
             max_tokens=1024,
             system=[{
                 "type": "text",

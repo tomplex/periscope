@@ -63,7 +63,7 @@ def test_model_family_strips_the_context_suffix_and_matches_full_ids():
     assert model_family("fable") == "fable"
     assert model_family("opus[1m]") == "opus"
     assert model_family("claude-opus-5") == "opus"
-    assert model_family("claude-haiku-4-5") == "haiku"
+    assert model_family("claude-haiku-5-5") == "haiku"
     assert model_family("default") is None
     assert model_family("gpt-5") is None
 

@@ -32,7 +32,7 @@ DEFAULT_POKE_AT = "08:00"
 DEFAULT_GRACE_MIN = 90
 # Full id, not an alias: `claude --help` documents only fable/opus/sonnet as
 # aliases, and a rejected alias would fail silently every morning.
-_POKE_MODEL = "claude-haiku-4-5"
+_POKE_MODEL = "claude-haiku-5-5"
 _VERIFY_TOLERANCE_S = 300
 _SESSION_WINDOW_S = 5 * 3600
 _SUBPROCESS_TIMEOUT_S = 120

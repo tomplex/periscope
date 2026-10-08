@@ -67,13 +67,17 @@ def get_anthropic():
     return _anthropic_client
 
 
-def claude_complete(prompt: str, model: str = "claude-haiku-4-5") -> str:
+def claude_complete(prompt: str, model: str = "claude-haiku-5-5") -> str:
     """Single-shot completion via the Anthropic SDK. Much faster than the
     claude CLI (no MCP / hooks / settings load — just an HTTP round-trip)."""
     client = get_anthropic()
+    # Haiku 5.5 thinks by default and the thinking counts against max_tokens;
+    # low effort keeps a one-line status/rename from being truncated by its
+    # own reasoning.
     msg = client.messages.create(
         model=model,
         max_tokens=2048,
+        output_config={"effort": "low"},
         messages=[{"role": "user", "content": prompt}],
     )
     # Concatenate all text blocks (Haiku usually returns just one)

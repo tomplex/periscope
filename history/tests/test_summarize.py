@@ -52,11 +52,11 @@ def test_call_summarizer_uses_forced_tool_use():
     mock_msg.content = [mock_block]
     mock_client.messages.create.return_value = mock_msg
 
-    result = call_summarizer(mock_client, _sample_record(), model="claude-haiku-4-5")
+    result = call_summarizer(mock_client, _sample_record(), model="claude-haiku-5-5")
     assert isinstance(result, SummaryResult)
     assert result.summary.startswith("Fixed slow cohort query")
     assert result.tags == ["performance", "postgres", "cohorts"]
-    assert result.model == "claude-haiku-4-5"
+    assert result.model == "claude-haiku-5-5"
 
     # Verify the call shape
     call_kwargs = mock_client.messages.create.call_args.kwargs
@@ -65,7 +65,7 @@ def test_call_summarizer_uses_forced_tool_use():
     # Prompt caching set on the system block
     assert call_kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert call_kwargs["system"][0]["text"] == SUMMARIZE_SYSTEM_PROMPT
-    assert call_kwargs["model"] == "claude-haiku-4-5"
+    assert call_kwargs["model"] == "claude-haiku-5-5"
 
 
 def test_call_summarizer_retries_on_missing_tool_use():
@@ -131,7 +131,7 @@ def test_call_summarizer_parses_facets():
         first_user_msg="hi", last_user_msg="bye", final_assistant_msg="done",
         files_touched="[]", notable_cmds="[]", tool_use_counts="{}",
     )
-    res = call_summarizer(_Client(), rec, model="claude-haiku-4-5")
+    res = call_summarizer(_Client(), rec, model="claude-haiku-5-5")
     assert res.outcome == "shipped"
     assert res.category == "feature"
     assert res.notable is True
@@ -167,6 +167,6 @@ def test_call_summarizer_rejects_unknown_enum():
         first_user_msg="hi", last_user_msg="bye", final_assistant_msg="done",
         files_touched="[]", notable_cmds="[]", tool_use_counts="{}",
     )
-    res = call_summarizer(_Client(), rec, model="claude-haiku-4-5")
+    res = call_summarizer(_Client(), rec, model="claude-haiku-5-5")
     assert res.outcome is None      # unknown enum → None
     assert res.category is None
