@@ -6,7 +6,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = 2
 MECHANICAL_VERSION = 1
-DEFAULT_HAIKU_MODEL = "claude-haiku-4-5"
+DEFAULT_HAIKU_MODEL = "claude-haiku-5-5"
 
 DEFAULT_DB_PATH = Path(os.environ.get("CLAUDE_HISTORY_DB") or
                        Path.home() / ".claude" / "history.db")
@@ -38,19 +38,19 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     _migrate(conn)
     cur = conn.execute("SELECT key FROM meta")
     existing = {row[0] for row in cur}
-    seed = {
-        "schema_version":     str(SCHEMA_VERSION),
-        "mechanical_version": str(MECHANICAL_VERSION),
-        "haiku_model":        DEFAULT_HAIKU_MODEL,
-    }
-    for key, value in seed.items():
-        if key not in existing:
-            conn.execute("INSERT INTO meta(key, value) VALUES (?, ?)", (key, value))
-    conn.execute(
-        "INSERT INTO meta(key, value) VALUES ('schema_version', ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (str(SCHEMA_VERSION),),
-    )
+    if "mechanical_version" not in existing:
+        conn.execute("INSERT INTO meta(key, value) VALUES (?, ?)",
+                     ("mechanical_version", str(MECHANICAL_VERSION)))
+    # Code-owned keys overwrite the stored value: a DB seeded under an older
+    # Haiku kept summarizing on it after the constant moved, since the
+    # indexer reads the meta row first.
+    for key, value in (("schema_version", str(SCHEMA_VERSION)),
+                       ("haiku_model", DEFAULT_HAIKU_MODEL)):
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
     conn.commit()
 
 
