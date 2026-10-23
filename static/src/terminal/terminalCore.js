@@ -31,7 +31,7 @@ import { terminalTheme } from "./theme.js";
 // typed text lands (a 🐍 in the shell prompt reproduced it every time).
 export const XTERM_OPTIONS = {
   allowProposedApi: true,
-  fontFamily: '"SF Mono", "JetBrains Mono", "Menlo", monospace',
+  fontFamily: '"IBM Plex Mono", "JetBrains Mono", "Menlo", monospace',
   fontSize: 12,
   cursorBlink: true,
   // Holds the initial paint (up to 10k lines from capture-pane in ws.py)
@@ -433,9 +433,9 @@ function ensureTerminal() {
   term = new Terminal({
     ...XTERM_OPTIONS,
     theme: terminalTheme,
-    // CSS ligatures aren't a runtime xterm setting in the vendored bundle,
-    // but the parent container's CSS sets font-feature-settings so JetBrains
-    // Mono / SF Mono show their ligatures when present.
+    // No ligatures: IBM Plex Mono ships none, and they aren't a runtime xterm
+    // setting in the vendored bundle. .detail-xterm's font-feature-settings
+    // only matter if a ligature face goes back first in fontFamily.
     //
     // OSC 8 hyperlinks (Claude Code wraps file paths in file:// links).
     // Without a handler, xterm's fallback confirm()s then window.open()s
@@ -461,6 +461,22 @@ function ensureTerminal() {
     },
   });
   term.open(xtermHost);
+  // IBM Plex Mono is a webfont: xterm measures its cell on open, often against
+  // the Menlo fallback, and never re-measures on its own. Bouncing the family
+  // forces a fresh measure once the real face lands (the options setter drops
+  // a same-value write, so one assignment is a no-op); the refit goes through
+  // the width pin, so a sub-column difference never reaches tmux. Both faces:
+  // the bounce rebuilds the WebGL glyph atlas, and bold glyphs rasterised
+  // before the 700 file lands would otherwise stay in the fallback for good.
+  if (document.fonts?.load) {
+    const face = `${XTERM_OPTIONS.fontSize}px "IBM Plex Mono"`;
+    Promise.all([document.fonts.load(face), document.fonts.load(`bold ${face}`)]).then(() => {
+      if (!term) return;
+      term.options.fontFamily = "monospace";
+      term.options.fontFamily = XTERM_OPTIONS.fontFamily;
+      scheduleFit();
+    }, () => {});
+  }
 
   // Mouse wheel. tmux consumes the app's mouse-mode DECSET (it's a tmux pane
   // flag, `mouse_any_flag`), so the xterm mirror never sees `\e[?1003h` and

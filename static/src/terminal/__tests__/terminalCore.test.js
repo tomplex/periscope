@@ -23,6 +23,12 @@ class StubTerminal {
     this.rows = 24;
     this.unicode = {};
     this.buffer = { active: { viewportY: 0, baseY: 0 } };
+    // Mirrors the vendored setter: a same-value write fires nothing.
+    let family = "";
+    this.options = {
+      get fontFamily() { return family; },
+      set fontFamily(v) { if (v !== family) { family = v; env.familyWrites.push(v); } },
+    };
     env.term = this;
   }
   resize(cols, rows) { this.cols = cols; this.rows = rows; }
@@ -48,7 +54,7 @@ const NoopAddon = class { onContextLoss() {} dispose() {} };
 
 let core;
 beforeEach(async () => {
-  env = { box: { cols: 143, rows: 36 }, hidden: false, sockets: [], sent: [], ws: null, ro: null, term: null };
+  env = { box: { cols: 143, rows: 36 }, hidden: false, sockets: [], sent: [], ws: null, ro: null, term: null, familyWrites: [] };
   vi.useFakeTimers();
   vi.stubGlobal("Terminal", StubTerminal);
   vi.stubGlobal("WebSocket", StubSocket);
@@ -182,5 +188,66 @@ describe("terminal sizing glue", () => {
     expect(env.sent).toStrictEqual([{ type: "resize", rows: 28 }]);
     await resizeBox(180, 28);
     expect(env.sent.at(-1)).toStrictEqual({ type: "resize", cols: 180, rows: 28 });
+  });
+});
+
+describe("terminal webfont re-measure", () => {
+  // xterm measures its cell once, at open, usually against the Menlo fallback;
+  // the bounce on font load is the only re-measure. Each case is a one-line
+  // revert the sizing tests above stay green through.
+  let faces;
+  const settle = async () => {
+    for (const f of faces) f.resolve();
+    await vi.advanceTimersByTimeAsync(100); // the fit's debounce
+  };
+  beforeEach(() => {
+    faces = [];
+    vi.stubGlobal("document", {
+      createElement: stubEl,
+      fonts: {
+        load(spec) {
+          const f = { spec };
+          f.promise = new Promise((r) => { f.resolve = r; });
+          faces.push(f);
+          return f.promise;
+        },
+      },
+    });
+  });
+
+  it("waits for the regular and bold faces before re-measuring", async () => {
+    // Awaiting only the 400 face left bold glyphs cached in the WebGL atlas
+    // in the fallback when the 700 file landed second.
+    const size = core.XTERM_OPTIONS.fontSize;
+    await mount("%1");
+    expect(faces.map((f) => f.spec)).toEqual([`${size}px "IBM Plex Mono"`, `bold ${size}px "IBM Plex Mono"`]);
+    faces[0].resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(env.familyWrites).toEqual([]);
+    faces[1].resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(env.familyWrites.length).toBeGreaterThan(0);
+  });
+
+  it("bounces the family through another value, so the write actually fires", async () => {
+    // The setter drops a same-value write: assigning XTERM_OPTIONS.fontFamily
+    // alone (what the Terminal was built with) re-measures nothing.
+    await mount("%1");
+    env.term.options.fontFamily = core.XTERM_OPTIONS.fontFamily; // as constructed
+    env.familyWrites.length = 0;
+    await settle();
+    expect(env.familyWrites).toHaveLength(2);
+    expect(env.familyWrites[0]).not.toBe(core.XTERM_OPTIONS.fontFamily);
+    expect(env.term.options.fontFamily).toBe(core.XTERM_OPTIONS.fontFamily);
+  });
+
+  it("refits after the load without resizing tmux for an in-tolerance wobble", async () => {
+    // The real face measures a column or two off the fallback; the pin must
+    // absorb it, or every page load reflows the pane's scrollback.
+    await mount("%1");
+    await announce(143, 36);
+    env.box = { cols: 141, rows: 36 };
+    await settle();
+    expect(env.sent).toEqual([]);
   });
 });

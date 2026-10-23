@@ -5,7 +5,7 @@
    (.card, .cards, .session-group, .stream-*) were removed when grid was
    retired. */
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Hanken+Grotesk:wght@300..700&display=swap');
 
 :root {
   /* Surfaces — cool neutral gray (low chroma, slight blue cast) */
@@ -48,8 +48,8 @@
   --effort: oklch(0.72 0.12 330);    /* track / effort accent — pink-magenta */
   --worktree: oklch(0.72 0.13 295);  /* branch / worktree accent — violet (⎇) */
 
-  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --sans: 'Inter', -apple-system, system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+  --sans: 'Hanken Grotesk', -apple-system, system-ui, sans-serif;
 
   --r-sm: 4px;
   --r-md: 6px;
@@ -74,12 +74,16 @@ html, body {
   padding: 0;
   background: var(--bg-0);
   color: var(--fg-1);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-feature-settings: 'liga' 0, 'calt' 0;
   font-size: 13px;
   line-height: 1.5;
   letter-spacing: 0.005em;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Form controls default to the UA's system font, not the page's. */
+button, input, textarea, select { font-family: inherit; }
 
 ::selection { background: color-mix(in oklch, var(--accent) 40%, transparent); color: var(--fg-0); }
 
@@ -615,7 +619,7 @@ html, body {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
   color: var(--fg-2);
   background: transparent;
@@ -691,7 +695,7 @@ html, body {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
   color: var(--fg-2);
   background: transparent;
@@ -777,6 +781,7 @@ body.modal-open { overflow: hidden; }
 .modal-head .modal-name    { color: var(--fg-0); }
 .modal-head .modal-session { color: var(--fg-3); font-weight: 400; font-size: 13px; }
 .modal-head .modal-cwd     {
+  font-family: var(--mono);   /* a cwd path */
   color: var(--fg-4);
   font-weight: 400;
   font-size: 12px;
@@ -819,7 +824,7 @@ body.modal-open { overflow: hidden; }
 .modal-subtitle {
   margin-top: 4px;
   font-size: 11.5px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   color: var(--fg-3);
   display: flex;
   flex-wrap: wrap;
@@ -843,7 +848,7 @@ body.modal-open { overflow: hidden; }
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 11.5px;
   color: var(--fg-2);
   background: var(--bg-1);
@@ -879,7 +884,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--line-soft);
   color: var(--fg-3);
   padding: 5px 12px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 11.5px;
   border-radius: var(--r-sm);
   cursor: pointer;
@@ -995,7 +1000,7 @@ body.modal-open { overflow: hidden; }
   text-align: left;
   width: 100%;
   padding: 6px 8px 6px 10px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 11.5px;
   color: var(--fg-2);
   background: transparent;
@@ -1108,7 +1113,7 @@ body.modal-open { overflow: hidden; }
 }
 .modal-review-empty button {
   padding: 8px 18px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
   color: var(--fg-0);
   background: var(--bg-1);
@@ -1152,7 +1157,7 @@ body.modal-open { overflow: hidden; }
   min-height: 0;
   background: oklch(0.245 0.008 250);
   border-left: 1px solid var(--line-soft);
-  font-family: var(--mono);
+  font-family: var(--sans);
 }
 /* Empty placeholder while waiting for the first /api/pane response. Keeps
    the xterm sized correctly from the start so there's no width-jump when
@@ -1199,7 +1204,7 @@ body.modal-open { overflow: hidden; }
   width: 100%;
   min-height: 80px;
   resize: vertical;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 11.5px;
   background: var(--bg-1);
   color: var(--fg-1);
@@ -1244,7 +1249,7 @@ body.modal-open { overflow: hidden; }
 }
 .tag-chip-x:hover { color: var(--s-danger); }
 .modal-tag-input {
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 11px;
   background: var(--bg-1);
   border: 1px solid var(--line-soft);
@@ -1257,7 +1262,7 @@ body.modal-open { overflow: hidden; }
   display: block;
   width: 100%;
   padding: 7px 10px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 11.5px;
   color: var(--fg-3);
   background: transparent;
@@ -1564,7 +1569,7 @@ body.modal-open { overflow: hidden; }
   border: 1px dashed var(--line);
   color: var(--fg-2);
   padding: 6px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
   border-radius: var(--r-sm);
   cursor: pointer;
@@ -2169,7 +2174,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--line);
   border-radius: var(--r-sm, 5px);
   font: inherit;
-  font-family: var(--mono);
+  font-family: var(--sans);
   box-sizing: border-box;
 }
 .prompt-dialog-input:focus {
@@ -2285,7 +2290,9 @@ body.col-resizing iframe { pointer-events: none; }
    `.xterm { height: 100% }` rules below resolve against it, and FitAddon
    measures xterm's PARENT — a zero-height host makes fit() compute garbage
    rows and the terminal renders collapsed. */
-.xterm-host { height: 100%; min-height: 0; }
+/* The page default is sans; xterm's DOM bits (IME composition, link hover,
+   helper textarea) inherit it, so pin them to the terminal's own face. */
+.xterm-host { height: 100%; min-height: 0; font-family: var(--mono); }
 .detail-xterm .xterm { height: 100%; }
 .detail-xterm .xterm-viewport { background: var(--bg-term) !important; }
 /* Detail-side reuses the modal's sidebar classes (.modal-side-section,
@@ -2301,7 +2308,7 @@ body.col-resizing iframe { pointer-events: none; }
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
 }
 .detail-review { display: flex; flex-direction: column; }
@@ -2427,6 +2434,7 @@ body.col-resizing iframe { pointer-events: none; }
    its project's pin (session-anchored rail: the row never moves on cd, the
    chip carries the location instead). */
 .rail-chip {
+  font-family: var(--mono);   /* a cwd path */
   font-size: 10px;
   color: var(--fg-3);
   white-space: nowrap;
@@ -2491,7 +2499,7 @@ body.col-resizing iframe { pointer-events: none; }
   border: 1px solid transparent;
   background: var(--bg-2);
   color: var(--fg-2);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 10px;
   line-height: 1.5;
   padding: 1px 8px;
@@ -2527,7 +2535,7 @@ body.col-resizing iframe { pointer-events: none; }
 }
 .track-menu-item {
   appearance: none; -webkit-appearance: none; border: none; background: transparent;
-  text-align: left; cursor: pointer; font-family: var(--mono); font-size: 12px;
+  text-align: left; cursor: pointer; font-family: var(--sans); font-size: 12px;
   color: var(--fg-1); padding: 5px 8px; border-radius: 4px;
   display: flex; align-items: baseline; gap: 6px; white-space: nowrap;
 }
@@ -2650,7 +2658,7 @@ body.col-resizing iframe { pointer-events: none; }
   border: 1px solid var(--accent);
   border-radius: 3px;
   font: inherit;
-  font-family: var(--mono);
+  font-family: var(--sans);
   padding: 1px 4px;
   outline: none;
 }
@@ -2972,12 +2980,14 @@ body.col-resizing iframe { pointer-events: none; }
   display: inline-flex; align-items: center; gap: 3px;
   padding: 0 5px; height: 15px; border-radius: 3px;
   background: var(--bg-2); color: var(--fg-2);
-  font-family: var(--mono); font-size: 10px; text-decoration: none; white-space: nowrap;
+  font-family: var(--sans); font-size: 10px; text-decoration: none; white-space: nowrap;
 }
 /* Expanded cards sit a shade lighter (bg-2), so their pills drop to bg-1 to
    keep the inset read. Compact rows are on the group card (bg-1) → pills bg-2. */
 .pane-expanded .pane-pill { background: var(--bg-1); }
 .pane-pill:hover { background: var(--bg-3); color: var(--fg-1); }
+/* Refs stay mono like .header-pr / .wt-meta-chip; the pill itself is sans. */
+.pane-pill-pr, .pane-pill-linear { font-family: var(--mono); }
 .pane-pill-pr { color: var(--fg-1); }
 /* Linked-PR lifecycle: a landed PR reads violet (merged), a dropped one dims
    (closed) — so neither masquerades as live open work. Shared by every PR
@@ -2989,7 +2999,7 @@ body.col-resizing iframe { pointer-events: none; }
 /* Which subscription a pane bills; absent on the default account. Teal — clear
    of Linear's purple (280) and the repo-icon blue (232). */
 .pane-pill-acct { color: oklch(0.75 0.11 190); cursor: help; }
-.pane-pill-ctx { color: var(--fg-3); }
+.pane-pill-ctx { color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .pane-pill-ctx.ctx-warn { color: var(--s-working); }
 .pane-pill-ctx.ctx-hot { color: var(--s-danger); }
 .pane-ci-ok { color: var(--s-success); }
@@ -3403,7 +3413,7 @@ body.col-resizing iframe { pointer-events: none; }
   width: 100%;
   box-sizing: border-box;
   margin-bottom: 6px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 11px;
   background: var(--bg-1);
   border: 1px solid var(--line-soft);
@@ -3414,7 +3424,7 @@ body.col-resizing iframe { pointer-events: none; }
 .files-filter::placeholder { color: var(--fg-4); }
 .files-nomatch {
   padding: 6px 8px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 11px;
   color: var(--fg-4);
 }
@@ -3487,6 +3497,7 @@ body.col-resizing iframe { pointer-events: none; }
 .files-row-pinned .files-path { color: var(--fg-1); font-weight: 600; }
 .files-row-pinned .files-op { opacity: 1; }
 .header-cwd-reveal {
+  font-family: var(--mono);   /* a cwd path */
   cursor: pointer;
   text-decoration: underline dotted rgba(255,255,255,0.3);
   text-underline-offset: 3px;
@@ -3647,7 +3658,7 @@ body.col-resizing iframe { pointer-events: none; }
   background: transparent;
   color: var(--fg-4);
   font: inherit;
-  font-family: var(--mono);
+  font-family: var(--sans);
   cursor: pointer;
 }
 .changes-ctx button:hover { background: var(--bg-2); color: var(--fg-1); }
