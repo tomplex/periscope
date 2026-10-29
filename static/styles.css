@@ -3929,8 +3929,9 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
   display: flex; flex-direction: column; height: 100%; min-height: 0; box-sizing: border-box;
   font-size: var(--wt-fs-ui); color: var(--fg-1);
 }
-/* The loading/error states Walkthrough() returns before .walkthrough itself
-   mounts render straight into #detail (split/Detail.jsx is their parent). */
+/* Walkthrough's own loading/error states, plus Detail.jsx's own loading div
+   (shown before the reviews signal has loaded, i.e. before the queue or a
+   walkthrough can render) — both land here as a direct child of #detail. */
 #detail > .wt-empty { padding: 14px 18px; color: var(--fg-2); }
 .walkthrough > .wt-head { flex: none; display: block; margin: 0; padding: 14px 18px 10px; border-bottom: 1px solid var(--line-soft); }
 .walkthrough .wt-title { margin: 0 0 4px; font-size: var(--wt-fs-title); line-height: 1.25; font-weight: 650; color: var(--fg-0); }
@@ -3944,13 +3945,15 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    there). scrollbar-gutter keeps that width stable whether a vertical
    scrollbar is showing or not. */
 .wt-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 40px; container: wt / size; scrollbar-gutter: stable; }
-/* Always rendered (a status region announces reliably only if it's there
-   before the text arrives); empty most of the time. */
-.walkthrough .wt-error { margin: 6px 0 0; color: var(--s-danger); font-size: var(--wt-fs-meta); }
-.walkthrough .wt-error:empty { display: none; }
-/* Prose keeps a readable measure; the code column gets the rest. ch tracks
-   the 15px body text because the grid itself is 15px. */
-.wt-cols { display: grid; grid-template-columns: minmax(0, 72ch) minmax(0, 1fr); gap: 16px 28px; align-items: start; font-size: var(--wt-fs-body); }
+/* Always rendered: a status region announces reliably only if it's there
+   before the text arrives, so it must stay in the a11y tree even empty
+   (0px tall on its own — only the non-empty state needs top margin). */
+.walkthrough .wt-error { color: var(--s-danger); font-size: var(--wt-fs-meta); }
+.walkthrough .wt-error:not(:empty) { margin-top: 6px; }
+/* Prose keeps a readable measure down to 52ch, then shrinks first; the code
+   column holds a real ~80-char floor (540px) instead of taking the squeeze.
+   ch tracks the 15px body text because the grid itself is 15px. */
+.wt-cols { display: grid; grid-template-columns: minmax(52ch, 72ch) minmax(540px, 1fr); gap: 16px 28px; align-items: start; font-size: var(--wt-fs-body); }
 /* 3px card edge + 16px card padding, so the intro's columns line up with the
    stop cards' inner columns below. */
 .wt-intro { margin-bottom: 22px; padding: 0 17px 0 19px; }
@@ -3966,7 +3969,7 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 .walkthrough .md-cite:not(.is-inert):hover { background: var(--bg-3); }
 .walkthrough .md-cite.is-inert:hover { background: var(--bg-2); }
 .walkthrough .wt-stop .md-doc .md-code { background: var(--bg-0); }
-.walkthrough .md-doc .md-table tbody tr:nth-child(even) td { background: color-mix(in oklch, var(--bg-1-hi) 50%, transparent); }
+.walkthrough .md-doc .md-table tbody tr:nth-child(even) td { background: var(--bg-1-hi); }
 /* Unbreakable content escapes its column: a long path, branch name or table
    cell would otherwise overflow instead of wrapping or scrolling on its own. */
 .walkthrough .md-doc .md-table { display: block; width: max-content; max-width: 100%; overflow-x: auto; }
@@ -4006,7 +4009,7 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 .wt-kind-badge { flex: none; padding: 1px 8px; border-radius: 9px; background: var(--k-bg); color: var(--k-fg); font-size: var(--wt-fs-meta); text-transform: uppercase; letter-spacing: .04em; }
 /* Folded-stop comment count ("2 comments · 1 open"): a muted pill like
    .wt-badge, so it reads as metadata rather than another action. */
-.wt-comment-chip { padding: 1px 8px; border-radius: 9px; background: var(--bg-2); color: var(--fg-1); font-size: var(--wt-fs-meta); }
+.wt-comment-chip { flex: none; padding: 1px 8px; border-radius: 9px; background: var(--bg-2); color: var(--fg-1); font-size: var(--wt-fs-meta); }
 .wt-reviewed { flex: 0 1 auto; display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .wt-reviewed-btn { padding: 3px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: pointer; }
 .wt-reviewed-btn:hover { color: var(--fg-0); border-color: var(--line-strong); }
@@ -4015,7 +4018,14 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 /* Diagram row: as wide as the card, never past mermaid's own inline max-width
    (its natural size), and short enough that the prose stays on screen. */
 .wt-diagrams { margin: 12px 0 4px; }
-.wt-diagrams .md-mermaid { margin: 0 0 12px; }
+/* overflow: visible, not auto: the sideways scroll moves to the svg host
+   below, so the ⤢ button (absolutely positioned here, a sibling of the
+   host) stays put in the corner instead of scrolling off with the drawing. */
+.wt-diagrams .md-mermaid { margin: 0 0 12px; overflow: visible; }
+/* The svg host scrolls sideways on its own: Mermaid.jsx gives a zoomable
+   diagram a minimum width (¾ natural size, for label legibility), which can
+   exceed the card. */
+.wt-diagrams .md-mermaid-svg { overflow-x: auto; }
 /* cqh, not vh: ties the cap to the scroll container the sticky code column
    also measures against, not the browser window. */
 .wt-diagrams .md-mermaid-svg svg { width: 100%; height: auto; max-height: 70cqh; }
@@ -4047,9 +4057,9 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    scrolls on its own when taller. cqh measures .wt-scroll's content box,
    56px (its own 16+40 padding) short of the border-box height this sticky
    column actually gets; +32 adds that back, less a symmetric 12px top/bottom
-   clearance around the column. Also: `position: sticky` is what makes this
-   element the offsetParent Stop.goTo reads offsetTop from — any `overflow`
-   added to .wt-stop or .wt-cols would take over that role instead. */
+   clearance around the column. `position: sticky` also makes this the
+   offsetParent that reveal() reads offsetTop from; and no overflow on
+   .wt-stop/.wt-cols, or that box becomes the sticky's scroller. */
 .wt-evidence { position: sticky; top: 12px; min-width: 0; max-height: calc(100cqh + 32px); overflow: auto; font-size: var(--wt-fs-ui); }
 .wt-evidence.is-empty { display: none; }
 /* One sideways scroller per hunk (D3), not per line: in the narrow code column most
@@ -4057,9 +4067,10 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    auto column sizes to the widest line, so add/del tints run the full width. */
 .walkthrough .dhunk { display: grid; overflow-x: auto; }
 .walkthrough .dl { overflow-x: visible; }
-/* Base tok-comment (#7f848e) is under 4.5:1 on the card's --bg-1; brighten
-   for the code column (5.85:1 on the card, 4.66/4.92 on add/del rows). */
-.walkthrough .dl .tok-comment { color: #9da5b4; }
+/* Base tok-comment/tok-meta (#7f848e) are under 4.5:1 both on the card's
+   --bg-1 (5.85:1 fixed; 4.66/4.92 on add/del rows) and on prose code blocks'
+   --bg-0 (4.44:1 fixed). */
+.walkthrough :is(.dl, .wt-stop .md-doc) :is(.tok-comment, .tok-meta) { color: #9da5b4; }
 .wt-files { list-style: none; margin: 0 0 8px; padding: 0; }
 .wt-file { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 2px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--fg-1); font: inherit; text-align: left; }
 button.wt-file { cursor: pointer; }
@@ -4093,10 +4104,12 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 .wt-comment-body .md-link { color: var(--accent); text-decoration: none; } /* 6.4:1 on --bg-1 */
 .wt-comment-body .md-link:hover { text-decoration: underline; }
 .wt-comment-body .md-p { margin: 2px 0 0; } /* was the UA's 1em */
+.wt-comment-body .md-h { margin: 6px 0 2px; font-size: inherit; font-weight: 650; color: var(--fg-0); } /* not .md-doc: demoted h5/h6 would be the UA's 0.83em/0.67em */
 .wt-comment-ts, .wt-comment-state { margin-right: 8px; color: var(--fg-2); font-size: var(--wt-fs-meta); }
 .wt-comment-box { margin-top: 10px; font-size: var(--wt-fs-ui); }
 .walkthrough .wt-link { padding: 0; border: 0; background: none; color: var(--fg-1); font: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
-.walkthrough .wt-link:hover { color: var(--fg-0); }
+.walkthrough .wt-link:hover:not(:disabled) { color: var(--fg-0); }
+.walkthrough .wt-link:disabled { opacity: .55; cursor: default; text-decoration: none; }
 .wt-comment-box textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-0); color: var(--fg-0); font: inherit; }
 .wt-comment-box textarea:focus { outline: none; border-color: var(--accent); }
 .wt-comment-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
@@ -4104,28 +4117,33 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 .walkthrough .wt-btn:hover:not(:disabled) { border-color: var(--line-strong); }
 .walkthrough .wt-btn:disabled { opacity: .55; cursor: default; }
 .wt-hint, .wt-comment-note { color: var(--fg-2); font-size: var(--wt-fs-meta); }
-/* Always rendered, after the link or the send/cancel row; empty until a send
-   settles. */
-.wt-comment-note:empty { display: none; }
+/* Always rendered, after the link or the send/cancel row; empty until a
+   send settles — stays in the a11y tree (role=status) even then. */
 .wt-comment-note:not(:empty) { display: block; margin-top: 4px; }
-/* Narrow: one column, prose then code; the code column stops sticking. 1100px
-   leaves the code column ~45 mono columns at the switch; Task 12 tunes it. */
-@container wt (width < 1100px) {
+/* Narrow: one column, prose then code; the code column stops sticking.
+   1050px: the two-column layout's floor is 52ch (≈442px) + 540px + 28px gap
+   + ~36px card chrome ≈ 1046, just under the switch — so it holds its
+   ~80-char code column all the way down instead of the columns getting
+   squeezed first. */
+@container wt (width < 1050px) {
   .wt-cols { grid-template-columns: minmax(0, 1fr); }
   .wt-evidence { position: static; max-height: none; overflow: visible; }
 }
 /* Full-size view (overlays/Lightbox.jsx). z-index 90: above the sticky header
    (10), below toasts (100) and the modals (200, ⌘K 1000), so a notification
    or a palette opened over it still shows. */
-.lightbox { position: fixed; inset: 0; z-index: 90; display: flex; background: color-mix(in oklch, var(--bg-0) 92%, transparent); }
+.lightbox { position: fixed; inset: 0; z-index: 90; display: flex; background: color-mix(in oklch, var(--bg-0) 96%, transparent); }
 /* 48px top clearance: room for the fixed ✕, which would otherwise sit over the content. */
 .lightbox-body { flex: 1; display: flex; overflow: auto; padding: 48px 32px 32px; }
 /* margin:auto, not place-items:center: centering would clip an oversized
-   child's top-left edge out of the scroll range. */
-.lightbox-body > * { margin: auto; }
+   child's top-left edge out of the scroll range. A solid panel behind the
+   drawing, not the translucent backdrop — its own lines and labels were
+   competing with whatever page showed through between them. */
+.lightbox-body > * { margin: auto; background: var(--bg-1); padding: 16px; border-radius: 8px; }
 .lightbox-body img { display: block; max-width: none; }
-/* No max-width:none here: LightboxHost sets width/height inline off the
-   drawn SVG's viewBox, and an inline style already wins over this. */
+/* No max-width:none here: LightboxHost sets width/height attributes and an
+   inline style.maxWidth = "none" off the drawn SVG's viewBox — that inline
+   style is what makes a CSS max-width unnecessary. */
 .lightbox-svg svg { display: block; }
 .lightbox-close { position: fixed; top: 12px; right: 16px; z-index: 1; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-0); font: inherit; font-size: 16px; cursor: pointer; }
 .lightbox-close:hover { background: var(--bg-3); }
