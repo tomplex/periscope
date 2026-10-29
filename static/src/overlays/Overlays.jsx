@@ -6,11 +6,11 @@
 // header-button-by-id conventions, so this component is just composition +
 // the two imperative inits.
 import { useEffect } from "preact/hooks";
-import { LightboxHost } from "../split/Lightbox.jsx";
 import { initExternalLinks } from "../tauri.js";
 import { CleanupModal } from "./CleanupModal.jsx";
 import { CommandsModal } from "./CommandsModal.jsx";
 import { LauncherModal } from "./LauncherModal.jsx";
+import { LightboxHost } from "./Lightbox.jsx";
 import { OpenOmnibox } from "./OpenOmnibox.jsx";
 import { SettingsModal } from "./SettingsModal.jsx";
 

@@ -6,7 +6,7 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
-import { openLightbox } from "./Lightbox.jsx";
+import { openLightbox } from "../overlays/Lightbox.jsx";
 import { Mermaid } from "./Mermaid.jsx";
 import { metaPairs, parseCite, refTokens, splitCites } from "./mdMeta.js";
 

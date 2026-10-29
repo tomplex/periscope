@@ -1,7 +1,7 @@
 // A ```mermaid fence → inline SVG. Until it draws the host is empty; if the
 // load or the source fails, the fence shows as text so nothing is ever lost.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { openLightbox } from "./Lightbox.jsx";
+import { openLightbox } from "../overlays/Lightbox.jsx";
 import { renderDiagram } from "./mermaidRender.js";
 
 export function Mermaid({ code, zoom = false, label }) {
