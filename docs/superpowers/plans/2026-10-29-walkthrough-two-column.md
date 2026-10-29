@@ -37,7 +37,8 @@
 | `static/src/review/__tests__/walkthrough.test.js` | modify | cases for all of the above |
 | `static/src/split/mermaidTheme.js` | create | pure `mermaidTheme({color, font})` → mermaid config |
 | `static/src/split/__tests__/mermaidTheme.test.js` | create | the token mapping |
-| `static/src/split/Lightbox.jsx` | create | `lightbox` signal, `openLightbox`, `closeLightbox`, `<LightboxHost/>` |
+| `static/src/overlays/Lightbox.jsx` | create | `lightbox` signal, `openLightbox`, `closeLightbox`, `nextFocus`, `<LightboxHost/>` (Task 5 created it in `split/`; its code review moved it) |
+| `static/src/split/mermaidRender.js` | create | DOM side of diagrams: lazy mermaid load, token → hex, font wait, `renderDiagram(code)` (from Task 5's code review) |
 | `static/src/overlays/Overlays.jsx` | modify | mounts `<LightboxHost/>` at the app root (inside `#split-view` it would sit under the header) |
 | `static/src/split/__tests__/lightbox.test.jsx` | create | host render, open/close, keys |
 | `static/src/split/Mermaid.jsx` | modify | base theme from `mermaidTheme`, `zoom` prop |
@@ -663,6 +664,12 @@ git commit -m "diagrams: mermaid's base theme in periscope's tokens (node fill b
 ---
 
 ### Task 5: Full-size view for diagrams and images
+
+> **Executed, then revised by code review (2026-10-29).** This text is the plan as run. Follow-up commits then changed four things:
+> - the lightbox moved to `overlays/Lightbox.jsx`;
+> - mermaid loading, token conversion, the font wait and `renderDiagram` moved to `split/mermaidRender.js`;
+> - the lightbox re-renders a diagram from its `code` (fresh ids) rather than copying its SVG, ignores drags and clicks on links, and has a pure `nextFocus`;
+> - `mermaidTheme` sets explicit category palettes (pie, cScale, git, notes, gantt), and the ⤢ button is disabled until the diagram has drawn, with an optional `label`.
 
 **Files:**
 - Create: `static/src/split/Lightbox.jsx`
@@ -1690,7 +1697,10 @@ function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggle
       {folded ? null : (
         <>
           {stop.diagrams.length ? (
-            <div class="wt-diagrams">{stop.diagrams.map((code, i) => <Mermaid code={code} zoom key={i} />)}</div>
+            <div class="wt-diagrams">
+              {/* label: a stop can have 2–3 diagrams, and their ⤢ buttons need telling apart. */}
+              {stop.diagrams.map((code, i) => <Mermaid code={code} zoom label={`${stop.title}, diagram ${i + 1}`} key={i} />)}
+            </div>
           ) : null}
           <div class="wt-cols">
             <div class="wt-prose">
@@ -2010,7 +2020,9 @@ and put this block in their place:
 .walkthrough .md-mermaid { position: relative; }
 .md-mermaid-svg.is-zoomable, .md-img-zoom { cursor: zoom-in; }
 .md-mermaid-zoom { position: absolute; top: 6px; right: 6px; padding: 1px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: zoom-in; }
-.md-mermaid-zoom:hover { color: var(--fg-0); border-color: var(--line-strong); }
+.md-mermaid-zoom:hover:not(:disabled) { color: var(--fg-0); border-color: var(--line-strong); }
+/* Disabled until mermaid's ~3 MB chunk has drawn the diagram. */
+.md-mermaid-zoom:disabled { opacity: .55; cursor: default; }
 .md-img-zoom { display: inline-block; padding: 0; border: 0; background: none; }
 .md-mermaid-zoom:focus-visible, .md-img-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Prose column */
@@ -2061,8 +2073,10 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
   .wt-cols { grid-template-columns: minmax(0, 1fr); }
   .wt-evidence { position: static; max-height: none; overflow: visible; }
 }
-/* Full-size view (split/Lightbox.jsx) */
-.lightbox { position: fixed; inset: 0; z-index: 1000; display: flex; background: color-mix(in oklch, var(--bg-0) 92%, transparent); }
+/* Full-size view (overlays/Lightbox.jsx). z-index 90: above the sticky header
+   (10), below toasts (100) and the modals (200, ⌘K 1000), so a notification
+   or a palette opened over it still shows. */
+.lightbox { position: fixed; inset: 0; z-index: 90; display: flex; background: color-mix(in oklch, var(--bg-0) 92%, transparent); }
 .lightbox-body { flex: 1; display: flex; overflow: auto; padding: 48px 32px 32px; }
 /* margin:auto, not place-items:center: centering would clip an oversized
    child's top-left edge out of the scroll range. */
@@ -2203,7 +2217,8 @@ Open `http://127.0.0.1:17375/` and select the 13-stop review in the rail (`~/.cl
 - clicking a diagram opens the lightbox at natural size, scrolling both ways, **above the app header** (✕ visible and clickable at the top right); Esc, a backdrop click and ✕ each close it; Tab to the diagram's ⤢ button, then Enter, opens it; inside, the arrow keys scroll it and Tab only moves between the scroller and ✕;
 - the code column sticks while the prose scrolls, and scrolls on its own; a file-list click and a prose cite chip both land on that file and flash it, and the page itself doesn't jump;
 - "N not in this diff" is one line and expands;
-- marking the stop reviewed while a comment is half-typed, then unfolding it, brings the draft back.
+- marking the stop reviewed while a comment is half-typed, then unfolding it, brings the draft back;
+- the theme is app-wide, so check one non-flowchart diagram too. Write a scratch `.md` with a `pie` and a `gitGraph` fence outside the repo (in the scratchpad), open it as a file preview, and check that the pie slices and git branches are distinct colors, not one grey.
 
 - [ ] **Step 3: Narrow window (1000×900), and the breakpoint**
 

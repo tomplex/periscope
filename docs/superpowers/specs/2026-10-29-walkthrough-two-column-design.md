@@ -158,6 +158,13 @@ untouched).
   | other text | `--fg-1` |
   | font | `--sans` (Hanken Grotesk), 14px |
 
+  The base theme derives pie, mindmap/timeline (`cScale*`) and git colors by
+  rotating `primaryColor`'s hue, and `--bg-2` is near-grey. So those sets
+  are given explicitly from periscope's opaque accents (`--accent`,
+  `--s-done`, `--s-working`, `--s-needs`, `--effort`, `--worktree`,
+  `--s-shell`, `--s-danger`), with `--bg-0` labels on them. Sequence notes,
+  autonumbers and gantt sections also get token colors.
+
   `darkMode: true`. Mermaid's color parser can't read `oklch()`, so tokens
   are converted to hex at load by painting them on a 1×1 canvas and reading
   the pixel. The stylesheet stays the single source of truth, and only opaque
@@ -324,9 +331,15 @@ On `.walkthrough`, so `.md-doc` and file previews don't change:
   zoom button, except inside a link, and `Mermaid` receives `zoom`.
 - **`split/Mermaid.jsx`:** base theme from `mermaidTheme`, plus the `zoom`
   prop (a click on the diagram, or its corner button, opens the lightbox).
-- **`split/Lightbox.jsx`** (new): a `lightbox` signal and `<LightboxHost/>`
-  (backdrop, scroller, ✕, `useEscape`, Tab kept inside).
+- **`overlays/Lightbox.jsx`** (new): a `lightbox` signal and `<LightboxHost/>`
+  (backdrop, scroller, ✕, `useEscape`, Tab kept inside). It re-renders a
+  diagram from its source with a fresh id rather than copying the SVG, whose
+  duplicated ids would bind its arrowheads to the original's markers.
   `overlays/Overlays.jsx` mounts the host at the app root.
+- **`split/mermaidRender.js`** (new): the DOM side of diagrams. It loads
+  mermaid lazily, converts tokens to hex, and waits for the UI font before
+  mermaid measures labels. It re-initializes when Settings → Fonts changes
+  `--sans`, and exposes `renderDiagram(code)`.
 - **`static/styles.css`:** the walkthrough section is rewritten: tokens,
   grids, the container query, sticky column, cards, badges, comment control
   and lightbox.
