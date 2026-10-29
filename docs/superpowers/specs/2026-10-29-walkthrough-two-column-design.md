@@ -212,7 +212,10 @@ away.
 
 - **File:** `~/.claude/reviews/<repo>/<slug>/reviewed.json`, a JSON object
   of `{"<stop title>": "<sig>"}`. periscope is its only writer (D2 of the
-  original spec). "clear" removes it with the folder.
+  original spec). "clear" removes it with the folder, under the same flock
+  as a mark. Otherwise a mark landing mid-`rmtree` makes the final `rmdir`
+  fail, leaving a folder holding only `reviewed.json`, which would surface
+  as an orphan queue row.
 - **Signature:** `stopSig(stop)`, an FNV-1a 32-bit hash (8 hex chars) of the
   stop's full source slice, trailing whitespace trimmed: heading, metadata
   and body before diagrams are lifted. Any rewrite of the stop's title,
