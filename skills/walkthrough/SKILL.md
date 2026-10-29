@@ -51,7 +51,7 @@ Start from the stat and group files into conceptual units: a new module, its rou
 
 ### 4. Write walkthrough.md
 
-Write `<dir>/walkthrough.md` in the format below, stops ordered as in "Ordering", with diagrams where "Diagrams" calls for them. A re-run rewrites the file wholesale with the new `head`, keeping the titles of stops that still hold so their comments stay attached. A re-run leaves `comments.md` alone apart from step 6.
+Write `<dir>/walkthrough.md` in the format below, stops ordered as in "Ordering", with diagrams where "Diagrams" calls for them. A re-run rewrites the file wholesale with the new `head`, keeping the titles of stops that still hold so their comments stay attached. A re-run leaves `comments.md` alone apart from step 6, and never touches `reviewed.json` (periscope's reviewed marks).
 
 ### 5. Verify
 
@@ -127,7 +127,7 @@ Order stops by damage-if-wrong; the first stop is the one Tom must not skip. By 
 
 ## Diagrams
 
-Draw a mermaid `flowchart` on a stop that introduces a new boundary or changes a path every existing caller takes. Two or three per walkthrough is the usual count, well short of one per stop; a stop that only consumes an existing module gets none. Show the mechanism: who calls whom, what flows where, what crosses the boundary. Mermaid goes in a ```` ```mermaid ```` fence.
+Draw a mermaid `flowchart` on a stop that introduces a new boundary or changes a path every existing caller takes. Two or three per walkthrough is the usual count, well short of one per stop; a stop that only consumes an existing module gets none. Show the mechanism: who calls whom, what flows where, what crosses the boundary. Mermaid goes in a ```` ```mermaid ```` fence. The view draws a stop's diagrams in a full-width row above its text, so a diagram should make sense before the prose explains it.
 
 ## Example
 
