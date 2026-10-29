@@ -177,8 +177,8 @@ export function evidenceFor(refs, diffFiles) {
   return { shown, hidden, noDiff: false };
 }
 
-// One line per hidden group, in HIDDEN_WHY's order, skipping empty ones.
-// Task 8's expanded list renders from the same map, so the two can't disagree.
+// Why a ref has nothing to show, in display order. The code column's summary
+// line and its expanded list both read this, so the two can't disagree.
 export const HIDDEN_WHY = {
   missing: "not in this diff",
   generated: "generated",
@@ -186,6 +186,7 @@ export const HIDDEN_WHY = {
   noText: "no text changes",
 };
 
+// One part per non-empty hidden group, in HIDDEN_WHY's order.
 export function hiddenSummary(hidden) {
   return Object.keys(HIDDEN_WHY)
     .filter((k) => hidden[k]?.length)
