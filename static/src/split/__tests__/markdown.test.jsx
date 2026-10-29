@@ -204,8 +204,9 @@ describe("zoom", () => {
     const out = html(diagram, { mermaid: true, zoom: true });
     expect(out).toContain('class="md-mermaid-svg is-zoomable"');
     expect(out).not.toContain('role="button"');
-    expect(out).toContain(
-      '<button type="button" class="md-mermaid-zoom" aria-label="open diagram full size" title="open full size">⤢</button>',
+    // render-to-string runs no effects, so `ready` is still false here.
+    expect(out).toMatch(
+      /<button type="button" class="md-mermaid-zoom" disabled(="")? aria-label="open diagram full size" title="open full size">⤢<\/button>/,
     );
   });
   it("leaves a linked image a plain image, so a click follows the link only", () => {
