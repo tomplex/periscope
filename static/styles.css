@@ -3929,30 +3929,53 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
   display: flex; flex-direction: column; height: 100%; min-height: 0; box-sizing: border-box;
   font-size: var(--wt-fs-ui); color: var(--fg-1);
 }
+/* The loading/error states Walkthrough() returns before .walkthrough itself
+   mounts render straight into #detail (split/Detail.jsx is their parent). */
+#detail > .wt-empty { padding: 14px 18px; color: var(--fg-2); }
 .walkthrough > .wt-head { flex: none; display: block; margin: 0; padding: 14px 18px 10px; border-bottom: 1px solid var(--line-soft); }
 .walkthrough .wt-title { margin: 0 0 4px; font-size: var(--wt-fs-title); line-height: 1.25; font-weight: 650; color: var(--fg-0); }
 .walkthrough .wt-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: var(--wt-fs-meta); color: var(--fg-2); }
-.wt-badge { padding: 1px 8px; border-radius: 9px; background: var(--bg-2); color: var(--fg-1); }
-.wt-badge.is-warn { background: var(--s-needs-bg); color: var(--s-needs); }
+.walkthrough .wt-badge { padding: 1px 8px; border-radius: 9px; background: var(--bg-2); color: var(--fg-1); }
+.walkthrough .wt-badge.is-warn { background: var(--s-needs-bg); color: var(--s-needs); }
 .wt-progress { margin-left: auto; color: var(--fg-1); font-variant-numeric: tabular-nums; }
-/* The scroll container is the size container: 100cqh is its visible height,
-   which caps the sticky code column; its width drives the one-column fallback. */
-.wt-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 40px; container: wt / size; }
+/* The scroll container is the size container: its width drives the
+   one-column fallback below, and it's what the sticky code column's
+   max-height is computed against (cqh is its content box — see the +32 note
+   there). scrollbar-gutter keeps that width stable whether a vertical
+   scrollbar is showing or not. */
+.wt-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 40px; container: wt / size; scrollbar-gutter: stable; }
 .walkthrough .wt-error { margin: 0 0 12px; color: var(--s-danger); font-size: var(--wt-fs-meta); }
 /* Prose keeps a readable measure; the code column gets the rest. ch tracks
    the 15px body text because the grid itself is 15px. */
 .wt-cols { display: grid; grid-template-columns: minmax(0, 72ch) minmax(0, 1fr); gap: 16px 28px; align-items: start; font-size: var(--wt-fs-body); }
-.wt-intro { margin-bottom: 22px; }
+/* 3px card edge + 16px card padding, so the intro's columns line up with the
+   stop cards' inner columns below. */
+.wt-intro { margin-bottom: 22px; padding: 0 17px 0 19px; }
 .walkthrough .md-doc { max-width: none; margin: 0; font-size: var(--wt-fs-body); }
 .walkthrough .md-doc .md-h { font-size: var(--wt-fs-body); margin: 14px 0 6px; border-bottom: 0; padding-bottom: 0; }
+.walkthrough .md-doc .md-h:first-child { margin-top: 0; }
 .walkthrough .md-doc .md-icode { color: var(--fg-1); }
+/* The card's own fill (--bg-1) swallows chip/code/stripe fills tuned for
+   --bg-0: brighten them one step for the card. */
+.walkthrough .md-cite { background: var(--bg-2); }
+.walkthrough .md-cite:not(.is-inert):hover { background: var(--bg-3); }
+.walkthrough .md-cite.is-inert:hover { background: var(--bg-2); }
+.walkthrough .wt-stop .md-doc .md-code { background: var(--bg-0); }
+.walkthrough .md-doc .md-table tbody tr:nth-child(even) td { background: color-mix(in oklch, var(--bg-1-hi) 50%, transparent); }
+/* Unbreakable content escapes its column: a long path, branch name or table
+   cell would otherwise overflow instead of wrapping or scrolling on its own. */
+.walkthrough .md-doc .md-table { display: block; width: max-content; max-width: 100%; overflow-x: auto; }
+.walkthrough .md-cite, .wt-ev-path, .wt-hidden-path, .wt-stop-title, .walkthrough .wt-title { overflow-wrap: anywhere; }
+.wt-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* full path is in title */
+.wt-file-range, .wt-file-count { flex: none; }
+.wt-toc-title, .walkthrough .wt-sub > :first-child { min-width: 0; overflow-wrap: anywhere; } /* long branch names */
 /* Contents */
 .wt-toc ol { list-style: none; margin: 0; padding: 0; font-size: var(--wt-fs-ui); }
 .wt-toc-item { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 3px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--fg-1); font: inherit; text-align: left; cursor: pointer; }
 .wt-toc-item:hover { background: var(--bg-1); color: var(--fg-0); }
 .wt-toc-n { min-width: 2.2em; text-align: right; color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .wt-toc-item:hover .wt-toc-n { color: var(--fg-1); }
-.wt-toc-dot { flex: none; align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--k); }
+.wt-toc-dot { flex: none; align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--k, var(--kind-other)); }
 .wt-toc-done { margin-left: auto; color: var(--s-success); }
 /* Kind: --k is the card edge and contents dot, --k-bg/--k-fg the badge. */
 .wt-kind-new-subsystem { --k: var(--kind-new-subsystem); --k-bg: var(--kind-new-subsystem-bg); --k-fg: var(--kind-new-subsystem-fg); }
@@ -3962,15 +3985,15 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 .wt-kind-behavior { --k: var(--kind-behavior); --k-bg: var(--kind-behavior-bg); --k-fg: var(--kind-behavior-fg); }
 .wt-kind-other { --k: var(--kind-other); --k-bg: var(--bg-2); --k-fg: var(--fg-1); }
 /* Stop card */
-.wt-stop { margin-bottom: 16px; padding: 12px 16px 14px; background: var(--bg-1); border: 1px solid var(--line-soft); border-left: 3px solid var(--k); border-radius: 8px; }
-.wt-stop.is-folded { padding-bottom: 12px; }
-.wt-stop-head { display: flex; align-items: baseline; gap: 10px; }
-.wt-stop-title { flex: 1; min-width: 0; margin: 0; font-size: var(--wt-fs-stop); line-height: 1.3; font-weight: 650; color: var(--fg-0); }
-.wt-stop-n { color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.walkthrough .wt-stop { margin-bottom: 16px; padding: 12px 16px 14px; background: var(--bg-1); border: 1px solid var(--line-soft); border-left: 3px solid var(--k, var(--kind-other)); border-radius: 8px; scroll-margin-top: 12px; }
+.walkthrough .wt-stop.is-folded { padding-bottom: 12px; }
+.walkthrough .wt-stop-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; row-gap: 6px; }
+.walkthrough .wt-stop-title { flex: 1 1 24ch; min-width: 0; margin: 0; font-size: var(--wt-fs-stop); line-height: 1.3; font-weight: 650; color: var(--fg-0); }
+.walkthrough .wt-stop-n { color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .wt-fold { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .wt-fold:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
 .wt-kind-badge { flex: none; padding: 1px 8px; border-radius: 9px; background: var(--k-bg); color: var(--k-fg); font-size: var(--wt-fs-meta); text-transform: uppercase; letter-spacing: .04em; }
-.wt-reviewed { flex: none; display: inline-flex; align-items: baseline; gap: 8px; }
+.wt-reviewed { flex: 0 1 auto; display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .wt-reviewed-btn { padding: 3px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: pointer; }
 .wt-reviewed-btn:hover { color: var(--fg-0); border-color: var(--line-strong); }
 .wt-reviewed-btn.is-on { color: var(--s-success); }
@@ -3979,7 +4002,13 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    (its natural size), and short enough that the prose stays on screen. */
 .wt-diagrams { margin: 12px 0 4px; }
 .wt-diagrams .md-mermaid { margin: 0 0 12px; }
-.wt-diagrams .md-mermaid-svg svg { width: 100%; height: auto; max-height: 70vh; }
+/* cqh, not vh: ties the cap to the scroll container the sticky code column
+   also measures against, not the browser window. */
+.wt-diagrams .md-mermaid-svg svg { width: 100%; height: auto; max-height: 70cqh; }
+/* The ⤢ button sits in the diagram's own corner; clear it room instead of
+   covering the drawing it's labeling. */
+.wt-diagrams .md-mermaid:has(> .md-mermaid-zoom) { padding-top: 28px; }
+.wt-diagrams .md-mermaid-zoom { top: 0; right: 0; }
 /* Outside .md-doc, so a failed diagram's source + error needs its own skin and
    its own sideways scroll (5.8:1, --s-needs on --bg-term). */
 .wt-diagrams .md-mermaid-err { margin: 0; padding: 11px 14px; overflow-x: auto; white-space: pre; font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--bg-term); border: 1px solid var(--line-soft); border-radius: var(--r-sm); }
@@ -3992,12 +4021,31 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 /* Disabled until mermaid's ~3 MB chunk has drawn the diagram. */
 .md-mermaid-zoom:disabled { opacity: .55; cursor: default; }
 .md-img-zoom { display: inline-block; padding: 0; border: 0; background: none; }
-.md-mermaid-zoom:focus-visible, .md-img-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* One ring for the view (there is no app-wide :focus-visible rule). Inset on
+   full-width rows, whose outer ring .wt-evidence's overflow clips, and on the
+   lightbox scroller, whose outer ring would be off-screen. */
+.walkthrough :is(button, summary, a):focus-visible, .lightbox-close:focus-visible, .md-img-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.walkthrough :is(.wt-file, .wt-toc-item):focus-visible { outline-offset: -2px; }
+.lightbox-body:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 /* Prose column */
 .wt-prose { min-width: 0; }
 /* Code column: sticks beside the prose while the stop is on screen and
-   scrolls on its own when taller. */
-.wt-evidence { position: sticky; top: 12px; align-self: start; min-width: 0; max-height: calc(100cqh - 24px); overflow: auto; font-size: var(--wt-fs-ui); }
+   scrolls on its own when taller. cqh measures .wt-scroll's content box,
+   56px (its own 16+40 padding) short of the border-box height this sticky
+   column actually gets; +32 adds that back, less a symmetric 12px top/bottom
+   clearance around the column. Also: `position: sticky` is what makes this
+   element the offsetParent Stop.goTo reads offsetTop from — any `overflow`
+   added to .wt-stop or .wt-cols would take over that role instead. */
+.wt-evidence { position: sticky; top: 12px; min-width: 0; max-height: calc(100cqh + 32px); overflow: auto; font-size: var(--wt-fs-ui); }
+.wt-evidence.is-empty { display: none; }
+/* One sideways scroller per hunk (D3), not per line: in the narrow code column most
+   long lines overflow, and each per-line scroller grew its own 8px bar. The implicit
+   auto column sizes to the widest line, so add/del tints run the full width. */
+.walkthrough .dhunk { display: grid; overflow-x: auto; }
+.walkthrough .dl { overflow-x: visible; }
+/* Base tok-comment (#7f848e) is under 4.5:1 on the card's --bg-1; brighten
+   for the code column (5.85:1 on the card, 4.66/4.92 on add/del rows). */
+.walkthrough .dl .tok-comment { color: #9da5b4; }
 .wt-files { list-style: none; margin: 0 0 8px; padding: 0; }
 .wt-file { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 2px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--fg-1); font: inherit; text-align: left; }
 button.wt-file { cursor: pointer; }
@@ -4017,23 +4065,26 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 .wt-ev-file.is-flash { animation: wt-flash 1.2s ease-out; }
 @keyframes wt-flash { from { background: color-mix(in oklch, var(--accent) 22%, transparent); } to { background: transparent; } }
 /* Shared styles that put --fg-3 text in the view (D9: nothing under 4.5:1). */
-.walkthrough .dhunk-head { color: var(--fg-1); }
+.walkthrough .dhunk-head, .walkthrough .dhunk-sym { color: var(--fg-1); }
 .walkthrough .md-doc .md-ul li::marker, .walkthrough .md-doc .md-ol li::marker { color: var(--fg-2); }
 .walkthrough .rq-pr-link.is-closed { color: var(--fg-2); }
 /* Comments */
 .wt-comments { list-style: none; margin: 14px 0 0; padding: 0; font-size: var(--wt-fs-ui); }
 .wt-comments li { margin: 8px 0; padding: 2px 10px; border-left: 2px solid var(--s-needs); }
 .wt-comments li.is-resolved { border-left-color: var(--fg-4); }
+.wt-comment-body .md-link { color: var(--accent); text-decoration: none; } /* 6.4:1 on --bg-1 */
+.wt-comment-body .md-link:hover { text-decoration: underline; }
+.wt-comment-body .md-p { margin: 2px 0 0; } /* was the UA's 1em */
 .wt-comment-ts, .wt-comment-state { margin-right: 8px; color: var(--fg-2); font-size: var(--wt-fs-meta); }
 .wt-comment-box { margin-top: 10px; font-size: var(--wt-fs-ui); }
-.wt-link { padding: 0; border: 0; background: none; color: var(--fg-1); font: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
-.wt-link:hover { color: var(--fg-0); }
+.walkthrough .wt-link { padding: 0; border: 0; background: none; color: var(--fg-1); font: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.walkthrough .wt-link:hover { color: var(--fg-0); }
 .wt-comment-box textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-0); color: var(--fg-0); font: inherit; }
 .wt-comment-box textarea:focus { outline: none; border-color: var(--accent); }
 .wt-comment-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
-.wt-btn { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-0); font: inherit; cursor: pointer; }
-.wt-btn:hover:not(:disabled) { border-color: var(--line-strong); }
-.wt-btn:disabled { opacity: .55; cursor: default; }
+.walkthrough .wt-btn { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-0); font: inherit; cursor: pointer; }
+.walkthrough .wt-btn:hover:not(:disabled) { border-color: var(--line-strong); }
+.walkthrough .wt-btn:disabled { opacity: .55; cursor: default; }
 .wt-hint, .wt-comment-note { color: var(--fg-2); font-size: var(--wt-fs-meta); }
 /* Narrow: one column, prose then code; the code column stops sticking. 1100px
    leaves the code column ~45 mono columns at the switch; Task 12 tunes it. */
@@ -4045,12 +4096,17 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
    (10), below toasts (100) and the modals (200, ⌘K 1000), so a notification
    or a palette opened over it still shows. */
 .lightbox { position: fixed; inset: 0; z-index: 90; display: flex; background: color-mix(in oklch, var(--bg-0) 92%, transparent); }
+/* 48px top clearance: room for the fixed ✕, which would otherwise sit over the content. */
 .lightbox-body { flex: 1; display: flex; overflow: auto; padding: 48px 32px 32px; }
 /* margin:auto, not place-items:center: centering would clip an oversized
    child's top-left edge out of the scroll range. */
 .lightbox-body > * { margin: auto; }
-.lightbox-body img, .lightbox-svg svg { display: block; max-width: none; }
+.lightbox-body img { display: block; max-width: none; }
+/* No max-width:none here: LightboxHost sets width/height inline off the
+   drawn SVG's viewBox, and an inline style already wins over this. */
+.lightbox-svg svg { display: block; }
 .lightbox-close { position: fixed; top: 12px; right: 16px; z-index: 1; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-0); font: inherit; font-size: 16px; cursor: pointer; }
+.lightbox-close:hover { background: var(--bg-3); }
 .rq-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .rq-table th { text-align: left; color: var(--fg-3); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--line); }
 /* Sortable headers (THI-444). Resting labels are fg-2, not the th's fg-3: that
