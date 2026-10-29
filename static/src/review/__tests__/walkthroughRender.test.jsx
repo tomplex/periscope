@@ -4,10 +4,11 @@
 import { options } from "preact";
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseCite } from "../../split/mdMeta.js";
 import {
-  CommentForm, commentOutcome, drafts, MemoHunk, ReviewedToggle, reveal, sendHint, WalkthroughView,
+  CommentForm, commentOutcome, drafts, Evidence, MemoHunk, ReviewedToggle, reveal, sendHint, WalkthroughView,
 } from "../Walkthrough.jsx";
-import { parseWalkthrough, stopSig } from "../walkthrough.js";
+import { evidenceFor, parseWalkthrough, stopSig } from "../walkthrough.js";
 
 const DOC = `# Gauge
 
@@ -135,6 +136,39 @@ describe("<WalkthroughView> body", () => {
     expect(view({ diff: edge })).not.toContain("wt-ev-more");
     expect(view({ diff: edge })).toContain('class="dhunk"');
   });
+  it("keeps a large block open by its ref, wherever a refetch moves it in the list", () => {
+    const lines = (n) => Array.from({ length: n }, () => ({ kind: "add", text: "x" }));
+    const small = { path: "a/small.py", hunks: [{ new_start: 1, lines: lines(2) }] };
+    const big = { path: "a/big.py", hunks: [{ new_start: 1, lines: lines(301) }] };
+    const refs = [parseCite("a/small.py"), parseCite("a/big.py")];
+    const pressed = [];
+    let more;
+    let row;
+    const prev = options.vnode;
+    options.vnode = (v) => {
+      prev?.(v);
+      if (v.props?.class === "wt-ev-more") more = v;
+      if (v.props?.class === "wt-file" && v.props.title === "a/big.py") row = v;
+    };
+    const ev = (files) => evidenceFor(refs, files);
+    const col = (e, expanded) => render(
+      <Evidence ev={e} title="S" noWorktree={false} hl={null} colRef={null} expanded={expanded}
+        onGo={(i, key) => pressed.push(["go", i, key])} onExpand={(key) => pressed.push(["open", key])} />,
+    );
+    try {
+      expect(col(ev([small, big]), new Set())).toContain('class="wt-ev-more"');
+      more.props.onClick();
+      row.props.onClick();
+      expect(pressed).toEqual([["open", "a/big.py"], ["go", 1, "a/big.py"]]);
+      // Opened, then the refetched diff puts it first: still open, and small stays as it was.
+      const moved = col(ev([big, small]), new Set(["a/big.py"]));
+      expect(moved).not.toContain("wt-ev-more");
+      expect(count(moved, 'class="dhunk"')).toBe(2);
+      expect(col(ev([big, small]), new Set(["a/small.py"]))).toContain("show 301 lines");
+    } finally {
+      options.vnode = prev;
+    }
+  });
   it("lists files without hunks when there is no worktree", () => {
     const html = view({ diff: null, stale_by: null });
     expect(html).toContain('<span class="wt-file-name">missing.py</span>');
@@ -206,9 +240,17 @@ describe("<WalkthroughView> cites and accessibility", () => {
   it("names each stop's code column and describes its toggle by the stop's title", () => {
     const html = view();
     expect(html).toContain('aria-label="files and code changes: Adds a gauge"');
-    expect(html).toContain('<h3 class="wt-stop-title" id="stop-adds-a-gauge-title">');
-    expect(html).toContain('aria-describedby="stop-adds-a-gauge-title" aria-pressed="false">reviewed</button>');
-    expect(html).toContain('aria-describedby="stop-reuses-the-cache-title"');
+    expect(html).toContain('<h3 class="wt-stop-title" id="stop-adds-a-gauge__title">');
+    expect(html).toContain('aria-describedby="stop-adds-a-gauge__title" aria-pressed="false">reviewed</button>');
+    expect(html).toContain('aria-describedby="stop-reuses-the-cache__title"');
+  });
+  it("keeps title ids apart from stop ids, whatever the titles", () => {
+    // Stop "X title" slugs to x-title: with a "-title" suffix, stop X's heading
+    // would have claimed the same id as that stop's section.
+    const html = view({ text: "# T\n\n## X\n\na\n\n## X title\n\nb\n" });
+    for (const id of ["stop-x", "stop-x__title", "stop-x-title", "stop-x-title__title"]) {
+      expect(count(html, `id="${id}"`)).toBe(1);
+    }
   });
   it("gives the contents ✓ a name", () => {
     expect(view({}, { reviewed: { "Adds a gauge": firstSig } }))
@@ -335,6 +377,12 @@ describe("walkthrough pieces", () => {
     expect(render(
       <CommentForm stop="S" text="  " busy={false} textRef={null} onInput={() => {}} onSend={() => {}} onCancel={() => {}} />,
     )).toMatch(/<button type="button" class="wt-btn" disabled(="")?>send<\/button>/);
+  });
+  it("CommentForm holds cancel while a send is out: cancel discards the draft, and a failed send would have lost it", () => {
+    const html = render(
+      <CommentForm stop="S" text="why?" busy textRef={null} onInput={() => {}} onSend={() => {}} onCancel={() => {}} />,
+    );
+    expect(html).toMatch(/<button type="button" class="wt-link" disabled(="")?>cancel<\/button>/);
   });
   it("sendHint names the keys for the platform", () => {
     expect(sendHint("MacIntel")).toBe("⌘↩ to send");

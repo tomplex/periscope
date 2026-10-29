@@ -88,7 +88,8 @@ export function CommentForm({ stop, text, busy, textRef, onInput, onSend, onCanc
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSend(); }} />
       <div class="wt-comment-actions">
         <button type="button" class="wt-btn" disabled={busy || !text.trim()} onClick={onSend}>send</button>
-        <button type="button" class="wt-link" onClick={onCancel}>cancel</button>
+        {/* Held while sending: cancel discards the draft, so cancel then a failed send would lose the text. */}
+        <button type="button" class="wt-link" disabled={busy} onClick={onCancel}>cancel</button>
         <span class="wt-hint">{SEND_HINT}</span>
       </div>
     </>
@@ -193,7 +194,7 @@ export class MemoHunk extends Component {
 // The right column (THI-443 D5): the stop's files, one summary line for the
 // ones with nothing to show, then the hunks expanded, except a block past
 // COLLAPSE_LINES, which waits behind a button.
-function Evidence({ ev, title, noWorktree, hl, colRef, expanded, onGo, onExpand }) {
+export function Evidence({ ev, title, noWorktree, hl, colRef, expanded, onGo, onExpand }) {
   const summary = hiddenSummary(ev.hidden);
   if (!ev.shown.length && !summary) return <div class="wt-evidence is-empty" />;
   return (
@@ -211,7 +212,7 @@ function Evidence({ ev, title, noWorktree, hl, colRef, expanded, onGo, onExpand 
             <li key={i}>
               {ev.noDiff
                 ? <span class="wt-file" title={e.ref.path}>{label}</span>
-                : <button type="button" class="wt-file" title={e.ref.path} onClick={() => onGo(i)}>{label}</button>}
+                : <button type="button" class="wt-file" title={e.ref.path} onClick={() => onGo(i, e.ref.raw)}>{label}</button>}
             </li>
           );
         })}
@@ -233,9 +234,9 @@ function Evidence({ ev, title, noWorktree, hl, colRef, expanded, onGo, onExpand 
         return (
           <section class="wt-ev-file" data-ev={i} key={i}>
             <div class="wt-ev-path">{e.ref.raw}</div>
-            {n <= COLLAPSE_LINES || expanded.has(i)
+            {n <= COLLAPSE_LINES || expanded.has(e.ref.raw)
               ? e.hunks.map((h, j) => <MemoHunk key={j} hunk={h} lang={langFor(e.ref.path)} hl={hl} onOpen={null} />)
-              : <button type="button" class="wt-ev-more" onClick={() => onExpand(i)}>{`show ${n} lines`}</button>}
+              : <button type="button" class="wt-ev-more" onClick={() => onExpand(e.ref.raw)}>{`show ${n} lines`}</button>}
           </section>
         );
       })}
@@ -245,22 +246,24 @@ function Evidence({ ev, title, noWorktree, hl, colRef, expanded, onGo, onExpand 
 
 function Stop({ stop, n, diffFiles, noWorktree, comments, repo, branch, hl, reviewed, toggleError, onToggleReviewed, onPosted }) {
   const [unfolded, setUnfolded] = useState(false);
-  // Large file blocks the reader has opened, by index into ev.shown.
+  // Large file blocks the reader has opened, by ref: an index into ev.shown
+  // would pass the open state to whatever file a refetch put at that index.
   const [expanded, setExpanded] = useState(() => new Set());
   const col = useRef(null);
   const done = isReviewed(stop, reviewed);
   const folded = done && !unfolded;
   const ev = useMemo(() => evidenceFor(stop.refs, diffFiles), [stop.refs, diffFiles]);
-  const expand = useCallback((i) => setExpanded((s) => (s.has(i) ? s : new Set(s).add(i))), []);
+  const expand = useCallback((key) => setExpanded((s) => (s.has(key) ? s : new Set(s).add(key))), []);
   // Stable, so the memoized prose below keeps its cite chips across marks.
-  const goTo = useCallback((i) => {
+  // `i` finds the block in this render's column, `key` is the ref it opens.
+  const goTo = useCallback((i, key) => {
     const c = col.current;
     const el = c?.querySelector(`[data-ev="${i}"]`);
     if (!el) return;
     // A collapsed block opens first, and the scroll waits for it to draw:
     // "nearest" aimed at the button alone would leave its code off screen.
     if (el.querySelector(".wt-ev-more")) {
-      expand(i);
+      expand(key);
       requestAnimationFrame(() => reveal(c, el));
     } else reveal(c, el);
   }, [expand]);
@@ -271,7 +274,7 @@ function Stop({ stop, n, diffFiles, noWorktree, comments, repo, branch, hl, revi
         <button type="button" class={`md-cite${i >= 0 ? "" : " is-inert"}`}
           title={i >= 0 ? "show in the code column" : "not among this stop's changes"}
           aria-disabled={i >= 0 ? undefined : "true"}
-          onClick={() => { if (i >= 0) goTo(i); }}>{c.raw}</button>
+          onClick={() => { if (i >= 0) goTo(i, ev.shown[i].ref.raw); }}>{c.raw}</button>
       );
     };
     // demote: a "### Detail" in a stop would otherwise be an h3, a sibling of
@@ -279,7 +282,9 @@ function Stop({ stop, n, diffFiles, noWorktree, comments, repo, branch, hl, revi
     return renderMarkdown(stop.bodyMarkdown, { demote: true, softBreaks: "space", mermaid: true, meta: true, cite, zoom: true });
   }, [stop.bodyMarkdown, ev, goTo]);
   const title = <><span class="wt-stop-n">{`${n}.`}</span> {stop.title}</>;
-  const titleId = `stop-${stop.id}-title`;
+  // "__": slug() never emits "_", so no stop's own id (a stop titled "X
+  // title" is stop-x-title) can collide with this.
+  const titleId = `stop-${stop.id}__title`;
   return (
     // tabIndex -1: the contents list moves focus here, without the stop
     // joining the tab order.
