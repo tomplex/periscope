@@ -1483,7 +1483,7 @@ import { refreshReviews } from "../poll.js";
 import { Mermaid } from "../split/Mermaid.jsx";
 import { renderMarkdown } from "../split/markdown.jsx";
 import { prStateMeta } from "../util.js";
-import { evidenceFor, evidenceIndex, hiddenSummary, isReviewed, parseWalkthrough, stopSig, withMark } from "./walkthrough.js";
+import { evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed, parseWalkthrough, stopSig, withMark } from "./walkthrough.js";
 
 async function postJson(url, body) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -1600,8 +1600,6 @@ export function ReviewedToggle({ on, onToggle, error }) {
   );
 }
 
-const HIDDEN_LABEL = { missing: "not in this diff", generated: "generated, not shown", unchanged: "unchanged at the cited lines" };
-
 // The right column (THI-443 D5): the stop's files, one summary line for the
 // ones with nothing to show, then the hunks expanded.
 function Evidence({ ev, hl, colRef, onGo }) {
@@ -1632,7 +1630,7 @@ function Evidence({ ev, hl, colRef, onGo }) {
           <summary>{summary}</summary>
           <ul>
             {Object.entries(ev.hidden).flatMap(([why, refs]) => refs.map((r, i) => (
-              <li key={`${why}${i}`}><span class="wt-hidden-path">{r.raw}</span>{` · ${HIDDEN_LABEL[why]}`}</li>
+              <li key={`${why}${i}`}><span class="wt-hidden-path">{r.raw}</span>{` · ${HIDDEN_WHY[why]}`}</li>
             )))}
           </ul>
         </details>
