@@ -46,7 +46,7 @@ from periscope.session_status import claude_proc_for, session_state_for
 from periscope.store import SessionSetting, get_accounts, get_window, linear_team_keys
 from periscope.tmux import capture
 from periscope.tracks import resolve_track_for_window, track_kind, track_label
-from periscope.turns import session_id_for_pane
+from periscope.turns import last_reply_for_session, session_id_for_pane
 from periscope.worktrees import affiliation
 
 # Cache of the parsed-pane dict, keyed by (target, pane_id). Skips
@@ -534,6 +534,12 @@ def build_window_view(
         "acted_at": acked,
         "completed_at": completed,
         "needs_since": needs_since,
+        # What a done banner says: the reply, from the transcript, where
+        # last_line is the screen's guess (THI-416). Only a done pane notifies,
+        # and a working pane's file grows every poll.
+        "last_reply": last_reply_for_session(sid)
+        if parsed.get("state") == "done" and parsed.get("agent") == "claude"
+        else None,
         # The request a banner's Allow / Deny would answer (or null: Open only).
         "pending_permission": pending_permission,
         "mem": mem_signal(claude_proc_for(sid)),

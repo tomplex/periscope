@@ -172,6 +172,147 @@ def test_none_when_no_transcript(tmp_path, monkeypatch):
     assert turns.get_turns_for_pane("main", 0) is None
 
 
+# ── last_reply: what a done banner says (THI-416) ────────────────────────
+# Shapes from real 2.1.x transcripts: each content block is its own event,
+# and the reply is followed by bookkeeping rows that carry no message.
+
+
+def _prompt(text):
+    return {"type": "user", "message": {"role": "user", "content": text}}
+
+
+def _said(*blocks, **extra):
+    return {"type": "assistant", "message": {"role": "assistant", "content": list(blocks)}, **extra}
+
+
+def _text(t):
+    return {"type": "text", "text": t}
+
+
+_THINKING = _said({"type": "thinking", "thinking": "hmm"})
+_TOOL_USE = _said({"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}})
+_TOOL_RESULT = {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]}}
+_BOOKKEEPING = [
+    {"type": "system", "subtype": "turn_duration", "durationMs": 42000},
+    {"type": "artifact-autoreact-ledger", "entries": []},
+    {"type": "mode", "mode": "auto"},
+]
+
+
+def _transcript(tmp_path, *events, name="s1.jsonl"):
+    path = tmp_path / name
+    path.write_text("".join(json.dumps(e) + "\n" for e in events))
+    return path
+
+
+def test_last_reply_is_the_newest_assistant_text_under_the_bookkeeping(tmp_path):
+    path = _transcript(
+        tmp_path,
+        _prompt("fix the banner"),
+        _said(_text("Looking at copy.js first.")),
+        _TOOL_USE,
+        _TOOL_RESULT,
+        _THINKING,
+        _said(_text("Fixed it. The banner now says the reply.")),
+        *_BOOKKEEPING,
+    )
+    assert turns.last_reply(path) == "Fixed it. The banner now says the reply."
+
+
+def test_last_reply_answers_a_notification_turn_too(tmp_path):
+    # A background agent's <task-notification> starts a turn like a prompt does.
+    path = _transcript(
+        tmp_path,
+        _said(_text("Waiting on the agent.")),
+        _prompt("<task-notification>\n<task-id>a7</task-id>\n</task-notification>"),
+        _said(_text("That's the report I summarized above.")),
+        *_BOOKKEEPING,
+    )
+    assert turns.last_reply(path) == "That's the report I summarized above."
+
+
+def test_last_reply_is_none_once_a_prompt_follows_it(tmp_path):
+    # The new turn has no words yet; the previous turn's would describe the
+    # wrong thing.
+    path = _transcript(tmp_path, _said(_text("Done with the first ask.")), _prompt("now the second"), _TOOL_USE)
+    assert turns.last_reply(path) is None
+
+
+def test_last_reply_reads_past_meta_and_sidechain_events(tmp_path):
+    path = _transcript(
+        tmp_path,
+        _said(_text("The real reply.")),
+        {"type": "user", "isMeta": True, "message": {"role": "user", "content": '<channel source="periscope">hi'}},
+        _said(_text("A subagent's words."), isSidechain=True),
+        *_BOOKKEEPING,
+    )
+    assert turns.last_reply(path) == "The real reply."
+
+
+def test_last_reply_flattens_markdown_for_a_banner(tmp_path):
+    reply = (
+        "## Summary\n\n"
+        "I updated [FDY-8473](https://linear.app/x/issue/FDY-8473/grade) and **merged** `#534`.\n\n"
+        "```sh\nbin/periscope restart\n```\n\n"
+        "- first item\n"
+        "1. second item\n"
+        "> quoted"
+    )
+    path = _transcript(tmp_path, _said(_text(reply)))
+    assert turns.last_reply(path) == "I updated FDY-8473 and merged #534. first item second item quoted"
+
+
+def test_last_reply_is_capped(tmp_path):
+    path = _transcript(tmp_path, _said(_text("word " * 500)))
+    assert len(turns.last_reply(path)) == turns._REPLY_CHARS
+
+
+def test_last_reply_reads_back_past_a_chunk_of_bookkeeping(tmp_path):
+    ledger = {"type": "artifact-autoreact-ledger", "pad": "x" * 1000}
+    rows = [ledger] * (2 * turns._REPLY_CHUNK // 1000)
+    path = _transcript(tmp_path, _said(_text("Still found.")), *rows)
+    assert turns.last_reply(path) == "Still found."
+
+
+def test_last_reply_gives_up_past_its_reach(tmp_path, monkeypatch):
+    monkeypatch.setattr(turns, "_REPLY_REACH", 4 * turns._REPLY_CHUNK)
+    ledger = {"type": "artifact-autoreact-ledger", "pad": "x" * 1000}
+    rows = [ledger] * (5 * turns._REPLY_CHUNK // 1000)
+    path = _transcript(tmp_path, _said(_text("Too far back.")), *rows)
+    assert turns.last_reply(path) is None
+
+
+def test_last_reply_skips_a_torn_or_foreign_row(tmp_path):
+    path = tmp_path / "s1.jsonl"
+    path.write_text(json.dumps(_said(_text("Survives."))) + "\n[1, 2]\n" + '{"type": "assist')
+    assert turns.last_reply(path) == "Survives."
+
+
+def test_last_reply_for_session_finds_the_file_and_caches_by_size(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr(turns, "_reply_cache", {})
+    (tmp_path / "-Users-tom-dev-x").mkdir()
+    path = _transcript(tmp_path / "-Users-tom-dev-x", _said(_text("First.")), name="sid-R.jsonl")
+    reads = []
+    real = turns.last_reply
+    monkeypatch.setattr(turns, "last_reply", lambda p: reads.append(p) or real(p))
+
+    assert turns.last_reply_for_session("sid-R") == "First."
+    assert turns.last_reply_for_session("sid-R") == "First."
+    assert len(reads) == 1  # a done pane's file sits still between polls
+    with path.open("a") as f:
+        f.write(json.dumps(_said(_text("Second."))) + "\n")
+    assert turns.last_reply_for_session("sid-R") == "Second."
+    assert len(reads) == 2
+
+
+def test_last_reply_for_session_is_none_without_a_transcript(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr(turns, "_reply_cache", {})
+    assert turns.last_reply_for_session(None) is None
+    assert turns.last_reply_for_session("sid-gone") is None
+
+
 # ── pane_session_hook producer (SessionStart / UserPromptSubmit) ─────────
 
 
