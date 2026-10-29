@@ -3944,7 +3944,10 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    there). scrollbar-gutter keeps that width stable whether a vertical
    scrollbar is showing or not. */
 .wt-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 40px; container: wt / size; scrollbar-gutter: stable; }
-.walkthrough .wt-error { margin: 0 0 12px; color: var(--s-danger); font-size: var(--wt-fs-meta); }
+/* Always rendered (a status region announces reliably only if it's there
+   before the text arrives); empty most of the time. */
+.walkthrough .wt-error { margin: 6px 0 0; color: var(--s-danger); font-size: var(--wt-fs-meta); }
+.walkthrough .wt-error:empty { display: none; }
 /* Prose keeps a readable measure; the code column gets the rest. ch tracks
    the 15px body text because the grid itself is 15px. */
 .wt-cols { display: grid; grid-template-columns: minmax(0, 72ch) minmax(0, 1fr); gap: 16px 28px; align-items: start; font-size: var(--wt-fs-body); }
@@ -3952,7 +3955,9 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    stop cards' inner columns below. */
 .wt-intro { margin-bottom: 22px; padding: 0 17px 0 19px; }
 .walkthrough .md-doc { max-width: none; margin: 0; font-size: var(--wt-fs-body); }
-.walkthrough .md-doc .md-h { font-size: var(--wt-fs-body); margin: 14px 0 6px; border-bottom: 0; padding-bottom: 0; }
+/* color: fg-0 beats .md-doc h5.md-h/h6.md-h's fg-1 (used for transcript-demoted
+   headings): three classes (0,3,0) outrank two classes + an element (0,2,1). */
+.walkthrough .md-doc .md-h { font-size: var(--wt-fs-body); margin: 14px 0 6px; border-bottom: 0; padding-bottom: 0; color: var(--fg-0); }
 .walkthrough .md-doc .md-h:first-child { margin-top: 0; }
 .walkthrough .md-doc .md-icode { color: var(--fg-1); }
 /* The card's own fill (--bg-1) swallows chip/code/stripe fills tuned for
@@ -3977,6 +3982,7 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 .wt-toc-item:hover .wt-toc-n { color: var(--fg-1); }
 .wt-toc-dot { flex: none; align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--k, var(--kind-other)); }
 .wt-toc-done { margin-left: auto; color: var(--s-success); }
+.wt-empty-stops { color: var(--fg-2); }
 /* Kind: --k is the card edge and contents dot, --k-bg/--k-fg the badge. */
 .wt-kind-new-subsystem { --k: var(--kind-new-subsystem); --k-bg: var(--kind-new-subsystem-bg); --k-fg: var(--kind-new-subsystem-fg); }
 .wt-kind-extension { --k: var(--kind-extension); --k-bg: var(--kind-extension-bg); --k-fg: var(--kind-extension-fg); }
@@ -3987,12 +3993,20 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 /* Stop card */
 .walkthrough .wt-stop { margin-bottom: 16px; padding: 12px 16px 14px; background: var(--bg-1); border: 1px solid var(--line-soft); border-left: 3px solid var(--k, var(--kind-other)); border-radius: 8px; scroll-margin-top: 12px; }
 .walkthrough .wt-stop.is-folded { padding-bottom: 12px; }
+/* tabindex -1: the contents list moves focus here without joining the tab
+   order. :focus alone would ring the card on every mouse click too — only
+   the visible-heuristic ring is wanted. */
+.walkthrough .wt-stop:focus { outline: none; }
+.walkthrough .wt-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .walkthrough .wt-stop-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; row-gap: 6px; }
 .walkthrough .wt-stop-title { flex: 1 1 24ch; min-width: 0; margin: 0; font-size: var(--wt-fs-stop); line-height: 1.3; font-weight: 650; color: var(--fg-0); }
 .walkthrough .wt-stop-n { color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .wt-fold { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .wt-fold:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
 .wt-kind-badge { flex: none; padding: 1px 8px; border-radius: 9px; background: var(--k-bg); color: var(--k-fg); font-size: var(--wt-fs-meta); text-transform: uppercase; letter-spacing: .04em; }
+/* Folded-stop comment count ("2 comments · 1 open"): a muted pill like
+   .wt-badge, so it reads as metadata rather than another action. */
+.wt-comment-chip { padding: 1px 8px; border-radius: 9px; background: var(--bg-2); color: var(--fg-1); font-size: var(--wt-fs-meta); }
 .wt-reviewed { flex: 0 1 auto; display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .wt-reviewed-btn { padding: 3px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: pointer; }
 .wt-reviewed-btn:hover { color: var(--fg-0); border-color: var(--line-strong); }
@@ -4060,6 +4074,10 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 .wt-nodiff { margin: 6px; color: var(--fg-2); font-size: var(--wt-fs-meta); }
 .wt-ev-file { margin-top: 10px; border-radius: var(--r-sm); }
 .wt-ev-path { margin: 0 0 4px; color: var(--fg-2); }
+/* "show N lines": a file past COLLAPSE_LINES waits behind this instead of
+   rendering every hunk up front. Muted and link-like, like .wt-link. */
+.wt-ev-more { display: block; margin-top: 4px; padding: 0; border: 0; background: none; color: var(--fg-2); font: inherit; font-size: var(--wt-fs-meta); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.wt-ev-more:hover { color: var(--fg-0); }
 /* A background fade, not motion, so it plays under reduced motion too (an
    outline instead would stay forever: nothing removes is-flash). */
 .wt-ev-file.is-flash { animation: wt-flash 1.2s ease-out; }
@@ -4086,6 +4104,10 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 .walkthrough .wt-btn:hover:not(:disabled) { border-color: var(--line-strong); }
 .walkthrough .wt-btn:disabled { opacity: .55; cursor: default; }
 .wt-hint, .wt-comment-note { color: var(--fg-2); font-size: var(--wt-fs-meta); }
+/* Always rendered, after the link or the send/cancel row; empty until a send
+   settles. */
+.wt-comment-note:empty { display: none; }
+.wt-comment-note:not(:empty) { display: block; margin-top: 4px; }
 /* Narrow: one column, prose then code; the code column stops sticking. 1100px
    leaves the code column ~45 mono columns at the switch; Task 12 tunes it. */
 @container wt (width < 1100px) {
