@@ -48,9 +48,12 @@ const kindOf = (stop) => (stop.knownKind ? stop.kind : "other");
 // Bring a file block into view and flash it. Wide, the column scrolls on its
 // own, so move it rather than the page. Otherwise bring the file into view only
 // if it isn't already ("nearest"), so a column that fits on screen never jumps
-// the page (D5).
-function reveal(c, el) {
-  if (c.scrollHeight > c.clientHeight) c.scrollTo({ top: el.offsetTop - 8, behavior: motion() });
+// the page (D5). Narrow, the column is static: asked by its overflow, not its
+// heights, so it always takes the page path.
+export function reveal(c, el) {
+  if (getComputedStyle(c).overflowY !== "visible" && c.scrollHeight > c.clientHeight) {
+    c.scrollTo({ top: el.offsetTop - 8, behavior: motion() });
+  }
   else el.scrollIntoView({ block: "nearest", behavior: motion() });
   // Restart the flash even on a second click of the same file: the reflow
   // between remove and add makes the browser replay the animation.
@@ -189,7 +192,7 @@ export class MemoHunk extends Component {
 // The right column (THI-443 D5): the stop's files, one summary line for the
 // ones with nothing to show, then the hunks expanded, except a block past
 // COLLAPSE_LINES, which waits behind a button.
-function Evidence({ ev, title, hl, colRef, expanded, onGo, onExpand }) {
+function Evidence({ ev, title, noWorktree, hl, colRef, expanded, onGo, onExpand }) {
   const summary = hiddenSummary(ev.hidden);
   if (!ev.shown.length && !summary) return <div class="wt-evidence is-empty" />;
   return (
@@ -222,7 +225,9 @@ function Evidence({ ev, title, hl, colRef, expanded, onGo, onExpand }) {
           </ul>
         </details>
       ) : null}
-      {ev.noDiff ? <p class="wt-nodiff">no worktree, so code changes are unavailable</p> : ev.shown.map((e, i) => {
+      {/* diff is also null in a worktree whose diff base wasn't found, so the
+          worktree gets the blame only when the header's badge does. */}
+      {ev.noDiff ? <p class="wt-nodiff">{noWorktree ? "no worktree, so code changes are unavailable" : "code changes are unavailable"}</p> : ev.shown.map((e, i) => {
         const n = lineCount(e.hunks);
         return (
           <section class="wt-ev-file" data-ev={i} key={i}>
@@ -237,7 +242,7 @@ function Evidence({ ev, title, hl, colRef, expanded, onGo, onExpand }) {
   );
 }
 
-function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggleError, onToggleReviewed, onPosted }) {
+function Stop({ stop, n, diffFiles, noWorktree, comments, repo, branch, hl, reviewed, toggleError, onToggleReviewed, onPosted }) {
   const [unfolded, setUnfolded] = useState(false);
   // Large file blocks the reader has opened, by index into ev.shown.
   const [expanded, setExpanded] = useState(() => new Set());
@@ -304,7 +309,8 @@ function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggle
               <Comments list={comments} />
               <CommentBox repo={repo} branch={branch} stop={stop.title} onPosted={onPosted} />
             </div>
-            <Evidence ev={ev} title={stop.title} hl={hl} colRef={col} expanded={expanded} onGo={goTo} onExpand={expand} />
+            <Evidence ev={ev} title={stop.title} noWorktree={noWorktree} hl={hl} colRef={col} expanded={expanded}
+              onGo={goTo} onExpand={expand} />
           </div>
         </>
       )}
@@ -344,9 +350,9 @@ function Contents({ stops, reviewed }) {
 // stale_by is null both with no worktree (no diff either) and when the
 // worktree no longer has the recorded head (rebased away); the queue calls the
 // second "stale: unknown", and so does this.
-function Staleness({ staleBy, header, diff }) {
+function Staleness({ staleBy, header, diff, noWorktree }) {
   if (staleBy > 0) return <span class="wt-badge is-warn">{`stale: ${staleBy} commit${staleBy === 1 ? "" : "s"}`}</span>;
-  if (staleBy == null && header && !diff) return <span class="wt-badge">no worktree</span>;
+  if (noWorktree) return <span class="wt-badge">no worktree</span>;
   if (staleBy == null && header && diff) return <span class="wt-badge is-warn">stale: unknown</span>;
   return null;
 }
@@ -361,6 +367,8 @@ export function WalkthroughView({ data, repo, branch, pr, hl, reviewed, toggleEr
   const attached = new Set(w.stops.map((s) => s.title));
   const unattached = comments.filter((c) => !attached.has(c.stop));
   const done = w.stops.filter((s) => isReviewed(s, reviewed)).length;
+  // The header's badge and every code column say "no worktree" on one rule.
+  const noWorktree = stale_by == null && !!w.header && !diff;
   return (
     <div class="walkthrough">
       <header class="wt-head">
@@ -371,20 +379,29 @@ export function WalkthroughView({ data, repo, branch, pr, hl, reviewed, toggleEr
           {w.header?.pr ? (pr?.url && pr.number === w.header.pr
             ? <a class={`rq-pr-link ${prStateMeta(pr.state).cls}`} href={pr.url} target="_blank" rel="noopener">{`PR #${w.header.pr}`}</a>
             : <span>{`PR #${w.header.pr}`}</span>) : null}
-          <Staleness staleBy={stale_by} header={w.header} diff={diff} />
+          <Staleness staleBy={stale_by} header={w.header} diff={diff} noWorktree={noWorktree} />
           {w.stops.length ? <span class="wt-progress">{`${done} / ${w.stops.length} reviewed`}</span> : null}
         </div>
+        {/* In the fixed header, so it shows however far down the reader is. A
+            status, not an alert: a background refresh isn't the reader's doing.
+            Present while empty, as a status that mounts with its text is often
+            not announced. */}
+        <div class="wt-error" role="status">{error ? `refresh failed: ${error}` : ""}</div>
       </header>
       <div class="wt-scroll">
-        {error ? <div class="wt-error" role="alert">{`refresh failed: ${error}`}</div> : null}
-        <div class="wt-cols wt-intro">
-          <div class="md-doc wt-problem">{renderMarkdown(w.problemMarkdown, { demote: false, softBreaks: "space" })}</div>
-          <Contents stops={w.stops} reviewed={reviewed} />
-        </div>
+        {w.problemMarkdown || w.stops.length ? (
+          <div class="wt-cols wt-intro">
+            {w.problemMarkdown
+              ? <div class="md-doc wt-problem">{renderMarkdown(w.problemMarkdown, { demote: false, softBreaks: "space" })}</div>
+              : null}
+            <Contents stops={w.stops} reviewed={reviewed} />
+          </div>
+        ) : null}
+        {w.stops.length ? null : <p class="wt-empty-stops">no stops in this walkthrough</p>}
         {w.stops.map((s, i) => (
-          <Stop key={s.id} stop={s} n={i + 1} diffFiles={diff?.files || null} comments={byStop.get(s.title) || []}
-            repo={repo} branch={branch} hl={hl} reviewed={reviewed} toggleError={toggleErrors[s.title] || null}
-            onToggleReviewed={onToggleReviewed} onPosted={onPosted} />
+          <Stop key={s.id} stop={s} n={i + 1} diffFiles={diff?.files || null} noWorktree={noWorktree}
+            comments={byStop.get(s.title) || []} repo={repo} branch={branch} hl={hl} reviewed={reviewed}
+            toggleError={toggleErrors[s.title] || null} onToggleReviewed={onToggleReviewed} onPosted={onPosted} />
         ))}
         {unattached.length ? (
           <section class="wt-stop wt-kind-other">

@@ -3,8 +3,10 @@
 // press the pure pieces (ReviewedToggle) by calling them, as hunk.test.jsx does.
 import { options } from "preact";
 import render from "preact-render-to-string";
-import { describe, expect, it } from "vitest";
-import { CommentForm, commentOutcome, drafts, MemoHunk, ReviewedToggle, sendHint, WalkthroughView } from "../Walkthrough.jsx";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  CommentForm, commentOutcome, drafts, MemoHunk, ReviewedToggle, reveal, sendHint, WalkthroughView,
+} from "../Walkthrough.jsx";
 import { parseWalkthrough, stopSig } from "../walkthrough.js";
 
 const DOC = `# Gauge
@@ -54,6 +56,41 @@ describe("<WalkthroughView> header", () => {
     // stale_by null with a diff: the head was rebased away (reviews.stale_by).
     expect(view({ stale_by: null })).toContain('<span class="wt-badge is-warn">stale: unknown</span>');
   });
+  it("links the PR only when the queue's PR is the one the walkthrough names", () => {
+    const pr = { url: "https://github.com/o/r/pull/12", number: 12, state: "merged" };
+    expect(view({}, { pr })).toContain(
+      '<a class="rq-pr-link is-merged" href="https://github.com/o/r/pull/12" target="_blank" rel="noopener">PR #12</a>',
+    );
+    const other = view({}, { pr: { ...pr, number: 13 } });
+    expect(other).toContain("<span>PR #12</span>");
+    expect(other).not.toContain("rq-pr-link");
+  });
+  it("shows a failed refresh in the fixed header, in a status line that is always there", () => {
+    expect(view()).toMatch(/<header class="wt-head">.*<div class="wt-error" role="status"><\/div><\/header>/);
+    expect(view({}, { error: "HTTP 500" }))
+      .toMatch(/<header class="wt-head">.*<div class="wt-error" role="status">refresh failed: HTTP 500<\/div><\/header>/);
+  });
+});
+
+describe("<WalkthroughView> sparse documents", () => {
+  it("falls back to the branch for the title and leaves out an absent problem statement", () => {
+    const html = view({ text: "## Only\n> kind: reuse\n\nBody.\n", stale_by: null });
+    expect(html).toContain('<h2 class="wt-title">feat/x</h2>');
+    expect(html).not.toContain("wt-problem");
+    expect(html).toContain('<span class="wt-toc-title">Only</span>');
+    expect(html).toContain("Body.");
+    expect(html).not.toContain("wt-empty-stops");
+  });
+  it("says so when there are no stops", () => {
+    const html = view({ text: "" });
+    expect(html).toContain('<p class="wt-empty-stops">no stops in this walkthrough</p>');
+    expect(html).not.toContain("wt-intro");
+    expect(html).not.toContain("wt-progress");
+    const problemOnly = view({ text: "# T\n\nJust the problem.\n" });
+    expect(problemOnly).toContain('class="md-doc wt-problem"><p class="md-p">Just the problem.</p>');
+    expect(problemOnly).toContain("no stops in this walkthrough");
+    expect(problemOnly).not.toContain("wt-toc");
+  });
 });
 
 describe("<WalkthroughView> body", () => {
@@ -101,8 +138,14 @@ describe("<WalkthroughView> body", () => {
   it("lists files without hunks when there is no worktree", () => {
     const html = view({ diff: null, stale_by: null });
     expect(html).toContain('<span class="wt-file-name">missing.py</span>');
-    expect(html).toContain("no worktree, so code changes are unavailable");
+    expect(html).toContain('<p class="wt-nodiff">no worktree, so code changes are unavailable</p>');
     expect(html).not.toContain("wt-file-count");
+  });
+  it("blames the worktree for missing code changes only when the header says there is none", () => {
+    // A worktree whose diff base couldn't be found: staleness known, diff null.
+    const html = view({ diff: null, stale_by: 0 });
+    expect(html).toContain('<p class="wt-nodiff">code changes are unavailable</p>');
+    expect(html).not.toContain("no worktree");
   });
   it("folds a reviewed stop to its title row, and only while its sig matches", () => {
     const folded = view({}, { reviewed: { "Adds a gauge": firstSig } });
@@ -228,6 +271,32 @@ describe("<WalkthroughView> comments", () => {
     // Unfolded, the comments are on show and need no chip; folded with none, nothing to count.
     expect(view({ comments })).not.toContain("wt-comment-chip");
     expect(view({}, { reviewed: { "Adds a gauge": firstSig } })).not.toContain("wt-comment-chip");
+  });
+});
+
+describe("reveal", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  function setup(overflowY) {
+    vi.stubGlobal("getComputedStyle", () => ({ overflowY }));
+    const calls = [];
+    const col = { scrollHeight: 900, clientHeight: 300, scrollTo: (o) => calls.push(["column", o.top]) };
+    const el = {
+      offsetTop: 400,
+      scrollIntoView: (o) => calls.push(["page", o.block]),
+      getBoundingClientRect: () => ({}),
+      classList: { remove: () => {}, add: (k) => calls.push(["flash", k]) },
+    };
+    return { col, el, calls };
+  }
+  it("scrolls a column that scrolls on its own, not the page", () => {
+    const { col, el, calls } = setup("auto");
+    reveal(col, el);
+    expect(calls).toEqual([["column", 392], ["flash", "is-flash"]]);
+  });
+  it("scrolls the page as little as it can when the column is static, however tall", () => {
+    const { col, el, calls } = setup("visible");
+    reveal(col, el);
+    expect(calls).toEqual([["page", "nearest"], ["flash", "is-flash"]]);
   });
 });
 
