@@ -1,7 +1,9 @@
 // Pure helpers for the review walkthrough: the mdast-side parser of the
-// walkthrough.md convention (spec D3), ref→hunk matching against the branch
-// diff, and the queue sort (D6). The backend has a line-based twin for the
-// header/stop count; both agree on ATX headings and plain metadata quotes.
+// walkthrough.md convention (spec D3), the per-stop reviewed-mark signatures
+// it feeds (THI-443 D6), ref→hunk matching against the branch diff and the
+// code-changes grouping built on it (THI-443 D5), and the queue sort (D6).
+// The backend has a line-based twin for the header/stop count; both agree on
+// ATX headings and plain metadata quotes.
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
@@ -69,8 +71,8 @@ export function parseWalkthrough(text) {
     while (j < blocks.length && !(blocks[j].type === "heading" && blocks[j].depth === 2)) j++;
     const bodyEnd = j < blocks.length ? blocks[j].position.start.offset : src.length;
     // Top-level mermaid fences move to the stop's full-width diagram row
-    // (THI-443 D1). A fence inside a list item stays where it is: lifting it
-    // out would reorder content we can't place cleanly.
+    // (THI-443 D1). A fence nested in a list item or quote stays where it is:
+    // lifting it out would reorder content we can't place cleanly.
     const diagrams = [];
     let body = "";
     let cursor = bodyStart;
@@ -101,23 +103,103 @@ export function parseWalkthrough(text) {
   return { title, header, problem, problemMarkdown, stops };
 }
 
+// FNV-1a, 32-bit, over the stop as written. A reviewed mark is tied to this:
+// any rewrite of the title, metadata or text gives a new sig and lapses the
+// mark (THI-443 D6), as the Changes tab's viewedSig lapses when a file changes.
+// Pinned (see the test vector): a silent change here would lapse every mark
+// already saved in reviewed.json.
+export function stopSig(stop) {
+  // trimEnd: appending a stop, or the file's final newline, must not lapse
+  // the old last stop's mark.
+  const s = (stop.source || "").trimEnd();
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+export function isReviewed(stop, reviewed) {
+  return !!reviewed && reviewed[stop.title] === stopSig(stop);
+}
+
+// One stop's mark set (sig) or cleared (null), leaving the others alone.
+export function withMark(reviewed, title, sig) {
+  const next = { ...reviewed };
+  if (sig == null) delete next[title];
+  else next[title] = sig;
+  return next;
+}
+
 // New-side span of a hunk: new_start through new_start + ctx/add lines − 1.
 function newEnd(h) {
   const n = (h.lines || []).filter((l) => l.kind === "ctx" || l.kind === "add").length;
   return h.new_start + Math.max(n, 1) - 1;
 }
 
+// Whether a hunk's new-side span intersects a cited range. Shared by
+// matchRefs and evidenceIndex so the two can't disagree on "covers".
+const overlaps = (h, r) => h.new_start <= r.end && newEnd(h) >= r.start;
+
 export function matchRefs(refs, diffFiles) {
   const byPath = new Map((diffFiles || []).map((f) => [f.path, f]));
   return refs.map((ref) => {
     const file = byPath.get(ref.path) || null;
     if (!file) return { ref, file: null, hunks: [], generated: false };
-    const hunks = ref.start == null
-      ? file.hunks
-      : file.hunks.filter((h) => h.new_start <= ref.end && newEnd(h) >= ref.start);
+    const hunks = ref.start == null ? file.hunks : file.hunks.filter((h) => overlaps(h, ref));
     // `generated`: the server kept the entry but dropped its hunks (bundle, lockfile).
     return { ref, file: file.path, hunks, generated: !!file.generated };
   });
+}
+
+const basename = (p) => p.slice(p.lastIndexOf("/") + 1);
+
+// The code-changes column (THI-443 D5). `shown` gets a file-list row and a
+// block of hunks; `hidden` folds into one summary line, so files with nothing
+// to show don't bury the ones that do. diffFiles null means no worktree: every
+// ref is listed and none has hunks.
+export function evidenceFor(refs, diffFiles) {
+  const hidden = { missing: [], generated: [], unchanged: [], noText: [] };
+  if (diffFiles == null) {
+    return { shown: refs.map((ref) => ({ ref, name: basename(ref.path), hunks: [] })), hidden, noDiff: true };
+  }
+  const shown = [];
+  for (const m of matchRefs(refs, diffFiles)) {
+    if (!m.file) hidden.missing.push(m.ref);
+    else if (m.generated) hidden.generated.push(m.ref);
+    // A whole-file cite to a file with no hunks (binary, pure rename,
+    // mode-only change) has no lines to call "unchanged at"; a ranged cite
+    // that just misses every hunk does.
+    else if (!m.hunks.length) hidden[m.ref.start == null ? "noText" : "unchanged"].push(m.ref);
+    else shown.push({ ref: m.ref, name: basename(m.ref.path), hunks: m.hunks });
+  }
+  return { shown, hidden, noDiff: false };
+}
+
+// One line per hidden group, in HIDDEN_WHY's order, skipping empty ones.
+// Task 8's expanded list renders from the same map, so the two can't disagree.
+export const HIDDEN_WHY = {
+  missing: "not in this diff",
+  generated: "generated",
+  unchanged: "unchanged at the cited lines",
+  noText: "no text changes",
+};
+
+export function hiddenSummary(hidden) {
+  return Object.keys(HIDDEN_WHY)
+    .filter((k) => hidden[k]?.length)
+    .map((k) => `${hidden[k].length} ${HIDDEN_WHY[k]}`)
+    .join(" · ");
+}
+
+// A cite chip in the prose lands on the file-list entry for its path whose
+// hunks cover its line; with no line, or none covering it, the first entry for
+// the path. A stop citing a.py:1-5 and a.py:50-60 sends a.py:52 to the second.
+export function evidenceIndex(shown, cite) {
+  const covers = (e) => cite.start != null && e.hunks.some((h) => overlaps(h, cite));
+  const hit = shown.findIndex((e) => e.ref.path === cite.path && covers(e));
+  return hit >= 0 ? hit : shown.findIndex((e) => e.ref.path === cite.path);
 }
 
 // Merged rows sink to the bottom of the readiness order and of every column
@@ -217,69 +299,4 @@ export function filterRows(rows, query) {
 
 export function unresolvedTotal(rows) {
   return (rows || []).filter((r) => !isMerged(r)).reduce((n, r) => n + (r.unresolved || 0), 0);
-}
-
-// FNV-1a, 32-bit, over the stop as written. A reviewed mark is tied to this:
-// any rewrite of the title, metadata or text gives a new sig and lapses the
-// mark (THI-443 D6), as the Changes tab's viewedSig lapses when a file changes.
-export function stopSig(stop) {
-  // trimEnd: appending a stop, or the file's final newline, must not lapse
-  // the old last stop's mark.
-  const s = (stop.source || "").trimEnd();
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, "0");
-}
-
-export function isReviewed(stop, reviewed) {
-  return !!reviewed && reviewed[stop.title] === stopSig(stop);
-}
-
-// One stop's mark set (sig) or cleared (null), leaving the others alone.
-export function withMark(reviewed, title, sig) {
-  const next = { ...reviewed };
-  if (sig == null) delete next[title];
-  else next[title] = sig;
-  return next;
-}
-
-const basename = (p) => p.slice(p.lastIndexOf("/") + 1);
-
-// The code-changes column (THI-443 D5). `shown` gets a file-list row and a
-// block of hunks; `hidden` folds into one summary line, so files with nothing
-// to show don't bury the ones that do. diffFiles null means no worktree: every
-// ref is listed and none has hunks.
-export function evidenceFor(refs, diffFiles) {
-  const hidden = { missing: [], generated: [], unchanged: [] };
-  if (diffFiles == null) {
-    return { shown: refs.map((ref) => ({ ref, name: basename(ref.path), hunks: [] })), hidden, noDiff: true };
-  }
-  const shown = [];
-  for (const m of matchRefs(refs, diffFiles)) {
-    if (!m.file) hidden.missing.push(m.ref);
-    else if (m.generated) hidden.generated.push(m.ref);
-    else if (!m.hunks.length) hidden.unchanged.push(m.ref);
-    else shown.push({ ref: m.ref, name: basename(m.ref.path), hunks: m.hunks });
-  }
-  return { shown, hidden, noDiff: false };
-}
-
-export function hiddenSummary(hidden) {
-  const parts = [];
-  if (hidden.missing.length) parts.push(`${hidden.missing.length} not in this diff`);
-  if (hidden.generated.length) parts.push(`${hidden.generated.length} generated`);
-  if (hidden.unchanged.length) parts.push(`${hidden.unchanged.length} unchanged at the cited lines`);
-  return parts.join(" · ");
-}
-
-// A cite chip in the prose lands on the file-list entry for its path whose
-// hunks cover its line; with no line, or none covering it, the first entry for
-// the path. A stop citing a.py:1-5 and a.py:50-60 sends a.py:52 to the second.
-export function evidenceIndex(shown, cite) {
-  const covers = (e) => cite.start != null && e.hunks.some((h) => h.new_start <= cite.end && newEnd(h) >= cite.start);
-  const hit = shown.findIndex((e) => e.ref.path === cite.path && covers(e));
-  return hit >= 0 ? hit : shown.findIndex((e) => e.ref.path === cite.path);
 }

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { parseCite } from "../../split/mdMeta.js";
 import {
   evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, matchRefs, nextSort,
   parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
 } from "../walkthrough.js";
-import { parseCite } from "../../split/mdMeta.js";
 
 const DOC = `# Cost gauge
 
@@ -25,6 +25,39 @@ Prose two.
 ## No meta here
 
 Prose three.
+`;
+
+const FENCES = `# T
+
+> branch: feat/x · head: abc
+
+Panes **cost** more and \`nothing\` said so.
+
+## Adds a gauge
+> kind: new-subsystem · refs: a.py
+
+Before.
+
+\`\`\`mermaid
+flowchart LR
+  a --> b
+\`\`\`
+
+Between.
+
+- a list item
+
+  \`\`\`mermaid
+  flowchart TD
+    nested --> stays
+  \`\`\`
+
+\`\`\`mermaid
+flowchart LR
+  c --> d
+\`\`\`
+
+After.
 `;
 
 describe("parseWalkthrough", () => {
@@ -252,38 +285,6 @@ describe("unresolvedTotal", () => {
 });
 
 describe("parseWalkthrough lifts diagrams (THI-443 D1)", () => {
-  const FENCES = `# T
-
-> branch: feat/x · head: abc
-
-Panes **cost** more and \`nothing\` said so.
-
-## Adds a gauge
-> kind: new-subsystem · refs: a.py
-
-Before.
-
-\`\`\`mermaid
-flowchart LR
-  a --> b
-\`\`\`
-
-Between.
-
-- a list item
-
-  \`\`\`mermaid
-  flowchart TD
-    nested --> stays
-  \`\`\`
-
-\`\`\`mermaid
-flowchart LR
-  c --> d
-\`\`\`
-
-After.
-`;
   const w = parseWalkthrough(FENCES);
   const s = w.stops[0];
 
@@ -294,6 +295,10 @@ After.
     expect(s.bodyMarkdown).not.toContain("a --> b");
     expect(s.bodyMarkdown).not.toContain("c --> d");
     for (const kept of ["Before.", "Between.", "After.", "nested --> stays"]) expect(s.bodyMarkdown).toContain(kept);
+    // Only the nested fence marker should remain.
+    expect(s.bodyMarkdown.match(/```mermaid/g)).toHaveLength(1);
+    expect(s.bodyMarkdown.indexOf("Before.")).toBeLessThan(s.bodyMarkdown.indexOf("Between."));
+    expect(s.bodyMarkdown.indexOf("Between.")).toBeLessThan(s.bodyMarkdown.indexOf("After."));
   });
   it("keeps the stop's whole source, diagrams included, for its signature", () => {
     expect(s.source.startsWith("## Adds a gauge\n> kind: new-subsystem")).toBe(true);
@@ -315,6 +320,13 @@ describe("stopSig, isReviewed, withMark (THI-443 D6)", () => {
   it("is 8 hex chars and stable for the same source", () => {
     expect(stopSig(w.stops[0])).toMatch(/^[0-9a-f]{8}$/);
     expect(stopSig(first(DOC))).toBe(stopSig(w.stops[0]));
+  });
+  it("is pinned to a known hash, since saved marks in reviewed.json key off it", () => {
+    expect(stopSig({ source: "a" })).toBe("e40c292c");
+  });
+  it("changes when a diagram inside the stop is edited", () => {
+    const edited = FENCES.replace("a --> b", "a --> c");
+    expect(stopSig(parseWalkthrough(edited).stops[0])).not.toBe(stopSig(parseWalkthrough(FENCES).stops[0]));
   });
   it("changes with a one-character edit to the title, the metadata or the text", () => {
     const sig = stopSig(w.stops[0]);
@@ -377,15 +389,23 @@ describe("evidenceFor, hiddenSummary, evidenceIndex (THI-443 D5)", () => {
     expect(ev.shown.map((e) => [e.name, e.hunks.length])).toEqual([["one.py", 0], ["one.py", 0], ["missing.py", 0], ["app.js", 0]]);
     expect(hiddenSummary(ev.hidden)).toBe("");
   });
+  it("sends a whole-file ref with no hunks to noText; a ranged ref with no matching hunk stays unchanged", () => {
+    const imgFiles = [{ path: "img/logo.png", hunks: [] }];
+    const ev = evidenceFor([parseCite("img/logo.png"), parseCite("img/logo.png:3-4")], imgFiles);
+    expect(ev.hidden.noText.map((r) => r.raw)).toEqual(["img/logo.png"]);
+    expect(ev.hidden.unchanged.map((r) => r.raw)).toEqual(["img/logo.png:3-4"]);
+    // unchanged before noText: HIDDEN_WHY's key order.
+    expect(hiddenSummary(ev.hidden)).toBe("1 unchanged at the cited lines · 1 no text changes");
+  });
   it("lands a prose cite on the first shown file with its path", () => {
     const { shown } = evidenceFor(refs, files);
     expect(evidenceIndex(shown, parseCite("a/one.py:3"))).toBe(0);
     expect(evidenceIndex(shown, parseCite("b/missing.py"))).toBe(-1);
   });
   it("prefers the cited range whose hunks cover the cite's line", () => {
-    const { shown } = evidenceFor(["a/one.py:1-5", "a/one.py:50-60"].map(parseCite), files);
-    expect(evidenceIndex(shown, parseCite("a/one.py:50"))).toBe(1);
-    expect(evidenceIndex(shown, parseCite("a/one.py:2"))).toBe(0);
+    const { shown } = evidenceFor(["a/one.py:50-60", "a/one.py:1-5"].map(parseCite), files);
+    expect(evidenceIndex(shown, parseCite("a/one.py:1"))).toBe(1);
+    expect(evidenceIndex(shown, parseCite("a/one.py:50"))).toBe(0);
     // No line, or a line no hunk covers: the first entry for the path.
     expect(evidenceIndex(shown, parseCite("a/one.py"))).toBe(0);
     expect(evidenceIndex(shown, parseCite("a/one.py:999"))).toBe(0);
