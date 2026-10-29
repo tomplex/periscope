@@ -6,8 +6,9 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
-import { metaPairs, parseCite, refTokens, splitCites } from "./mdMeta.js";
+import { openLightbox } from "../overlays/Lightbox.jsx";
 import { Mermaid } from "./Mermaid.jsx";
+import { metaPairs, parseCite, refTokens, splitCites } from "./mdMeta.js";
 
 // Scheme-qualified, root-absolute, and fragment URLs pass through untouched;
 // everything else is doc-relative and goes through ctx.resolveUrl.
@@ -54,7 +55,9 @@ function inline(node, ctx, key) {
     case "link":
       return (
         <a class="md-link" href={url(node.url, ctx)} target="_blank" rel="noopener" key={key}>
-          {inlineAll(node.children, { ...ctx, cite: null })}
+          {/* zoom off inside a link: a zoom button in an <a> would both open the
+              lightbox and follow the link on one click. */}
+          {inlineAll(node.children, { ...ctx, cite: null, zoom: false })}
         </a>
       );
     case "image":
@@ -63,7 +66,20 @@ function inline(node, ctx, key) {
         // origin — show the alt text, not a broken image icon.
         return node.alt || node.url;
       }
-      return <img class="md-img" src={url(node.url, ctx)} alt={node.alt || ""} key={key} />;
+      {
+        const src = url(node.url, ctx);
+        const alt = node.alt || "";
+        if (!ctx.zoom) return <img class="md-img" src={src} alt={alt} key={key} />;
+        // A real button around the image: <img role="button"> fails biome's
+        // noNoninteractiveElementToInteractiveRole, and a button gets Enter and Space free.
+        return (
+          <button type="button" class="md-img-zoom" key={key}
+            aria-label={alt ? `open image full size: ${alt}` : "open image full size"}
+            onClick={() => openLightbox({ kind: "img", src, alt })}>
+            <img class="md-img is-zoomable" src={src} alt={alt} />
+          </button>
+        );
+      }
     case "break":
       return <br key={key} />;
     case "html":
@@ -130,7 +146,7 @@ function block(node, ctx, key, prev) {
       return <Tag class={`md-h md-h${node.depth}`} key={key}>{inlineAll(node.children, ctx)}</Tag>;
     }
     case "code":
-      if (ctx.mermaid && node.lang === "mermaid") return <Mermaid code={node.value} key={key} />;
+      if (ctx.mermaid && node.lang === "mermaid") return <Mermaid code={node.value} zoom={ctx.zoom} key={key} />;
       return (
         <pre class="md-code" key={key}>
           <code>
@@ -201,6 +217,8 @@ export function renderMarkdown(text, opts = {}) {
     meta: opts.meta ?? false,
     cite: opts.cite ?? null,
     mermaid: opts.mermaid ?? false,
+    // Images and diagrams open full size on click (the walkthrough, THI-443).
+    zoom: opts.zoom ?? false,
   };
   const tree = fromMarkdown(src, {
     extensions: [gfm()],

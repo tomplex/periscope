@@ -1,7 +1,9 @@
 // Pure helpers for the review walkthrough: the mdast-side parser of the
-// walkthrough.md convention (spec D3), ref→hunk matching against the branch
-// diff, and the queue sort (D6). The backend has a line-based twin for the
-// header/stop count; both agree on ATX headings and plain metadata quotes.
+// walkthrough.md convention (spec D3), the per-stop reviewed-mark signatures
+// it feeds (THI-443 D6), ref→hunk matching against the branch diff and the
+// code-changes grouping built on it (THI-443 D5), and the queue sort (D6).
+// The backend has a line-based twin for the header/stop count; both agree on
+// ATX headings and plain metadata quotes.
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
@@ -26,6 +28,7 @@ export function parseWalkthrough(text) {
   let title = "";
   let header = null;
   let problem = "";
+  let problemMarkdown = "";
   const stops = [];
   const ids = new Map();
 
@@ -41,7 +44,11 @@ export function parseWalkthrough(text) {
       }
       i++;
     }
-    if (blocks[i]?.type === "paragraph") { problem = textOf(blocks[i]); i++; }
+    if (blocks[i]?.type === "paragraph") {
+      problem = textOf(blocks[i]);
+      problemMarkdown = src.slice(blocks[i].position.start.offset, blocks[i].position.end.offset);
+      i++;
+    }
   }
 
   for (; i < blocks.length; i++) {
@@ -63,6 +70,20 @@ export function parseWalkthrough(text) {
     let j = i + 1;
     while (j < blocks.length && !(blocks[j].type === "heading" && blocks[j].depth === 2)) j++;
     const bodyEnd = j < blocks.length ? blocks[j].position.start.offset : src.length;
+    // Top-level mermaid fences move to the stop's full-width diagram row
+    // (THI-443 D1). A fence nested in a list item or quote stays where it is:
+    // lifting it out would reorder content we can't place cleanly.
+    const diagrams = [];
+    let body = "";
+    let cursor = bodyStart;
+    for (let k = i + 1; k < j; k++) {
+      const node = blocks[k];
+      if (node.type !== "code" || node.lang !== "mermaid") continue;
+      diagrams.push(node.value);
+      body += src.slice(cursor, node.position.start.offset);
+      cursor = node.position.end.offset;
+    }
+    body += src.slice(cursor, bodyEnd);
     const base = slug(stopTitle);
     const n = (ids.get(base) || 0) + 1;
     ids.set(base, n);
@@ -72,11 +93,97 @@ export function parseWalkthrough(text) {
       kind,
       knownKind: kind != null && KINDS.has(kind),
       refs,
-      bodyMarkdown: src.slice(bodyStart, bodyEnd),
+      // The whole stop as written, diagrams included: stopSig hashes this.
+      source: src.slice(b.position.start.offset, bodyEnd),
+      diagrams,
+      bodyMarkdown: body,
     });
     i = j - 1;
   }
-  return { title, header, problem, stops };
+  return { title, header, problem, problemMarkdown, stops };
+}
+
+// FNV-1a, 32-bit, over the stop as written. A reviewed mark is tied to this:
+// any rewrite of the title, metadata or text gives a new sig and lapses the
+// mark (THI-443 D6), as the Changes tab's viewedSig lapses when a file changes.
+// Pinned (see the test vector): a silent change here would lapse every mark
+// already saved in reviewed.json.
+export function stopSig(stop) {
+  // trimEnd: appending a stop, or the file's final newline, must not lapse
+  // the old last stop's mark.
+  const s = (stop.source || "").trimEnd();
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+export function isReviewed(stop, reviewed) {
+  return !!reviewed && reviewed[stop.title] === stopSig(stop);
+}
+
+// One stop's mark set (sig) or cleared (null), leaving the others alone.
+export function withMark(reviewed, title, sig) {
+  const next = { ...reviewed };
+  if (sig == null) delete next[title];
+  else next[title] = sig;
+  return next;
+}
+
+// The reviewed toggles' POSTs, one at a time per stop title, so a double click
+// can't land out of order. A click shows at once. When a title's newest click
+// settles, the title shows what the server last confirmed, so a failure
+// reverts to that, not to a guess captured at click time that an earlier
+// failure may have made wrong. `post(title, sig, on)` throws to fail; `show`
+// and `fail` are the page's setters (null clears). `pending` and `settled` let
+// a refetch tell whether its marks predate a click; `seed` takes a refetch's
+// marks as confirmed once the page applies them.
+export function markQueue({ post, show, fail }) {
+  const tail = new Map();
+  const newest = new Map();
+  let confirmed = {};
+  let clicks = 0;
+  const q = {
+    pending: 0,
+    settled: 0,
+    seed(reviewed) {
+      confirmed = { ...reviewed };
+    },
+    toggle(title, sig, on) {
+      const id = ++clicks;
+      newest.set(title, id);
+      show(title, on ? sig : null);
+      fail(title, null);
+      q.pending++;
+      const run = (tail.get(title) || Promise.resolve()).then(async () => {
+        try {
+          await post(title, sig, on);
+          confirmed = withMark(confirmed, title, on ? sig : null);
+          if (newest.get(title) === id) fail(title, null);
+        } catch (e) {
+          fail(title, `not saved: ${e?.message || e}`);
+        } finally {
+          q.pending--;
+          q.settled++;
+          if (newest.get(title) === id) show(title, confirmed[title] ?? null);
+        }
+      });
+      tail.set(title, run);
+      return run;
+    },
+  };
+  return q;
+}
+
+// Whether a refetch that captured `settledAtStart` from marks.settled may
+// still apply what it fetched: not while a click's POST is still in flight
+// (pending), and not when one settled after the request started — either
+// way the queue's own `show` already reflects a click the refetch's response
+// predates, and applying it would overwrite that with stale data.
+export function appliesRefetch(marks, settledAtStart) {
+  return !marks.pending && marks.settled === settledAtStart;
 }
 
 // New-side span of a hunk: new_start through new_start + ctx/add lines − 1.
@@ -85,17 +192,83 @@ function newEnd(h) {
   return h.new_start + Math.max(n, 1) - 1;
 }
 
+// Whether a hunk's new-side span intersects a cited range. Shared by
+// matchRefs and evidenceIndex so the two can't disagree on "covers".
+const overlaps = (h, r) => h.new_start <= r.end && newEnd(h) >= r.start;
+
 export function matchRefs(refs, diffFiles) {
   const byPath = new Map((diffFiles || []).map((f) => [f.path, f]));
   return refs.map((ref) => {
     const file = byPath.get(ref.path) || null;
     if (!file) return { ref, file: null, hunks: [], generated: false };
-    const hunks = ref.start == null
-      ? file.hunks
-      : file.hunks.filter((h) => h.new_start <= ref.end && newEnd(h) >= ref.start);
+    const hunks = ref.start == null ? file.hunks : file.hunks.filter((h) => overlaps(h, ref));
     // `generated`: the server kept the entry but dropped its hunks (bundle, lockfile).
     return { ref, file: file.path, hunks, generated: !!file.generated };
   });
+}
+
+const basename = (p) => p.slice(p.lastIndexOf("/") + 1);
+
+// The code-changes column (THI-443 D5). `shown` gets a file-list row and a
+// block of hunks; `hidden` folds into one summary line, so files with nothing
+// to show don't bury the ones that do. diffFiles null means no worktree: every
+// ref is listed and none has hunks.
+export function evidenceFor(refs, diffFiles) {
+  const hidden = { missing: [], generated: [], unchanged: [], noText: [] };
+  if (diffFiles == null) {
+    return { shown: refs.map((ref) => ({ ref, name: basename(ref.path), hunks: [] })), hidden, noDiff: true };
+  }
+  const shown = [];
+  for (const m of matchRefs(refs, diffFiles)) {
+    if (!m.file) hidden.missing.push(m.ref);
+    else if (m.generated) hidden.generated.push(m.ref);
+    // A whole-file cite to a file with no hunks (binary, pure rename,
+    // mode-only change) has no lines to call "unchanged at"; a ranged cite
+    // that just misses every hunk does.
+    else if (!m.hunks.length) hidden[m.ref.start == null ? "noText" : "unchanged"].push(m.ref);
+    else shown.push({ ref: m.ref, name: basename(m.ref.path), hunks: m.hunks });
+  }
+  return { shown, hidden, noDiff: false };
+}
+
+// Why a ref has nothing to show, in display order. The code column's summary
+// line and its expanded list both read this, so the two can't disagree.
+export const HIDDEN_WHY = {
+  missing: "not in this diff",
+  generated: "generated",
+  unchanged: "unchanged at the cited lines",
+  noText: "no text changes",
+};
+
+// One part per non-empty hidden group, in HIDDEN_WHY's order.
+export function hiddenSummary(hidden) {
+  return Object.keys(HIDDEN_WHY)
+    .filter((k) => hidden[k]?.length)
+    .map((k) => `${hidden[k].length} ${HIDDEN_WHY[k]}`)
+    .join(" · ");
+}
+
+// A cite chip in the prose lands on the file-list entry for its path whose
+// hunks cover its line; with no line, or none covering it, the first entry for
+// the path. A stop citing a.py:1-5 and a.py:50-60 sends a.py:52 to the second.
+export function evidenceIndex(shown, cite) {
+  const covers = (e) => cite.start != null && e.hunks.some((h) => overlaps(h, cite));
+  const hit = shown.findIndex((e) => e.ref.path === cite.path && covers(e));
+  return hit >= 0 ? hit : shown.findIndex((e) => e.ref.path === cite.path);
+}
+
+// A whole-file cite can carry thousands of diff lines, and drawing them all
+// at once stalled the page, so a block past COLLAPSE_LINES starts as a button.
+export const COLLAPSE_LINES = 300;
+export const lineCount = (hunks) => hunks.reduce((n, h) => n + (h.lines?.length || 0), 0);
+
+// A folded stop's stand-in for its comment list. Folding hides the list, and
+// with it any reply the owning pane wrote into a comment without rewriting the
+// stop (which would have lapsed the mark).
+export function commentsLabel(list) {
+  if (!list.length) return "";
+  const open = list.filter((c) => !c.resolved).length;
+  return `${list.length} comment${list.length === 1 ? "" : "s"}${open ? ` · ${open} open` : ""}`;
 }
 
 // Merged rows sink to the bottom of the readiness order and of every column

@@ -1,59 +1,70 @@
-// A ```mermaid fence → inline SVG. mermaid is ~3 MB and lives in its own
-// vite chunk (vite.config.js mermaidOnly), pulled in by this dynamic import
-// on the first diagram only. Until it lands the host is empty; if the import
-// or the source fails, the fence shows as text so nothing is ever lost.
+// A ```mermaid fence → inline SVG. Until it draws the host is empty; if the
+// load or the source fails, the fence shows as text so nothing is ever lost.
 import { useEffect, useRef, useState } from "preact/hooks";
+import { openLightbox } from "../overlays/Lightbox.jsx";
+import { renderDiagram } from "./mermaidRender.js";
 
-let mermaidP = null;
-function loadMermaid() {
-  if (!mermaidP) {
-    mermaidP = import("mermaid").then((m) => {
-      const mermaid = m.default;
-      // The dashboard has one (dark) theme; following prefers-color-scheme
-      // would draw a light diagram on the dark UI whenever macOS is light.
-      // Without suppressErrorRendering, render() on bad source draws the "Syntax
-      // error" bomb SVG into a temp div on document.body and throws before
-      // removing it, leaving a stray error diagram on the dashboard.
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: "dark",
-        securityLevel: "strict",
-        suppressErrorRendering: true,
-      });
-      return mermaid;
-    }).catch((e) => {
-      // Don't cache a failed chunk fetch (a restart can swap dist under an open tab).
-      mermaidP = null;
-      throw e;
-    });
-  }
-  return mermaidP;
-}
+// below ~¾ scale a wide flowchart's 16px labels drop under ~12px; scroll inside the box instead
+const MIN_DIAGRAM_SCALE = 0.75;
 
-let seq = 0;
-
-export function Mermaid({ code }) {
+export function Mermaid({ code, zoom = false, label }) {
   const host = useRef(null);
   const [error, setError] = useState(null);
+  const [ready, setReady] = useState(false);
   useEffect(() => {
     let alive = true;
     setError(null);
-    loadMermaid()
-      .then((mermaid) => mermaid.render(`md-mermaid-${++seq}`, code))
-      .then(({ svg }) => { if (alive && host.current) host.current.innerHTML = svg; })
+    setReady(false);
+    renderDiagram(code)
+      .then(({ svg }) => {
+        if (!alive || !host.current) return;
+        host.current.innerHTML = svg;
+        if (zoom) {
+          const el = host.current.querySelector("svg");
+          const vb = el?.viewBox?.baseVal;
+          if (vb?.width > 0) el.style.minWidth = `${Math.round(vb.width * MIN_DIAGRAM_SCALE)}px`;
+        }
+        setReady(true);
+      })
       .catch((e) => {
         if (!alive) return;
         if (host.current) host.current.innerHTML = "";
         setError(String(e?.message || e));
       });
     return () => { alive = false; };
-  }, [code]);
+  }, [code, zoom]);
+  // Re-render from source for a fresh id (see Lightbox.jsx): copying this
+  // host's innerHTML duplicated the SVG's ids, so the lightbox's arrowheads
+  // bound to the original's <marker>s and vanished once this one hid.
+  const open = () => openLightbox({ kind: "svg", code });
+  const canZoom = zoom && !error;
   return (
     <div class="md-mermaid">
       {/* innerHTML is only ever mermaid's own SVG output, never document text.
           The source can be any previewed markdown; strict mode runs DOMPurify
           on the SVG — the one exception to convention #8. */}
-      <div ref={host} class="md-mermaid-svg" />
+      {/* zoom (the walkthrough): a click on the diagram opens it full size, and
+          the button is the keyboard and screen-reader way in. role="button" on
+          the diagram itself would hide its text labels from screen readers.
+          A click on a link inside the diagram (e.g. a file node) must only
+          follow that link, not also pop the lightbox. */}
+      <div
+        ref={host}
+        class={`md-mermaid-svg${canZoom ? " is-zoomable" : ""}`}
+        onClick={canZoom ? (e) => { if (!e.target.closest?.("a")) open(); } : undefined}
+      />
+      {canZoom ? (
+        <button
+          type="button"
+          class="md-mermaid-zoom"
+          disabled={!ready}
+          aria-label={label ? `open diagram full size: ${label}` : "open diagram full size"}
+          title="open full size"
+          onClick={open}
+        >
+          ⤢
+        </button>
+      ) : null}
       {error ? <pre class="md-code md-mermaid-err">{code}{"\n\n"}{error}</pre> : null}
     </div>
   );
