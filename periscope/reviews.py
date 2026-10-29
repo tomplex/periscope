@@ -1,7 +1,8 @@
 """The review walkthrough convention: files under ~/.claude/reviews that the
 `walkthrough` skill writes and periscope renders. Periscope only ever appends
-to comments.md and removes a whole review dir on an explicit clear — the pane
-is the sole writer of walkthrough.md (spec D2).
+to comments.md, writes reviewed.json (per-stop reviewed marks, THI-443) and
+removes a whole review dir on an explicit clear — the pane is the sole writer
+of walkthrough.md (spec D2).
 
 Two parsers read this format: this line-based one (header, stop count,
 comments — cheap enough to run per queue refresh) and the frontend's mdast one
@@ -11,6 +12,7 @@ which is all the skill emits.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -65,6 +67,10 @@ def walkthrough_path(repo: str, branch: str) -> Path:
 
 def comments_path(repo: str, branch: str) -> Path:
     return review_dir(repo, branch) / "comments.md"
+
+
+def reviewed_path(repo: str, branch: str) -> Path:
+    return review_dir(repo, branch) / "reviewed.json"
 
 
 # --- parse -----------------------------------------------------------------
@@ -182,6 +188,55 @@ def append_comment(repo: str, branch: str, stop: str, body: str, ts: str) -> Non
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(f"## {ts} · {stop}\n> resolved: no\n\n{body.strip()}\n\n")
+
+
+# reviewed.json is a read-modify-write, and the dev and prod servers both write
+# ~/.claude/reviews (it isn't instance_file()-separated): a flock on the review
+# dir serializes writers across processes, the thread lock within one.
+_reviewed_lock = threading.Lock()
+
+
+def read_reviewed(repo: str, branch: str) -> dict[str, str]:
+    """stop title → the stop's sig when it was marked (THI-443 D6). A missing,
+    unreadable or hand-mangled file reads as nothing reviewed."""
+    try:
+        data = json.loads(_read(reviewed_path(repo, branch)) or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def set_reviewed(repo: str, branch: str, stop: str, sig: str | None) -> None:
+    """Mark `stop` reviewed at `sig`, or unmark it with None. Written through a
+    temp file + os.replace so a crash mid-write can't leave half a JSON object;
+    an empty result removes the file rather than leaving `{}` behind. Raises
+    FileNotFoundError when the review dir is gone: a mark never creates it."""
+    path = reviewed_path(repo, branch)
+    with _reviewed_lock:
+        dfd = os.open(path.parent, os.O_RDONLY)
+        try:
+            fcntl.flock(dfd, fcntl.LOCK_EX)
+            marks = read_reviewed(repo, branch)
+            if sig is None:
+                marks.pop(stop, None)
+            else:
+                marks[stop] = sig
+            if not marks:
+                path.unlink(missing_ok=True)
+                return
+            # One temp name is safe under the flock; a crash leaves at most this
+            # file, which the next write replaces.
+            tmp = path.with_suffix(".json.tmp")
+            try:
+                tmp.write_text(json.dumps(marks, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+                os.replace(tmp, path)
+            except OSError:
+                tmp.unlink(missing_ok=True)
+                raise
+        finally:
+            os.close(dfd)  # releases the flock
 
 
 def clear_review(repo: str, branch: str) -> None:

@@ -2,6 +2,7 @@
 queue assembly. Files live outside the repo (~/.claude/reviews); tests point
 REVIEWS_DIR at tmp_path."""
 
+import json
 import os
 import subprocess
 
@@ -570,3 +571,34 @@ def test_a_header_row_reads_its_owner_panes_pr_title(mocker):
         "linear_ticket_source": "pr_title",
     }
     assert _ticket(rows["feat/relinked"]) == _NO_TICKET
+
+
+def test_read_reviewed_missing_corrupt_and_mangled_read_as_empty(tmp_path):
+    assert reviews.read_reviewed("fdy", "feat/x") == {}
+    p = reviews.reviewed_path("fdy", "feat/x")
+    p.parent.mkdir(parents=True)
+    for bad in ["{not json", "[1, 2]", '"a string"']:
+        p.write_text(bad)
+        assert reviews.read_reviewed("fdy", "feat/x") == {}
+    p.write_text(json.dumps({"A": "0123abcd", "B": 7, "C": None}))
+    assert reviews.read_reviewed("fdy", "feat/x") == {"A": "0123abcd"}
+
+
+def test_set_reviewed_sets_overwrites_unsets_and_removes_the_empty_file(tmp_path):
+    reviews.review_dir("fdy", "feat/x").mkdir(parents=True)
+    reviews.set_reviewed("fdy", "feat/x", "Stop A", "0123abcd")
+    reviews.set_reviewed("fdy", "feat/x", "Stop B", "11111111")
+    reviews.set_reviewed("fdy", "feat/x", "Stop A", "ffffffff")
+    assert reviews.read_reviewed("fdy", "feat/x") == {"Stop A": "ffffffff", "Stop B": "11111111"}
+    reviews.set_reviewed("fdy", "feat/x", "Stop A", None)
+    reviews.set_reviewed("fdy", "feat/x", "never marked", None)
+    assert reviews.read_reviewed("fdy", "feat/x") == {"Stop B": "11111111"}
+    reviews.set_reviewed("fdy", "feat/x", "Stop B", None)
+    assert not reviews.reviewed_path("fdy", "feat/x").exists()
+    assert not list(reviews.review_dir("fdy", "feat/x").glob("*.tmp"))
+
+
+def test_set_reviewed_never_creates_the_review_dir():
+    with pytest.raises(FileNotFoundError):
+        reviews.set_reviewed("fdy", "gone", "Stop A", "0123abcd")
+    assert not reviews.review_dir("fdy", "gone").exists()
