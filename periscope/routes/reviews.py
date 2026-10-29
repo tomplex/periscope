@@ -82,6 +82,12 @@ def _check_stop(stop: str) -> None:
     # would drop the entry; reviewed.json keys follow the same rule.
     if not stop.strip() or "\n" in stop or "\r" in stop:
         raise HTTPException(400, "bad stop")
+    # A lone surrogate round-trips through JSON but can't be written as UTF-8:
+    # set_reviewed's write_text (ensure_ascii=False) would raise mid-write.
+    try:
+        stop.encode("utf-8")
+    except UnicodeEncodeError:
+        raise HTTPException(400, "bad stop") from None
 
 
 @router.get("/api/reviews")

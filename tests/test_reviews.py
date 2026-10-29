@@ -624,6 +624,19 @@ def test_set_reviewed_failed_replace_keeps_the_old_marks_and_no_tmp(mocker):
     assert not list(reviews.review_dir("fdy", "feat/x").glob("*.tmp"))
 
 
+def test_set_reviewed_non_oserror_during_replace_leaves_no_tmp(mocker):
+    # ensure_ascii=False lets write_text raise UnicodeEncodeError, not OSError,
+    # on a lone surrogate; the cleanup must catch more than OSError or the tmp
+    # file (and this mock stands in for any non-OSError write failure) survives.
+    reviews.review_dir("fdy", "feat/x").mkdir(parents=True)
+    reviews.set_reviewed("fdy", "feat/x", "Stop A", "0123abcd")
+    mocker.patch("periscope.reviews.os.replace", side_effect=ValueError("boom"))
+    with pytest.raises(ValueError):
+        reviews.set_reviewed("fdy", "feat/x", "Stop B", "11111111")
+    assert reviews.read_reviewed("fdy", "feat/x") == {"Stop A": "0123abcd"}
+    assert not list(reviews.review_dir("fdy", "feat/x").glob("*.tmp"))
+
+
 def test_set_reviewed_on_a_dir_removed_under_the_lock_recreates_nothing(mocker):
     d = reviews.review_dir("fdy", "feat/x")
     d.mkdir(parents=True)

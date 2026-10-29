@@ -556,6 +556,35 @@ def test_reviewed_without_a_walkthrough_is_404_and_creates_nothing(client):
     assert not reviews.review_dir("fdy", "feat/x").exists()
 
 
+def test_reviewed_with_a_dir_holding_only_comments_is_404(client):
+    # A dir can hold comments.md (an earlier comment, never a prepare) with no
+    # walkthrough.md: _set_reviewed's is_file() guard must still 404 rather
+    # than let set_reviewed write reviewed.json into a dir with nothing to mark.
+    path = reviews.comments_path("fdy", "feat/x")
+    path.parent.mkdir(parents=True)
+    path.write_text("## 2026-10-26T09:14 · Stop A\n> resolved: no\n\nhi\n\n")
+    r = client.post(
+        "/api/reviews/reviewed",
+        json={"repo": "fdy", "branch": "feat/x", "stop": "Stop A", "sig": "0123abcd", "reviewed": True},
+    )
+    assert r.status_code == 404
+    assert not reviews.reviewed_path("fdy", "feat/x").exists()
+
+
+def test_reviewed_rejects_a_stop_with_an_unpaired_surrogate(client):
+    # ensure_ascii=False in set_reviewed's json.dumps lets a lone surrogate
+    # reach write_text, which raises UnicodeEncodeError; _check_stop must
+    # reject it with a 400 before any file is touched. httpx's own `json=`
+    # encodes with ensure_ascii=False and fails to utf-8-encode the surrogate
+    # before the request is even sent, so the body is built by hand here
+    # (plain json.dumps escapes it as ASCII \ud800) to reach the server at all.
+    _write_wt()
+    body = json.dumps({"repo": "fdy", "branch": "feat/x", "stop": "\ud800", "sig": "0123abcd", "reviewed": True})
+    r = client.post("/api/reviews/reviewed", content=body, headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+    assert not reviews.reviewed_path("fdy", "feat/x").exists()
+
+
 def test_reviewed_on_a_review_cleared_mid_request_is_404(client, mocker):
     _write_wt()
     mocker.patch("periscope.routes.reviews.reviews.set_reviewed", side_effect=FileNotFoundError)

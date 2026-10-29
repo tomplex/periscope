@@ -233,7 +233,10 @@ def set_reviewed(repo: str, branch: str, stop: str, sig: str | None) -> None:
             try:
                 tmp.write_text(json.dumps(marks, indent=1, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
                 os.replace(tmp, path)
-            except OSError:
+            except BaseException:
+                # ensure_ascii=False lets a lone surrogate reach write_text, which raises
+                # UnicodeEncodeError, not OSError; _check_stop rejects that before this
+                # runs, but nothing here may leave the temp file behind either way.
                 tmp.unlink(missing_ok=True)
                 raise
         finally:
