@@ -105,6 +105,10 @@ CUSTOM_STATUS_LINE = (
 )
 # The full-width rules Claude draws above and below its composer.
 RULE = "─" * 60
+# A named session's top rule carries the name at its right end (2.1.x, -e).
+NAMED_RULE = f"\x1b[38;5;244m{'─' * 50}\x1b[39m \x1b[38;5;244mthi-416-banner\x1b[39m \x1b[38;5;244m─"
+# An OSC 8 hyperlink, how a reply's or statusline's link reaches capture -e.
+OSC_LINK = "\x1b]8;id=1;https://linear.app/t/issue/THI-416\x1b\\THI-416\x1b]8;;\x1b\\"
 
 PARSE_CASES: list[tuple[str, str, str, str | None]] = [
     # The screenshot Tom hit: multi-word phrase + trailing `…` + ↓-arrow
@@ -570,8 +574,10 @@ GHOST_CASES: list[tuple[str, str, str | None]] = [
 
 
 # ── last_line filter cases ─────────────────────────────────────────────
-# Each row: (tag, content, expected_last_line). These verify the card
-# snippet doesn't surface TUI chrome (auto-mode footer, title bar, etc.).
+# Each row: (tag, content, expected_last_line). last_line is what a done
+# banner falls back to when the transcript can't say (THI-416), so it must be
+# the reply: no TUI chrome (footer, title bar) and none of the turn's own (its
+# `✻ … for 31s` line, `⎿` results and tips, right-aligned hints).
 
 LAST_LINE_CASES: list[tuple[str, str, str]] = [
     # Auto-mode footer at the bottom — must be filtered. Falls through to
@@ -586,7 +592,7 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
         {STATUS_LINE}
         ⏵⏵ auto mode on (shift+tab to cycle)
     """),
-        "✻ Brewed for 31s",
+        "Some recent response text from the assistant.",
     ),
     # Auto-mode footer with the "← for agents" suffix — same filter.
     (
@@ -598,7 +604,7 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
         {STATUS_LINE}
         ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
     """),
-        "✻ Cooked for 1m 15s",
+        "Some recent response text.",
     ),
     # Title bar at top + auto-mode at bottom — both filtered.
     (
@@ -611,7 +617,7 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
         {STATUS_LINE}
         ⏵⏵ auto mode on (shift+tab to cycle)
     """),
-        "✻ Brewed for 5s",
+        "Assistant said something useful here.",
     ),
     # Active spinner line shouldn't surface as snippet (duplicate of state
     # label). Falls through to whatever's below the spinner.
@@ -626,6 +632,45 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
         ⏵⏵ auto mode on (shift+tab to cycle)
     """),
         "◻ Task 2.4: another subtask",
+    ),
+    # THI-416, shapes from live 2.1.x panes. A named session's composer:
+    # Claude prints the name in the top rule, which used to hide the composer
+    # and hand the footer (statusline, ⧉ row) to last_line. The reply's
+    # linkified ticket is an OSC 8 hyperlink in the -e capture.
+    (
+        "named-session-footer",
+        "⏺ I fixed the banner.\n"
+        f"  It now reads the reply for {OSC_LINK}, not the footer.\n\n"
+        "✻ Brewed for 37s · done 2:19 PM\n\n"
+        f"{NAMED_RULE}\n\x1b[39m❯\xa0\x1b[2mmerge it\x1b[0m\n{RULE}\n"
+        f"{CUSTOM_STATUS_LINE} {OSC_LINK}\n"
+        "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents\n"
+        "  ⧉  dashboard-latest · client-health-preview\n",
+        "It now reads the reply for THI-416, not the footer.",
+    ),
+    # A tool result or tip under the reply, and the turn's waiting line.
+    (
+        "tool-result-and-tip",
+        textwrap.dedent(f"""\
+        ⏺ Pushed the branch.
+          ⎿  Allowed by auto mode classifier
+          ⎿  Tip: You can control how big a workflow is just by prompting.
+        ✻ Waiting for 1 background agent to finish
+        {RULE}
+        ❯
+        {RULE}
+        {CUSTOM_STATUS_LINE}
+    """),
+        "Pushed the branch.",
+    ),
+    # The right-aligned hint Claude draws just above the composer.
+    (
+        "clear-hint-above-composer",
+        "⏺ Which option do you want?\n\n"
+        "✻ Cogitated for 5m 33s · done 3:22 PM\n"
+        f"{' ' * 62}new task? /clear to save 433.4k tokens\n"
+        f"{RULE}\n❯\n{RULE}\n{CUSTOM_STATUS_LINE}\n",
+        "Which option do you want?",
     ),
 ]
 
@@ -1613,6 +1658,26 @@ def test_a_claude_with_no_status_line_parses_as_claude():
     assert parsed["agent"] == "claude"
     assert parsed["state"] == "idle"
     assert parsed["context_pct"] is None
+
+
+def _named(screen: str) -> str:
+    # The capture's top rule as a named session draws it: the name at its
+    # right end (live 2.1.x pane, escapes kept).
+    lines = screen.split("\n")
+    assert lines[5].startswith("\x1b[38;2;136;136;136m─")
+    grey = "\x1b[38;2;136;136;136m"
+    lines[5] = f"{grey}{'─' * 100}\x1b[39m {grey}thi-416-banner\x1b[39m {grey}─\x1b[39m"
+    return "\n".join(lines)
+
+
+def test_a_named_sessions_composer_is_still_the_composer():
+    # THI-416: the name hid the composer, so with no session file to say
+    # otherwise the pane read as a shell, its footer as the reply, and a reply
+    # got a 409. The draft check still applies under a named rule.
+    screen = _named(_composer_capture("idle.txt"))
+    assert parse_pane(screen)["agent"] == "claude"
+    assert composer_ready(screen)
+    assert not composer_ready(_named(_with_composer_row("\x1b[39m❯\xa0half a thought")))
 
 
 def test_a_footer_of_a_few_rows_still_reads_as_ready():
