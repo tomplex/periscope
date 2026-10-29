@@ -148,6 +148,35 @@ describe("<WalkthroughView> body", () => {
   });
 });
 
+describe("<WalkthroughView> comments", () => {
+  const comment = (stop, body, resolved = false) => ({ ts: "2026-10-29 10:00", stop, resolved, body });
+  const comments = [comment("Adds a gauge", "why?"), comment("Adds a gauge", "fixed", true), comment("Gone stop", "orphan")];
+  const stopAt = (html, title) => html.indexOf(`</span> ${title}`);
+  it("lists each comment under its stop, and the ones for unknown titles last", () => {
+    const html = view({ comments });
+    const one = stopAt(html, "Adds a gauge");
+    const two = stopAt(html, "Reuses the cache");
+    const loose = html.indexOf("unattached comments");
+    expect(html.indexOf("why?")).toBeGreaterThan(one);
+    expect(html.indexOf("why?")).toBeLessThan(two);
+    expect(html.indexOf("fixed")).toBeLessThan(two);
+    expect(loose).toBeGreaterThan(two);
+    expect(html.indexOf("orphan")).toBeGreaterThan(loose);
+    expect(count(html, 'class="wt-comments"')).toBe(2);
+  });
+  it("puts a folded stop's comment count in its title row, since folding hides the replies", () => {
+    const folded = view({ comments }, { reviewed: { "Adds a gauge": firstSig } });
+    expect(folded).not.toContain("why?");
+    expect(folded).toMatch(/class="wt-stop-head">.*<span class="wt-comment-chip">2 comments · 1 open<\/span>/);
+    expect(count(folded, "wt-comment-chip")).toBe(1);
+    const resolved = view({ comments: [comment("Adds a gauge", "ok", true)] }, { reviewed: { "Adds a gauge": firstSig } });
+    expect(resolved).toContain('<span class="wt-comment-chip">1 comment</span>');
+    // Unfolded, the comments are on show and need no chip; folded with none, nothing to count.
+    expect(view({ comments })).not.toContain("wt-comment-chip");
+    expect(view({}, { reviewed: { "Adds a gauge": firstSig } })).not.toContain("wt-comment-chip");
+  });
+});
+
 describe("walkthrough pieces", () => {
   it("MemoHunk redraws a hunk only when one of its props changes", () => {
     const props = { hunk: diff.files[0].hunks[0], lang: "python", hl: null, onOpen: null };

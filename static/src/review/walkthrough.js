@@ -208,6 +208,15 @@ export function evidenceIndex(shown, cite) {
 export const COLLAPSE_LINES = 300;
 export const lineCount = (hunks) => hunks.reduce((n, h) => n + (h.lines?.length || 0), 0);
 
+// A folded stop's stand-in for its comment list. Folding hides the list, and
+// with it any reply the owning pane wrote into a comment without rewriting the
+// stop (which would have lapsed the mark).
+export function commentsLabel(list) {
+  if (!list.length) return "";
+  const open = list.filter((c) => !c.resolved).length;
+  return `${list.length} comment${list.length === 1 ? "" : "s"}${open ? ` · ${open} open` : ""}`;
+}
+
 // Merged rows sink to the bottom of the readiness order and of every column
 // sort, and their comments stop counting toward the header badge.
 const isMerged = (r) => r.pr?.state === "merged";

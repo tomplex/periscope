@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseCite } from "../../split/mdMeta.js";
 import {
-  COLLAPSE_LINES, evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, lineCount, matchRefs, nextSort,
+  COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, lineCount, matchRefs, nextSort,
   parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
 } from "../walkthrough.js";
 
@@ -459,5 +459,20 @@ describe("lineCount, COLLAPSE_LINES (THI-443 review)", () => {
   });
   it("collapses a file block past 300 lines", () => {
     expect(COLLAPSE_LINES).toBe(300);
+  });
+});
+
+describe("commentsLabel (THI-443 review)", () => {
+  const c = (resolved) => ({ ts: "t", stop: "S", resolved, body: "b" });
+  it("counts a folded stop's comments and the open ones", () => {
+    expect(commentsLabel([c(false), c(true)])).toBe("2 comments · 1 open");
+    expect(commentsLabel([c(false), c(false)])).toBe("2 comments · 2 open");
+  });
+  it("says one comment, and leaves out an open count of zero", () => {
+    expect(commentsLabel([c(true)])).toBe("1 comment");
+    expect(commentsLabel([c(false)])).toBe("1 comment · 1 open");
+  });
+  it("is empty with no comments", () => {
+    expect(commentsLabel([])).toBe("");
   });
 });

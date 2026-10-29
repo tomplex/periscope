@@ -12,7 +12,7 @@ import { Mermaid } from "../split/Mermaid.jsx";
 import { renderMarkdown } from "../split/markdown.jsx";
 import { prStateMeta } from "../util.js";
 import {
-  COLLAPSE_LINES, evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed, lineCount, parseWalkthrough, stopSig, withMark,
+  COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed, lineCount, parseWalkthrough, stopSig, withMark,
 } from "./walkthrough.js";
 
 async function postJson(url, body) {
@@ -272,6 +272,7 @@ function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggle
             : title}
         </h3>
         {stop.kind ? <span class="wt-kind-badge">{stop.kind}</span> : null}
+        {folded && comments.length ? <span class="wt-comment-chip">{commentsLabel(comments)}</span> : null}
         <ReviewedToggle on={done} error={toggleError} onToggle={() => { setUnfolded(false); onToggleReviewed(stop, !done); }} />
       </div>
       {folded ? null : (
