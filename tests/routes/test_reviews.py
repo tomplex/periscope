@@ -89,6 +89,7 @@ def test_walkthrough_404_without_file_and_no_diff_without_worktree(client):
     assert r.status_code == 200
     body = r.json()
     assert body["text"] == WT and body["comments"] == [] and body["diff"] is None and body["stale_by"] is None
+    assert body["reviewed"] == {}
 
 
 def test_comment_appends_and_delivers(client, mocker):
@@ -511,3 +512,63 @@ def test_prepare_without_worktree_or_open_pr_409s_before_touching_git(client, mo
     r = client.post("/api/reviews/prepare", json={"repo": "fdy", "branch": "feat/x"})
     assert r.status_code == 409 and "no open PR" in r.json()["detail"]
     fetch.assert_not_called()
+
+
+def test_reviewed_round_trips_through_the_walkthrough(client):
+    _write_wt()
+    q = {"repo": "fdy", "branch": "feat/x"}
+    r = client.post("/api/reviews/reviewed", json={**q, "stop": "Stop A", "sig": "0123abcd", "reviewed": True})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert client.get("/api/reviews/walkthrough", params=q).json()["reviewed"] == {"Stop A": "0123abcd"}
+    r = client.post("/api/reviews/reviewed", json={**q, "stop": "Stop A", "sig": "0123abcd", "reviewed": False})
+    assert r.status_code == 200
+    assert client.get("/api/reviews/walkthrough", params=q).json()["reviewed"] == {}
+    assert not reviews.reviewed_path("fdy", "feat/x").exists()
+
+
+@pytest.mark.parametrize(
+    "stop,sig",
+    [
+        ("", "0123abcd"),
+        ("  ", "0123abcd"),
+        ("a\nb", "0123abcd"),
+        ("Stop A", "xyz"),
+        ("Stop A", "0123ABCD"),
+        ("Stop A", "0123abcd0"),
+        ("Stop A", "0123abcd\n"),
+    ],
+)
+def test_reviewed_bad_stop_or_sig_is_400(client, stop, sig):
+    _write_wt()
+    r = client.post(
+        "/api/reviews/reviewed", json={"repo": "fdy", "branch": "feat/x", "stop": stop, "sig": sig, "reviewed": True}
+    )
+    assert r.status_code == 400
+    assert not reviews.reviewed_path("fdy", "feat/x").exists()
+
+
+def test_reviewed_without_a_walkthrough_is_404_and_creates_nothing(client):
+    r = client.post(
+        "/api/reviews/reviewed",
+        json={"repo": "fdy", "branch": "feat/x", "stop": "Stop A", "sig": "0123abcd", "reviewed": True},
+    )
+    assert r.status_code == 404
+    assert not reviews.review_dir("fdy", "feat/x").exists()
+
+
+def test_reviewed_on_a_review_cleared_mid_request_is_404(client, mocker):
+    _write_wt()
+    mocker.patch("periscope.routes.reviews.reviews.set_reviewed", side_effect=FileNotFoundError)
+    r = client.post(
+        "/api/reviews/reviewed",
+        json={"repo": "fdy", "branch": "feat/x", "stop": "Stop A", "sig": "0123abcd", "reviewed": True},
+    )
+    assert r.status_code == 404
+
+
+def test_reviewed_rejects_traversal(client):
+    r = client.post(
+        "/api/reviews/reviewed",
+        json={"repo": "..", "branch": "feat/x", "stop": "A", "sig": "0123abcd", "reviewed": True},
+    )
+    assert r.status_code == 400

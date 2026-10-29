@@ -2,7 +2,8 @@
 
 Periscope never mutates git or GitHub here (spec D1): prepare and merge are
 channel messages to the pane that owns the branch; the only filesystem
-writes are an append to comments.md and the explicit clear of a review dir.
+writes are an append to comments.md, reviewed.json's per-stop marks, and the
+explicit clear of a review dir.
 All handlers are async because delivery goes through channels._deliver;
 blocking git/file work runs in a thread so the event loop (every pane
 mirror, every MCP connection) never stalls.
@@ -11,6 +12,7 @@ mirror, every MCP connection) never stalls.
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime
 
@@ -65,6 +67,23 @@ class CommentBody(ReviewRef):
     body: str
 
 
+class ReviewedBody(ReviewRef):
+    stop: str
+    sig: str
+    reviewed: bool
+
+
+# stopSig in static/src/review/walkthrough.js: 32-bit FNV-1a as 8 lowercase hex.
+_SIG_RE = re.compile(r"[0-9a-f]{8}")
+
+
+def _check_stop(stop: str) -> None:
+    # A newline would split comments.md's heading line, and parse_comments
+    # would drop the entry; reviewed.json keys follow the same rule.
+    if not stop.strip() or "\n" in stop or "\r" in stop:
+        raise HTTPException(400, "bad stop")
+
+
 @router.get("/api/reviews")
 async def reviews_list():
     team_keys = store.linear_team_keys()
@@ -101,6 +120,7 @@ async def reviews_walkthrough(repo: str, branch: str):
         return {
             "text": text,
             "comments": reviews.parse_comments(reviews._read(reviews.comments_path(repo, branch))),
+            "reviewed": reviews.read_reviewed(repo, branch),
             "head_now": reviews.head_sha(worktree) if worktree else None,
             "stale_by": reviews.stale_by(worktree, header["head"]) if header and worktree else None,
             "diff": diff,
@@ -123,9 +143,7 @@ async def _deliver_or_409(owner: dict | None, message: str) -> None:
 @router.post("/api/reviews/comment")
 async def reviews_comment(body: CommentBody):
     _check(body.repo, body.branch)
-    # A newline would split the heading line and parse_comments would drop the entry.
-    if not body.stop.strip() or "\n" in body.stop or "\r" in body.stop:
-        raise HTTPException(400, "bad stop")
+    _check_stop(body.stop)
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M")
     # Append BEFORE delivery: a comment with no pane to hear it is still kept,
     # and the next pane to prepare the branch is told to read the file.
@@ -137,6 +155,26 @@ async def reviews_comment(body: CommentBody):
         f"{reviews.comments_path(body.repo, body.branch)}):\n\n{body.body.strip()}"
     )
     await _deliver_or_409(owner, msg)
+    return {"ok": True}
+
+
+@router.post("/api/reviews/reviewed")
+async def reviews_reviewed(body: ReviewedBody):
+    """Mark or unmark one stop reviewed (THI-443 D6). The sig ties the mark to
+    the stop's text, so a re-prepare that rewrites the stop lapses it."""
+    _check(body.repo, body.branch)
+    _check_stop(body.stop)
+    if not _SIG_RE.fullmatch(body.sig):
+        raise HTTPException(400, "bad sig")
+    # A dir can hold comments.md but no walkthrough: there's nothing to mark.
+    if not reviews.walkthrough_path(body.repo, body.branch).is_file():
+        raise HTTPException(404, f"no walkthrough for {body.repo} {body.branch}")
+    sig = body.sig if body.reviewed else None
+    try:
+        await asyncio.to_thread(reviews.set_reviewed, body.repo, body.branch, body.stop, sig)
+    except FileNotFoundError:
+        # The review was cleared mid-request; a mark never recreates it (D6).
+        raise HTTPException(404, f"no walkthrough for {body.repo} {body.branch}") from None
     return {"ok": True}
 
 
