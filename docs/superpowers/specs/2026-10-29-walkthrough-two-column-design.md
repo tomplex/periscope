@@ -114,7 +114,11 @@ untouched).
   unfolds or refolds the stop for this visit without unmarking it; the
   "reviewed" toggle beside it is a separate button and only marks or
   unmarks. The unfolded state is local and not saved. A half-typed comment
-  survives its stop folding and unfolding (D8).
+  survives its stop folding and unfolding (D8). A folded stop with comments
+  shows a chip in its title row, e.g. "2 comments · 1 open". The owning
+  pane answers inside a comment and resolves it without rewriting the stop
+  (the skill's step 6), so the stop stays folded and its reply would
+  otherwise go unseen.
 
 ### D4. Diagrams render near natural size, in periscope's theme, and open full size
 
@@ -198,7 +202,11 @@ The column (`.wt-evidence`) renders:
 - **One closing summary line** for `hidden`, e.g. "8 not in this diff · 1
   generated", a `<details>` that expands to the paths.
 - **The hunks,** expanded, under each file's path, drawn by `Hunk` from
-  `diff/ChangesTab.jsx` with `onOpen={null}`.
+  `diff/ChangesTab.jsx` with `onOpen={null}`, memoized so a reviewed toggle
+  doesn't re-highlight them. A file whose hunks total more than 300 lines
+  (`COLLAPSE_LINES`) starts collapsed behind "show N lines". Whole-file
+  cites of new files made one real walkthrough mount about 10.7k
+  highlighted lines.
 - **Wide panes:** `position: sticky; top: 12px; align-self: start;
   max-height: calc(100cqh - 24px); overflow: auto`. The column stays beside
   the text while the stop is on screen, scrolls on its own when taller, and
