@@ -1,8 +1,8 @@
 // Mermaid's "base" theme in periscope's colors (THI-443 D4), app-wide: file
 // previews draw diagrams with it too. `color(name)` returns a token as
 // #rrggbb, or undefined when the token isn't set. mermaid's color math can't
-// parse the stylesheet's oklch(), so Mermaid.jsx converts each token before
-// it gets here. Pure, so the mapping is testable without a DOM.
+// parse the stylesheet's oklch(), so mermaidRender.js's tokenHex converts
+// each token before it gets here. Pure, so the mapping is testable without a DOM.
 
 // Pie slices, cScale (mindmap/timeline/journey/kanban) and git branch colors
 // all default to rotating primaryColor's hue. primaryColor is --bg-2, a

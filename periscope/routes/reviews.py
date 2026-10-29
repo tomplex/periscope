@@ -185,7 +185,7 @@ async def reviews_reviewed(body: ReviewedBody):
     try:
         await asyncio.to_thread(_set_reviewed, body.repo, body.branch, body.stop, sig)
     except FileNotFoundError:
-        # No walkthrough, or one cleared mid-request; a mark never recreates it (D6).
+        # No walkthrough, or one cleared mid-request; a mark never recreates it (THI-443 D6).
         raise HTTPException(404, f"no walkthrough for {body.repo} {body.branch}") from None
     return {"ok": True}
 

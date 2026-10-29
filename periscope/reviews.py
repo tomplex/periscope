@@ -193,7 +193,7 @@ def append_comment(repo: str, branch: str, stop: str, body: str, ts: str) -> Non
 # reviewed.json is a read-modify-write, and the dev and prod servers both write
 # ~/.claude/reviews (it isn't instance_file()-separated): the flock serializes
 # writers across processes and threads (flock is per open file description,
-# not per process); the module lock is belt-and-braces (spec D6).
+# not per process); the module lock is belt-and-braces (THI-443 D6).
 _reviewed_lock = threading.Lock()
 
 

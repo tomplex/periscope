@@ -450,7 +450,7 @@ describe("filterRows", () => {
   });
 });
 
-describe("lineCount, COLLAPSE_LINES (THI-443 review)", () => {
+describe("lineCount, COLLAPSE_LINES", () => {
   it("counts every diff line across a file's hunks", () => {
     const h = (n) => ({ new_start: 1, lines: Array.from({ length: n }, () => ({ kind: "ctx", text: "" })) });
     expect(lineCount([h(3), h(4)])).toBe(7);
@@ -462,7 +462,7 @@ describe("lineCount, COLLAPSE_LINES (THI-443 review)", () => {
   });
 });
 
-describe("commentsLabel (THI-443 review)", () => {
+describe("commentsLabel", () => {
   const c = (resolved) => ({ ts: "t", stop: "S", resolved, body: "b" });
   it("counts a folded stop's comments and the open ones", () => {
     expect(commentsLabel([c(false), c(true)])).toBe("2 comments · 1 open");
@@ -477,7 +477,7 @@ describe("commentsLabel (THI-443 review)", () => {
   });
 });
 
-describe("markQueue (THI-443 review)", () => {
+describe("markQueue", () => {
   const SIG = "0123abcd";
   // A page stand-in: `marks` is what the toggles and contents would show,
   // `errors` what sits beside each toggle, and every POST waits for the test.
