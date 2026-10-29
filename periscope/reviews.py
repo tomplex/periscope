@@ -191,8 +191,9 @@ def append_comment(repo: str, branch: str, stop: str, body: str, ts: str) -> Non
 
 
 # reviewed.json is a read-modify-write, and the dev and prod servers both write
-# ~/.claude/reviews (it isn't instance_file()-separated): a flock on the review
-# dir serializes writers across processes, the thread lock within one.
+# ~/.claude/reviews (it isn't instance_file()-separated): the flock serializes
+# writers across processes and threads (flock is per open file description,
+# not per process); the module lock is belt-and-braces (spec D6).
 _reviewed_lock = threading.Lock()
 
 
@@ -201,7 +202,7 @@ def read_reviewed(repo: str, branch: str) -> dict[str, str]:
     unreadable or hand-mangled file reads as nothing reviewed."""
     try:
         data = json.loads(_read(reviewed_path(repo, branch)) or "{}")
-    except ValueError:
+    except (ValueError, RecursionError):  # deeply nested junk blows the decoder's stack, not just malformed JSON
         return {}
     if not isinstance(data, dict):
         return {}
@@ -215,7 +216,7 @@ def set_reviewed(repo: str, branch: str, stop: str, sig: str | None) -> None:
     FileNotFoundError when the review dir is gone: a mark never creates it."""
     path = reviewed_path(repo, branch)
     with _reviewed_lock:
-        dfd = os.open(path.parent, os.O_RDONLY)
+        dfd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             fcntl.flock(dfd, fcntl.LOCK_EX)
             marks = read_reviewed(repo, branch)
@@ -230,7 +231,7 @@ def set_reviewed(repo: str, branch: str, stop: str, sig: str | None) -> None:
             # file, which the next write replaces.
             tmp = path.with_suffix(".json.tmp")
             try:
-                tmp.write_text(json.dumps(marks, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+                tmp.write_text(json.dumps(marks, indent=1, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
                 os.replace(tmp, path)
             except OSError:
                 tmp.unlink(missing_ok=True)
@@ -243,8 +244,17 @@ def clear_review(repo: str, branch: str) -> None:
     d = review_dir(repo, branch).resolve()
     if not d.is_relative_to(REVIEWS_DIR.resolve()) or d == REVIEWS_DIR.resolve():
         raise ValueError(f"refusing to remove {d}: outside the reviews dir")
-    if d.exists():  # only a missing dir is a no-op; permission errors must surface
+    try:
+        dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+    except FileNotFoundError:
+        return  # only a missing dir is a no-op; permission errors must surface
+    try:
+        # A reviewed.json write in flight finishes first; one that waits gets
+        # the lock on the dead dir and its temp write fails -> the route's 404.
+        fcntl.flock(dfd, fcntl.LOCK_EX)
         shutil.rmtree(d)
+    finally:
+        os.close(dfd)
 
 
 # --- queue -----------------------------------------------------------------

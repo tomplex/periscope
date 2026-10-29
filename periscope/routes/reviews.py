@@ -158,6 +158,15 @@ async def reviews_comment(body: CommentBody):
     return {"ok": True}
 
 
+def _set_reviewed(repo: str, branch: str, stop: str, sig: str | None) -> None:
+    # A dir can hold comments.md but no walkthrough: there's nothing to mark.
+    # Checked in the same thread as the write so the stat never blocks the
+    # event loop; raising here maps to the route's 404 same as a mid-request clear.
+    if not reviews.walkthrough_path(repo, branch).is_file():
+        raise FileNotFoundError
+    reviews.set_reviewed(repo, branch, stop, sig)
+
+
 @router.post("/api/reviews/reviewed")
 async def reviews_reviewed(body: ReviewedBody):
     """Mark or unmark one stop reviewed (THI-443 D6). The sig ties the mark to
@@ -166,14 +175,11 @@ async def reviews_reviewed(body: ReviewedBody):
     _check_stop(body.stop)
     if not _SIG_RE.fullmatch(body.sig):
         raise HTTPException(400, "bad sig")
-    # A dir can hold comments.md but no walkthrough: there's nothing to mark.
-    if not reviews.walkthrough_path(body.repo, body.branch).is_file():
-        raise HTTPException(404, f"no walkthrough for {body.repo} {body.branch}")
     sig = body.sig if body.reviewed else None
     try:
-        await asyncio.to_thread(reviews.set_reviewed, body.repo, body.branch, body.stop, sig)
+        await asyncio.to_thread(_set_reviewed, body.repo, body.branch, body.stop, sig)
     except FileNotFoundError:
-        # The review was cleared mid-request; a mark never recreates it (D6).
+        # No walkthrough, or one cleared mid-request; a mark never recreates it (D6).
         raise HTTPException(404, f"no walkthrough for {body.repo} {body.branch}") from None
     return {"ok": True}
 

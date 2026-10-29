@@ -4,6 +4,7 @@ REVIEWS_DIR at tmp_path."""
 
 import json
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -573,7 +574,7 @@ def test_a_header_row_reads_its_owner_panes_pr_title(mocker):
     assert _ticket(rows["feat/relinked"]) == _NO_TICKET
 
 
-def test_read_reviewed_missing_corrupt_and_mangled_read_as_empty(tmp_path):
+def test_read_reviewed_missing_corrupt_and_mangled_read_as_empty():
     assert reviews.read_reviewed("fdy", "feat/x") == {}
     p = reviews.reviewed_path("fdy", "feat/x")
     p.parent.mkdir(parents=True)
@@ -584,7 +585,16 @@ def test_read_reviewed_missing_corrupt_and_mangled_read_as_empty(tmp_path):
     assert reviews.read_reviewed("fdy", "feat/x") == {"A": "0123abcd"}
 
 
-def test_set_reviewed_sets_overwrites_unsets_and_removes_the_empty_file(tmp_path):
+def test_read_reviewed_deeply_nested_json_is_not_a_crash():
+    # json.loads("[" * 200000) raises RecursionError, not ValueError; a hand-
+    # mangled file must still read as empty, not 500 the walkthrough GET.
+    p = reviews.reviewed_path("fdy", "feat/x")
+    p.parent.mkdir(parents=True)
+    p.write_text("[" * 200000)
+    assert reviews.read_reviewed("fdy", "feat/x") == {}
+
+
+def test_set_reviewed_sets_overwrites_unsets_and_removes_the_empty_file():
     reviews.review_dir("fdy", "feat/x").mkdir(parents=True)
     reviews.set_reviewed("fdy", "feat/x", "Stop A", "0123abcd")
     reviews.set_reviewed("fdy", "feat/x", "Stop B", "11111111")
@@ -602,3 +612,29 @@ def test_set_reviewed_never_creates_the_review_dir():
     with pytest.raises(FileNotFoundError):
         reviews.set_reviewed("fdy", "gone", "Stop A", "0123abcd")
     assert not reviews.review_dir("fdy", "gone").exists()
+
+
+def test_set_reviewed_failed_replace_keeps_the_old_marks_and_no_tmp(mocker):
+    reviews.review_dir("fdy", "feat/x").mkdir(parents=True)
+    reviews.set_reviewed("fdy", "feat/x", "Stop A", "0123abcd")
+    mocker.patch("periscope.reviews.os.replace", side_effect=OSError("disk full"))
+    with pytest.raises(OSError):
+        reviews.set_reviewed("fdy", "feat/x", "Stop B", "11111111")
+    assert reviews.read_reviewed("fdy", "feat/x") == {"Stop A": "0123abcd"}
+    assert not list(reviews.review_dir("fdy", "feat/x").glob("*.tmp"))
+
+
+def test_set_reviewed_on_a_dir_removed_under_the_lock_recreates_nothing(mocker):
+    d = reviews.review_dir("fdy", "feat/x")
+    d.mkdir(parents=True)
+    mocker.patch("periscope.reviews.read_reviewed", side_effect=lambda *a: (shutil.rmtree(d), {})[1])
+    with pytest.raises(FileNotFoundError):
+        reviews.set_reviewed("fdy", "feat/x", "Stop A", "0123abcd")
+    assert not d.exists()
+
+
+def test_clear_review_removes_a_dir_holding_only_reviewed_json():
+    reviews.review_dir("fdy", "feat/x").mkdir(parents=True)
+    reviews.set_reviewed("fdy", "feat/x", "Stop A", "0123abcd")
+    reviews.clear_review("fdy", "feat/x")
+    assert not reviews.review_dir("fdy", "feat/x").exists()
