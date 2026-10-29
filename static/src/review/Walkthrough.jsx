@@ -67,7 +67,7 @@ function Comments({ list }) {
         <li key={i} class={c.resolved ? "is-resolved" : ""}>
           <span class="wt-comment-ts">{c.ts}</span>
           <span class="wt-comment-state">{c.resolved ? "resolved" : "open"}</span>
-          <div class="wt-comment-body">{renderMarkdown(c.body, { demote: false, softBreaks: "space" })}</div>
+          <div class="wt-comment-body">{renderMarkdown(c.body, { demote: true, softBreaks: "space" })}</div>
         </li>
       ))}
     </ul>
@@ -157,11 +157,14 @@ function CommentBox({ repo, branch, stop, onPosted }) {
 
 // One accessible name in both states: aria-pressed carries the state, and the ✓
 // is decoration (a changing label plus "pressed" would be announced twice).
-export function ReviewedToggle({ on, onToggle, error }) {
+// `describedBy` is the stop title's id: thirteen buttons all named "reviewed"
+// need it to tell them apart.
+export function ReviewedToggle({ on, onToggle, error, describedBy }) {
   return (
     <span class="wt-reviewed">
       {error ? <span class="wt-reviewed-err" role="alert">{error}</span> : null}
-      <button type="button" class={`wt-reviewed-btn${on ? " is-on" : ""}`} aria-pressed={on ? "true" : "false"} onClick={onToggle}>
+      <button type="button" class={`wt-reviewed-btn${on ? " is-on" : ""}`} aria-describedby={describedBy}
+        aria-pressed={on ? "true" : "false"} onClick={onToggle}>
         {on ? <span aria-hidden="true">✓ </span> : null}reviewed
       </button>
     </span>
@@ -186,11 +189,11 @@ export class MemoHunk extends Component {
 // The right column (THI-443 D5): the stop's files, one summary line for the
 // ones with nothing to show, then the hunks expanded, except a block past
 // COLLAPSE_LINES, which waits behind a button.
-function Evidence({ ev, hl, colRef, expanded, onGo, onExpand }) {
+function Evidence({ ev, title, hl, colRef, expanded, onGo, onExpand }) {
   const summary = hiddenSummary(ev.hidden);
   if (!ev.shown.length && !summary) return <div class="wt-evidence is-empty" />;
   return (
-    <aside class="wt-evidence" ref={colRef} aria-label="files and code changes">
+    <aside class="wt-evidence" ref={colRef} aria-label={`files and code changes: ${title}`}>
       <ul class="wt-files">
         {ev.shown.map((e, i) => {
           const label = (
@@ -261,16 +264,22 @@ function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggle
       return (
         <button type="button" class={`md-cite${i >= 0 ? "" : " is-inert"}`}
           title={i >= 0 ? "show in the code column" : "not among this stop's changes"}
+          aria-disabled={i >= 0 ? undefined : "true"}
           onClick={() => { if (i >= 0) goTo(i); }}>{c.raw}</button>
       );
     };
-    return renderMarkdown(stop.bodyMarkdown, { demote: false, softBreaks: "space", mermaid: true, meta: true, cite, zoom: true });
+    // demote: a "### Detail" in a stop would otherwise be an h3, a sibling of
+    // the stop's own title.
+    return renderMarkdown(stop.bodyMarkdown, { demote: true, softBreaks: "space", mermaid: true, meta: true, cite, zoom: true });
   }, [stop.bodyMarkdown, ev, goTo]);
   const title = <><span class="wt-stop-n">{`${n}.`}</span> {stop.title}</>;
+  const titleId = `stop-${stop.id}-title`;
   return (
-    <section class={`wt-stop wt-kind-${kindOf(stop)}${folded ? " is-folded" : ""}`} id={`stop-${stop.id}`}>
+    // tabIndex -1: the contents list moves focus here, without the stop
+    // joining the tab order.
+    <section class={`wt-stop wt-kind-${kindOf(stop)}${folded ? " is-folded" : ""}`} id={`stop-${stop.id}`} tabIndex={-1}>
       <div class="wt-stop-head">
-        <h3 class="wt-stop-title">
+        <h3 class="wt-stop-title" id={titleId}>
           {done
             ? <button type="button" class="wt-fold" aria-expanded={folded ? "false" : "true"} title={folded ? "show this stop" : "fold this stop"}
                 onClick={() => setUnfolded(!unfolded)}>{title}</button>
@@ -278,7 +287,8 @@ function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggle
         </h3>
         {stop.kind ? <span class="wt-kind-badge">{stop.kind}</span> : null}
         {folded && comments.length ? <span class="wt-comment-chip">{commentsLabel(comments)}</span> : null}
-        <ReviewedToggle on={done} error={toggleError} onToggle={() => { setUnfolded(false); onToggleReviewed(stop, !done); }} />
+        <ReviewedToggle on={done} error={toggleError} describedBy={titleId}
+          onToggle={() => { setUnfolded(false); onToggleReviewed(stop, !done); }} />
       </div>
       {folded ? null : (
         <>
@@ -294,7 +304,7 @@ function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggle
               <Comments list={comments} />
               <CommentBox repo={repo} branch={branch} stop={stop.title} onPosted={onPosted} />
             </div>
-            <Evidence ev={ev} hl={hl} colRef={col} expanded={expanded} onGo={goTo} onExpand={expand} />
+            <Evidence ev={ev} title={stop.title} hl={hl} colRef={col} expanded={expanded} onGo={goTo} onExpand={expand} />
           </div>
         </>
       )}
@@ -311,11 +321,18 @@ function Contents({ stops, reviewed }) {
           <li key={s.id}>
             {/* A button, not a #link: the URL and periscope's routing stay put. */}
             <button type="button" class={`wt-toc-item wt-kind-${kindOf(s)}`}
-              onClick={() => document.getElementById(`stop-${s.id}`)?.scrollIntoView({ block: "start", behavior: motion() })}>
+              onClick={() => {
+                const el = document.getElementById(`stop-${s.id}`);
+                if (!el) return;
+                el.scrollIntoView({ block: "start", behavior: motion() });
+                // Focus follows, so the next Tab continues from the stop
+                // rather than from the contents at the top.
+                el.focus({ preventScroll: true });
+              }}>
               <span class="wt-toc-n">{`${i + 1}.`}</span>
               <span class="wt-toc-dot" aria-hidden="true" />
               <span class="wt-toc-title">{s.title}</span>
-              {isReviewed(s, reviewed) ? <span class="wt-toc-done" title="reviewed">✓</span> : null}
+              {isReviewed(s, reviewed) ? <span class="wt-toc-done" role="img" aria-label="reviewed">✓</span> : null}
             </button>
           </li>
         ))}

@@ -16,7 +16,7 @@ Panes cost more and \`nothing\` said so.
 ## Adds a gauge
 > kind: system-touch · refs: a/one.py, b/missing.py
 
-Prose one.
+Prose one. See \`a/one.py:1\` and \`b/missing.py\`.
 
 \`\`\`mermaid
 flowchart LR
@@ -107,7 +107,7 @@ describe("<WalkthroughView> body", () => {
   it("folds a reviewed stop to its title row, and only while its sig matches", () => {
     const folded = view({}, { reviewed: { "Adds a gauge": firstSig } });
     expect(folded).toContain('class="wt-stop wt-kind-system-touch is-folded"');
-    expect(folded).toContain('class="wt-fold"');
+    expect(folded).toMatch(/<button type="button" class="wt-fold" aria-expanded="false"/);
     expect(folded).not.toContain("Prose one.");
     expect(folded).toContain("Prose two.");
     expect(folded).toContain("1 / 2 reviewed");
@@ -145,6 +145,60 @@ describe("<WalkthroughView> body", () => {
   it("shows a failed mark's error beside its toggle", () => {
     expect(view({}, { toggleErrors: { "Adds a gauge": "not saved: HTTP 500" } }))
       .toContain('<span class="wt-reviewed-err" role="alert">not saved: HTTP 500</span>');
+  });
+});
+
+describe("<WalkthroughView> cites and accessibility", () => {
+  it("makes a cite chip live only when the code column has its file", () => {
+    const html = view();
+    expect(html).toContain('<button type="button" class="md-cite" title="show in the code column">a/one.py:1</button>');
+    expect(html).toContain(
+      '<button type="button" class="md-cite is-inert" title="not among this stop\'s changes" aria-disabled="true">b/missing.py</button>',
+    );
+    // No worktree: nothing to scroll to, so every chip is inert.
+    const bare = view({ diff: null, stale_by: null });
+    expect(count(bare, 'class="md-cite is-inert"')).toBe(2);
+    expect(bare).not.toContain('class="md-cite"');
+  });
+  it("names each stop's code column and describes its toggle by the stop's title", () => {
+    const html = view();
+    expect(html).toContain('aria-label="files and code changes: Adds a gauge"');
+    expect(html).toContain('<h3 class="wt-stop-title" id="stop-adds-a-gauge-title">');
+    expect(html).toContain('aria-describedby="stop-adds-a-gauge-title" aria-pressed="false">reviewed</button>');
+    expect(html).toContain('aria-describedby="stop-reuses-the-cache-title"');
+  });
+  it("gives the contents ✓ a name", () => {
+    expect(view({}, { reviewed: { "Adds a gauge": firstSig } }))
+      .toContain('<span class="wt-toc-done" role="img" aria-label="reviewed">✓</span>');
+  });
+  it("demotes headings in a stop and its comments below the stop's own h3", () => {
+    const text = "# T\n\n## Stop\n> kind: reuse\n\nBody.\n\n### Detail\n";
+    const html = view({ text, comments: [{ ts: "t", stop: "Stop", resolved: false, body: "## Fix\n\nthis" }] });
+    expect(html).toContain('<h5 class="md-h md-h3">Detail</h5>');
+    expect(html).toContain('<h4 class="md-h md-h2">Fix</h4>');
+  });
+  it("moves focus to the stop a contents entry scrolls to", () => {
+    let entry;
+    const calls = [];
+    const el = { scrollIntoView: (o) => calls.push(["scroll", o.block]), focus: (o) => calls.push(["focus", o.preventScroll]) };
+    const prev = options.vnode;
+    const hadDoc = "document" in globalThis;
+    const prevDoc = globalThis.document;
+    options.vnode = (v) => {
+      prev?.(v);
+      if (v.props?.class === "wt-toc-item wt-kind-system-touch") entry = v;
+    };
+    globalThis.document = { getElementById: (id) => (id === "stop-adds-a-gauge" ? el : null) };
+    try {
+      // Focusable by script only, so the stop takes focus without joining the tab order.
+      expect(view()).toContain('id="stop-adds-a-gauge" tabindex="-1"');
+      entry.props.onClick();
+      expect(calls).toEqual([["scroll", "start"], ["focus", true]]);
+    } finally {
+      options.vnode = prev;
+      if (hadDoc) globalThis.document = prevDoc;
+      else delete globalThis.document;
+    }
   });
 });
 
