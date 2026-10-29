@@ -55,6 +55,14 @@
   --sans: 'Hanken Grotesk', -apple-system, system-ui, sans-serif;
 
   --r-sm: 4px;
+  /* Walkthrough stop kinds (THI-443 D9). The accent marks a card's edge and its
+     contents dot (≥ 3:1 on --bg-1); -bg/-fg is the badge pair. */
+  --kind-new-subsystem: oklch(0.70 0.11 255); --kind-new-subsystem-bg: #2b4a7a; --kind-new-subsystem-fg: #cfe0ff;
+  --kind-extension:     oklch(0.70 0.11 150); --kind-extension-bg:     #2f5a3f; --kind-extension-fg:     #cfe9d6;
+  --kind-reuse:         oklch(0.72 0.10 80);  --kind-reuse-bg:         #5a4a2f; --kind-reuse-fg:         #f2e2c4;
+  --kind-system-touch:  oklch(0.68 0.14 25);  --kind-system-touch-bg:  #6a2f2f; --kind-system-touch-fg:  #f6d0d0;
+  --kind-behavior:      oklch(0.70 0.12 300); --kind-behavior-bg:      #4a2f6a; --kind-behavior-fg:      #e2d0f6;
+  --kind-other:         var(--fg-2);          /* unknown or missing kind: neutral */
   --r-md: 6px;
   --r-lg: 10px;
 
@@ -3907,30 +3915,142 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 .rail-review-badge { margin-left: auto; font-size: 10px; padding: 0 5px; border-radius: 8px; background: var(--s-needs); color: #fff; }
 .icon-review { color: var(--s-shell); font-size: 11px; }
 .rail-review-head { padding-top: 0; padding-bottom: 2px; }
-.walkthrough, .reviews-queue { padding: 14px 18px; overflow: auto; height: 100%; box-sizing: border-box; }
+.reviews-queue { padding: 14px 18px; overflow: auto; height: 100%; box-sizing: border-box; }
 .wt-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
 .wt-head h2 { margin: 0; font-size: 16px; }
 .wt-sub, .wt-empty, .rq-repo, .rq-note { color: var(--fg-3); font-size: 12px; }
-.wt-problem { max-width: 72ch; margin: 0 0 16px; }
-.wt-stop { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
-.wt-stop-title { margin: 0 0 6px; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
-.wt-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 8px; background: var(--bg-1-hi); color: var(--fg-2); }
-.wt-kind-new-subsystem { background: #2b4a7a; color: #cfe0ff; }
-.wt-kind-extension { background: #2f5a3f; color: #cfe9d6; }
-.wt-kind-reuse { background: #5a4a2f; color: #f2e2c4; }
-.wt-kind-system-touch { background: #6a2f2f; color: #f6d0d0; }
-.wt-kind-behavior { background: #4a2f6a; color: #e2d0f6; }
-.wt-stop-body { max-width: 80ch; }
-.wt-evidence { margin-top: 8px; }
-.wt-evidence-toggle { font: inherit; font-size: 12px; background: none; border: 0; color: var(--fg-2); cursor: pointer; padding: 2px 0; }
-.wt-evidence-path { font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; color: var(--fg-3); margin: 6px 0 2px; }
-.wt-comments { list-style: none; padding: 0; margin: 10px 0 0; }
-.wt-comments li { border-left: 2px solid var(--s-needs); padding: 2px 8px; margin: 6px 0; }
-.wt-comments li.is-resolved { border-left-color: var(--fg-4); opacity: .75; }
-.wt-comment-ts, .wt-comment-state { font-size: 11px; color: var(--fg-3); margin-right: 8px; }
-.wt-comment-box { margin-top: 8px; }
-.wt-comment-box textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 12.5px; background: var(--bg-1); color: var(--fg-1); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
-.wt-comment-actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+/* --- review walkthrough (THI-443) ---
+   Scoped to .walkthrough: the Reviews queue shares .wt-head/.wt-sub/.wt-empty,
+   and .md-doc is the file preview's text style too. One type scale; text is
+   --fg-2 or brighter, and --fg-1 on --bg-1-hi/--bg-2 chips (--fg-2 there is
+   under 4.5:1). */
+.walkthrough {
+  --wt-fs-meta: 12px; --wt-fs-ui: 13px; --wt-fs-body: 15px; --wt-fs-stop: 18px; --wt-fs-title: 22px;
+  display: flex; flex-direction: column; height: 100%; min-height: 0; box-sizing: border-box;
+  font-size: var(--wt-fs-ui); color: var(--fg-1);
+}
+.walkthrough > .wt-head { flex: none; display: block; margin: 0; padding: 14px 18px 10px; border-bottom: 1px solid var(--line-soft); }
+.walkthrough .wt-title { margin: 0 0 4px; font-size: var(--wt-fs-title); line-height: 1.25; font-weight: 650; color: var(--fg-0); }
+.walkthrough .wt-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: var(--wt-fs-meta); color: var(--fg-2); }
+.wt-badge { padding: 1px 8px; border-radius: 9px; background: var(--bg-2); color: var(--fg-1); }
+.wt-badge.is-warn { background: var(--s-needs-bg); color: var(--s-needs); }
+.wt-progress { margin-left: auto; color: var(--fg-1); font-variant-numeric: tabular-nums; }
+/* The scroll container is the size container: 100cqh is its visible height,
+   which caps the sticky code column; its width drives the one-column fallback. */
+.wt-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 40px; container: wt / size; }
+.walkthrough .wt-error { margin: 0 0 12px; color: var(--s-danger); font-size: var(--wt-fs-meta); }
+/* Prose keeps a readable measure; the code column gets the rest. ch tracks
+   the 15px body text because the grid itself is 15px. */
+.wt-cols { display: grid; grid-template-columns: minmax(0, 72ch) minmax(0, 1fr); gap: 16px 28px; align-items: start; font-size: var(--wt-fs-body); }
+.wt-intro { margin-bottom: 22px; }
+.walkthrough .md-doc { max-width: none; margin: 0; font-size: var(--wt-fs-body); }
+.walkthrough .md-doc .md-h { font-size: var(--wt-fs-body); margin: 14px 0 6px; border-bottom: 0; padding-bottom: 0; }
+.walkthrough .md-doc .md-icode { color: var(--fg-1); }
+/* Contents */
+.wt-toc ol { list-style: none; margin: 0; padding: 0; font-size: var(--wt-fs-ui); }
+.wt-toc-item { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 3px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--fg-1); font: inherit; text-align: left; cursor: pointer; }
+.wt-toc-item:hover { background: var(--bg-1); color: var(--fg-0); }
+.wt-toc-n { min-width: 2.2em; text-align: right; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.wt-toc-item:hover .wt-toc-n { color: var(--fg-1); }
+.wt-toc-dot { flex: none; align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--k); }
+.wt-toc-done { margin-left: auto; color: var(--s-success); }
+/* Kind: --k is the card edge and contents dot, --k-bg/--k-fg the badge. */
+.wt-kind-new-subsystem { --k: var(--kind-new-subsystem); --k-bg: var(--kind-new-subsystem-bg); --k-fg: var(--kind-new-subsystem-fg); }
+.wt-kind-extension { --k: var(--kind-extension); --k-bg: var(--kind-extension-bg); --k-fg: var(--kind-extension-fg); }
+.wt-kind-reuse { --k: var(--kind-reuse); --k-bg: var(--kind-reuse-bg); --k-fg: var(--kind-reuse-fg); }
+.wt-kind-system-touch { --k: var(--kind-system-touch); --k-bg: var(--kind-system-touch-bg); --k-fg: var(--kind-system-touch-fg); }
+.wt-kind-behavior { --k: var(--kind-behavior); --k-bg: var(--kind-behavior-bg); --k-fg: var(--kind-behavior-fg); }
+.wt-kind-other { --k: var(--kind-other); --k-bg: var(--bg-2); --k-fg: var(--fg-1); }
+/* Stop card */
+.wt-stop { margin-bottom: 16px; padding: 12px 16px 14px; background: var(--bg-1); border: 1px solid var(--line-soft); border-left: 3px solid var(--k); border-radius: 8px; }
+.wt-stop.is-folded { padding-bottom: 12px; }
+.wt-stop-head { display: flex; align-items: baseline; gap: 10px; }
+.wt-stop-title { flex: 1; min-width: 0; margin: 0; font-size: var(--wt-fs-stop); line-height: 1.3; font-weight: 650; color: var(--fg-0); }
+.wt-stop-n { color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.wt-fold { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.wt-fold:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
+.wt-kind-badge { flex: none; padding: 1px 8px; border-radius: 9px; background: var(--k-bg); color: var(--k-fg); font-size: var(--wt-fs-meta); text-transform: uppercase; letter-spacing: .04em; }
+.wt-reviewed { flex: none; display: inline-flex; align-items: baseline; gap: 8px; }
+.wt-reviewed-btn { padding: 3px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: pointer; }
+.wt-reviewed-btn:hover { color: var(--fg-0); border-color: var(--line-strong); }
+.wt-reviewed-btn.is-on { color: var(--s-success); }
+.wt-reviewed-err { color: var(--s-danger); font-size: var(--wt-fs-meta); }
+/* Diagram row: as wide as the card, never past mermaid's own inline max-width
+   (its natural size), and short enough that the prose stays on screen. */
+.wt-diagrams { margin: 12px 0 4px; }
+.wt-diagrams .md-mermaid { margin: 0 0 12px; }
+.wt-diagrams .md-mermaid-svg svg { width: 100%; height: auto; max-height: 70vh; }
+/* Outside .md-doc, so a failed diagram's source + error needs its own skin and
+   its own sideways scroll (5.8:1, --s-needs on --bg-term). */
+.wt-diagrams .md-mermaid-err { margin: 0; padding: 11px 14px; overflow-x: auto; white-space: pre; font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--bg-term); border: 1px solid var(--line-soft); border-radius: var(--r-sm); }
+/* Zoom (split/Mermaid.jsx, split/markdown.jsx): a click on a diagram opens it,
+   the corner button is the keyboard way in; an image is wrapped in a button. */
+.walkthrough .md-mermaid { position: relative; }
+.md-mermaid-svg.is-zoomable, .md-img-zoom { cursor: zoom-in; }
+.md-mermaid-zoom { position: absolute; top: 6px; right: 6px; padding: 1px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: zoom-in; }
+.md-mermaid-zoom:hover:not(:disabled) { color: var(--fg-0); border-color: var(--line-strong); }
+/* Disabled until mermaid's ~3 MB chunk has drawn the diagram. */
+.md-mermaid-zoom:disabled { opacity: .55; cursor: default; }
+.md-img-zoom { display: inline-block; padding: 0; border: 0; background: none; }
+.md-mermaid-zoom:focus-visible, .md-img-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Prose column */
+.wt-prose { min-width: 0; }
+/* Code column: sticks beside the prose while the stop is on screen and
+   scrolls on its own when taller. */
+.wt-evidence { position: sticky; top: 12px; align-self: start; min-width: 0; max-height: calc(100cqh - 24px); overflow: auto; font-size: var(--wt-fs-ui); }
+.wt-files { list-style: none; margin: 0 0 8px; padding: 0; }
+.wt-file { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 2px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--fg-1); font: inherit; text-align: left; }
+button.wt-file { cursor: pointer; }
+button.wt-file:hover { background: var(--bg-2); color: var(--fg-0); }
+.wt-file-name, .wt-file-range, .wt-hidden-path, .wt-ev-path { font-family: var(--mono); font-size: var(--wt-fs-meta); }
+.wt-file-range, .wt-file-count { color: var(--fg-2); }
+button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color: var(--fg-1); }
+.wt-file-count { margin-left: auto; font-size: var(--wt-fs-meta); }
+.wt-hidden { margin: 0 0 10px; font-size: var(--wt-fs-meta); color: var(--fg-2); }
+.wt-hidden summary { padding: 2px 6px; cursor: pointer; }
+.wt-hidden ul { list-style: none; margin: 4px 0 0; padding: 0 6px; }
+.wt-nodiff { margin: 6px; color: var(--fg-2); font-size: var(--wt-fs-meta); }
+.wt-ev-file { margin-top: 10px; border-radius: var(--r-sm); }
+.wt-ev-path { margin: 0 0 4px; color: var(--fg-2); }
+/* A background fade, not motion, so it plays under reduced motion too (an
+   outline instead would stay forever: nothing removes is-flash). */
+.wt-ev-file.is-flash { animation: wt-flash 1.2s ease-out; }
+@keyframes wt-flash { from { background: color-mix(in oklch, var(--accent) 22%, transparent); } to { background: transparent; } }
+/* Shared styles that put --fg-3 text in the view (D9: nothing under 4.5:1). */
+.walkthrough .dhunk-head { color: var(--fg-1); }
+.walkthrough .md-doc .md-ul li::marker, .walkthrough .md-doc .md-ol li::marker { color: var(--fg-2); }
+.walkthrough .rq-pr-link.is-closed { color: var(--fg-2); }
+/* Comments */
+.wt-comments { list-style: none; margin: 14px 0 0; padding: 0; font-size: var(--wt-fs-ui); }
+.wt-comments li { margin: 8px 0; padding: 2px 10px; border-left: 2px solid var(--s-needs); }
+.wt-comments li.is-resolved { border-left-color: var(--fg-4); }
+.wt-comment-ts, .wt-comment-state { margin-right: 8px; color: var(--fg-2); font-size: var(--wt-fs-meta); }
+.wt-comment-box { margin-top: 10px; font-size: var(--wt-fs-ui); }
+.wt-link { padding: 0; border: 0; background: none; color: var(--fg-1); font: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.wt-link:hover { color: var(--fg-0); }
+.wt-comment-box textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-0); color: var(--fg-0); font: inherit; }
+.wt-comment-box textarea:focus { outline: none; border-color: var(--accent); }
+.wt-comment-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.wt-btn { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-0); font: inherit; cursor: pointer; }
+.wt-btn:hover:not(:disabled) { border-color: var(--line-strong); }
+.wt-btn:disabled { opacity: .55; cursor: default; }
+.wt-hint, .wt-comment-note { color: var(--fg-2); font-size: var(--wt-fs-meta); }
+/* Narrow: one column, prose then code; the code column stops sticking. 1100px
+   leaves the code column ~45 mono columns at the switch; Task 12 tunes it. */
+@container wt (width < 1100px) {
+  .wt-cols { grid-template-columns: minmax(0, 1fr); }
+  .wt-evidence { position: static; max-height: none; overflow: visible; }
+}
+/* Full-size view (overlays/Lightbox.jsx). z-index 90: above the sticky header
+   (10), below toasts (100) and the modals (200, ⌘K 1000), so a notification
+   or a palette opened over it still shows. */
+.lightbox { position: fixed; inset: 0; z-index: 90; display: flex; background: color-mix(in oklch, var(--bg-0) 92%, transparent); }
+.lightbox-body { flex: 1; display: flex; overflow: auto; padding: 48px 32px 32px; }
+/* margin:auto, not place-items:center: centering would clip an oversized
+   child's top-left edge out of the scroll range. */
+.lightbox-body > * { margin: auto; }
+.lightbox-body img, .lightbox-svg svg { display: block; max-width: none; }
+.lightbox-close { position: fixed; top: 12px; right: 16px; z-index: 1; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-0); font: inherit; font-size: 16px; cursor: pointer; }
 .rq-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .rq-table th { text-align: left; color: var(--fg-3); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--line); }
 /* Sortable headers (THI-444). Resting labels are fg-2, not the th's fg-3: that
