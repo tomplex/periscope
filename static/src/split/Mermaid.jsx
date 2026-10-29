@@ -3,6 +3,7 @@
 // on the first diagram only. Until it lands the host is empty; if the import
 // or the source fails, the fence shows as text so nothing is ever lost.
 import { useEffect, useRef, useState } from "preact/hooks";
+import { openLightbox } from "./Lightbox.jsx";
 import { mermaidTheme } from "./mermaidTheme.js";
 
 const tokenValue = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -49,7 +50,7 @@ function loadMermaid() {
 
 let seq = 0;
 
-export function Mermaid({ code }) {
+export function Mermaid({ code, zoom = false }) {
   const host = useRef(null);
   const [error, setError] = useState(null);
   useEffect(() => {
@@ -65,12 +66,20 @@ export function Mermaid({ code }) {
       });
     return () => { alive = false; };
   }, [code]);
+  const open = () => { if (host.current?.innerHTML) openLightbox({ kind: "svg", svg: host.current.innerHTML }); };
+  const canZoom = zoom && !error;
   return (
     <div class="md-mermaid">
       {/* innerHTML is only ever mermaid's own SVG output, never document text.
           The source can be any previewed markdown; strict mode runs DOMPurify
           on the SVG — the one exception to convention #8. */}
-      <div ref={host} class="md-mermaid-svg" />
+      {/* zoom (the walkthrough): a click on the diagram opens it full size, and
+          the button is the keyboard and screen-reader way in. role="button" on
+          the diagram itself would hide its text labels from screen readers. */}
+      <div ref={host} class={`md-mermaid-svg${canZoom ? " is-zoomable" : ""}`} onClick={canZoom ? open : undefined} />
+      {canZoom ? (
+        <button type="button" class="md-mermaid-zoom" aria-label="open diagram full size" title="open full size" onClick={open}>⤢</button>
+      ) : null}
       {error ? <pre class="md-code md-mermaid-err">{code}{"\n\n"}{error}</pre> : null}
     </div>
   );

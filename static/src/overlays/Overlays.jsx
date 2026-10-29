@@ -6,6 +6,7 @@
 // header-button-by-id conventions, so this component is just composition +
 // the two imperative inits.
 import { useEffect } from "preact/hooks";
+import { LightboxHost } from "../split/Lightbox.jsx";
 import { initExternalLinks } from "../tauri.js";
 import { CleanupModal } from "./CleanupModal.jsx";
 import { CommandsModal } from "./CommandsModal.jsx";
@@ -32,6 +33,9 @@ export function Overlays() {
       <SettingsModal />
       <LauncherModal />
       <OpenOmnibox />
+      {/* Here, not in the walkthrough: inside #split-view (fixed, z-index 1) the
+          sticky header (z-index 10) would paint over it, ✕ included. */}
+      <LightboxHost />
     </>
   );
 }
