@@ -100,15 +100,16 @@ untouched).
 - **Title row:** "N." plus the title at 18px, the kind badge, and a
   "reviewed" toggle at the right edge.
 - **Diagram row:** present only when `stop.diagrams` is non-empty (D4).
-- **Two columns** (`.wt-cols`): `grid-template-columns: minmax(0, 72ch)
-  minmax(0, 1fr)` with the grid's font size at 15px so `ch` tracks body
-  text. Left: the prose, then the stop's comments and the comment control
+- **Two columns** (`.wt-cols`): `grid-template-columns: minmax(52ch, 72ch)
+  minmax(540px, 1fr)` with the grid's font size at 15px so `ch` tracks body
+  text. The prose gives up width (down to 52ch) before the code column drops
+  below ~75 monospace characters. Left: the prose, then the stop's comments and the comment control
   (D8). Right: the code-changes column (D5).
-- **Narrow:** `@container wt (width < 1100px)` switches every `.wt-cols`
+- **Narrow:** `@container wt (width < 1050px)` switches every `.wt-cols`
   grid to one column, with the prose first and the code changes after. The
   page never scrolls sideways; long code lines scroll inside their hunk. The
-  1100px breakpoint is a starting value, tuned in the browser so the code
-  column holds about 80 monospace characters when two columns show.
+  breakpoint was tuned in the browser (container queries measure the
+  content box): 52ch + 540px + the gap and card chrome is about 1046px.
 - **Reviewed stops fold** to the title row, as "viewed" folds a file in the
   Changes tab. On a reviewed stop the title itself is a button. Pressing it
   unfolds or refolds the stop for this visit without unmarking it; the
@@ -124,8 +125,12 @@ untouched).
 
 - **Size.** In the diagram row the SVG is `width: 100%` capped by mermaid's
   own inline `max-width` (its natural width), so it fills the card but never
-  scales a small diagram up. `max-height: 70vh` keeps a tall top-down chart
-  from pushing the stop's text off screen. Several diagrams stack in order.
+  scales a small diagram up. It also gets a `min-width` of 75% of its
+  natural width: below that, a wide flowchart's 16px labels drop under
+  ~12px (measured at 7.6px on a 1600px window). Wider than the card, the
+  diagram scrolls sideways inside its own box, never the page. A 70% height
+  cap keeps a tall top-down chart from pushing the stop's text off screen.
+  Several diagrams stack in order.
 - **Full size on click.** With the new `zoom: true` renderer option:
   - a **diagram** opens on a mouse click, and gets a small real button in its
     corner (⤢, `aria-label="open diagram full size"`) as the keyboard and
@@ -137,8 +142,9 @@ untouched).
   - an image **inside a link** is left alone, so one click doesn't both zoom
     and follow the link.
 
-  The lightbox is a dark backdrop with the content at natural size, scrolling
-  both ways when larger than the window. On open, focus goes to the scroller,
+  The lightbox is a dark backdrop with the content at natural size, on a
+  solid panel so the page doesn't show through between a diagram's boxes,
+  scrolling both ways when larger than the window. On open, focus goes to the scroller,
   so the arrow keys scroll a big diagram, and Tab moves only between the
   scroller and ✕. Esc (`useEscape`), a backdrop click or ✕ closes it, and
   focus returns to what opened it. For a diagram it copies the rendered SVG
