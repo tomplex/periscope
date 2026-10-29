@@ -44,6 +44,16 @@ describe("mermaidTheme", () => {
     expect(t.themeVariables.cScaleLabel0).toBe("#000000");
     expect(t.themeVariables.gitBranchLabel0).toBe("#000000");
   });
+  it("opaques pie slices, so their dark labels keep contrast against the slice, not the card behind it", () => {
+    // mermaid's default pieOpacity (0.7) blends the slice into the card,
+    // dropping pie4-pie8's dark labels below 4.5:1.
+    expect(t.themeVariables.pieOpacity).toBe("1");
+  });
+  it("gives the gantt chart's active/critical/excluded bars real colors, not mermaid's defaults", () => {
+    expect(t.themeVariables.activeTaskBkgColor).toBe("#ff0011"); // first category color
+    expect(t.themeVariables.critBkgColor).toBe("#ee2244"); // --s-danger
+    expect(t.themeVariables.excludeBkgColor).toBe("#1a1a1a"); // --bg-1-hi, not a flat #eeeeee
+  });
   it("reads only opaque tokens, which the canvas converter can paint", () => {
     const asked = new Set();
     mermaidTheme({ color: (n) => { asked.add(n); return "#000000"; }, font: "x" });

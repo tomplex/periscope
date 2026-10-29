@@ -43,6 +43,9 @@ export function mermaidTheme({ color, font }) {
     pieLegendTextColor: body,
     pieStrokeColor: card,
     pieOuterStrokeColor: line,
+    // mermaid's default 0.7 blends a slice into the card, dropping pie4-pie8's
+    // dark labels below 4.5:1. A string: mermaid parses this one as CSS, not a color.
+    pieOpacity: "1",
 
     noteBkgColor: raised,
     noteTextColor: label,
@@ -50,6 +53,9 @@ export function mermaidTheme({ color, font }) {
     sequenceNumberColor: card,
     altSectionBkgColor: raised,
     taskTextDarkColor: card,
+    activeTaskBkgColor: cats[0],
+    critBkgColor: color("--s-danger"), // mermaid's default read ~3.6:1 against the card
+    excludeBkgColor: raised, // mermaid's default is a flat #eeeeee, blind to the theme
   };
   for (let i = 0; i < 12; i++) {
     vars[`pie${i + 1}`] = cats[i % cats.length];

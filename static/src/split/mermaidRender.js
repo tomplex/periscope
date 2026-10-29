@@ -69,7 +69,9 @@ export async function renderDiagram(code) {
   const mermaid = await loadMermaid();
   const font = tokenValue("--sans");
   try {
-    await document.fonts?.load?.(`14px ${font}`);
+    // Capped: a stalled woff2 request would otherwise hang every diagram
+    // until the browser's own fetch timeout, long after 1.5s stops helping anyone.
+    await Promise.race([document.fonts?.load?.(`14px ${font}`), new Promise((r) => setTimeout(r, 1500))]);
   } catch {
     // Font-loading API absence/failure isn't fatal — mermaid falls back to
     // whatever's already loaded.

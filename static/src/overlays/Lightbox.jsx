@@ -32,12 +32,21 @@ export function nextFocus(active, body, close) {
   return active === close ? body : close;
 }
 
+// Pure: closing on a backdrop click needs the whole gesture on the backdrop
+// — mousedown, mouseup and the click itself — or a drag starting in the
+// content (mouseup over the padding) or starting on the backdrop and ending
+// in the content (mousedown over the padding) would close the lightbox.
+export function isBackdropClose(mouseDown, mouseUp, click) {
+  return mouseDown && mouseUp && click;
+}
+
 export function LightboxHost() {
   const item = lightbox.value;
   const body = useRef(null);
   const svgHost = useRef(null);
   const closeBtn = useRef(null);
   const down = useRef(false); // mousedown landed on the backdrop itself, not a drag out of the content
+  const up = useRef(false); // mouseup landed on the backdrop itself, not a drag in from the content
   useEscape(closeLightbox, !!item);
   useEffect(() => {
     if (!item) return;
@@ -64,11 +73,13 @@ export function LightboxHost() {
     return () => { alive = false; };
   }, [item]);
   if (!item) return null;
-  // Close only on a plain click of the backdrop: the mousedown that started
-  // the gesture must have landed there too, or dragging a selection out past
-  // the content (mouseup over the padding) would close the lightbox.
+  // Close only on a plain click of the backdrop: the mousedown and mouseup
+  // that bracket it must both have landed there too (see isBackdropClose).
   const onMouseDown = (e) => { down.current = e.target === e.currentTarget; };
-  const onBackdrop = (e) => { if (down.current && e.target === e.currentTarget) closeLightbox(); };
+  const onMouseUp = (e) => { up.current = e.target === e.currentTarget; };
+  const onBackdrop = (e) => {
+    if (isBackdropClose(down.current, up.current, e.target === e.currentTarget)) closeLightbox();
+  };
   // aria-modal promises focus stays in here: Tab moves between the scroller and ✕.
   const onKeyDown = (e) => {
     if (e.key !== "Tab") return;
@@ -79,7 +90,7 @@ export function LightboxHost() {
     <div class="lightbox" role="dialog" aria-modal="true" aria-label={item.kind === "img" ? "image, full size" : "diagram, full size"}
       onKeyDown={onKeyDown}>
       <button type="button" class="lightbox-close" ref={closeBtn} aria-label="close" onClick={closeLightbox}>✕</button>
-      <div class="lightbox-body" ref={body} tabIndex={-1} onMouseDown={onMouseDown} onClick={onBackdrop}>
+      <div class="lightbox-body" ref={body} tabIndex={-1} onMouseDown={onMouseDown} onMouseUp={onMouseUp} onClick={onBackdrop}>
         {item.kind === "img" ? <img src={item.src} alt={item.alt} /> : <div class="lightbox-svg" ref={svgHost} />}
       </div>
     </div>
