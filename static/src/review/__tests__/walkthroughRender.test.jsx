@@ -223,4 +223,10 @@ describe("walkthrough pieces", () => {
     expect(commentOutcome({ ok: false, status: 409, data: { detail: "no pane" } })).toEqual({ close: true, note: "saved, no pane" });
     expect(commentOutcome({ ok: false, status: 500, data: {} })).toEqual({ close: false, note: "HTTP 500" });
   });
+  it("commentOutcome reads only a string detail: FastAPI's 422 detail is a list", () => {
+    const list = [{ loc: ["body", "stop"], msg: "Field required", type: "missing" }];
+    expect(commentOutcome({ ok: false, status: 422, data: { detail: list } })).toEqual({ close: false, note: "HTTP 422" });
+    expect(commentOutcome({ ok: false, status: 409, data: { detail: list } })).toEqual({ close: true, note: "saved, not delivered" });
+    expect(commentOutcome({ ok: false, status: 400, data: { detail: "bad stop" } })).toEqual({ close: false, note: "bad stop" });
+  });
 });

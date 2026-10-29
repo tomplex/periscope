@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseCite } from "../../split/mdMeta.js";
 import {
-  COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, lineCount, matchRefs, nextSort,
+  COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, lineCount, markQueue, matchRefs, nextSort,
   parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
 } from "../walkthrough.js";
 
@@ -474,5 +474,91 @@ describe("commentsLabel (THI-443 review)", () => {
   });
   it("is empty with no comments", () => {
     expect(commentsLabel([])).toBe("");
+  });
+});
+
+describe("markQueue (THI-443 review)", () => {
+  const SIG = "0123abcd";
+  // A page stand-in: `marks` is what the toggles and contents would show,
+  // `errors` what sits beside each toggle, and every POST waits for the test.
+  function setup(seed = {}) {
+    const page = { marks: { ...seed }, errors: {}, calls: [] };
+    const q = markQueue({
+      post: (title, sig, on) => new Promise((resolve, reject) => { page.calls.push({ title, sig, on, resolve, reject }); }),
+      show: (title, sig) => { page.marks = withMark(page.marks, title, sig); },
+      fail: (title, msg) => { page.errors[title] = msg; },
+    });
+    q.seed(seed);
+    return { page, q };
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("shows a mark at once and keeps it once the server confirms", async () => {
+    const { page, q } = setup();
+    const done = q.toggle("S", SIG, true);
+    expect(page.marks).toEqual({ S: SIG });
+    expect(q.pending).toBe(1);
+    await flush();
+    page.calls[0].resolve();
+    await done;
+    expect(page.marks).toEqual({ S: SIG });
+    expect(page.errors.S).toBeNull();
+    expect(q.pending).toBe(0);
+    expect(q.settled).toBe(1);
+  });
+  it("reverts a failed mark to the last confirmed state, with the error", async () => {
+    const { page, q } = setup({ S: SIG });
+    const done = q.toggle("S", SIG, false);
+    expect(page.marks).toEqual({});
+    await flush();
+    page.calls[0].reject(new Error("HTTP 500"));
+    await done;
+    expect(page.marks).toEqual({ S: SIG });
+    expect(page.errors.S).toBe("not saved: HTTP 500");
+  });
+  it("sends a title's toggles one at a time, in click order", async () => {
+    const { page, q } = setup();
+    q.toggle("S", SIG, true);
+    const last = q.toggle("S", SIG, false);
+    q.toggle("T", SIG, true);
+    await flush();
+    // S's second POST waits for its first; T's own queue isn't held up by S's.
+    expect(page.calls.map((c) => [c.title, c.on])).toEqual([["S", true], ["T", true]]);
+    page.calls[0].resolve();
+    await flush();
+    expect(page.calls.map((c) => [c.title, c.on])).toEqual([["S", true], ["T", true], ["S", false]]);
+    // The first settling leaves the newer click's mark on show.
+    expect(page.marks.S).toBeUndefined();
+    page.calls[2].resolve();
+    await last;
+    expect(page.marks.S).toBeUndefined();
+    expect(q.pending).toBe(1);
+  });
+  it("ends two failed toggles on what the server has, not on the first click's guess", async () => {
+    const { page, q } = setup();
+    q.toggle("S", SIG, true);
+    const last = q.toggle("S", SIG, false);
+    await flush();
+    page.calls[0].reject(new Error("HTTP 500"));
+    await flush();
+    // Still showing the newer click while its POST runs.
+    expect(page.marks.S).toBeUndefined();
+    page.calls[1].reject(new Error("HTTP 502"));
+    await last;
+    expect(page.marks).toEqual({});
+    expect(page.errors.S).toBe("not saved: HTTP 502");
+  });
+  it("clears an earlier failure's error once the newest toggle lands", async () => {
+    const { page, q } = setup();
+    q.toggle("S", SIG, true);
+    const last = q.toggle("S", SIG, true);
+    await flush();
+    page.calls[0].reject(new Error("HTTP 500"));
+    await flush();
+    expect(page.errors.S).toBe("not saved: HTTP 500");
+    page.calls[1].resolve();
+    await last;
+    expect(page.errors.S).toBeNull();
+    expect(page.marks).toEqual({ S: SIG });
   });
 });

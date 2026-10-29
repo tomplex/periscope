@@ -12,7 +12,8 @@ import { Mermaid } from "../split/Mermaid.jsx";
 import { renderMarkdown } from "../split/markdown.jsx";
 import { prStateMeta } from "../util.js";
 import {
-  COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed, lineCount, parseWalkthrough, stopSig, withMark,
+  COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed, lineCount, markQueue,
+  parseWalkthrough, stopSig, withMark,
 } from "./walkthrough.js";
 
 async function postJson(url, body) {
@@ -20,6 +21,10 @@ async function postJson(url, body) {
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data };
 }
+
+// An error's `detail`, when it is words. FastAPI's 422s carry a list of
+// objects there, which would show as "[object Object]".
+const detailText = (data) => (typeof data?.detail === "string" && data.detail ? data.detail : null);
 
 // The keys the comment box listens for, named the way this keyboard labels them.
 export function sendHint(platform) {
@@ -31,8 +36,8 @@ const SEND_HINT = sendHint(typeof navigator === "undefined" ? "" : navigator.pla
 // closes it; anything else keeps the text so nothing typed is lost.
 export function commentOutcome(r) {
   if (r.ok) return { close: true, note: "sent to the owning pane" };
-  if (r.status === 409) return { close: true, note: `saved, ${r.data?.detail || "not delivered"}` };
-  return { close: false, note: r.data?.detail || `HTTP ${r.status}` };
+  if (r.status === 409) return { close: true, note: `saved, ${detailText(r.data) || "not delivered"}` };
+  return { close: false, note: detailText(r.data) || `HTTP ${r.status}` };
 }
 
 // Smooth scrolling unless the viewer asked for less motion.
@@ -384,11 +389,15 @@ export function Walkthrough({ repo, branch, pr, sig }) {
   const [nonce, setNonce] = useState(0);
   const [reviewed, setReviewed] = useState({});
   const [toggleErrors, setToggleErrors] = useState({});
-  // Marks in flight, and marks settled: a refetch must not apply a `reviewed`
-  // it read before a mark landed, whether it arrives mid-POST or just after
-  // ("send a comment, then mark the stop" starts exactly that refetch).
-  const pending = useRef(0);
-  const settled = useRef(0);
+  // One queue per review (Detail keys this component by repo/branch).
+  const marks = useMemo(() => markQueue({
+    post: async (title, s, on) => {
+      const r = await postJson("/api/reviews/reviewed", { repo, branch, stop: title, sig: s, reviewed: on });
+      if (!r.ok) throw new Error(detailText(r.data) || `HTTP ${r.status}`);
+    },
+    show: (title, s) => setReviewed((x) => withMark(x, title, s)),
+    fail: (title, msg) => setToggleErrors((x) => ({ ...x, [title]: msg })),
+  }), [repo, branch]);
 
   useEffect(() => {
     let alive = true;
@@ -398,7 +407,10 @@ export function Walkthrough({ repo, branch, pr, sig }) {
 
   useEffect(() => {
     let alive = true;
-    const marksAtStart = settled.current;
+    // A refetch must not apply a `reviewed` it read before a mark landed,
+    // whether it arrives mid-POST or just after ("send a comment, then mark
+    // the stop" starts exactly that refetch).
+    const marksAtStart = marks.settled;
     (async () => {
       try {
         const res = await fetch(`/api/reviews/walkthrough?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}`);
@@ -406,35 +418,21 @@ export function Walkthrough({ repo, branch, pr, sig }) {
         if (!alive) return;
         // Keep the last good data on a failed refetch: unmounting every Stop
         // would drop the open hunks and any half-typed comment.
-        if (!res.ok) { setState((s) => ({ loading: false, error: body.detail || `HTTP ${res.status}`, data: s.data })); return; }
+        if (!res.ok) { setState((s) => ({ loading: false, error: detailText(body) || `HTTP ${res.status}`, data: s.data })); return; }
         setState({ loading: false, error: null, data: body });
-        if (!pending.current && settled.current === marksAtStart) setReviewed(body.reviewed || {});
+        if (!marks.pending && marks.settled === marksAtStart) {
+          setReviewed(body.reviewed || {});
+          marks.seed(body.reviewed || {});
+        }
       } catch (e) {
         if (alive) setState((s) => ({ loading: false, error: String(e), data: s.data }));
       }
     })();
     return () => { alive = false; };
-  }, [repo, branch, nonce, sig]);
+  }, [repo, branch, nonce, sig, marks]);
 
   const onPosted = () => { setNonce((n) => n + 1); refreshReviews(); };
-
-  async function onToggleReviewed(stop, on) {
-    const s = stopSig(stop);
-    const before = reviewed[stop.title] ?? null;
-    setReviewed((r) => withMark(r, stop.title, on ? s : null));
-    setToggleErrors((e) => ({ ...e, [stop.title]: null }));
-    pending.current++;
-    try {
-      const r = await postJson("/api/reviews/reviewed", { repo, branch, stop: stop.title, sig: s, reviewed: on });
-      if (!r.ok) throw new Error(r.data.detail || `HTTP ${r.status}`);
-    } catch (e) {
-      setReviewed((r) => withMark(r, stop.title, before));
-      setToggleErrors((x) => ({ ...x, [stop.title]: `not saved: ${e.message || e}` }));
-    } finally {
-      pending.current--;
-      settled.current++;
-    }
-  }
+  const onToggleReviewed = (stop, on) => marks.toggle(stop.title, stopSig(stop), on);
 
   if (state.loading) return <div class="wt-empty">loading…</div>;
   if (!state.data) return <div class="wt-empty">{state.error}</div>;

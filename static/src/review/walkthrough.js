@@ -132,6 +132,51 @@ export function withMark(reviewed, title, sig) {
   return next;
 }
 
+// The reviewed toggles' POSTs, one at a time per stop title, so a double click
+// can't land out of order. A click shows at once. When a title's newest click
+// settles, the title shows what the server last confirmed, so a failure
+// reverts to that, not to a guess captured at click time that an earlier
+// failure may have made wrong. `post(title, sig, on)` throws to fail; `show`
+// and `fail` are the page's setters (null clears). `pending` and `settled` let
+// a refetch tell whether its marks predate a click; `seed` takes a refetch's
+// marks as confirmed once the page applies them.
+export function markQueue({ post, show, fail }) {
+  const tail = new Map();
+  const newest = new Map();
+  let confirmed = {};
+  let clicks = 0;
+  const q = {
+    pending: 0,
+    settled: 0,
+    seed(reviewed) {
+      confirmed = { ...reviewed };
+    },
+    toggle(title, sig, on) {
+      const id = ++clicks;
+      newest.set(title, id);
+      show(title, on ? sig : null);
+      fail(title, null);
+      q.pending++;
+      const run = (tail.get(title) || Promise.resolve()).then(async () => {
+        try {
+          await post(title, sig, on);
+          confirmed = withMark(confirmed, title, on ? sig : null);
+          if (newest.get(title) === id) fail(title, null);
+        } catch (e) {
+          fail(title, `not saved: ${e?.message || e}`);
+        } finally {
+          q.pending--;
+          q.settled++;
+          if (newest.get(title) === id) show(title, confirmed[title] ?? null);
+        }
+      });
+      tail.set(title, run);
+      return run;
+    },
+  };
+  return q;
+}
+
 // New-side span of a hunk: new_start through new_start + ctx/add lines − 1.
 function newEnd(h) {
   const n = (h.lines || []).filter((l) => l.kind === "ctx" || l.kind === "add").length;
