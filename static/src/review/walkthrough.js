@@ -203,6 +203,11 @@ export function evidenceIndex(shown, cite) {
   return hit >= 0 ? hit : shown.findIndex((e) => e.ref.path === cite.path);
 }
 
+// A whole-file cite can carry thousands of diff lines, and drawing them all
+// at once stalled the page, so a block past COLLAPSE_LINES starts as a button.
+export const COLLAPSE_LINES = 300;
+export const lineCount = (hunks) => hunks.reduce((n, h) => n + (h.lines?.length || 0), 0);
+
 // Merged rows sink to the bottom of the readiness order and of every column
 // sort, and their comments stop counting toward the header badge.
 const isMerged = (r) => r.pr?.state === "merged";

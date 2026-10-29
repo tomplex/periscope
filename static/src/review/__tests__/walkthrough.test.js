@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseCite } from "../../split/mdMeta.js";
 import {
-  evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, matchRefs, nextSort,
+  COLLAPSE_LINES, evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, lineCount, matchRefs, nextSort,
   parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
 } from "../walkthrough.js";
 
@@ -447,5 +447,17 @@ describe("filterRows", () => {
     expect(branches("QUEUE")).toEqual(["feat/queue"]);
     expect(branches("periscope local")).toEqual(["feat/local"]);
     expect(branches("periscope xyz")).toEqual([]);
+  });
+});
+
+describe("lineCount, COLLAPSE_LINES (THI-443 review)", () => {
+  it("counts every diff line across a file's hunks", () => {
+    const h = (n) => ({ new_start: 1, lines: Array.from({ length: n }, () => ({ kind: "ctx", text: "" })) });
+    expect(lineCount([h(3), h(4)])).toBe(7);
+    expect(lineCount([])).toBe(0);
+    expect(lineCount([{ new_start: 1 }])).toBe(0);
+  });
+  it("collapses a file block past 300 lines", () => {
+    expect(COLLAPSE_LINES).toBe(300);
   });
 });

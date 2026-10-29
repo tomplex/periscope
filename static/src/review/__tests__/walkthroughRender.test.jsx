@@ -3,7 +3,7 @@
 // press the pure pieces (ReviewedToggle) by calling them, as hunk.test.jsx does.
 import render from "preact-render-to-string";
 import { describe, expect, it } from "vitest";
-import { CommentForm, commentOutcome, ReviewedToggle, sendHint, WalkthroughView } from "../Walkthrough.jsx";
+import { CommentForm, commentOutcome, MemoHunk, ReviewedToggle, sendHint, WalkthroughView } from "../Walkthrough.jsx";
 import { parseWalkthrough, stopSig } from "../walkthrough.js";
 
 const DOC = `# Gauge
@@ -86,6 +86,17 @@ describe("<WalkthroughView> body", () => {
     expect(html).toContain('<span class="wt-file-count">1 change</span>');
     expect(html).toContain("<summary>1 not in this diff</summary>");
   });
+  it("collapses a file block past 300 lines to a button, and keeps its row and count", () => {
+    const lines = (n) => Array.from({ length: n }, () => ({ kind: "add", text: "x" }));
+    const big = { files: [{ path: "a/one.py", hunks: [{ new_start: 1, lines: lines(301) }] }] };
+    const html = view({ diff: big });
+    expect(html).toContain('<span class="wt-file-count">1 change</span>');
+    expect(html).toContain('<button type="button" class="wt-ev-more">show 301 lines</button>');
+    expect(html).not.toContain('class="dhunk"');
+    const edge = { files: [{ path: "a/one.py", hunks: [{ new_start: 1, lines: lines(300) }] }] };
+    expect(view({ diff: edge })).not.toContain("wt-ev-more");
+    expect(view({ diff: edge })).toContain('class="dhunk"');
+  });
   it("lists files without hunks when there is no worktree", () => {
     const html = view({ diff: null, stale_by: null });
     expect(html).toContain('<span class="wt-file-name">missing.py</span>');
@@ -113,6 +124,14 @@ describe("<WalkthroughView> body", () => {
 });
 
 describe("walkthrough pieces", () => {
+  it("MemoHunk redraws a hunk only when one of its props changes", () => {
+    const props = { hunk: diff.files[0].hunks[0], lang: "python", hl: null, onOpen: null };
+    const m = new MemoHunk(props);
+    m.props = props;
+    expect(m.shouldComponentUpdate({ ...props })).toBe(false);
+    expect(m.shouldComponentUpdate({ ...props, hl: () => "" })).toBe(true);
+    expect(m.shouldComponentUpdate({ ...props, hunk: { ...props.hunk } })).toBe(true);
+  });
   it("ReviewedToggle presses through to onToggle and reports its state", () => {
     let pressed = 0;
     const button = ReviewedToggle({ on: false, onToggle: () => { pressed++; }, error: null }).props.children[1];

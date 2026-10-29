@@ -4,13 +4,16 @@
 // /api/reviews/walkthrough; the file is the artifact, this is a lens on it
 // (2026-10-26 spec D2). No pane target here, so hunk heads are inert. The
 // lightbox host lives in Overlays.jsx, at the app root.
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { Component } from "preact";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Hunk, langFor } from "../diff/ChangesTab.jsx";
 import { refreshReviews } from "../poll.js";
 import { Mermaid } from "../split/Mermaid.jsx";
 import { renderMarkdown } from "../split/markdown.jsx";
 import { prStateMeta } from "../util.js";
-import { evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed, parseWalkthrough, stopSig, withMark } from "./walkthrough.js";
+import {
+  COLLAPSE_LINES, evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed, lineCount, parseWalkthrough, stopSig, withMark,
+} from "./walkthrough.js";
 
 async function postJson(url, body) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -36,6 +39,20 @@ export function commentOutcome(r) {
 const motion = () => (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
 
 const kindOf = (stop) => (stop.knownKind ? stop.kind : "other");
+
+// Bring a file block into view and flash it. Wide, the column scrolls on its
+// own, so move it rather than the page. Otherwise bring the file into view only
+// if it isn't already ("nearest"), so a column that fits on screen never jumps
+// the page (D5).
+function reveal(c, el) {
+  if (c.scrollHeight > c.clientHeight) c.scrollTo({ top: el.offsetTop - 8, behavior: motion() });
+  else el.scrollIntoView({ block: "nearest", behavior: motion() });
+  // Restart the flash even on a second click of the same file: the reflow
+  // between remove and add makes the browser replay the animation.
+  el.classList.remove("is-flash");
+  el.getBoundingClientRect();
+  el.classList.add("is-flash");
+}
 
 function Comments({ list }) {
   if (!list.length) return null;
@@ -127,9 +144,25 @@ export function ReviewedToggle({ on, onToggle, error }) {
   );
 }
 
+// A real walkthrough cites ~10k diff lines, and highlighting them all again on
+// every reviewed click cost a third of a second. A hunk's props are stable
+// across marks (the parse is memoized, the diff unchanged), so it skips.
+// compat's memo() would do this, but importing preact/compat installs app-wide
+// vnode hooks (onChange on a text input becomes onInput: CommandsModal's).
+export class MemoHunk extends Component {
+  shouldComponentUpdate(next) {
+    for (const k in next) if (next[k] !== this.props[k]) return true;
+    return false;
+  }
+  render(props) {
+    return <Hunk {...props} />;
+  }
+}
+
 // The right column (THI-443 D5): the stop's files, one summary line for the
-// ones with nothing to show, then the hunks expanded.
-function Evidence({ ev, hl, colRef, onGo }) {
+// ones with nothing to show, then the hunks expanded, except a block past
+// COLLAPSE_LINES, which waits behind a button.
+function Evidence({ ev, hl, colRef, expanded, onGo, onExpand }) {
   const summary = hiddenSummary(ev.hidden);
   if (!ev.shown.length && !summary) return <div class="wt-evidence is-empty" />;
   return (
@@ -162,45 +195,53 @@ function Evidence({ ev, hl, colRef, onGo }) {
           </ul>
         </details>
       ) : null}
-      {ev.noDiff ? <p class="wt-nodiff">no worktree, so code changes are unavailable</p> : ev.shown.map((e, i) => (
-        <section class="wt-ev-file" data-ev={i} key={i}>
-          <div class="wt-ev-path">{e.ref.raw}</div>
-          {e.hunks.map((h, j) => <Hunk key={j} hunk={h} lang={langFor(e.ref.path)} hl={hl} onOpen={null} />)}
-        </section>
-      ))}
+      {ev.noDiff ? <p class="wt-nodiff">no worktree, so code changes are unavailable</p> : ev.shown.map((e, i) => {
+        const n = lineCount(e.hunks);
+        return (
+          <section class="wt-ev-file" data-ev={i} key={i}>
+            <div class="wt-ev-path">{e.ref.raw}</div>
+            {n <= COLLAPSE_LINES || expanded.has(i)
+              ? e.hunks.map((h, j) => <MemoHunk key={j} hunk={h} lang={langFor(e.ref.path)} hl={hl} onOpen={null} />)
+              : <button type="button" class="wt-ev-more" onClick={() => onExpand(i)}>{`show ${n} lines`}</button>}
+          </section>
+        );
+      })}
     </aside>
   );
 }
 
 function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggleError, onToggleReviewed, onPosted }) {
   const [unfolded, setUnfolded] = useState(false);
+  // Large file blocks the reader has opened, by index into ev.shown.
+  const [expanded, setExpanded] = useState(() => new Set());
   const col = useRef(null);
   const done = isReviewed(stop, reviewed);
   const folded = done && !unfolded;
-  const ev = evidenceFor(stop.refs, diffFiles);
-  // Wide, the column scrolls on its own, so move it rather than the page.
-  // Otherwise bring the file into view only if it isn't already ("nearest"), so
-  // a column that fits on screen never jumps the page (D5).
-  function goTo(i) {
+  const ev = useMemo(() => evidenceFor(stop.refs, diffFiles), [stop.refs, diffFiles]);
+  const expand = useCallback((i) => setExpanded((s) => (s.has(i) ? s : new Set(s).add(i))), []);
+  // Stable, so the memoized prose below keeps its cite chips across marks.
+  const goTo = useCallback((i) => {
     const c = col.current;
     const el = c?.querySelector(`[data-ev="${i}"]`);
     if (!el) return;
-    if (c.scrollHeight > c.clientHeight) c.scrollTo({ top: el.offsetTop - 8, behavior: motion() });
-    else el.scrollIntoView({ block: "nearest", behavior: motion() });
-    // Restart the flash even on a second click of the same file: the reflow
-    // between remove and add makes the browser replay the animation.
-    el.classList.remove("is-flash");
-    el.getBoundingClientRect();
-    el.classList.add("is-flash");
-  }
-  const cite = (c) => {
-    const i = ev.noDiff ? -1 : evidenceIndex(ev.shown, c);
-    return (
-      <button type="button" class={`md-cite${i >= 0 ? "" : " is-inert"}`}
-        title={i >= 0 ? "show in the code column" : "not among this stop's changes"}
-        onClick={() => { if (i >= 0) goTo(i); }}>{c.raw}</button>
-    );
-  };
+    // A collapsed block opens first, and the scroll waits for it to draw:
+    // "nearest" aimed at the button alone would leave its code off screen.
+    if (el.querySelector(".wt-ev-more")) {
+      expand(i);
+      requestAnimationFrame(() => reveal(c, el));
+    } else reveal(c, el);
+  }, [expand]);
+  const prose = useMemo(() => {
+    const cite = (c) => {
+      const i = ev.noDiff ? -1 : evidenceIndex(ev.shown, c);
+      return (
+        <button type="button" class={`md-cite${i >= 0 ? "" : " is-inert"}`}
+          title={i >= 0 ? "show in the code column" : "not among this stop's changes"}
+          onClick={() => { if (i >= 0) goTo(i); }}>{c.raw}</button>
+      );
+    };
+    return renderMarkdown(stop.bodyMarkdown, { demote: false, softBreaks: "space", mermaid: true, meta: true, cite, zoom: true });
+  }, [stop.bodyMarkdown, ev, goTo]);
   const title = <><span class="wt-stop-n">{`${n}.`}</span> {stop.title}</>;
   return (
     <section class={`wt-stop wt-kind-${kindOf(stop)}${folded ? " is-folded" : ""}`} id={`stop-${stop.id}`}>
@@ -224,13 +265,11 @@ function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggle
           ) : null}
           <div class="wt-cols">
             <div class="wt-prose">
-              <div class="md-doc wt-stop-body">
-                {renderMarkdown(stop.bodyMarkdown, { demote: false, softBreaks: "space", mermaid: true, meta: true, cite, zoom: true })}
-              </div>
+              <div class="md-doc wt-stop-body">{prose}</div>
               <Comments list={comments} />
               <CommentBox repo={repo} branch={branch} stop={stop.title} onPosted={onPosted} />
             </div>
-            <Evidence ev={ev} hl={hl} colRef={col} onGo={goTo} />
+            <Evidence ev={ev} hl={hl} colRef={col} expanded={expanded} onGo={goTo} onExpand={expand} />
           </div>
         </>
       )}
