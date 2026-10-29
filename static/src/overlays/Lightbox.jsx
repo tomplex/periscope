@@ -23,7 +23,9 @@ export function closeLightbox() {
   lightbox.value = null;
   // Only if it's still on the page — a card or banner that opened this and
   // was removed underneath it shouldn't yank focus onto a detached node.
-  if (from?.isConnected) from.focus?.();
+  // preventScroll: `from` can be a stop section (tabIndex -1), whose own
+  // scrollIntoView-on-focus would otherwise snap the page back to its top.
+  if (from?.isConnected) from.focus?.({ preventScroll: true });
 }
 
 // Pure Tab trap: the dialog has exactly two focusable stops (the scroller,

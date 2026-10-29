@@ -12,8 +12,8 @@ import { Mermaid } from "../split/Mermaid.jsx";
 import { renderMarkdown } from "../split/markdown.jsx";
 import { prStateMeta } from "../util.js";
 import {
-  COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed, lineCount, markQueue,
-  parseWalkthrough, stopSig, withMark,
+  appliesRefetch, COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, HIDDEN_WHY, hiddenSummary, isReviewed,
+  lineCount, markQueue, parseWalkthrough, stopSig, withMark,
 } from "./walkthrough.js";
 
 async function postJson(url, body) {
@@ -311,7 +311,7 @@ function Stop({ stop, n, diffFiles, noWorktree, comments, repo, branch, hl, revi
           ) : null}
           <div class="wt-cols">
             <div class="wt-prose">
-              <div class="md-doc wt-stop-body">{prose}</div>
+              <div class="md-doc">{prose}</div>
               <Comments list={comments} />
               <CommentBox repo={repo} branch={branch} stop={stop.title} onPosted={onPosted} />
             </div>
@@ -460,7 +460,7 @@ export function Walkthrough({ repo, branch, pr, sig }) {
         // would drop the open hunks and any half-typed comment.
         if (!res.ok) { setState((s) => ({ loading: false, error: detailText(body) || `HTTP ${res.status}`, data: s.data })); return; }
         setState({ loading: false, error: null, data: body });
-        if (!marks.pending && marks.settled === marksAtStart) {
+        if (appliesRefetch(marks, marksAtStart)) {
           setReviewed(body.reviewed || {});
           marks.seed(body.reviewed || {});
         }

@@ -46,11 +46,13 @@ describe("lightbox", () => {
 });
 
 describe("closeLightbox", () => {
-  it("refocuses what opened it, if it's still in the document", () => {
-    const from = { focus: () => { from.called = true; }, isConnected: true };
+  it("refocuses what opened it without scrolling, if it's still in the document", () => {
+    // preventScroll: `from` can be a stop section (tabIndex -1); a plain
+    // focus() would scroll the page back to it.
+    const from = { focus: (opts) => { from.calledWith = opts; }, isConnected: true };
     lightbox.value = { kind: "img", src: "x", alt: "", from };
     closeLightbox();
-    expect(from.called).toBe(true);
+    expect(from.calledWith).toEqual({ preventScroll: true });
     expect(lightbox.value).toBeNull();
   });
   it("skips focus for an opener that's left the document", () => {

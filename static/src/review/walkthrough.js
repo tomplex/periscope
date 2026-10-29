@@ -177,6 +177,15 @@ export function markQueue({ post, show, fail }) {
   return q;
 }
 
+// Whether a refetch that captured `settledAtStart` from marks.settled may
+// still apply what it fetched: not while a click's POST is still in flight
+// (pending), and not when one settled after the request started — either
+// way the queue's own `show` already reflects a click the refetch's response
+// predates, and applying it would overwrite that with stale data.
+export function appliesRefetch(marks, settledAtStart) {
+  return !marks.pending && marks.settled === settledAtStart;
+}
+
 // New-side span of a hunk: new_start through new_start + ctx/add lines − 1.
 function newEnd(h) {
   const n = (h.lines || []).filter((l) => l.kind === "ctx" || l.kind === "add").length;

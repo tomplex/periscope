@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseCite } from "../../split/mdMeta.js";
 import {
-  COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, lineCount, markQueue, matchRefs, nextSort,
-  parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
+  appliesRefetch, COLLAPSE_LINES, commentsLabel, evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed,
+  lineCount, markQueue, matchRefs, nextSort, parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
 } from "../walkthrough.js";
 
 const DOC = `# Cost gauge
@@ -560,5 +560,27 @@ describe("markQueue (THI-443 review)", () => {
     await last;
     expect(page.errors.S).toBeNull();
     expect(page.marks).toEqual({ S: SIG });
+  });
+  it("settled advances when a click lands mid-refetch", async () => {
+    const { page, q } = setup();
+    const settledAtStart = q.settled;
+    const done = q.toggle("S", SIG, true);
+    await flush();
+    page.calls[0].resolve();
+    await done;
+    expect(q.settled).toBeGreaterThan(settledAtStart);
+    expect(appliesRefetch(q, settledAtStart)).toBe(false);
+  });
+});
+
+describe("appliesRefetch", () => {
+  it("applies when nothing is pending and nothing settled meanwhile", () => {
+    expect(appliesRefetch({ pending: 0, settled: 2 }, 2)).toBe(true);
+  });
+  it("skips while a mark is pending", () => {
+    expect(appliesRefetch({ pending: 1, settled: 2 }, 2)).toBe(false);
+  });
+  it("skips when a mark settled after the request started", () => {
+    expect(appliesRefetch({ pending: 0, settled: 3 }, 2)).toBe(false);
   });
 });
