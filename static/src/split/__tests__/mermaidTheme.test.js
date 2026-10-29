@@ -51,7 +51,8 @@ describe("mermaidTheme", () => {
   });
   it("gives the gantt chart's active/critical/excluded bars real colors, not mermaid's defaults", () => {
     expect(t.themeVariables.activeTaskBkgColor).toBe("#ff0011"); // first category color
-    expect(t.themeVariables.critBkgColor).toBe("#ee2244"); // --s-danger
+    expect(t.themeVariables.critBkgColor).toBe("#222222"); // --bg-2
+    expect(t.themeVariables.critBorderColor).toBe("#ee2244"); // --s-danger
     expect(t.themeVariables.excludeBkgColor).toBe("#1a1a1a"); // --bg-1-hi, not a flat #eeeeee
   });
   it("reads only opaque tokens, which the canvas converter can paint", () => {

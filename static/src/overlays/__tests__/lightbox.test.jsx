@@ -1,6 +1,6 @@
 import { options } from "preact";
 import render from "preact-render-to-string";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Mermaid } from "../../split/Mermaid.jsx";
 import { renderMarkdown } from "../../split/markdown.jsx";
 import { closeLightbox, isBackdropClose, LightboxHost, lightbox, nextFocus, openLightbox } from "../Lightbox.jsx";
@@ -94,6 +94,7 @@ describe("markdown zoom -> lightbox", () => {
 
 describe("Mermaid's own zoom", () => {
   let prevVnode;
+  beforeEach(() => { prevVnode = options.vnode; });
   afterEach(() => { options.vnode = prevVnode; });
 
   it("opens the diagram's own source, and ignores a click on a link inside it", () => {
@@ -101,9 +102,9 @@ describe("Mermaid's own zoom", () => {
     let host;
     // options.vnode fires for every vnode h() creates, render-to-string
     // included, so this is how to reach a handler a render-to-string pass
-    // would otherwise discard.
-    prevVnode = options.vnode;
+    // would otherwise discard. Chain to the previous hook rather than clobber it.
     options.vnode = (v) => {
+      prevVnode?.(v);
       if (v.props?.class === "md-mermaid-zoom") btn = v;
       if (v.props?.class === "md-mermaid-svg is-zoomable") host = v;
     };

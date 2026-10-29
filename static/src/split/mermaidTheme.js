@@ -54,7 +54,8 @@ export function mermaidTheme({ color, font }) {
     altSectionBkgColor: raised,
     taskTextDarkColor: card,
     activeTaskBkgColor: cats[0],
-    critBkgColor: color("--s-danger"), // mermaid's default read ~3.6:1 against the card
+    critBkgColor: color("--bg-2"),        // the label is taskTextColor (light): 7.6:1 here
+    critBorderColor: color("--s-danger"), // 2px red outline, 5.06:1 against the card
     excludeBkgColor: raised, // mermaid's default is a flat #eeeeee, blind to the theme
   };
   for (let i = 0; i < 12; i++) {
