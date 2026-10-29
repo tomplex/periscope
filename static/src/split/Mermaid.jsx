@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { openLightbox } from "../overlays/Lightbox.jsx";
 import { renderDiagram } from "./mermaidRender.js";
 
+// below ~¾ scale a wide flowchart's 16px labels drop under ~12px; scroll inside the box instead
+const MIN_DIAGRAM_SCALE = 0.75;
+
 export function Mermaid({ code, zoom = false, label }) {
   const host = useRef(null);
   const [error, setError] = useState(null);
@@ -16,6 +19,11 @@ export function Mermaid({ code, zoom = false, label }) {
       .then(({ svg }) => {
         if (!alive || !host.current) return;
         host.current.innerHTML = svg;
+        if (zoom) {
+          const el = host.current.querySelector("svg");
+          const vb = el?.viewBox?.baseVal;
+          if (vb?.width > 0) el.style.minWidth = `${Math.round(vb.width * MIN_DIAGRAM_SCALE)}px`;
+        }
         setReady(true);
       })
       .catch((e) => {
@@ -24,7 +32,7 @@ export function Mermaid({ code, zoom = false, label }) {
         setError(String(e?.message || e));
       });
     return () => { alive = false; };
-  }, [code]);
+  }, [code, zoom]);
   // Re-render from source for a fresh id (see Lightbox.jsx): copying this
   // host's innerHTML duplicated the SVG's ids, so the lightbox's arrowheads
   // bound to the original's <marker>s and vanished once this one hid.
