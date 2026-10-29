@@ -48,13 +48,14 @@ const kindOf = (stop) => (stop.knownKind ? stop.kind : "other");
 // Bring a file block into view and flash it. Wide, the column scrolls on its
 // own, so move it rather than the page. Otherwise bring the file into view only
 // if it isn't already ("nearest"), so a column that fits on screen never jumps
-// the page (D5). Narrow, the column is static: asked by its overflow, not its
-// heights, so it always takes the page path.
+// the page (D5). Narrow, the column is static; asking its overflow, not just
+// its heights, sends it down the page path every time.
 export function reveal(c, el) {
   if (getComputedStyle(c).overflowY !== "visible" && c.scrollHeight > c.clientHeight) {
     c.scrollTo({ top: el.offsetTop - 8, behavior: motion() });
+  } else {
+    el.scrollIntoView({ block: "nearest", behavior: motion() });
   }
-  else el.scrollIntoView({ block: "nearest", behavior: motion() });
   // Restart the flash even on a second click of the same file: the reflow
   // between remove and add makes the browser replay the animation.
   el.classList.remove("is-flash");
