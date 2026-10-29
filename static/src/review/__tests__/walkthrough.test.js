@@ -247,6 +247,63 @@ describe("unresolvedTotal", () => {
   });
 });
 
+describe("parseWalkthrough lifts diagrams (THI-443 D1)", () => {
+  const FENCES = `# T
+
+> branch: feat/x · head: abc
+
+Panes **cost** more and \`nothing\` said so.
+
+## Adds a gauge
+> kind: new-subsystem · refs: a.py
+
+Before.
+
+\`\`\`mermaid
+flowchart LR
+  a --> b
+\`\`\`
+
+Between.
+
+- a list item
+
+  \`\`\`mermaid
+  flowchart TD
+    nested --> stays
+  \`\`\`
+
+\`\`\`mermaid
+flowchart LR
+  c --> d
+\`\`\`
+
+After.
+`;
+  const w = parseWalkthrough(FENCES);
+  const s = w.stops[0];
+
+  it("returns the top-level mermaid fences in order", () => {
+    expect(s.diagrams).toEqual(["flowchart LR\n  a --> b", "flowchart LR\n  c --> d"]);
+  });
+  it("cuts only those fences out of the body and leaves a nested one in place", () => {
+    expect(s.bodyMarkdown).not.toContain("a --> b");
+    expect(s.bodyMarkdown).not.toContain("c --> d");
+    for (const kept of ["Before.", "Between.", "After.", "nested --> stays"]) expect(s.bodyMarkdown).toContain(kept);
+  });
+  it("keeps the stop's whole source, diagrams included, for its signature", () => {
+    expect(s.source.startsWith("## Adds a gauge\n> kind: new-subsystem")).toBe(true);
+    expect(s.source).toContain("a --> b");
+  });
+  it("returns the problem statement as markdown beside the plain text", () => {
+    expect(w.problemMarkdown).toBe("Panes **cost** more and `nothing` said so.");
+    expect(w.problem).toBe("Panes cost more and nothing said so.");
+  });
+  it("gives a stop without diagrams an empty list", () => {
+    expect(parseWalkthrough(DOC).stops[0].diagrams).toEqual([]);
+  });
+});
+
 describe("filterRows", () => {
   const rows = [
     { repo: "fdy", branch: "feat/restack", pr: { number: 8818, title: "Outcome restack", author: "sam" },

@@ -26,6 +26,7 @@ export function parseWalkthrough(text) {
   let title = "";
   let header = null;
   let problem = "";
+  let problemMarkdown = "";
   const stops = [];
   const ids = new Map();
 
@@ -41,7 +42,11 @@ export function parseWalkthrough(text) {
       }
       i++;
     }
-    if (blocks[i]?.type === "paragraph") { problem = textOf(blocks[i]); i++; }
+    if (blocks[i]?.type === "paragraph") {
+      problem = textOf(blocks[i]);
+      problemMarkdown = src.slice(blocks[i].position.start.offset, blocks[i].position.end.offset);
+      i++;
+    }
   }
 
   for (; i < blocks.length; i++) {
@@ -63,6 +68,20 @@ export function parseWalkthrough(text) {
     let j = i + 1;
     while (j < blocks.length && !(blocks[j].type === "heading" && blocks[j].depth === 2)) j++;
     const bodyEnd = j < blocks.length ? blocks[j].position.start.offset : src.length;
+    // Top-level mermaid fences move to the stop's full-width diagram row
+    // (THI-443 D1). A fence inside a list item stays where it is: lifting it
+    // out would reorder content we can't place cleanly.
+    const diagrams = [];
+    let body = "";
+    let cursor = bodyStart;
+    for (let k = i + 1; k < j; k++) {
+      const node = blocks[k];
+      if (node.type !== "code" || node.lang !== "mermaid") continue;
+      diagrams.push(node.value);
+      body += src.slice(cursor, node.position.start.offset);
+      cursor = node.position.end.offset;
+    }
+    body += src.slice(cursor, bodyEnd);
     const base = slug(stopTitle);
     const n = (ids.get(base) || 0) + 1;
     ids.set(base, n);
@@ -72,11 +91,14 @@ export function parseWalkthrough(text) {
       kind,
       knownKind: kind != null && KINDS.has(kind),
       refs,
-      bodyMarkdown: src.slice(bodyStart, bodyEnd),
+      // The whole stop as written, diagrams included: stopSig hashes this.
+      source: src.slice(b.position.start.offset, bodyEnd),
+      diagrams,
+      bodyMarkdown: body,
     });
     i = j - 1;
   }
-  return { title, header, problem, stops };
+  return { title, header, problem, problemMarkdown, stops };
 }
 
 // New-side span of a hunk: new_start through new_start + ctx/add lines − 1.
