@@ -218,3 +218,30 @@ export function filterRows(rows, query) {
 export function unresolvedTotal(rows) {
   return (rows || []).filter((r) => !isMerged(r)).reduce((n, r) => n + (r.unresolved || 0), 0);
 }
+
+// FNV-1a, 32-bit, over the stop as written. A reviewed mark is tied to this:
+// any rewrite of the title, metadata or text gives a new sig and lapses the
+// mark (THI-443 D6), as the Changes tab's viewedSig lapses when a file changes.
+export function stopSig(stop) {
+  // trimEnd: appending a stop, or the file's final newline, must not lapse
+  // the old last stop's mark.
+  const s = (stop.source || "").trimEnd();
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+export function isReviewed(stop, reviewed) {
+  return !!reviewed && reviewed[stop.title] === stopSig(stop);
+}
+
+// One stop's mark set (sig) or cleared (null), leaving the others alone.
+export function withMark(reviewed, title, sig) {
+  const next = { ...reviewed };
+  if (sig == null) delete next[title];
+  else next[title] = sig;
+  return next;
+}

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { filterRows, matchRefs, nextSort, parseWalkthrough, sortRows, staleLabel, unresolvedTotal } from "../walkthrough.js";
+import {
+  filterRows, isReviewed, matchRefs, nextSort, parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
+} from "../walkthrough.js";
 
 const DOC = `# Cost gauge
 
@@ -301,6 +303,45 @@ After.
   });
   it("gives a stop without diagrams an empty list", () => {
     expect(parseWalkthrough(DOC).stops[0].diagrams).toEqual([]);
+  });
+});
+
+describe("stopSig, isReviewed, withMark (THI-443 D6)", () => {
+  const w = parseWalkthrough(DOC);
+  const first = (doc) => parseWalkthrough(doc).stops[0];
+
+  it("is 8 hex chars and stable for the same source", () => {
+    expect(stopSig(w.stops[0])).toMatch(/^[0-9a-f]{8}$/);
+    expect(stopSig(first(DOC))).toBe(stopSig(w.stops[0]));
+  });
+  it("changes with a one-character edit to the title, the metadata or the text", () => {
+    const sig = stopSig(w.stops[0]);
+    // String.replace with a string pattern edits the first stop only.
+    for (const edited of [
+      DOC.replace("## Adds a gauge", "## Adds a gaugE"),
+      DOC.replace("kind: new-subsystem", "kind: new-subsystems"),
+      DOC.replace("Prose one.", "Prose one!"),
+    ]) expect(stopSig(first(edited))).not.toBe(sig);
+  });
+  it("ignores trailing whitespace, so appending a stop keeps the old last stop's mark", () => {
+    // The last stop's source runs to the end of the file; a re-prepare that adds
+    // a stop gives it a trailing blank line it didn't have.
+    const a = "# T\n\n## One\n\nbody one\n\n## Two\n\nbody two\n";
+    const b = `${a}\n## Three\n\nbody three\n`;
+    expect(stopSig(parseWalkthrough(b).stops[1])).toBe(stopSig(parseWalkthrough(a).stops[1]));
+  });
+  it("counts a stop reviewed only while its title maps to its current sig", () => {
+    const s = w.stops[2];
+    expect(isReviewed(s, { [s.title]: stopSig(s) })).toBe(true);
+    expect(isReviewed(s, { [s.title]: "00000000" })).toBe(false);
+    expect(isReviewed(s, {})).toBe(false);
+    expect(isReviewed(s, null)).toBe(false);
+  });
+  it("withMark sets or clears one title and leaves the rest alone", () => {
+    const marks = { A: "11111111", B: "22222222" };
+    expect(withMark(marks, "A", "33333333")).toEqual({ A: "33333333", B: "22222222" });
+    expect(withMark(marks, "A", null)).toEqual({ B: "22222222" });
+    expect(marks).toEqual({ A: "11111111", B: "22222222" });
   });
 });
 
