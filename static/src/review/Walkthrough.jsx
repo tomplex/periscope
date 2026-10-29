@@ -69,10 +69,11 @@ function Comments({ list }) {
   );
 }
 
-// The open box, pure, so a render test can see it.
-export function CommentForm({ stop, text, busy, note, textRef, onInput, onSend, onCancel }) {
+// The open box's text and buttons, pure, so a render test can see them. The
+// note lives in CommentBox, outside the open and closed states.
+export function CommentForm({ stop, text, busy, textRef, onInput, onSend, onCancel }) {
   return (
-    <div class="wt-comment-box is-open">
+    <>
       <textarea ref={textRef} rows={3} value={text} placeholder="comment on this stop…" aria-label={`comment on ${stop}`}
         onInput={(e) => onInput(e.currentTarget.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSend(); }} />
@@ -80,16 +81,16 @@ export function CommentForm({ stop, text, busy, note, textRef, onInput, onSend, 
         <button type="button" class="wt-btn" disabled={busy || !text.trim()} onClick={onSend}>send</button>
         <button type="button" class="wt-link" onClick={onCancel}>cancel</button>
         <span class="wt-hint">{SEND_HINT}</span>
-        {note ? <span class="wt-comment-note" role="status">{note}</span> : null}
       </div>
-    </div>
+    </>
   );
 }
 
 // Half-typed comments, by stop. Marking a stop reviewed folds it, which unmounts
 // its box (hiding it instead would break mermaid, which can't measure text in a
-// display:none subtree), so a draft must outlive the component.
-const drafts = new Map();
+// display:none subtree), so a draft must outlive the component. Exported for
+// the render tests.
+export const drafts = new Map();
 
 // A "comment" link until used: thirteen always-open boxes buried the stops.
 function CommentBox({ repo, branch, stop, onPosted }) {
@@ -103,15 +104,31 @@ function CommentBox({ repo, branch, stop, onPosted }) {
   };
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const boxRef = useRef(null);
   const textRef = useRef(null);
-  useEffect(() => { if (open) textRef.current?.focus(); }, [open]);
+  const linkRef = useRef(null);
+  // Focus moves only after the reader's own open, cancel or send: a box that
+  // mounts open from its draft (a stop unfolding, a branch revisited) would
+  // otherwise steal focus and scroll the page to itself.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    (open ? textRef : linkRef).current?.focus();
+  }, [open]);
   async function send() {
     if (busy || !text.trim()) return;
     setBusy(true);
     try {
       const out = commentOutcome(await postJson("/api/reviews/comment", { repo, branch, stop, body: text }));
       setNote(out.note);
-      if (out.close) { setText(""); setOpen(false); }
+      if (out.close) {
+        // Back to the link, unless the reader moved on while it sent.
+        const a = document.activeElement;
+        refocus.current = !a || a === document.body || !!boxRef.current?.contains(a);
+        setText("");
+        setOpen(false);
+      }
       onPosted();
     } catch (e) {
       setNote(String(e));
@@ -119,16 +136,18 @@ function CommentBox({ repo, branch, stop, onPosted }) {
       setBusy(false);
     }
   }
-  if (!open) {
-    return (
-      <div class="wt-comment-box">
-        <button type="button" class="wt-link" onClick={() => { setNote(""); setOpen(true); }}>comment</button>
-        {note ? <span class="wt-comment-note" role="status">{note}</span> : null}
-      </div>
-    );
-  }
-  return <CommentForm stop={stop} text={text} busy={busy} note={note} textRef={textRef}
-    onInput={setText} onSend={send} onCancel={() => setOpen(false)} />;
+  return (
+    <div class={`wt-comment-box${open ? " is-open" : ""}`} ref={boxRef}>
+      {open
+        ? <CommentForm stop={stop} text={text} busy={busy} textRef={textRef} onInput={setText} onSend={send}
+            onCancel={() => { setText(""); refocus.current = true; setOpen(false); }} />
+        : <button ref={linkRef} type="button" class="wt-link" aria-label={`comment on ${stop}`}
+            onClick={() => { setNote(""); refocus.current = true; setOpen(true); }}>comment</button>}
+      {/* One region in both states, present while empty: a status that mounts
+          along with its text is often not announced. */}
+      <span class="wt-comment-note" role="status">{note}</span>
+    </div>
+  );
 }
 
 // One accessible name in both states: aria-pressed carries the state, and the ✓

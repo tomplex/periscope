@@ -1,9 +1,10 @@
 // Render-path tests for the walkthrough page (THI-443). render-to-string runs
 // no effects, so these drive the pure WalkthroughView with fixed data, and
 // press the pure pieces (ReviewedToggle) by calling them, as hunk.test.jsx does.
+import { options } from "preact";
 import render from "preact-render-to-string";
 import { describe, expect, it } from "vitest";
-import { CommentForm, commentOutcome, MemoHunk, ReviewedToggle, sendHint, WalkthroughView } from "../Walkthrough.jsx";
+import { CommentForm, commentOutcome, drafts, MemoHunk, ReviewedToggle, sendHint, WalkthroughView } from "../Walkthrough.jsx";
 import { parseWalkthrough, stopSig } from "../walkthrough.js";
 
 const DOC = `# Gauge
@@ -112,10 +113,34 @@ describe("<WalkthroughView> body", () => {
     expect(folded).toContain("1 / 2 reviewed");
     expect(view({}, { reviewed: { "Adds a gauge": "00000000" } })).toContain("Prose one.");
   });
-  it("collapses the comment box to a link", () => {
+  it("collapses the comment box to a link named for its stop, over one live status line", () => {
     const html = view();
-    expect(count(html, '<button type="button" class="wt-link">comment</button>')).toBe(2);
+    expect(html).toContain('<button type="button" class="wt-link" aria-label="comment on Adds a gauge">comment</button>');
+    expect(html).toContain('<button type="button" class="wt-link" aria-label="comment on Reuses the cache">comment</button>');
     expect(html).not.toContain("<textarea");
+    // Present while empty: a live region that mounts with its text is often not announced.
+    expect(count(html, '<span class="wt-comment-note" role="status"></span>')).toBe(2);
+  });
+  it("reopens a stop's box from its draft, and cancel discards the draft", () => {
+    const key = "fdy\nfeat/x\nAdds a gauge";
+    drafts.set(key, "half a thought");
+    let cancel;
+    const prev = options.vnode;
+    options.vnode = (v) => {
+      prev?.(v);
+      if (v.props?.class === "wt-link" && v.props.children === "cancel") cancel = v;
+    };
+    try {
+      const html = view();
+      expect(html).toContain('<div class="wt-comment-box is-open">');
+      expect(html).toContain('aria-label="comment on Adds a gauge">half a thought</textarea>');
+      cancel.props.onClick();
+      expect(drafts.has(key)).toBe(false);
+      expect(view()).not.toContain("<textarea");
+    } finally {
+      options.vnode = prev;
+      drafts.delete(key);
+    }
   });
   it("shows a failed mark's error beside its toggle", () => {
     expect(view({}, { toggleErrors: { "Adds a gauge": "not saved: HTTP 500" } }))
@@ -145,17 +170,18 @@ describe("walkthrough pieces", () => {
     expect(render(<ReviewedToggle on={false} onToggle={() => {}} error={null} />))
       .toContain('aria-pressed="false">reviewed</button>');
   });
-  it("CommentForm shows the text, the send hint and its buttons", () => {
+  it("CommentForm shows the text, the send hint and its buttons, and leaves the note to its box", () => {
     const html = render(
-      <CommentForm stop="Adds a gauge" text="why?" busy={false} note="" textRef={null}
+      <CommentForm stop="Adds a gauge" text="why?" busy={false} textRef={null}
         onInput={() => {}} onSend={() => {}} onCancel={() => {}} />,
     );
     expect(html).toContain('aria-label="comment on Adds a gauge">why?</textarea>');
     expect(html).toContain('<button type="button" class="wt-btn">send</button>');
     expect(html).toContain('<button type="button" class="wt-link">cancel</button>');
     expect(html).toMatch(/<span class="wt-hint">(⌘|Ctrl\+)↩ to send<\/span>/);
+    expect(html).not.toContain("wt-comment-note");
     expect(render(
-      <CommentForm stop="S" text="  " busy={false} note="" textRef={null} onInput={() => {}} onSend={() => {}} onCancel={() => {}} />,
+      <CommentForm stop="S" text="  " busy={false} textRef={null} onInput={() => {}} onSend={() => {}} onCancel={() => {}} />,
     )).toMatch(/<button type="button" class="wt-btn" disabled(="")?>send<\/button>/);
   });
   it("sendHint names the keys for the platform", () => {
