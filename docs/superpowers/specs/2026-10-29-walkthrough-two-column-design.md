@@ -150,16 +150,19 @@ untouched).
   scrolling both ways when larger than the window. On open, focus goes to the scroller,
   so the arrow keys scroll a big diagram, and Tab moves only between the
   scroller and ✕. Esc (`useEscape`), a backdrop click or ✕ closes it, and
-  focus returns to what opened it. For a diagram it copies the rendered SVG
-  markup (still only mermaid's own sanitized output, per `Mermaid.jsx`'s
-  innerHTML rule) and sets its width to the viewBox width. Its host is
+  focus returns to what opened it. For a diagram it re-renders the source
+  through `renderDiagram` with a fresh id (a copied SVG's duplicate ids
+  would bind its arrowheads to the original's markers), then sets its width
+  and height to the viewBox's. What it assigns is still only mermaid's own
+  sanitized output, per `Mermaid.jsx`'s innerHTML rule. Its host is
   mounted once, in `overlays/Overlays.jsx`: inside `#split-view`
   (`position: fixed; z-index: 1`) the sticky app header would paint over it.
   Only the walkthrough passes `zoom: true`; file previews keep their existing
   in-place image zoom.
-- **Theme (app-wide).** `Mermaid.jsx` initializes with `theme: "base"` and
-  `themeVariables` from a pure `mermaidTheme(read)` builder, where
-  `read(name)` returns a token's color as `#rrggbb`. The intent is:
+- **Theme (app-wide).** `split/mermaidRender.js` initializes mermaid with
+  `theme: "base"` and `themeVariables` from a pure `mermaidTheme({ color,
+  font })` builder, where `color(name)` returns a token's color as
+  `#rrggbb`. The intent is:
 
   | Element | Token |
   |---|---|
@@ -217,7 +220,9 @@ The column (`.wt-evidence`) renders:
   cites of new files made one real walkthrough mount about 10.7k
   highlighted lines.
 - **Wide panes:** `position: sticky; top: 12px; align-self: start;
-  max-height: calc(100cqh - 24px); overflow: auto`. The column stays beside
+  max-height: calc(100cqh + 32px); overflow: auto`. `cqh` measures
+  `.wt-scroll`'s content box, 56px of padding shorter than what's visible,
+  so +32px leaves a 12px gap at both ends. The column stays beside
   the text while the stop is on screen, scrolls on its own when taller, and
   leaves with the stop. **Narrow:** static, no max-height.
 - A stop with no refs leaves the column empty.
@@ -335,10 +340,10 @@ On `.walkthrough`, so `.md-doc` and file previews don't change:
   - `parseWalkthrough` adds `problemMarkdown`, and per stop `source`,
     `diagrams` and the trimmed `bodyMarkdown` (D1);
   - new pure `stopSig`, `isReviewed` and `evidenceFor`.
-- **`split/mermaidTheme.js`** (new, pure): `mermaidTheme(read)`, beside
-  `Mermaid.jsx`, since the theme is app-wide and not review-specific. The
-  canvas-based token reader lives in `Mermaid.jsx`, so the builder stays
-  testable without a DOM.
+- **`split/mermaidTheme.js`** (new, pure): `mermaidTheme({ color, font })`,
+  beside `Mermaid.jsx`, since the theme is app-wide and not review-specific.
+  The canvas-based token reader (`tokenHex`) lives in `split/mermaidRender.js`,
+  so the builder stays testable without a DOM.
 - **`review/Walkthrough.jsx`** splits in two:
   - `Walkthrough` fetches and owns `reviewed` and the posting nonce;
   - a pure `WalkthroughView({data, repo, branch, pr, hl, reviewed,
@@ -349,8 +354,10 @@ On `.walkthrough`, so `.md-doc` and file previews don't change:
   (with a pure `CommentForm`) and `ReviewedToggle`.
 - **`split/markdown.jsx`:** a new `zoom` option. An image is wrapped in a
   zoom button, except inside a link, and `Mermaid` receives `zoom`.
-- **`split/Mermaid.jsx`:** base theme from `mermaidTheme`, plus the `zoom`
-  prop (a click on the diagram, or its corner button, opens the lightbox).
+- **`split/Mermaid.jsx`:** draws through `renderDiagram` (which applies the
+  base theme), plus the `zoom` and `label` props. A click on the diagram, or
+  its corner ⤢ button (disabled until drawn), opens the lightbox, and a
+  zoomable diagram keeps at least 75% of its natural width.
 - **`overlays/Lightbox.jsx`** (new): a `lightbox` signal and `<LightboxHost/>`
   (backdrop, scroller, ✕, `useEscape`, Tab kept inside). It re-renders a
   diagram from its source with a fresh id rather than copying the SVG, whose
