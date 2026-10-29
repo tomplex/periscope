@@ -55,6 +55,9 @@
   --sans: 'Hanken Grotesk', -apple-system, system-ui, sans-serif;
 
   --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+
   /* Walkthrough stop kinds (THI-443 D9). The accent marks a card's edge and its
      contents dot (≥ 3:1 on --bg-1); -bg/-fg is the badge pair. */
   --kind-new-subsystem: oklch(0.70 0.11 255); --kind-new-subsystem-bg: #2b4a7a; --kind-new-subsystem-fg: #cfe0ff;
@@ -63,8 +66,6 @@
   --kind-system-touch:  oklch(0.68 0.14 25);  --kind-system-touch-bg:  #6a2f2f; --kind-system-touch-fg:  #f6d0d0;
   --kind-behavior:      oklch(0.70 0.12 300); --kind-behavior-bg:      #4a2f6a; --kind-behavior-fg:      #e2d0f6;
   --kind-other:         var(--fg-2);          /* unknown or missing kind: neutral */
-  --r-md: 6px;
-  --r-lg: 10px;
 
   --shadow-modal: 0 0 0 1px var(--line-strong), 0 30px 80px oklch(0 0 0 / 0.55);
 }
@@ -3963,6 +3964,11 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 /* 3px card edge + 16px card padding, so the intro's columns line up with the
    stop cards' inner columns below. */
 .wt-intro { margin-bottom: 22px; padding: 0 17px 0 19px; }
+/* With no problem paragraph the contents list is wt-intro's only child, and
+   grid auto-placement would drop it into the left (narrower) column instead
+   of its usual right one. Reset below the 1050px switch, where .wt-cols
+   collapses to one column and placing it explicitly would leave a gap. */
+.wt-intro > .wt-toc { grid-column: 2; }
 .walkthrough .md-doc { max-width: none; margin: 0; font-size: var(--wt-fs-body); }
 /* color: fg-0 beats .md-doc h5.md-h/h6.md-h's fg-1 (used for transcript-demoted
    headings): three classes (0,3,0) outrank two classes + an element (0,2,1). */
@@ -3979,7 +3985,8 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 /* Unbreakable content escapes its column: a long path, branch name or table
    cell would otherwise overflow instead of wrapping or scrolling on its own. */
 .walkthrough .md-doc .md-table { display: block; width: max-content; max-width: 100%; overflow-x: auto; }
-.walkthrough .md-cite, .wt-ev-path, .wt-hidden-path, .wt-stop-title, .walkthrough .wt-title { overflow-wrap: anywhere; }
+.walkthrough .md-cite, .wt-ev-path, .wt-hidden-path, .wt-stop-title, .walkthrough .wt-title,
+.walkthrough .md-doc :is(.md-icode, .md-link) { overflow-wrap: anywhere; } /* a bare URL or long identifier escapes the prose column otherwise */
 .wt-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* full path is in title */
 .wt-file-range, .wt-file-count { flex: none; }
 .wt-toc-title, .walkthrough .wt-sub > :first-child { min-width: 0; overflow-wrap: anywhere; } /* long branch names */
@@ -4037,7 +4044,6 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 /* The ⤢ button sits in the diagram's own corner; clear it room instead of
    covering the drawing it's labeling. */
 .walkthrough .md-mermaid:has(> .md-mermaid-zoom) { padding-top: 28px; }
-.walkthrough .md-mermaid-zoom { top: 0; right: 0; }
 /* Outside .md-doc, so a failed diagram's source + error needs its own skin and
    its own sideways scroll (5.8:1, --s-needs on --bg-term). */
 .wt-diagrams .md-mermaid-err { margin: 0; padding: 11px 14px; overflow-x: auto; white-space: pre; font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--bg-term); border: 1px solid var(--line-soft); border-radius: var(--r-sm); }
@@ -4049,7 +4055,10 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
    with the drawing. */
 .walkthrough .md-mermaid { position: relative; overflow: visible; }
 .md-mermaid-svg.is-zoomable, .md-img-zoom { cursor: zoom-in; }
-.md-mermaid-zoom { position: absolute; top: 6px; right: 6px; padding: 1px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: zoom-in; }
+/* Only Mermaid.jsx's zoom:true path draws this button, and only the
+   walkthrough passes zoom:true — top/right here, not split between this and
+   a .walkthrough override, since there's nowhere else it's ever drawn. */
+.md-mermaid-zoom { position: absolute; top: 0; right: 0; padding: 1px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: zoom-in; }
 .md-mermaid-zoom:hover:not(:disabled) { color: var(--fg-0); border-color: var(--line-strong); }
 /* Disabled until mermaid's ~3 MB chunk has drawn the diagram. */
 .md-mermaid-zoom:disabled { opacity: .55; cursor: default; }
@@ -4138,6 +4147,7 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 @container wt (width < 1050px) {
   .wt-cols { grid-template-columns: minmax(0, 1fr); }
   .wt-evidence { position: static; max-height: none; overflow: visible; }
+  .wt-intro > .wt-toc { grid-column: auto; }
 }
 /* Full-size view (overlays/Lightbox.jsx). z-index 90: above the sticky header
    (10), below toasts (100) and the modals (200, ⌘K 1000), so a notification
