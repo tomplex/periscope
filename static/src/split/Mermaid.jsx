@@ -3,22 +3,39 @@
 // on the first diagram only. Until it lands the host is empty; if the import
 // or the source fails, the fence shows as text so nothing is ever lost.
 import { useEffect, useRef, useState } from "preact/hooks";
+import { mermaidTheme } from "./mermaidTheme.js";
+
+const tokenValue = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+let paint = null;
+// Paint a token on a 1×1 canvas and read the pixel back: the portable way to
+// turn the stylesheet's oklch() into the #rrggbb mermaid's color parser takes.
+function tokenHex(name) {
+  if (!paint) paint = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  paint.clearRect(0, 0, 1, 1);
+  paint.fillStyle = "#000";
+  paint.fillStyle = tokenValue(name);
+  paint.fillRect(0, 0, 1, 1);
+  const [r, g, b] = paint.getImageData(0, 0, 1, 1).data;
+  return `#${[r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+}
 
 let mermaidP = null;
 function loadMermaid() {
   if (!mermaidP) {
     mermaidP = import("mermaid").then((m) => {
       const mermaid = m.default;
-      // The dashboard has one (dark) theme; following prefers-color-scheme
-      // would draw a light diagram on the dark UI whenever macOS is light.
+      // Periscope's own tokens on mermaid's base theme (THI-443 D4), read once:
+      // the dashboard has one dark theme, so following prefers-color-scheme
+      // would only ever draw a light diagram on the dark UI.
       // Without suppressErrorRendering, render() on bad source draws the "Syntax
       // error" bomb SVG into a temp div on document.body and throws before
       // removing it, leaving a stray error diagram on the dashboard.
       mermaid.initialize({
         startOnLoad: false,
-        theme: "dark",
         securityLevel: "strict",
         suppressErrorRendering: true,
+        ...mermaidTheme({ color: tokenHex, font: tokenValue("--sans") }),
       });
       return mermaid;
     }).catch((e) => {
