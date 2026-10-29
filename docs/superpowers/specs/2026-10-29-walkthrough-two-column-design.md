@@ -100,16 +100,17 @@ untouched).
 - **Title row:** "N." plus the title at 18px, the kind badge, and a
   "reviewed" toggle at the right edge.
 - **Diagram row:** present only when `stop.diagrams` is non-empty (D4).
-- **Two columns** (`.wt-cols`): `grid-template-columns: minmax(52ch, 72ch)
-  minmax(540px, 1fr)` with the grid's font size at 15px so `ch` tracks body
-  text. The prose gives up width (down to 52ch) before the code column drops
-  below ~75 monospace characters. Left: the prose, then the stop's comments and the comment control
+- **Two columns** (`.wt-cols`): `grid-template-columns: minmax(min(52ch,
+  440px), 72ch) minmax(540px, 1fr)` with the grid's font size at 15px so `ch`
+  tracks body text. The prose gives up width (down to 52ch, capped at 440px
+  so a wide UI font can't push the floor past the switch) before the code
+  column drops below ~70 monospace characters. Left: the prose, then the stop's comments and the comment control
   (D8). Right: the code-changes column (D5).
 - **Narrow:** `@container wt (width < 1050px)` switches every `.wt-cols`
   grid to one column, with the prose first and the code changes after. The
   page never scrolls sideways; long code lines scroll inside their hunk. The
   breakpoint was tuned in the browser (container queries measure the
-  content box): 52ch + 540px + the gap and card chrome is about 1046px.
+  content box): 440px + 540px + the gap and card chrome is about 1044px.
 - **Reviewed stops fold** to the title row, as "viewed" folds a file in the
   Changes tab. On a reviewed stop the title itself is a button. Pressing it
   unfolds or refolds the stop for this visit without unmarking it; the
@@ -127,7 +128,9 @@ untouched).
   own inline `max-width` (its natural width), so it fills the card but never
   scales a small diagram up. It also gets a `min-width` of 75% of its
   natural width: below that, a wide flowchart's 16px labels drop under
-  ~12px (measured at 7.6px on a 1600px window). Wider than the card, the
+  ~12px (measured at 7.6px on a 1600px window). That floor holds for wide
+  diagrams; a tall one capped by the height limit still scales down to fit,
+  and the full-size view is the way to read it. Wider than the card, the
   diagram scrolls sideways inside its own box, never the page. A 70% height
   cap keeps a tall top-down chart from pushing the stop's text off screen.
   Several diagrams stack in order.
