@@ -37,7 +37,8 @@
 | `static/src/review/__tests__/walkthrough.test.js` | modify | cases for all of the above |
 | `static/src/split/mermaidTheme.js` | create | pure `mermaidTheme({color, font})` → mermaid config |
 | `static/src/split/__tests__/mermaidTheme.test.js` | create | the token mapping |
-| `static/src/split/Lightbox.jsx` | create | `lightbox` signal, `openLightbox`, `closeLightbox`, `zoomKeys`, `<LightboxHost/>` |
+| `static/src/split/Lightbox.jsx` | create | `lightbox` signal, `openLightbox`, `closeLightbox`, `<LightboxHost/>` |
+| `static/src/overlays/Overlays.jsx` | modify | mounts `<LightboxHost/>` at the app root (inside `#split-view` it would sit under the header) |
 | `static/src/split/__tests__/lightbox.test.jsx` | create | host render, open/close, keys |
 | `static/src/split/Mermaid.jsx` | modify | base theme from `mermaidTheme`, `zoom` prop |
 | `static/src/split/markdown.jsx` | modify | `zoom` option for images and diagrams |
@@ -62,7 +63,7 @@
 Run (in the worktree):
 ```bash
 npm ci --no-audit --no-fund
-uv sync
+uv sync --locked
 ```
 Expected: both finish without errors.
 
@@ -246,7 +247,7 @@ Expected: all pass, the existing `parseWalkthrough` cases included.
 
 ```bash
 git add static/src/review/walkthrough.js static/src/review/__tests__/walkthrough.test.js
-git commit -m "reviews walkthrough: parseWalkthrough lifts top-level mermaid fences into stop.diagrams, keeps stop.source and the problem's markdown (THI-443)"
+git commit -m "reviews walkthrough: parseWalkthrough lifts top-level mermaid fences into stop.diagrams, keeps stop.source and the problem's markdown (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -285,6 +286,13 @@ describe("stopSig, isReviewed, withMark (THI-443 D6)", () => {
       DOC.replace("Prose one.", "Prose one!"),
     ]) expect(stopSig(first(edited))).not.toBe(sig);
   });
+  it("ignores trailing whitespace, so appending a stop keeps the old last stop's mark", () => {
+    // The last stop's source runs to the end of the file; a re-prepare that adds
+    // a stop gives it a trailing blank line it didn't have.
+    const a = "# T\n\n## One\n\nbody one\n\n## Two\n\nbody two\n";
+    const b = `${a}\n## Three\n\nbody three\n`;
+    expect(stopSig(parseWalkthrough(b).stops[1])).toBe(stopSig(parseWalkthrough(a).stops[1]));
+  });
   it("counts a stop reviewed only while its title maps to its current sig", () => {
     const s = w.stops[2];
     expect(isReviewed(s, { [s.title]: stopSig(s) })).toBe(true);
@@ -304,7 +312,7 @@ describe("stopSig, isReviewed, withMark (THI-443 D6)", () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run static/src/review/__tests__/walkthrough.test.js`
-Expected: the 4 new tests fail with `stopSig is not a function` (or the same for `isReviewed` / `withMark`). The existing tests still pass, because a missing named export imports as `undefined` rather than failing the file.
+Expected: the 5 new tests fail with `stopSig is not a function` (or the same for `isReviewed` / `withMark`). The existing tests still pass, because a missing named export imports as `undefined` rather than failing the file.
 
 - [ ] **Step 3: Implement**
 
@@ -314,7 +322,9 @@ Append to `static/src/review/walkthrough.js`, after `nextSort`:
 // any rewrite of the title, metadata or text gives a new sig and lapses the
 // mark (THI-443 D6), as the Changes tab's viewedSig lapses when a file changes.
 export function stopSig(stop) {
-  const s = stop.source || "";
+  // trimEnd: appending a stop, or the file's final newline, must not lapse
+  // the old last stop's mark.
+  const s = (stop.source || "").trimEnd();
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -345,7 +355,7 @@ Expected: every test in the file passes.
 
 ```bash
 git add static/src/review/walkthrough.js static/src/review/__tests__/walkthrough.test.js
-git commit -m "reviews walkthrough: stopSig (FNV-1a of the stop's source), isReviewed and withMark for per-stop reviewed marks (THI-443)"
+git commit -m "reviews walkthrough: stopSig (FNV-1a of the stop's source), isReviewed and withMark for per-stop reviewed marks (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -404,6 +414,14 @@ describe("evidenceFor, hiddenSummary, evidenceIndex (THI-443 D5)", () => {
     expect(evidenceIndex(shown, parseCite("a/one.py:3"))).toBe(0);
     expect(evidenceIndex(shown, parseCite("b/missing.py"))).toBe(-1);
   });
+  it("prefers the cited range whose hunks cover the cite's line", () => {
+    const { shown } = evidenceFor(["a/one.py:1-5", "a/one.py:50-60"].map(parseCite), files);
+    expect(evidenceIndex(shown, parseCite("a/one.py:50"))).toBe(1);
+    expect(evidenceIndex(shown, parseCite("a/one.py:2"))).toBe(0);
+    // No line, or a line no hunk covers: the first entry for the path.
+    expect(evidenceIndex(shown, parseCite("a/one.py"))).toBe(0);
+    expect(evidenceIndex(shown, parseCite("a/one.py:999"))).toBe(0);
+  });
 });
 ```
 
@@ -445,9 +463,13 @@ export function hiddenSummary(hidden) {
   return parts.join(" · ");
 }
 
-// A cite chip in the prose lands on the first file-list entry for its path.
+// A cite chip in the prose lands on the file-list entry for its path whose
+// hunks cover its line; with no line, or none covering it, the first entry for
+// the path. A stop citing a.py:1-5 and a.py:50-60 sends a.py:52 to the second.
 export function evidenceIndex(shown, cite) {
-  return shown.findIndex((e) => e.ref.path === cite.path);
+  const covers = (e) => cite.start != null && e.hunks.some((h) => h.new_start <= cite.end && newEnd(h) >= cite.start);
+  const hit = shown.findIndex((e) => e.ref.path === cite.path && covers(e));
+  return hit >= 0 ? hit : shown.findIndex((e) => e.ref.path === cite.path);
 }
 ```
 
@@ -460,7 +482,7 @@ Expected: every test in the file passes.
 
 ```bash
 git add static/src/review/walkthrough.js static/src/review/__tests__/walkthrough.test.js
-git commit -m "reviews walkthrough: evidenceFor splits a stop's refs into shown (with hunks) and hidden (missing, generated, unchanged); hiddenSummary and evidenceIndex (THI-443)"
+git commit -m "reviews walkthrough: evidenceFor splits a stop's refs into shown (with hunks) and hidden (missing, generated, unchanged); hiddenSummary and evidenceIndex (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -635,7 +657,7 @@ Expected: all pass. The markdown mermaid tests only check the host markup; `load
 
 ```bash
 git add static/src/split/mermaidTheme.js static/src/split/__tests__/mermaidTheme.test.js static/src/split/Mermaid.jsx
-git commit -m "diagrams: mermaid's base theme in periscope's tokens (node fill bg-2, text fg-0, lines fg-2, Hanken Grotesk 14px), oklch tokens converted to hex on a 1×1 canvas (THI-443)"
+git commit -m "diagrams: mermaid's base theme in periscope's tokens (node fill bg-2, text fg-0, lines fg-2, Hanken Grotesk 14px), oklch tokens converted to hex on a 1×1 canvas (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -645,8 +667,14 @@ git commit -m "diagrams: mermaid's base theme in periscope's tokens (node fill b
 **Files:**
 - Create: `static/src/split/Lightbox.jsx`
 - Create: `static/src/split/__tests__/lightbox.test.jsx`
-- Modify: `static/src/split/Mermaid.jsx`, `static/src/split/markdown.jsx`
+- Modify: `static/src/split/Mermaid.jsx`, `static/src/split/markdown.jsx`, `static/src/overlays/Overlays.jsx`
 - Test: `static/src/split/__tests__/markdown.test.jsx`
+
+Design notes from the plan review:
+- **The host is mounted in `Overlays.jsx`,** at the app root. Inside `#split-view` (`position: fixed; z-index: 1`), the sticky app header (`z-index: 10`) would paint over the lightbox, ✕ included.
+- **An image is wrapped in a real `<button>`.** `<img role="button" tabindex>` fails biome's `noNoninteractiveElementToInteractiveRole` and `useFocusableInteractive`, and the repo uses no `biome-ignore` suppressions.
+- **A diagram isn't made a button.** `role="button"` makes its children presentational, which would hide the diagram's text labels from screen readers. Instead, a mouse click on the diagram opens it, and a small real button in its corner is the keyboard and screen-reader way in.
+- **Images inside a link don't zoom,** or one click would both open the lightbox and follow the link.
 
 - [ ] **Step 1: Write the failing lightbox tests**
 
@@ -654,7 +682,7 @@ Create `static/src/split/__tests__/lightbox.test.jsx`:
 ```jsx
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeLightbox, LightboxHost, lightbox, openLightbox, zoomKeys } from "../Lightbox.jsx";
+import { closeLightbox, LightboxHost, lightbox, openLightbox } from "../Lightbox.jsx";
 
 afterEach(() => { lightbox.value = null; });
 
@@ -662,12 +690,15 @@ describe("lightbox", () => {
   it("renders nothing while closed", () => {
     expect(render(<LightboxHost />)).toBe("");
   });
-  it("shows an image at natural size with a close button, and closes", () => {
+  it("shows an image at natural size in a focusable scroller with a close button, and closes", () => {
     openLightbox({ kind: "img", src: "https://example.com/a.png", alt: "chart" });
     const html = render(<LightboxHost />);
     expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
     expect(html).toContain('<img src="https://example.com/a.png" alt="chart"');
     expect(html).toContain('aria-label="close"');
+    // The scroller takes focus on open, so the arrow keys scroll a big diagram.
+    expect(html).toContain('class="lightbox-body" tabindex="-1"');
     closeLightbox();
     expect(lightbox.value).toBeNull();
   });
@@ -675,48 +706,59 @@ describe("lightbox", () => {
     openLightbox({ kind: "svg", svg: "<svg></svg>" });
     expect(render(<LightboxHost />)).toContain('class="lightbox-svg"');
   });
-  it("zoomKeys opens on Enter and Space only", () => {
-    let opened = 0;
-    const prevented = [];
-    const onKey = zoomKeys(() => { opened++; });
-    for (const key of ["Enter", " ", "a", "Escape"]) onKey({ key, preventDefault: () => prevented.push(key) });
-    expect(opened).toBe(2);
-    expect(prevented).toEqual(["Enter", " "]);
-  });
 });
 ```
 
 - [ ] **Step 2: Write the failing markdown zoom tests**
 
 Append to `static/src/split/__tests__/markdown.test.jsx` (it already defines `html`):
-```jsx
+````jsx
 describe("zoom", () => {
   const img = "![chart](https://example.com/a.png)";
-  it("leaves images plain without zoom", () => {
+  const diagram = "```mermaid\nflowchart LR\n  a --> b\n```";
+  it("leaves images and diagrams plain without zoom", () => {
     const out = html(img);
-    expect(out).toContain('<img class="md-img" src="https://example.com/a.png" alt="chart"');
-    expect(out).not.toContain('role="button"');
+    expect(out).toContain('<img class="md-img" src="https://example.com/a.png" alt="chart"/>');
+    expect(out).not.toContain("md-img-zoom");
+    expect(html(diagram, { mermaid: true })).not.toContain("md-mermaid-zoom");
   });
-  it("makes images and diagrams focusable buttons with zoom: true", () => {
-    expect(html(img, { zoom: true })).toMatch(/<img class="md-img is-zoomable"[^>]*tabindex="0"[^>]*role="button"/);
-    const d = html("```mermaid\nflowchart LR\n  a --> b\n```", { mermaid: true, zoom: true });
-    expect(d).toMatch(/class="md-mermaid-svg is-zoomable"[^>]*role="button"/);
+  it("wraps an image in a button that opens it full size", () => {
+    expect(html(img, { zoom: true })).toContain(
+      '<button type="button" class="md-img-zoom" aria-label="open image full size: chart"><img class="md-img is-zoomable" src="https://example.com/a.png" alt="chart"/></button>',
+    );
+  });
+  it("gives a diagram a click target and a real full-size button", () => {
+    const out = html(diagram, { mermaid: true, zoom: true });
+    expect(out).toContain('class="md-mermaid-svg is-zoomable"');
+    expect(out).not.toContain('role="button"');
+    expect(out).toContain(
+      '<button type="button" class="md-mermaid-zoom" aria-label="open diagram full size" title="open full size">⤢</button>',
+    );
+  });
+  it("leaves a linked image a plain image, so a click follows the link only", () => {
+    const out = html("[![badge](https://x.test/b.svg)](https://x.test/)", { zoom: true });
+    expect(out).toContain('<a class="md-link" href="https://x.test/"');
+    expect(out).not.toContain("md-img-zoom");
   });
 });
-```
+````
 
 - [ ] **Step 3: Run both to verify they fail**
 
 Run: `npx vitest run static/src/split/__tests__/lightbox.test.jsx static/src/split/__tests__/markdown.test.jsx`
-Expected: lightbox fails to resolve `../Lightbox.jsx`; the second zoom case fails (no `is-zoomable`).
+Expected:
+- The lightbox file fails to load `../Lightbox.jsx` ("Failed to load url … Does the file exist?").
+- In markdown, "wraps an image…" and "gives a diagram…" fail.
+- "leaves … plain" and "leaves a linked image…" already pass, which is expected: zoom is off today.
 
 - [ ] **Step 4: Implement `Lightbox.jsx`**
 
 Create `static/src/split/Lightbox.jsx`:
 ```jsx
 // Full-size view for a walkthrough diagram or image (THI-443 D4). One host,
-// one signal: a zoomable diagram or <img> calls openLightbox, and the host
-// draws it at natural size over a backdrop that scrolls both ways.
+// mounted at the app root by Overlays.jsx, and one signal: a zoomable diagram
+// or image calls openLightbox, and the host draws it at natural size over a
+// backdrop that scrolls both ways.
 import { signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
@@ -735,23 +777,16 @@ export function closeLightbox() {
   from?.focus?.();
 }
 
-// Enter or Space on a focusable diagram or image opens it, like a button.
-export function zoomKeys(open) {
-  return (e) => {
-    if (e.key !== "Enter" && e.key !== " ") return;
-    e.preventDefault();
-    open();
-  };
-}
-
 export function LightboxHost() {
   const item = lightbox.value;
+  const body = useRef(null);
   const svgHost = useRef(null);
   const closeBtn = useRef(null);
   useEscape(closeLightbox, !!item);
   useEffect(() => {
     if (!item) return;
-    closeBtn.current?.focus();
+    // The scroller, not ✕: arrow keys and Page Down then scroll a big diagram.
+    body.current?.focus();
     if (item.kind !== "svg" || !svgHost.current) return;
     // Only ever mermaid's own sanitized SVG, copied from a rendered diagram
     // (Mermaid.jsx's innerHTML rule).
@@ -767,10 +802,17 @@ export function LightboxHost() {
   }, [item]);
   if (!item) return null;
   const onBackdrop = (e) => { if (e.target === e.currentTarget) closeLightbox(); };
+  // aria-modal promises focus stays in here: Tab moves between the scroller and ✕.
+  const onKeyDown = (e) => {
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    (document.activeElement === closeBtn.current ? body.current : closeBtn.current)?.focus();
+  };
   return (
-    <div class="lightbox" role="dialog" aria-modal="true" aria-label={item.kind === "img" ? "image, full size" : "diagram, full size"}>
+    <div class="lightbox" role="dialog" aria-modal="true" aria-label={item.kind === "img" ? "image, full size" : "diagram, full size"}
+      onKeyDown={onKeyDown}>
       <button type="button" class="lightbox-close" ref={closeBtn} aria-label="close" onClick={closeLightbox}>✕</button>
-      <div class="lightbox-body" onClick={onBackdrop}>
+      <div class="lightbox-body" ref={body} tabIndex={-1} onClick={onBackdrop}>
         {item.kind === "img" ? <img src={item.src} alt={item.alt} /> : <div class="lightbox-svg" ref={svgHost} />}
       </div>
     </div>
@@ -782,7 +824,7 @@ export function LightboxHost() {
 
 In `static/src/split/Mermaid.jsx`, add to the imports:
 ```js
-import { openLightbox, zoomKeys } from "./Lightbox.jsx";
+import { openLightbox } from "./Lightbox.jsx";
 ```
 
 Replace
@@ -806,23 +848,37 @@ Replace
 with
 ```jsx
   const open = () => { if (host.current?.innerHTML) openLightbox({ kind: "svg", svg: host.current.innerHTML }); };
-  // zoom (the walkthrough): the diagram is a button that opens it full size.
-  const hostProps = zoom && !error
-    ? { class: "md-mermaid-svg is-zoomable", tabindex: 0, role: "button", "aria-label": "open diagram full size", onClick: open, onKeyDown: zoomKeys(open) }
-    : { class: "md-mermaid-svg" };
+  const canZoom = zoom && !error;
   return (
     <div class="md-mermaid">
       {/* innerHTML is only ever mermaid's own SVG output, never document text.
           The source can be any previewed markdown; strict mode runs DOMPurify
           on the SVG — the one exception to convention #8. */}
-      <div ref={host} {...hostProps} />
+      {/* zoom (the walkthrough): a click on the diagram opens it full size, and
+          the button is the keyboard and screen-reader way in. role="button" on
+          the diagram itself would hide its text labels from screen readers. */}
+      <div ref={host} class={`md-mermaid-svg${canZoom ? " is-zoomable" : ""}`} onClick={canZoom ? open : undefined} />
+      {canZoom ? (
+        <button type="button" class="md-mermaid-zoom" aria-label="open diagram full size" title="open full size" onClick={open}>⤢</button>
+      ) : null}
 ```
 
 - [ ] **Step 6: Add `zoom` to `markdown.jsx`**
 
 In `static/src/split/markdown.jsx`, add to the imports:
 ```js
-import { openLightbox, zoomKeys } from "./Lightbox.jsx";
+import { openLightbox } from "./Lightbox.jsx";
+```
+
+In the `link` case, replace
+```jsx
+          {inlineAll(node.children, { ...ctx, cite: null })}
+```
+with
+```jsx
+          {/* zoom off inside a link: a zoom button in an <a> would both open the
+              lightbox and follow the link on one click. */}
+          {inlineAll(node.children, { ...ctx, cite: null, zoom: false })}
 ```
 
 Replace
@@ -835,11 +891,14 @@ with
       const src = url(node.url, ctx);
       const alt = node.alt || "";
       if (!ctx.zoom) return <img class="md-img" src={src} alt={alt} key={key} />;
-      const open = () => openLightbox({ kind: "img", src, alt });
+      // A real button around the image: <img role="button"> fails biome's
+      // noNoninteractiveElementToInteractiveRole, and a button gets Enter and Space free.
       return (
-        <img class="md-img is-zoomable" src={src} alt={alt} key={key} tabindex={0} role="button"
+        <button type="button" class="md-img-zoom" key={key}
           aria-label={alt ? `open image full size: ${alt}` : "open image full size"}
-          onClick={open} onKeyDown={zoomKeys(open)} />
+          onClick={() => openLightbox({ kind: "img", src, alt })}>
+          <img class="md-img is-zoomable" src={src} alt={alt} />
+        </button>
       );
     }
 ```
@@ -867,16 +926,43 @@ with
   };
 ```
 
-- [ ] **Step 7: Run the split tests to verify they pass**
+- [ ] **Step 7: Mount the host at the app root**
 
-Run: `npx vitest run static/src/split`
-Expected: all pass, the new lightbox and zoom cases included.
+In `static/src/overlays/Overlays.jsx`, add to the imports:
+```js
+import { LightboxHost } from "../split/Lightbox.jsx";
+```
 
-- [ ] **Step 8: Commit**
+Replace
+```jsx
+      <OpenOmnibox />
+    </>
+```
+with
+```jsx
+      <OpenOmnibox />
+      {/* Here, not in the walkthrough: inside #split-view (fixed, z-index 1) the
+          sticky header (z-index 10) would paint over it, ✕ included. */}
+      <LightboxHost />
+    </>
+```
+
+- [ ] **Step 8: Run the split tests and lint**
+
+Run:
+```bash
+npx vitest run static/src/split
+npx biome lint static/src/split static/src/overlays
+```
+Expected:
+- vitest: everything passes, including the new lightbox and zoom cases.
+- biome: no errors. The only warnings are the two `useOptionalChain` warnings already in `Rail.jsx`.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add static/src/split/Lightbox.jsx static/src/split/__tests__/lightbox.test.jsx static/src/split/Mermaid.jsx static/src/split/markdown.jsx static/src/split/__tests__/markdown.test.jsx
-git commit -m "diagrams: opt-in zoom — a diagram or image opens at natural size in a lightbox (click, Enter, Space; Esc, backdrop or ✕ closes, focus returns) (THI-443)"
+git add static/src/split/Lightbox.jsx static/src/split/__tests__/lightbox.test.jsx static/src/split/Mermaid.jsx static/src/split/markdown.jsx static/src/split/__tests__/markdown.test.jsx static/src/overlays/Overlays.jsx
+git commit -m "diagrams: opt-in zoom — an image becomes a button and a diagram gets a click target plus a full-size button; one lightbox at the app root (focus on its scroller, Tab cycles, Esc/backdrop/✕ close, focus returns) (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -886,6 +972,8 @@ git commit -m "diagrams: opt-in zoom — a diagram or image opens at natural siz
 **Files:**
 - Modify: `periscope/reviews.py`
 - Test: `tests/test_reviews.py`
+
+Design note from the plan review: `~/.claude/reviews` is **not** separated per instance (`config.instance_file()` doesn't apply to it), so the dev server (:17375) and prod (:17374) both write it. A thread lock alone let two processes collide on the shared temp file. In the review's experiment, 288 of 600 marks failed and only 43 survived. So writes also take an `fcntl.flock` on the review dir. And a mark never creates the dir: a review cleared mid-request must not come back as an orphan row holding only `reviewed.json`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -903,6 +991,7 @@ def test_read_reviewed_missing_corrupt_and_mangled_read_as_empty(tmp_path):
 
 
 def test_set_reviewed_sets_overwrites_unsets_and_removes_the_empty_file(tmp_path):
+    reviews.review_dir("fdy", "feat/x").mkdir(parents=True)
     reviews.set_reviewed("fdy", "feat/x", "Stop A", "0123abcd")
     reviews.set_reviewed("fdy", "feat/x", "Stop B", "11111111")
     reviews.set_reviewed("fdy", "feat/x", "Stop A", "ffffffff")
@@ -913,16 +1002,24 @@ def test_set_reviewed_sets_overwrites_unsets_and_removes_the_empty_file(tmp_path
     reviews.set_reviewed("fdy", "feat/x", "Stop B", None)
     assert not reviews.reviewed_path("fdy", "feat/x").exists()
     assert not list(reviews.review_dir("fdy", "feat/x").glob("*.tmp"))
+
+
+def test_set_reviewed_never_creates_the_review_dir():
+    with pytest.raises(FileNotFoundError):
+        reviews.set_reviewed("fdy", "gone", "Stop A", "0123abcd")
+    assert not reviews.review_dir("fdy", "gone").exists()
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/test_reviews.py -k reviewed -q`
-Expected: FAIL with `AttributeError: module 'periscope.reviews' has no attribute 'read_reviewed'`.
+Expected: the 3 tests fail with `AttributeError: module 'periscope.reviews' has no attribute 'read_reviewed'` (or `'reviewed_path'`/`'set_reviewed'`).
 
 - [ ] **Step 3: Implement**
 
 In `periscope/reviews.py`:
+
+Add `import fcntl` to the stdlib imports, in alphabetical order (after `from __future__ import annotations`, before `import json`).
 
 Change the module docstring's first paragraph from
 ```
@@ -948,8 +1045,9 @@ def reviewed_path(repo: str, branch: str) -> Path:
 
 After `append_comment`, add:
 ```python
-# reviewed.json is a read-modify-write: two marks pressed at once must not lose
-# one. Periscope is the file's only writer, so a process lock is enough.
+# reviewed.json is a read-modify-write, and the dev and prod servers both write
+# ~/.claude/reviews (it isn't instance_file()-separated): a flock on the review
+# dir serializes writers across processes, the thread lock within one.
 _reviewed_lock = threading.Lock()
 
 
@@ -968,34 +1066,50 @@ def read_reviewed(repo: str, branch: str) -> dict[str, str]:
 def set_reviewed(repo: str, branch: str, stop: str, sig: str | None) -> None:
     """Mark `stop` reviewed at `sig`, or unmark it with None. Written through a
     temp file + os.replace so a crash mid-write can't leave half a JSON object;
-    an empty result removes the file rather than leaving `{}` behind."""
+    an empty result removes the file rather than leaving `{}` behind. Raises
+    FileNotFoundError when the review dir is gone: a mark never creates it."""
     path = reviewed_path(repo, branch)
     with _reviewed_lock:
-        marks = read_reviewed(repo, branch)
-        if sig is None:
-            marks.pop(stop, None)
-        else:
-            marks[stop] = sig
-        if not marks:
-            path.unlink(missing_ok=True)
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(marks, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        dfd = os.open(path.parent, os.O_RDONLY)
+        try:
+            fcntl.flock(dfd, fcntl.LOCK_EX)
+            marks = read_reviewed(repo, branch)
+            if sig is None:
+                marks.pop(stop, None)
+            else:
+                marks[stop] = sig
+            if not marks:
+                path.unlink(missing_ok=True)
+                return
+            # One temp name is safe under the flock; a crash leaves at most this
+            # file, which the next write replaces.
+            tmp = path.with_suffix(".json.tmp")
+            try:
+                tmp.write_text(json.dumps(marks, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+                os.replace(tmp, path)
+            except OSError:
+                tmp.unlink(missing_ok=True)
+                raise
+        finally:
+            os.close(dfd)  # releases the flock
 ```
-(`json`, `os` and `threading` are already imported at the top of `reviews.py`.)
+(`json`, `os` and `threading` are already imported in `reviews.py`.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Run the tests and the format check**
 
-Run: `uv run pytest tests/test_reviews.py -q`
-Expected: all pass.
+Run:
+```bash
+uv run pytest tests/test_reviews.py -q
+uv run ruff format --check periscope/reviews.py tests/test_reviews.py
+uv run ruff check periscope/reviews.py tests/test_reviews.py
+```
+Expected: all tests pass, and both ruff commands are clean. If format complains, run `uv run ruff format periscope/reviews.py tests/test_reviews.py` and re-check.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add periscope/reviews.py tests/test_reviews.py
-git commit -m "reviews: reviewed.json — read_reviewed (corrupt reads as empty) and set_reviewed (locked, atomic, removes the file when empty) (THI-443)"
+git commit -m "reviews: reviewed.json — read_reviewed (corrupt reads as empty) and set_reviewed (thread lock + flock on the review dir for dev/prod, atomic, removes the file when empty, never creates the dir) (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1014,7 +1128,7 @@ In `tests/routes/test_reviews.py`, in `test_walkthrough_404_without_file_and_no_
     assert body["reviewed"] == {}
 ```
 
-Append:
+Append (already `ruff format`ted to the repo's 120 columns):
 ```python
 def test_reviewed_round_trips_through_the_walkthrough(client):
     _write_wt()
@@ -1030,30 +1144,56 @@ def test_reviewed_round_trips_through_the_walkthrough(client):
 
 @pytest.mark.parametrize(
     "stop,sig",
-    [("", "0123abcd"), ("  ", "0123abcd"), ("a\nb", "0123abcd"), ("Stop A", "xyz"), ("Stop A", "0123ABCD"), ("Stop A", "0123abcd0"), ("Stop A", "0123abcd\n")],
+    [
+        ("", "0123abcd"),
+        ("  ", "0123abcd"),
+        ("a\nb", "0123abcd"),
+        ("Stop A", "xyz"),
+        ("Stop A", "0123ABCD"),
+        ("Stop A", "0123abcd0"),
+        ("Stop A", "0123abcd\n"),
+    ],
 )
 def test_reviewed_bad_stop_or_sig_is_400(client, stop, sig):
     _write_wt()
-    r = client.post("/api/reviews/reviewed", json={"repo": "fdy", "branch": "feat/x", "stop": stop, "sig": sig, "reviewed": True})
+    r = client.post(
+        "/api/reviews/reviewed", json={"repo": "fdy", "branch": "feat/x", "stop": stop, "sig": sig, "reviewed": True}
+    )
     assert r.status_code == 400
     assert not reviews.reviewed_path("fdy", "feat/x").exists()
 
 
 def test_reviewed_without_a_walkthrough_is_404_and_creates_nothing(client):
-    r = client.post("/api/reviews/reviewed", json={"repo": "fdy", "branch": "feat/x", "stop": "Stop A", "sig": "0123abcd", "reviewed": True})
+    r = client.post(
+        "/api/reviews/reviewed",
+        json={"repo": "fdy", "branch": "feat/x", "stop": "Stop A", "sig": "0123abcd", "reviewed": True},
+    )
     assert r.status_code == 404
     assert not reviews.review_dir("fdy", "feat/x").exists()
 
 
+def test_reviewed_on_a_review_cleared_mid_request_is_404(client, mocker):
+    _write_wt()
+    mocker.patch("periscope.routes.reviews.reviews.set_reviewed", side_effect=FileNotFoundError)
+    r = client.post(
+        "/api/reviews/reviewed",
+        json={"repo": "fdy", "branch": "feat/x", "stop": "Stop A", "sig": "0123abcd", "reviewed": True},
+    )
+    assert r.status_code == 404
+
+
 def test_reviewed_rejects_traversal(client):
-    r = client.post("/api/reviews/reviewed", json={"repo": "..", "branch": "feat/x", "stop": "A", "sig": "0123abcd", "reviewed": True})
+    r = client.post(
+        "/api/reviews/reviewed",
+        json={"repo": "..", "branch": "feat/x", "stop": "A", "sig": "0123abcd", "reviewed": True},
+    )
     assert r.status_code == 400
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/routes/test_reviews.py -k "reviewed or 404_without" -q`
-Expected: FAIL. The GET has no `reviewed` key (`KeyError`), and the POST returns 404 or 405 because the route doesn't exist.
+Expected: FAIL. The GET has no `reviewed` key (`KeyError`), and the POST returns 405 from the static catch-all because the route doesn't exist.
 
 - [ ] **Step 3: Implement**
 
@@ -1125,24 +1265,33 @@ async def reviews_reviewed(body: ReviewedBody):
     _check_stop(body.stop)
     if not _SIG_RE.fullmatch(body.sig):
         raise HTTPException(400, "bad sig")
-    # Marking a walkthrough that isn't there would create its folder.
+    # A dir can hold comments.md but no walkthrough: there's nothing to mark.
     if not reviews.walkthrough_path(body.repo, body.branch).is_file():
         raise HTTPException(404, f"no walkthrough for {body.repo} {body.branch}")
     sig = body.sig if body.reviewed else None
-    await asyncio.to_thread(reviews.set_reviewed, body.repo, body.branch, body.stop, sig)
+    try:
+        await asyncio.to_thread(reviews.set_reviewed, body.repo, body.branch, body.stop, sig)
+    except FileNotFoundError:
+        # The review was cleared mid-request; a mark never recreates it (D6).
+        raise HTTPException(404, f"no walkthrough for {body.repo} {body.branch}") from None
     return {"ok": True}
 ```
 
-- [ ] **Step 4: Run the review tests to verify they pass**
+- [ ] **Step 4: Run the review tests and the format check**
 
-Run: `uv run pytest tests/test_reviews.py tests/routes/test_reviews.py -q`
-Expected: all pass, `test_comment_bad_stop_is_400` included (now through `_check_stop`).
+Run:
+```bash
+uv run pytest tests/test_reviews.py tests/routes/test_reviews.py -q
+uv run ruff format --check periscope/routes/reviews.py tests/routes/test_reviews.py
+uv run ruff check periscope/routes/reviews.py tests/routes/test_reviews.py
+```
+Expected: all pass, `test_comment_bad_stop_is_400` included (now through `_check_stop`), and both ruff commands are clean.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add periscope/routes/reviews.py tests/routes/test_reviews.py
-git commit -m "reviews: POST /api/reviews/reviewed marks or unmarks a stop (400 bad stop/sig, 404 without a walkthrough); the walkthrough GET carries reviewed (THI-443)"
+git commit -m "reviews: POST /api/reviews/reviewed marks or unmarks a stop (400 bad stop/sig, 404 without a walkthrough or when cleared mid-request); the walkthrough GET carries reviewed (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1164,7 +1313,7 @@ Create `static/src/review/__tests__/walkthroughRender.test.jsx`:
 // press the pure pieces (ReviewedToggle) by calling them, as hunk.test.jsx does.
 import render from "preact-render-to-string";
 import { describe, expect, it } from "vitest";
-import { commentOutcome, ReviewedToggle, sendHint, WalkthroughView } from "../Walkthrough.jsx";
+import { CommentForm, commentOutcome, ReviewedToggle, sendHint, WalkthroughView } from "../Walkthrough.jsx";
 import { parseWalkthrough, stopSig } from "../walkthrough.js";
 
 const DOC = `# Gauge
@@ -1210,6 +1359,10 @@ describe("<WalkthroughView> header", () => {
     expect(view({ stale_by: 1 })).toContain(">stale: 1 commit<");
     expect(view({ stale_by: null, diff: null })).toContain('<span class="wt-badge">no worktree</span>');
   });
+  it("says staleness is unknown when the worktree no longer has the recorded head", () => {
+    // stale_by null with a diff: the head was rebased away (reviews.stale_by).
+    expect(view({ stale_by: null })).toContain('<span class="wt-badge is-warn">stale: unknown</span>');
+  });
 });
 
 describe("<WalkthroughView> body", () => {
@@ -1218,7 +1371,11 @@ describe("<WalkthroughView> body", () => {
   });
   it("numbers the contents and the stops, and marks reviewed ones in the contents", () => {
     const html = view({}, { reviewed: { "Adds a gauge": firstSig } });
-    expect(html).toMatch(/class="wt-toc-n">1\.<\/span>.*Adds a gauge.*class="wt-toc-done"/s);
+    expect(html).toContain('<span class="wt-toc-n">1.</span>');
+    expect(html).toContain('<span class="wt-toc-n">2.</span>');
+    // The ✓ sits on the reviewed entry, and only there.
+    expect(html).toMatch(/<span class="wt-toc-title">Adds a gauge<\/span><span class="wt-toc-done"/);
+    expect(count(html, 'class="wt-toc-done"')).toBe(1);
     expect(html).toContain('<span class="wt-stop-n">2.</span> Reuses the cache');
   });
   it("colors each card by its kind", () => {
@@ -1272,7 +1429,25 @@ describe("walkthrough pieces", () => {
     expect(button.props["aria-pressed"]).toBe("false");
     button.props.onClick();
     expect(pressed).toBe(1);
-    expect(render(<ReviewedToggle on onToggle={() => {}} error={null} />)).toContain("✓ reviewed");
+    // One accessible name, "reviewed", in both states: aria-pressed carries the
+    // state, and the ✓ is decoration (a changing label plus pressed would be read twice).
+    expect(render(<ReviewedToggle on onToggle={() => {}} error={null} />))
+      .toContain('aria-pressed="true"><span aria-hidden="true">✓ </span>reviewed</button>');
+    expect(render(<ReviewedToggle on={false} onToggle={() => {}} error={null} />))
+      .toContain('aria-pressed="false">reviewed</button>');
+  });
+  it("CommentForm shows the text, the send hint and its buttons", () => {
+    const html = render(
+      <CommentForm stop="Adds a gauge" text="why?" busy={false} note="" textRef={null}
+        onInput={() => {}} onSend={() => {}} onCancel={() => {}} />,
+    );
+    expect(html).toContain('aria-label="comment on Adds a gauge">why?</textarea>');
+    expect(html).toContain('<button type="button" class="wt-btn">send</button>');
+    expect(html).toContain('<button type="button" class="wt-link">cancel</button>');
+    expect(html).toMatch(/<span class="wt-hint">(⌘|Ctrl\+)↩ to send<\/span>/);
+    expect(render(
+      <CommentForm stop="S" text="  " busy={false} note="" textRef={null} onInput={() => {}} onSend={() => {}} onCancel={() => {}} />,
+    )).toMatch(/<button type="button" class="wt-btn" disabled(="")?>send<\/button>/);
   });
   it("sendHint names the keys for the platform", () => {
     expect(sendHint("MacIntel")).toBe("⌘↩ to send");
@@ -1290,7 +1465,7 @@ describe("walkthrough pieces", () => {
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run static/src/review/__tests__/walkthroughRender.test.jsx`
-Expected: FAIL. `WalkthroughView`, `ReviewedToggle`, `sendHint` and `commentOutcome` are not exported.
+Expected: FAIL. `WalkthroughView`, `ReviewedToggle`, `CommentForm`, `sendHint` and `commentOutcome` are not exported.
 
 - [ ] **Step 3: Rewrite `static/src/review/Walkthrough.jsx`**
 
@@ -1300,11 +1475,11 @@ Replace the whole file with:
 // body. Each stop is a card: its title row, its diagrams across the full
 // width, then its prose beside its files and code changes. Reads
 // /api/reviews/walkthrough; the file is the artifact, this is a lens on it
-// (2026-10-26 spec D2). No pane target here, so hunk heads are inert.
-import { useEffect, useRef, useState } from "preact/hooks";
+// (2026-10-26 spec D2). No pane target here, so hunk heads are inert. The
+// lightbox host lives in Overlays.jsx, at the app root.
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Hunk, langFor } from "../diff/ChangesTab.jsx";
 import { refreshReviews } from "../poll.js";
-import { LightboxHost } from "../split/Lightbox.jsx";
 import { Mermaid } from "../split/Mermaid.jsx";
 import { renderMarkdown } from "../split/markdown.jsx";
 import { prStateMeta } from "../util.js";
@@ -1350,7 +1525,8 @@ function Comments({ list }) {
   );
 }
 
-function CommentForm({ stop, text, busy, note, textRef, onInput, onSend, onCancel }) {
+// The open box, pure, so a render test can see it.
+export function CommentForm({ stop, text, busy, note, textRef, onInput, onSend, onCancel }) {
   return (
     <div class="wt-comment-box is-open">
       <textarea ref={textRef} rows={3} value={text} placeholder="comment on this stop…" aria-label={`comment on ${stop}`}
@@ -1366,10 +1542,21 @@ function CommentForm({ stop, text, busy, note, textRef, onInput, onSend, onCance
   );
 }
 
+// Half-typed comments, by stop. Marking a stop reviewed folds it, which unmounts
+// its box (hiding it instead would break mermaid, which can't measure text in a
+// display:none subtree), so a draft must outlive the component.
+const drafts = new Map();
+
 // A "comment" link until used: thirteen always-open boxes buried the stops.
 function CommentBox({ repo, branch, stop, onPosted }) {
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState("");
+  const draftKey = `${repo}\n${branch}\n${stop}`;
+  const [open, setOpen] = useState(() => drafts.has(draftKey));
+  const [text, setTextState] = useState(() => drafts.get(draftKey) || "");
+  const setText = (v) => {
+    if (v) drafts.set(draftKey, v);
+    else drafts.delete(draftKey);
+    setTextState(v);
+  };
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const textRef = useRef(null);
@@ -1400,12 +1587,14 @@ function CommentBox({ repo, branch, stop, onPosted }) {
     onInput={setText} onSend={send} onCancel={() => setOpen(false)} />;
 }
 
+// One accessible name in both states: aria-pressed carries the state, and the ✓
+// is decoration (a changing label plus "pressed" would be announced twice).
 export function ReviewedToggle({ on, onToggle, error }) {
   return (
     <span class="wt-reviewed">
       {error ? <span class="wt-reviewed-err" role="alert">{error}</span> : null}
       <button type="button" class={`wt-reviewed-btn${on ? " is-on" : ""}`} aria-pressed={on ? "true" : "false"} onClick={onToggle}>
-        {on ? "✓ reviewed" : "mark reviewed"}
+        {on ? <span aria-hidden="true">✓ </span> : null}reviewed
       </button>
     </span>
   );
@@ -1465,13 +1654,14 @@ function Stop({ stop, n, diffFiles, comments, repo, branch, hl, reviewed, toggle
   const folded = done && !unfolded;
   const ev = evidenceFor(stop.refs, diffFiles);
   // Wide, the column scrolls on its own, so move it rather than the page.
-  // Narrow, it doesn't scroll, so bring the file into view instead.
+  // Otherwise bring the file into view only if it isn't already ("nearest"), so
+  // a column that fits on screen never jumps the page (D5).
   function goTo(i) {
     const c = col.current;
     const el = c?.querySelector(`[data-ev="${i}"]`);
     if (!el) return;
     if (c.scrollHeight > c.clientHeight) c.scrollTo({ top: el.offsetTop - 8, behavior: motion() });
-    else el.scrollIntoView({ block: "start", behavior: motion() });
+    else el.scrollIntoView({ block: "nearest", behavior: motion() });
     // Restart the flash even on a second click of the same file: the reflow
     // between remove and add makes the browser replay the animation.
     el.classList.remove("is-flash");
@@ -1542,16 +1732,21 @@ function Contents({ stops, reviewed }) {
   );
 }
 
+// stale_by is null both with no worktree (no diff either) and when the
+// worktree no longer has the recorded head (rebased away); the queue calls the
+// second "stale: unknown", and so does this.
 function Staleness({ staleBy, header, diff }) {
   if (staleBy > 0) return <span class="wt-badge is-warn">{`stale: ${staleBy} commit${staleBy === 1 ? "" : "s"}`}</span>;
   if (staleBy == null && header && !diff) return <span class="wt-badge">no worktree</span>;
+  if (staleBy == null && header && diff) return <span class="wt-badge is-warn">stale: unknown</span>;
   return null;
 }
 
 // The page itself, pure, so render-to-string tests can see every state.
 export function WalkthroughView({ data, repo, branch, pr, hl, reviewed, toggleErrors, error, onToggleReviewed, onPosted }) {
   const { text, comments, diff, stale_by } = data;
-  const w = parseWalkthrough(text);
+  // Every mark and refetch re-renders the page; parse only when the text changes.
+  const w = useMemo(() => parseWalkthrough(text), [text]);
   const byStop = new Map();
   for (const c of comments) (byStop.get(c.stop) || byStop.set(c.stop, []).get(c.stop)).push(c);
   const attached = new Set(w.stops.map((s) => s.title));
@@ -1589,7 +1784,6 @@ export function WalkthroughView({ data, repo, branch, pr, hl, reviewed, toggleEr
           </section>
         ) : null}
       </div>
-      <LightboxHost />
     </div>
   );
 }
@@ -1603,8 +1797,11 @@ export function Walkthrough({ repo, branch, pr, sig }) {
   const [nonce, setNonce] = useState(0);
   const [reviewed, setReviewed] = useState({});
   const [toggleErrors, setToggleErrors] = useState({});
-  // Marks in flight: a refetch landing mid-POST must not undo the optimistic mark.
+  // Marks in flight, and marks settled: a refetch must not apply a `reviewed`
+  // it read before a mark landed, whether it arrives mid-POST or just after
+  // ("send a comment, then mark the stop" starts exactly that refetch).
   const pending = useRef(0);
+  const settled = useRef(0);
 
   useEffect(() => {
     let alive = true;
@@ -1614,6 +1811,7 @@ export function Walkthrough({ repo, branch, pr, sig }) {
 
   useEffect(() => {
     let alive = true;
+    const marksAtStart = settled.current;
     (async () => {
       try {
         const res = await fetch(`/api/reviews/walkthrough?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}`);
@@ -1623,7 +1821,7 @@ export function Walkthrough({ repo, branch, pr, sig }) {
         // would drop the open hunks and any half-typed comment.
         if (!res.ok) { setState((s) => ({ loading: false, error: body.detail || `HTTP ${res.status}`, data: s.data })); return; }
         setState({ loading: false, error: null, data: body });
-        if (!pending.current) setReviewed(body.reviewed || {});
+        if (!pending.current && settled.current === marksAtStart) setReviewed(body.reviewed || {});
       } catch (e) {
         if (alive) setState((s) => ({ loading: false, error: String(e), data: s.data }));
       }
@@ -1647,6 +1845,7 @@ export function Walkthrough({ repo, branch, pr, sig }) {
       setToggleErrors((x) => ({ ...x, [stop.title]: `not saved: ${e.message || e}` }));
     } finally {
       pending.current--;
+      settled.current++;
     }
   }
 
@@ -1673,7 +1872,7 @@ Expected: no errors in the touched files. The three existing warnings in `Rail.j
 
 ```bash
 git add static/src/review/Walkthrough.jsx static/src/review/__tests__/walkthroughRender.test.jsx
-git commit -m "reviews walkthrough: fixed header with staleness badge and progress, contents list, stop cards with a diagram row and prose beside the code column, reviewed marks that fold a stop, collapsed comment box (THI-443)"
+git commit -m "reviews walkthrough: fixed header with staleness badge and progress, contents list, stop cards with a diagram row and prose beside the code column, reviewed marks that fold a stop, collapsed comment box (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1701,6 +1900,7 @@ with
   --kind-reuse:         oklch(0.72 0.10 80);  --kind-reuse-bg:         #5a4a2f; --kind-reuse-fg:         #f2e2c4;
   --kind-system-touch:  oklch(0.68 0.14 25);  --kind-system-touch-bg:  #6a2f2f; --kind-system-touch-fg:  #f6d0d0;
   --kind-behavior:      oklch(0.70 0.12 300); --kind-behavior-bg:      #4a2f6a; --kind-behavior-fg:      #e2d0f6;
+  --kind-other:         var(--fg-2);          /* unknown or missing kind: neutral */
 ```
 If `--r-sm: 4px;` isn't unique, use the occurrence inside the first `:root` block.
 
@@ -1784,7 +1984,7 @@ and put this block in their place:
 .wt-kind-reuse { --k: var(--kind-reuse); --k-bg: var(--kind-reuse-bg); --k-fg: var(--kind-reuse-fg); }
 .wt-kind-system-touch { --k: var(--kind-system-touch); --k-bg: var(--kind-system-touch-bg); --k-fg: var(--kind-system-touch-fg); }
 .wt-kind-behavior { --k: var(--kind-behavior); --k-bg: var(--kind-behavior-bg); --k-fg: var(--kind-behavior-fg); }
-.wt-kind-other { --k: var(--fg-2); --k-bg: var(--bg-2); --k-fg: var(--fg-1); }
+.wt-kind-other { --k: var(--kind-other); --k-bg: var(--bg-2); --k-fg: var(--fg-1); }
 /* Stop card */
 .wt-stop { margin-bottom: 16px; padding: 12px 16px 14px; background: var(--bg-1); border: 1px solid var(--line-soft); border-left: 3px solid var(--k); border-radius: 8px; }
 .wt-stop.is-folded { padding-bottom: 12px; }
@@ -1802,15 +2002,24 @@ and put this block in their place:
 /* Diagram row: as wide as the card, never past mermaid's own inline max-width
    (its natural size), and short enough that the prose stays on screen. */
 .wt-diagrams { margin: 12px 0 4px; }
-.wt-diagrams .md-mermaid { margin: 0 0 12px; overflow: visible; }
+.wt-diagrams .md-mermaid { margin: 0 0 12px; }
 .wt-diagrams .md-mermaid-svg svg { width: 100%; height: auto; max-height: 70vh; }
-.md-mermaid-svg.is-zoomable, .md-img.is-zoomable { cursor: zoom-in; }
-.md-mermaid-svg.is-zoomable:focus-visible, .md-img.is-zoomable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Outside .md-doc, so a failed diagram's source + error needs its own skin and
+   its own sideways scroll (5.8:1, --s-needs on --bg-term). */
+.wt-diagrams .md-mermaid-err { margin: 0; padding: 11px 14px; overflow-x: auto; white-space: pre; font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--bg-term); border: 1px solid var(--line-soft); border-radius: var(--r-sm); }
+/* Zoom (split/Mermaid.jsx, split/markdown.jsx): a click on a diagram opens it,
+   the corner button is the keyboard way in; an image is wrapped in a button. */
+.walkthrough .md-mermaid { position: relative; }
+.md-mermaid-svg.is-zoomable, .md-img-zoom { cursor: zoom-in; }
+.md-mermaid-zoom { position: absolute; top: 6px; right: 6px; padding: 1px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); color: var(--fg-1); font: inherit; font-size: var(--wt-fs-ui); cursor: zoom-in; }
+.md-mermaid-zoom:hover { color: var(--fg-0); border-color: var(--line-strong); }
+.md-img-zoom { display: inline-block; padding: 0; border: 0; background: none; }
+.md-mermaid-zoom:focus-visible, .md-img-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Prose column */
 .wt-prose { min-width: 0; }
 /* Code column: sticks beside the prose while the stop is on screen and
    scrolls on its own when taller. */
-.wt-evidence { position: sticky; top: 8px; align-self: start; min-width: 0; max-height: calc(100cqh - 16px); overflow: auto; font-size: var(--wt-fs-ui); }
+.wt-evidence { position: sticky; top: 12px; align-self: start; min-width: 0; max-height: calc(100cqh - 24px); overflow: auto; font-size: var(--wt-fs-ui); }
 .wt-files { list-style: none; margin: 0 0 8px; padding: 0; }
 .wt-file { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 2px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--fg-1); font: inherit; text-align: left; }
 button.wt-file { cursor: pointer; }
@@ -1825,9 +2034,14 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 .wt-nodiff { margin: 6px; color: var(--fg-2); font-size: var(--wt-fs-meta); }
 .wt-ev-file { margin-top: 10px; border-radius: var(--r-sm); }
 .wt-ev-path { margin: 0 0 4px; color: var(--fg-2); }
+/* A background fade, not motion, so it plays under reduced motion too (an
+   outline instead would stay forever: nothing removes is-flash). */
 .wt-ev-file.is-flash { animation: wt-flash 1.2s ease-out; }
 @keyframes wt-flash { from { background: color-mix(in oklch, var(--accent) 22%, transparent); } to { background: transparent; } }
-@media (prefers-reduced-motion: reduce) { .wt-ev-file.is-flash { animation: none; outline: 1px solid var(--accent); } }
+/* Shared styles that put --fg-3 text in the view (D9: nothing under 4.5:1). */
+.walkthrough .dhunk-head { color: var(--fg-1); }
+.walkthrough .md-doc .md-ul li::marker, .walkthrough .md-doc .md-ol li::marker { color: var(--fg-2); }
+.walkthrough .rq-pr-link.is-closed { color: var(--fg-2); }
 /* Comments */
 .wt-comments { list-style: none; margin: 14px 0 0; padding: 0; font-size: var(--wt-fs-ui); }
 .wt-comments li { margin: 8px 0; padding: 2px 10px; border-left: 2px solid var(--s-needs); }
@@ -1843,8 +2057,9 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 .wt-btn:hover:not(:disabled) { border-color: var(--line-strong); }
 .wt-btn:disabled { opacity: .55; cursor: default; }
 .wt-hint, .wt-comment-note { color: var(--fg-2); font-size: var(--wt-fs-meta); }
-/* Narrow: one column, prose then code; the code column stops sticking. */
-@container wt (width < 1000px) {
+/* Narrow: one column, prose then code; the code column stops sticking. 1100px
+   leaves the code column ~45 mono columns at the switch; Task 12 tunes it. */
+@container wt (width < 1100px) {
   .wt-cols { grid-template-columns: minmax(0, 1fr); }
   .wt-evidence { position: static; max-height: none; overflow: visible; }
 }
@@ -1871,7 +2086,7 @@ Expected: biome reports only the three existing warnings; vitest passes. CSS isn
 
 ```bash
 git add static/styles.css
-git commit -m "reviews walkthrough: styles — fixed header, two-column grids with a 1000px container fallback, sticky code column, kind-colored cards and tokens, five-step type scale, ≥4.5:1 text, lightbox (THI-443)"
+git commit -m "reviews walkthrough: styles — fixed header, two-column grids with a 1000px container fallback, sticky code column, kind-colored cards and tokens, five-step type scale, ≥4.5:1 text, lightbox (THI-443)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1893,7 +2108,19 @@ In `docs/superpowers/specs/2026-10-26-review-walkthrough-design.md`, after D5's 
 > (`POST /api/reviews/reviewed`).
 ```
 
-- [ ] **Step 2: Tell walkthrough authors where diagrams land**
+- [ ] **Step 1b: Add `reviewed.json` to D2's one-writer list**
+
+In the same file, the D2 section's paragraph starting "One writer per file:" ends with
+```
+whole dir only on the row's **clear**.
+```
+Replace that line with
+```
+whole dir only on the row's **clear**. Periscope is also the only writer of
+`reviewed.json` (per-stop reviewed marks, THI-443).
+```
+
+- [ ] **Step 2: Tell walkthrough authors where diagrams land, and that the marks file isn't theirs**
 
 In `skills/walkthrough/SKILL.md`, in the `## Diagrams` paragraph, replace
 ```
@@ -1902,6 +2129,15 @@ Mermaid goes in a ```` ```mermaid ```` fence.
 with
 ```
 Mermaid goes in a ```` ```mermaid ```` fence. The view draws a stop's diagrams in a full-width row above its text, so a diagram should make sense before the prose explains it.
+```
+
+In the same file, replace
+```
+A re-run leaves `comments.md` alone apart from step 6.
+```
+with
+```
+A re-run leaves `comments.md` alone apart from step 6, and never touches `reviewed.json` (periscope's reviewed marks).
 ```
 
 - [ ] **Step 3: Name the new spec in CLAUDE.md**
@@ -1919,7 +2155,7 @@ D6 queue sourced from `gh` with panes joined on; the walkthrough view's layout a
 
 ```bash
 git add docs/superpowers/specs/2026-10-26-review-walkthrough-design.md skills/walkthrough/SKILL.md CLAUDE.md
-git commit -m "docs: the walkthrough's two-column layout and reviewed.json — D5 points at the THI-443 spec, the skill says diagrams render above the text, CLAUDE.md names the spec"
+git commit -m "docs: the walkthrough's two-column layout and reviewed.json — D5 points at the THI-443 spec, the skill says diagrams render above the text, CLAUDE.md names the spec" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1932,7 +2168,7 @@ Run:
 ```bash
 npm run build
 git add static/dist
-git commit -m "build: static/dist"
+git commit -m "build: static/dist" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 Expected: `✓ built in …`.
 
@@ -1962,17 +2198,20 @@ Wait until `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:17375/api/re
 
 - [ ] **Step 2: Wide window (1600×1000)**
 
-Open `http://127.0.0.1:17375/` and select the 13-stop review in the rail. Check:
+Open `http://127.0.0.1:17375/` and select the 13-stop review in the rail (`~/.claude/reviews/fdy/project`, branch `project`). If its header shows "no worktree", that review has no diff: run the code-column checks below on a review whose branch has a worktree instead (any rail review row without that badge). Check:
 - the header stays put while the body scrolls; it shows the staleness badge (if stale) and "0 / 13 reviewed";
 - the problem statement and the contents list sit side by side; a contents entry jumps to its stop;
 - each diagram fills the card width up to its natural size, with labels readable at 100% zoom. Measure one: its rendered width ÷ viewBox width should be well above the old 0.30;
-- clicking a diagram opens the lightbox at natural size, scrolling both ways; Esc, a backdrop click and ✕ each close it; Tab to a diagram then Enter opens it;
-- the code column sticks while the prose scrolls, and scrolls on its own; a file-list click and a prose cite chip both land on that file and flash it;
-- "N not in this diff" is one line and expands.
+- clicking a diagram opens the lightbox at natural size, scrolling both ways, **above the app header** (✕ visible and clickable at the top right); Esc, a backdrop click and ✕ each close it; Tab to the diagram's ⤢ button, then Enter, opens it; inside, the arrow keys scroll it and Tab only moves between the scroller and ✕;
+- the code column sticks while the prose scrolls, and scrolls on its own; a file-list click and a prose cite chip both land on that file and flash it, and the page itself doesn't jump;
+- "N not in this diff" is one line and expands;
+- marking the stop reviewed while a comment is half-typed, then unfolding it, brings the draft back.
 
-- [ ] **Step 3: Narrow window (1000×900)**
+- [ ] **Step 3: Narrow window (1000×900), and the breakpoint**
 
 Check: every grid is one column, with the prose first; no sideways page scroll (`document.querySelector('.wt-scroll').scrollWidth <= clientWidth`); long hunk lines scroll inside their hunk.
+
+Then widen the window until the stops switch to two columns, and record `.wt-scroll`'s width and the code column's width (`.wt-evidence` `getBoundingClientRect().width`) at the switch. The code column should hold at least ~80 monospace characters at 12px (about 580px). If it doesn't, raise the `@container` threshold in `static/styles.css` (it starts at 1100px) and commit.
 
 - [ ] **Step 4: Reviewed mark round trip**
 
@@ -1985,11 +2224,11 @@ Mark the first stop reviewed. It folds, the contents shows ✓, and the header r
 - [ ] **Step 6: Contrast and fonts**
 
 In the page, measure contrast for:
-- the header line, the file-list range and count, the hidden summary, the comment timestamp, the kind badge, `wt-badge is-warn`, `wt-reviewed-btn.is-on` and the hint.
+- the header line, the file-list range and count, the hidden summary, the comment timestamp, the kind badge, `wt-badge is-warn`, `wt-reviewed-btn.is-on`, the hint, a hunk's `@@` head (`.dhunk-head`), an ordered list's numbers in prose, and the ⤢ button.
 
-Each must be ≥ 4.5:1 against its actual background. Use a canvas pixel read (paint the computed `color` over the computed background chain) to convert oklch first. Also check that the diagram labels' computed font family is Hanken Grotesk.
+Each must be ≥ 4.5:1 against its actual background. Use a canvas pixel read (paint the computed `color` over the computed background chain) to convert oklch first. Also check that the diagram labels' computed font family matches the computed `--sans`: it's Hanken Grotesk with the default font setting, and the user's choice otherwise (`main.jsx` sets `--sans` from Settings → Fonts).
 
-If anything misses, fix the CSS, re-run Task 11, and commit as `reviews walkthrough: <what> (THI-443)`. If 1000px is clearly the wrong breakpoint, adjust it in the `@container` rule and commit.
+If anything misses, fix the CSS, re-run Task 11, and commit as `reviews walkthrough: <what> (THI-443)`.
 
 - [ ] **Step 7: Stop the dev server**
 
@@ -1998,7 +2237,8 @@ If anything misses, fix the CSS, re-run Task 11, and commit as `reviews walkthro
 ### Task 13: Hand-off
 
 - [ ] **Step 1: Re-run the gates if Task 12 changed anything** (Task 11, Step 2)
-- [ ] **Step 2: Ask the user before pushing.** When approved:
+- [ ] **Step 2: Catch up with `origin/main`.** Run `git fetch origin`. If `git rev-list --count HEAD..origin/main` isn't 0, run `git rebase origin/main`. Nearly every periscope commit rebuilds `static/dist/app.js`, so expect conflicts on `build: static/dist` commits. Resolve each by running `npm run build`, then `git add static/dist`, then `GIT_EDITOR=true git rebase --continue`. Then re-run Task 11, Step 2.
+- [ ] **Step 3: Ask the user before pushing.** When approved:
   - `git push -u origin thibaultdody/thi-443-review-walkthrough-full-width-layout-legible-diagrams`
   - `gh pr create --repo tomplex/periscope --base main --head thibaultdody/thi-443-review-walkthrough-full-width-layout-legible-diagrams --title "THI-443: review walkthrough — two-column stops, legible diagrams, reviewed marks, type and color"`
   - link the PR on THI-443 and move it to In Review.
