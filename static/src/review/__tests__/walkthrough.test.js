@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  filterRows, isReviewed, matchRefs, nextSort, parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
+  evidenceFor, evidenceIndex, filterRows, hiddenSummary, isReviewed, matchRefs, nextSort,
+  parseWalkthrough, sortRows, staleLabel, stopSig, unresolvedTotal, withMark,
 } from "../walkthrough.js";
+import { parseCite } from "../../split/mdMeta.js";
 
 const DOC = `# Cost gauge
 
@@ -342,6 +344,51 @@ describe("stopSig, isReviewed, withMark (THI-443 D6)", () => {
     expect(withMark(marks, "A", "33333333")).toEqual({ A: "33333333", B: "22222222" });
     expect(withMark(marks, "A", null)).toEqual({ B: "22222222" });
     expect(marks).toEqual({ A: "11111111", B: "22222222" });
+  });
+});
+
+describe("evidenceFor, hiddenSummary, evidenceIndex (THI-443 D5)", () => {
+  const files = [
+    { path: "a/one.py", hunks: [
+      { new_start: 1, lines: [{ kind: "add", text: "x" }] },
+      { new_start: 50, lines: [{ kind: "ctx", text: "y" }] },
+    ] },
+    { path: "dist/app.js", hunks: [], generated: true },
+  ];
+  const refs = ["a/one.py", "a/one.py:200-210", "b/missing.py", "dist/app.js"].map(parseCite);
+
+  it("shows refs with hunks and sorts the rest into missing, generated and unchanged", () => {
+    const ev = evidenceFor(refs, files);
+    expect(ev.noDiff).toBe(false);
+    expect(ev.shown.map((e) => [e.ref.raw, e.name, e.hunks.length])).toEqual([["a/one.py", "one.py", 2]]);
+    expect(ev.hidden.missing.map((r) => r.raw)).toEqual(["b/missing.py"]);
+    expect(ev.hidden.generated.map((r) => r.raw)).toEqual(["dist/app.js"]);
+    expect(ev.hidden.unchanged.map((r) => r.raw)).toEqual(["a/one.py:200-210"]);
+  });
+  it("summarizes the hidden refs in one line, skipping empty groups", () => {
+    expect(hiddenSummary(evidenceFor(refs, files).hidden)).toBe(
+      "1 not in this diff · 1 generated · 1 unchanged at the cited lines",
+    );
+    expect(hiddenSummary(evidenceFor(refs.slice(0, 1), files).hidden)).toBe("");
+  });
+  it("lists every ref with no hunks when there is no worktree diff", () => {
+    const ev = evidenceFor(refs, null);
+    expect(ev.noDiff).toBe(true);
+    expect(ev.shown.map((e) => [e.name, e.hunks.length])).toEqual([["one.py", 0], ["one.py", 0], ["missing.py", 0], ["app.js", 0]]);
+    expect(hiddenSummary(ev.hidden)).toBe("");
+  });
+  it("lands a prose cite on the first shown file with its path", () => {
+    const { shown } = evidenceFor(refs, files);
+    expect(evidenceIndex(shown, parseCite("a/one.py:3"))).toBe(0);
+    expect(evidenceIndex(shown, parseCite("b/missing.py"))).toBe(-1);
+  });
+  it("prefers the cited range whose hunks cover the cite's line", () => {
+    const { shown } = evidenceFor(["a/one.py:1-5", "a/one.py:50-60"].map(parseCite), files);
+    expect(evidenceIndex(shown, parseCite("a/one.py:50"))).toBe(1);
+    expect(evidenceIndex(shown, parseCite("a/one.py:2"))).toBe(0);
+    // No line, or a line no hunk covers: the first entry for the path.
+    expect(evidenceIndex(shown, parseCite("a/one.py"))).toBe(0);
+    expect(evidenceIndex(shown, parseCite("a/one.py:999"))).toBe(0);
   });
 });
 

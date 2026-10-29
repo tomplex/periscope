@@ -245,3 +245,41 @@ export function withMark(reviewed, title, sig) {
   else next[title] = sig;
   return next;
 }
+
+const basename = (p) => p.slice(p.lastIndexOf("/") + 1);
+
+// The code-changes column (THI-443 D5). `shown` gets a file-list row and a
+// block of hunks; `hidden` folds into one summary line, so files with nothing
+// to show don't bury the ones that do. diffFiles null means no worktree: every
+// ref is listed and none has hunks.
+export function evidenceFor(refs, diffFiles) {
+  const hidden = { missing: [], generated: [], unchanged: [] };
+  if (diffFiles == null) {
+    return { shown: refs.map((ref) => ({ ref, name: basename(ref.path), hunks: [] })), hidden, noDiff: true };
+  }
+  const shown = [];
+  for (const m of matchRefs(refs, diffFiles)) {
+    if (!m.file) hidden.missing.push(m.ref);
+    else if (m.generated) hidden.generated.push(m.ref);
+    else if (!m.hunks.length) hidden.unchanged.push(m.ref);
+    else shown.push({ ref: m.ref, name: basename(m.ref.path), hunks: m.hunks });
+  }
+  return { shown, hidden, noDiff: false };
+}
+
+export function hiddenSummary(hidden) {
+  const parts = [];
+  if (hidden.missing.length) parts.push(`${hidden.missing.length} not in this diff`);
+  if (hidden.generated.length) parts.push(`${hidden.generated.length} generated`);
+  if (hidden.unchanged.length) parts.push(`${hidden.unchanged.length} unchanged at the cited lines`);
+  return parts.join(" · ");
+}
+
+// A cite chip in the prose lands on the file-list entry for its path whose
+// hunks cover its line; with no line, or none covering it, the first entry for
+// the path. A stop citing a.py:1-5 and a.py:50-60 sends a.py:52 to the second.
+export function evidenceIndex(shown, cite) {
+  const covers = (e) => cite.start != null && e.hunks.some((h) => h.new_start <= cite.end && newEnd(h) >= cite.start);
+  const hit = shown.findIndex((e) => e.ref.path === cite.path && covers(e));
+  return hit >= 0 ? hit : shown.findIndex((e) => e.ref.path === cite.path);
+}
