@@ -32,6 +32,7 @@ These come from the installed CLI bundle, because the hooks docs don't publish t
 - **A silent hook doesn't change the dialog.** If the hook prints nothing and exits 0, the dialog shows unchanged.
 - **The hook runs before the dialog renders.** So its row exists by the time the pane reads as waiting.
 - **The default timeout is 600 s,** so the hook must return at once.
+- **Some Bash dialogs add a row under the description.** `python3 -c …` gets `This command requires approval`, one column in (shallower than the command), between the description and the question. A real capture is `tests/fixtures/permission_dialogs/bash_requires_approval.txt`.
 - **The dialog's keys** (`1` = Yes, `Escape` = No and tell Claude what to do differently) aren't documented. PR 2 pins them with a fixture captured from a real dialog.
 
 ## PR 1: the shell and the plain buttons
@@ -180,7 +181,7 @@ So:
   3. the full-width rule sits above that, within 60 rows, with no scrollback marker (`⏺`, `✻`, `⎿`) in between;
   4. the header is the first row under the rule.
 - **`panes.dialog_matches(parsed, tool, match_key)`** replaces the planned `dialog_shows`, and is header-bound:
-  - **Bash:** the header is `Bash command`, and the digest of the body **equals** the key. The body is taken after a leading `Tip:` and its wrap, with `│` gutters dropped, then squashed. Never a prefix or a substring.
+  - **Bash:** the header is `Bash command`, and the digest of the body **equals** the key. The body is taken after a leading `Tip:` and its wrap, and before a trailing `This command requires approval` row (`_TRAILING_CHROME`), with `│` gutters dropped, then squashed. Any other row shallower than the command, or that text anywhere but the block's end, stays in the body and fails closed. Never a prefix or a substring.
   - **Write** (`Create file` / `Overwrite file`) **and Edit** (`Edit file`): the path in the question (`Do you want to create / overwrite / make this edit to <path>?`) is a `/`-boundary suffix of the stored absolute path, so `notes.md` can't vouch for `old-notes.md`. The body (a preview, a diff) is never read: it can mention any file.
   - **Only `VERIFIABLE_TOOLS = ("Bash", "Edit", "Write")` can match.** The hook runs on bare `python3` and can't import `periscope`, so it and `panes.py` each define that tuple and the hidden-control class (`\u` escapes, never the raw characters), and tests assert the copies agree.
 - **Accepted limits:**
