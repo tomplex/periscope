@@ -942,19 +942,37 @@ def _is_turn_chrome(line: str) -> bool:
     return len(line) - len(line.lstrip()) >= _RIGHT_ALIGNED_INDENT
 
 
-def _last_meaningful_line(lines: list[str]) -> str:
-    """The closest line of the reply from the bottom, skipping TUI chrome and
-    the turn's own (_is_turn_chrome): what a done banner says when the
-    transcript can't (THI-416). "" if nothing real.
+# A collapsed tool group (`⏺ Read 3 files (ctrl+o to expand)`) or an MCP call
+# (`⏺ periscope - notify (MCP)(kind: …)`): tool headers TOOL_CALL_RE misses.
+_TOOL_HEADER_MARKS = ("(ctrl+o to expand)", "(MCP)(")
+
+
+def _last_meaningful_line(rows: list[str]) -> str:
+    """What a done banner says when the transcript can't (THI-416): the newest
+    reply on screen from its start, its first paragraph's wrapped rows joined.
+    Its last row was the banner once, half a sentence ("that use it would
+    fail."). "" when the newest ⏺ is a tool call: the turn ended without words.
+    With no ⏺ on screen, the closest line from the bottom that isn't chrome or
+    the turn's own (_is_turn_chrome). `rows` keeps blank rows: they end the
+    paragraph.
     """
-    for line in reversed(lines):
-        s = line.strip()
-        if not s:
+    for i in range(len(rows) - 1, -1, -1):
+        s = rows[i].strip()
+        if not s.startswith("⏺"):
             continue
-        if _is_chrome_line(line) or _is_turn_chrome(line):
-            continue
-        # A reply's first row opens with Claude's ⏺; the banner wants the words.
-        return s.removeprefix("⏺").lstrip()[:200]
+        if TOOL_CALL_RE.match(s) or any(mark in s for mark in _TOOL_HEADER_MARKS):
+            return ""
+        # Claude wraps a reply itself, each continuation row indented under ⏺.
+        para = [s.removeprefix("⏺").strip()]
+        for row in rows[i + 1 :]:
+            if not row.startswith("  ") or not row.strip() or _is_chrome_line(row) or _is_turn_chrome(row):
+                break
+            para.append(row.strip())
+        return " ".join(para)[:300]
+    for row in reversed(rows):
+        s = row.strip()
+        if s and not _is_chrome_line(row) and not _is_turn_chrome(row):
+            return s[:200]
     return ""
 
 
@@ -1086,7 +1104,8 @@ def parse_pane(content: str) -> dict:
     pending_input = None if needs_input else _detect_pending_input(raw_rows, plain_rows)
 
     recap = _extract_recap(lines)
-    last_line = _last_meaningful_line(body)
+    # The same cut over every row: blank rows end the reply's first paragraph.
+    last_line = _last_meaningful_line(plain_rows[: _last_rule_index(plain_rows) + 1] if composer else plain_rows)
 
     asked_question = _detect_asked_question(body) if agent == "claude" and not needs_input else False
     api_error = _detect_api_error(body) if agent == "claude" else False

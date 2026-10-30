@@ -646,7 +646,65 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
         f"{CUSTOM_STATUS_LINE} {OSC_LINK}\n"
         "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents\n"
         "  ⧉  dashboard-latest · client-health-preview\n",
-        "It now reads the reply for THI-416, not the footer.",
+        "I fixed the banner. It now reads the reply for THI-416, not the footer.",
+    ),
+    # The start of the reply, not its last row: a banner read "that use it
+    # would fail.", the tail of a wrapped sentence. The first paragraph, its
+    # wrapped rows joined, holds the first sentence.
+    (
+        "reply-start-not-its-last-row",
+        textwrap.dedent(f"""\
+        ⏺ Bash(gh pr create --draft)
+          ⎿  https://github.com/o/r/pull/12
+
+        ⏺ I opened draft PR #12 with the keep-open label. CI is running in the
+          background; this is the first time the tests run anywhere.
+
+          - What it does: the banner now reads the reply.
+          - Not yet verified: a real macOS banner.
+
+          I'll report the CI result when the checks finish. Otherwise the scopes
+          that use it would fail.
+
+        ✻ Brewed for 2m 3s · done 12:28 PM
+        {RULE}
+        ❯
+        {RULE}
+        {CUSTOM_STATUS_LINE}
+    """),
+        "I opened draft PR #12 with the keep-open label. CI is running in the background; "
+        "this is the first time the tests run anywhere.",
+    ),
+    # A turn that ended in a tool call said nothing after it: no words beat a
+    # tool header or its output (the banner then says "Finished.").
+    (
+        "turn-ended-in-a-tool-call",
+        textwrap.dedent(f"""\
+        ⏺ Pushing now.
+
+        ⏺ Bash(git push origin main)
+          ⎿  To github.com:o/r.git
+             a1b2c3d..e4f5a6b  main -> main
+
+        ✻ Brewed for 9s · done 12:28 PM
+        {RULE}
+        ❯
+        {RULE}
+    """),
+        "",
+    ),
+    (
+        "turn-ended-in-an-mcp-call",
+        textwrap.dedent(f"""\
+        ⏺ Done.
+
+        ⏺ periscope - notify (MCP)(kind: "done", message: "Pushed")
+          ⎿  {{"ok": true}}
+        {RULE}
+        ❯
+        {RULE}
+    """),
+        "",
     ),
     # A tool result or tip under the reply, and the turn's waiting line.
     (
