@@ -1319,13 +1319,21 @@ def test_unknown_chrome_above_the_command_fails_closed():
 def test_only_known_chrome_below_the_command_is_skipped():
     # "This command requires approval" under the description is skipped (the
     # real capture matches its own key, above). Any other shallow row there
-    # stays in the block and fails closed, and the known text at the command's
-    # indent is part of the request, not chrome.
+    # stays in the block and fails closed, and so does the known text above the
+    # description or at the command's indent: it's part of the request then.
     key = _bash_key(_PY_COMMAND, _PY_DESCRIPTION)
     capture = _dialog("bash_requires_approval.txt")
     unknown = parse_permission_dialog(capture.replace(" This command requires approval", " ⚠ Sandbox disabled"))
     assert unknown is not None
     assert not dialog_matches(unknown, "Bash", key)
+    above = parse_permission_dialog(
+        capture.replace(
+            f"   {_PY_DESCRIPTION}\n\n This command requires approval",
+            f" This command requires approval\n   {_PY_DESCRIPTION}",
+        )
+    )
+    assert above is not None and above["body"][-1] == f"   {_PY_DESCRIPTION}"
+    assert not dialog_matches(above, "Bash", key)
     deep = parse_permission_dialog(
         capture.replace(" This command requires approval", "   This command requires approval")
     )
