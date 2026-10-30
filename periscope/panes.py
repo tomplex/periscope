@@ -460,13 +460,14 @@ def list_windows() -> list[dict]:
 def _split_buffers(content: str) -> tuple[list[str], list[str], list[str]]:
     """Split capture() output into (raw_rows, plain_rows, lines).
 
-    `content` includes SGR escape sequences (capture -e). `raw_rows` keeps
+    `content` includes escape sequences (capture -e). `raw_rows` keeps
     them — the prompt-line ghost-text check needs the fg-color info to tell
     real input from Claude's greyed-out suggestion. `plain_rows` strips
-    them; `lines` is the non-empty plain rows.
+    them, OSC 8 hyperlinks included (a linkified ticket reached the done
+    banner as `\\x1b]8;id=…`, THI-416); `lines` is the non-empty plain rows.
     """
     raw_rows = content.rstrip("\n").split("\n")
-    plain_rows = [_ANSI_SGR_RE.sub("", row) for row in raw_rows]
+    plain_rows = [_strip_escapes(row) for row in raw_rows]
     lines = [p for p in plain_rows if p.strip() != ""]
     return raw_rows, plain_rows, lines
 
@@ -830,6 +831,12 @@ def _dialog_above(rows: list[str]) -> bool:
     return False
 
 
+# The composer's top rule: plain, or a named session's with the name at its
+# right end (`──── thi-416-banner ─`), which hid the composer and handed the
+# footer to last_line (THI-416). The lower rule and a dialog's stay plain.
+_COMPOSER_TOP_RE = re.compile(r"^─{20,}(?: [^─]+ ─+)?\s*$")
+
+
 def _composer_rows(content: str, footer_reach: int = _FOOTER_REACH) -> list[tuple[str, str]] | None:
     """(raw, plain) of the non-empty rows between the LAST two full-width
     rules, where Claude draws its composer, or None when there is no such
@@ -838,14 +845,18 @@ def _composer_rows(content: str, footer_reach: int = _FOOTER_REACH) -> list[tupl
     raw_rows = content.rstrip("\n").split("\n")
     plain_rows = [_strip_escapes(row).rstrip() for row in raw_rows]
     rules = [i for i, row in enumerate(plain_rows) if DIALOG_RULE_RE.match(row)]
-    if len(rules) < 2:
+    if not rules:
         return None
-    footer = [row for row in plain_rows[rules[-1] + 1 :] if row.strip()]
+    bottom = rules[-1]
+    top = next((i for i in reversed(range(bottom)) if _COMPOSER_TOP_RE.match(plain_rows[i])), None)
+    if top is None:
+        return None
+    footer = [row for row in plain_rows[bottom + 1 :] if row.strip()]
     if len(footer) > footer_reach or any(_EXITED_RE.match(row) for row in footer):
         return None
-    if _dialog_above(plain_rows[: rules[-2]]):
+    if _dialog_above(plain_rows[:top]):
         return None
-    return [(raw_rows[i], plain_rows[i]) for i in range(rules[-2] + 1, rules[-1]) if plain_rows[i].strip()]
+    return [(raw_rows[i], plain_rows[i]) for i in range(top + 1, bottom) if plain_rows[i].strip()]
 
 
 def _detect_composer(content: str) -> bool:
@@ -930,18 +941,54 @@ def _extract_recap(lines: list[str]) -> str | None:
     return re.sub(r"\s+", " ", recap)[:400]
 
 
-def _last_meaningful_line(lines: list[str]) -> str:
-    """The closest "real" content line from the bottom — recent prose, a
-    subtask line, or a past-tense indicator — skipping TUI chrome. Used for
-    shell panes and the card snippet fallback. "" if nothing real.
+# Claude draws hints like `new task? /clear to save 433.4k tokens` flush right,
+# just above the composer. A reply's prose is indented 2 under its ⏺, a list a
+# few more.
+_RIGHT_ALIGNED_INDENT = 20
+
+
+def _is_turn_chrome(line: str) -> bool:
+    """True for the turn's own lines that aren't the reply: its `✻ Brewed for
+    42s · done 1:27 PM` or `✻ Waiting for 1 background agent` line, a `⎿` tool
+    result or tip, a right-aligned hint. Not in _is_chrome_line: the asked-
+    question check reads the line above the `✻` indicator through it."""
+    s = line.strip()
+    if s.startswith(("✻", "⎿")) or IDLE_INDICATOR_RE.match(line):
+        return True
+    return len(line) - len(line.lstrip()) >= _RIGHT_ALIGNED_INDENT
+
+
+# A collapsed tool group (`⏺ Read 3 files (ctrl+o to expand)`) or an MCP call
+# (`⏺ periscope - notify (MCP)(kind: …)`): tool headers TOOL_CALL_RE misses.
+_TOOL_HEADER_MARKS = ("(ctrl+o to expand)", "(MCP)(")
+
+
+def _last_meaningful_line(rows: list[str]) -> str:
+    """What a done banner says when the transcript can't (THI-416): the newest
+    reply on screen from its start, its first paragraph's wrapped rows joined.
+    Its last row was the banner once, half a sentence ("that use it would
+    fail."). "" when the newest ⏺ is a tool call: the turn ended without words.
+    With no ⏺ on screen, the closest line from the bottom that isn't chrome or
+    the turn's own (_is_turn_chrome). `rows` keeps blank rows: they end the
+    paragraph.
     """
-    for line in reversed(lines):
-        s = line.strip()
-        if not s:
+    for i in range(len(rows) - 1, -1, -1):
+        s = rows[i].strip()
+        if not s.startswith("⏺"):
             continue
-        if _is_chrome_line(line):
-            continue
-        return s[:200]
+        if TOOL_CALL_RE.match(s) or any(mark in s for mark in _TOOL_HEADER_MARKS):
+            return ""
+        # Claude wraps a reply itself, each continuation row indented under ⏺.
+        para = [s.removeprefix("⏺").strip()]
+        for row in rows[i + 1 :]:
+            if not row.startswith("  ") or not row.strip() or _is_chrome_line(row) or _is_turn_chrome(row):
+                break
+            para.append(row.strip())
+        return " ".join(para)[:300]
+    for row in reversed(rows):
+        s = row.strip()
+        if s and not _is_chrome_line(row) and not _is_turn_chrome(row):
+            return s[:200]
     return ""
 
 
@@ -1073,7 +1120,8 @@ def parse_pane(content: str) -> dict:
     pending_input = None if needs_input else _detect_pending_input(raw_rows, plain_rows)
 
     recap = _extract_recap(lines)
-    last_line = _last_meaningful_line(body)
+    # The same cut over every row: blank rows end the reply's first paragraph.
+    last_line = _last_meaningful_line(plain_rows[: _last_rule_index(plain_rows) + 1] if composer else plain_rows)
 
     asked_question = _detect_asked_question(body) if agent == "claude" and not needs_input else False
     api_error = _detect_api_error(body) if agent == "claude" else False

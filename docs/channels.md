@@ -174,6 +174,18 @@ Resolution falls back to newest-mtime-in-cwd when a pane has no recorded session
 yet. The earlier `channel_shim.py` recorder was removed — the hook's payload is
 strictly better (current vs spawn-frozen).
 
+The same mapping gives a done banner its words (THI-416). For a `done` Claude
+pane, `window_view` publishes `last_reply`: `turns.last_reply_for_session`
+reads the session's transcript backward from the end to the newest assistant
+text, skipping meta and sidechain events and Claude's bookkeeping rows
+(`turn_duration`, `artifact-autoreact-ledger`, `mode`, …). It returns None once
+a prompt follows that text (the new turn has said nothing yet), and flattens the
+markdown so a link's URL doesn't fill the banner. It's cached per session on the
+file's size and mtime, so a done pane costs a `stat` per poll. There is no
+newest-mtime-in-cwd fallback here: a wrong transcript would put another pane's
+words in the banner, so without the session the banner falls back to
+`last_line`, the screen's guess.
+
 ## Permission requests (a banner's Allow / Deny)
 
 **`pane_permission_hook.py`** is `pane_session_hook.py`'s sibling:

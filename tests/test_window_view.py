@@ -162,6 +162,27 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
     assert stamp == (pid, 5000, 0, 0)
 
 
+def test_view_publishes_a_done_panes_reply_from_its_transcript(mocker, clean_state):
+    # THI-416: the done banner's body. Read only for a done pane, the one
+    # state that notifies, so a working pane's growing file isn't re-read.
+    from periscope import panes
+    from periscope.window_view import build_window_view
+
+    mocker.patch("periscope.window_view.parse_pane", return_value={"agent": "claude", "state": "idle", "spinner": None})
+    _stub_subsystems(mocker, pane_content="x")
+    mocker.patch("periscope.window_view.session_id_for_pane", return_value="sid-1")
+    reply = mocker.patch("periscope.window_view.last_reply_for_session", return_value="Fixed it.")
+
+    view, _ = build_window_view(_window(), now_ts=4000)
+    assert (view["state"], view["last_reply"]) == ("idle", None)
+    reply.assert_not_called()
+
+    panes._prev_state["abc12345"] = "working"
+    view, _ = build_window_view(_window(activity=1), now_ts=5000)
+    assert (view["state"], view["last_reply"]) == ("done", "Fixed it.")
+    reply.assert_called_once_with("sid-1")
+
+
 def test_view_stamps_when_a_pane_started_waiting(mocker, clean_state):
     """needs_since holds the needs-input edge across polls and clears when the
     pane stops waiting, so a question's age doesn't reset on a reload."""

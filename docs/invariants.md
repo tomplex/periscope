@@ -17,7 +17,10 @@ These are the non-obvious behaviors worth preserving:
    `Resume this session with:` row under the composer means exited. The
    status line alone isn't enough: it's the user's statusLine script's output,
    and `STATUS_RE` knew one script's, so every other pane read as a shell
-   (THI-434). See `parse_pane`, `_detect_composer`.
+   (THI-434). A named session's top rule carries the name at its right end
+   (`──── thi-416-banner ─`) and still counts; missing it made the footer's
+   statusline the done banner's text (THI-416). See `parse_pane`,
+   `_detect_composer`, `_composer_rows`.
 
 3. **WebSocket paint is self-healing, not perfect.** The initial blob
    still mirrors tmux's size/cursor/alt-screen state (all from
