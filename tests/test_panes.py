@@ -1155,12 +1155,19 @@ def _bash_key(command: str, description: str = "") -> str:
     return _sha(re.sub(r"\s+", "", command) + re.sub(r"\s+", "", description))
 
 
+# The request bash_requires_approval.txt shows (its command as Claude passed it).
+_PY_COMMAND = 'python3 -c "open(\\"py.txt\\",\\"w\\").close()"'
+_PY_DESCRIPTION = "Create empty py.txt file with Python"
+
 # Each capture with the key of the request it shows.
 _FIXTURE_KEYS = [
     ("bash.txt", "Bash", _sha("touchprobe.txtCreateemptyprobe.txtfile")),
     # The same request in a 70-column pane, its Tip wrapped onto a second row.
     ("bash_narrow.txt", "Bash", _sha("touchprobe.txtCreateemptyprobe.txtfile")),
     ("bash_multiline.txt", "Bash", _sha("toucha.txttouchb.txtCreatetwofiles")),
+    # `python3 -c …` gets a "This command requires approval" row under its
+    # description, which is chrome, not part of the request.
+    ("bash_requires_approval.txt", "Bash", _bash_key(_PY_COMMAND, _PY_DESCRIPTION)),
     ("write.txt", "Write", "/tmp/probe/notes.md"),
     ("edit.txt", "Edit", "/tmp/probe/notes.md"),
 ]
@@ -1187,6 +1194,13 @@ _FIXTURE_KEYS = [
             "bash_multiline.txt",
             "Bash command",
             [_TIP, "   │ touch a.txt", "   │ touch b.txt", "   Create two files"],
+            "Do you want to proceed?",
+            None,
+        ),
+        (
+            "bash_requires_approval.txt",
+            "Bash command",
+            [_TIP, "   " + _PY_COMMAND, "   " + _PY_DESCRIPTION, " This command requires approval"],
             "Do you want to proceed?",
             None,
         ),
@@ -1300,6 +1314,31 @@ def test_unknown_chrome_above_the_command_fails_closed():
     assert not dialog_matches(warned, "Bash", key)
     for name in ("bash.txt", "bash_narrow.txt"):
         assert dialog_matches(parse_permission_dialog(_dialog(name)), "Bash", key)
+
+
+def test_only_known_chrome_below_the_command_is_skipped():
+    # "This command requires approval" under the description is skipped (the
+    # real capture matches its own key, above). Any other shallow row there
+    # stays in the block and fails closed, and so does the known text above the
+    # description or at the command's indent: it's part of the request then.
+    key = _bash_key(_PY_COMMAND, _PY_DESCRIPTION)
+    capture = _dialog("bash_requires_approval.txt")
+    unknown = parse_permission_dialog(capture.replace(" This command requires approval", " ⚠ Sandbox disabled"))
+    assert unknown is not None
+    assert not dialog_matches(unknown, "Bash", key)
+    above = parse_permission_dialog(
+        capture.replace(
+            f"   {_PY_DESCRIPTION}\n\n This command requires approval",
+            f" This command requires approval\n   {_PY_DESCRIPTION}",
+        )
+    )
+    assert above is not None and above["body"][-1] == f"   {_PY_DESCRIPTION}"
+    assert not dialog_matches(above, "Bash", key)
+    deep = parse_permission_dialog(
+        capture.replace(" This command requires approval", "   This command requires approval")
+    )
+    assert not dialog_matches(deep, "Bash", key)
+    assert dialog_matches(deep, "Bash", _bash_key(_PY_COMMAND, _PY_DESCRIPTION + "This command requires approval"))
 
 
 def test_a_bash_dialog_matches_across_a_wrap_and_a_bare_gutter():
@@ -1491,6 +1530,7 @@ def test_hidden_controls_agree_with_the_hook():
         ("bash.txt", "Bash", {"command": "touch probe.txt", "description": "Create empty probe.txt file"}),
         ("bash_narrow.txt", "Bash", {"command": "touch probe.txt", "description": "Create empty probe.txt file"}),
         ("bash_multiline.txt", "Bash", {"command": "touch a.txt\ntouch b.txt", "description": "Create two files"}),
+        ("bash_requires_approval.txt", "Bash", {"command": _PY_COMMAND, "description": _PY_DESCRIPTION}),
         ("write.txt", "Write", {"file_path": "/tmp/probe/notes.md", "content": "hello\n"}),
         ("edit.txt", "Edit", {"file_path": "/tmp/probe/notes.md", "old_string": "hello", "new_string": "goodbye"}),
     ],
@@ -1508,7 +1548,9 @@ def test_a_hidden_control_in_a_command_does_not_break_the_match():
     assert dialog_matches(parse_permission_dialog(screen), "Bash", key)
 
 
-@pytest.mark.parametrize("name", ["bash.txt", "bash_multiline.txt", "bash_narrow.txt", "edit.txt", "write.txt"])
+@pytest.mark.parametrize(
+    "name", ["bash.txt", "bash_multiline.txt", "bash_narrow.txt", "bash_requires_approval.txt", "edit.txt", "write.txt"]
+)
 def test_parse_pane_reads_a_permission_dialog_as_needs_input(name):
     # THI-435: its footer, "Esc to cancel · Tab to amend", is outside
     # NEEDS_INPUT_FOOTER_RE, and the dialog hides the composer and status

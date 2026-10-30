@@ -15,6 +15,7 @@ the resume orchestration).
 import hashlib
 import re
 import time
+from itertools import dropwhile
 
 from periscope.config import INPUT_CTL_SESSION
 from periscope.tmux import _ANSI_SGR_RE, tmux
@@ -339,6 +340,13 @@ _FILE_HEADERS = {"Write": ("Create file", "Overwrite file"), "Edit": ("Edit file
 # second shallow row that no `Tip:` test would catch. Without a leading Tip,
 # a shallow row above the command is unknown chrome and stays in the block.
 _COMMAND_INDENT = 3
+# Rows Claude draws below a Bash dialog's description, shallower than the
+# command: "This command requires approval" sits there for `python3 -c …`
+# (tests/fixtures/permission_dialogs/bash_requires_approval.txt), and counted
+# into the block it made every such Allow a 409. Only these exact rows, only
+# at the block's end, are skipped; any other shallow row there stays in the
+# block, so unknown chrome still fails closed.
+_TRAILING_CHROME = frozenset({"This command requires approval"})
 # A multi-line command's `│ ` gutter; a blank command line leaves a bare `│`.
 _GUTTER_RE = re.compile(r"^│(?=\s|$)")
 # Mirrors pane_permission_hook._HIDDEN_RE (a test pins the two): the hook
@@ -551,6 +559,11 @@ def _bash_key(squashed: str) -> str:
     return "sha256:" + hashlib.sha256(squashed.encode()).hexdigest()
 
 
+def _is_shallow(row: str) -> bool:
+    """Indented less than a Bash dialog's command and description."""
+    return len(row) - len(row.lstrip()) < _COMMAND_INDENT
+
+
 def parse_permission_dialog(content: str) -> dict | None:
     """The permission dialog ending a capture, or None. Returns its `text`
     (header row to footer row), `header` ("Bash command", "Create file", …),
@@ -616,11 +629,13 @@ def dialog_matches(parsed: dict | None, tool: str, match_key: str | None) -> boo
     and no other. No key, or a tool whose dialog isn't verified (NotebookEdit,
     WebFetch, MCP tools, …), never matches.
 
-    Bash: the digest of the whole command + description block (after a
-    leading Tip and its wrap, up to the first row indented 3+), gutter and
-    whitespace squashed, EQUALS the key. Never a prefix or a substring: `git
-    push origin main` vouched for `… --force`, two `cd <repo> && …` share
-    their first 40 characters, and every `python3 - <<'EOF'` its first line.
+    Bash: the digest of the command + description block, gutter and
+    whitespace squashed, EQUALS the key. The block starts after a leading Tip
+    and its wrap, at the first row that isn't shallow, and ends before any
+    shallow `_TRAILING_CHROME` rows at its foot. Never a prefix or a
+    substring: `git push origin main` vouched for `… --force`, two `cd <repo>
+    && …` share their first 40 characters, and every `python3 - <<'EOF'` its
+    first line.
     Accepted limit: squashing loses whitespace-only differences and the
     command/description boundary (`rm -rf / tmp/x` squashes as `rm -rf
     /tmp/x`), which the wrapped screen can't recover; the single-row rule and
@@ -640,11 +655,12 @@ def dialog_matches(parsed: dict | None, tool: str, match_key: str | None) -> boo
     if tool == "Bash":
         if parsed["header"] != "Bash command":
             return False
-        body = parsed["body"]
-        start = 0
-        if body and body[0].lstrip().startswith("Tip:"):
-            start = next((i for i, r in enumerate(body) if len(r) - len(r.lstrip()) >= _COMMAND_INDENT), len(body))
-        block = "".join(_GUTTER_RE.sub("", row.lstrip()) for row in body[start:])
+        rows = parsed["body"]
+        if rows and rows[0].lstrip().startswith("Tip:"):
+            rows = list(dropwhile(_is_shallow, rows))
+        while rows and _is_shallow(rows[-1]) and rows[-1].strip() in _TRAILING_CHROME:
+            rows = rows[:-1]
+        block = "".join(_GUTTER_RE.sub("", row.lstrip()) for row in rows)
         return _bash_key(_squash(block)) == match_key
     shown = parsed["shown_path"]
     return parsed["header"] in _FILE_HEADERS[tool] and bool(shown) and ("/" + match_key).endswith("/" + shown)
