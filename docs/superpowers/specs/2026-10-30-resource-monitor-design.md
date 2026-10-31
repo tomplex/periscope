@@ -35,7 +35,7 @@ Activity Monitor (100% = one core). Measured cost: ~3 µs per process, ~2 ms for
 
 **D2 — Measurement runs inside `build_state`, once per tick, on the tick's existing process snapshot.** It reads
 `agent_processes.process_snapshot()`, which the fan-out already takes every tick (`codex_process_for_pane`), so it
-adds no subprocess. When the snapshot is `None` (a `ps` failure), `res` and `resources` are omitted for that tick
+adds no subprocess. When the snapshot is `None` (a `ps` failure), `res` and `resources` are `null` for that tick
 rather than computed from an empty tree, which would collapse every pane to its shell. A separate sampler thread
 was rejected: it would need its own process table and a thread under `docs/testing.md`'s rules.
 
@@ -43,7 +43,8 @@ was rejected: it would need its own process table and a thread under `docs/testi
 - **Each window row's pane:** the row's `pane_pid` and all its descendants in the snapshot. The claude process alone
   undercounts a busy session (446 MB against 6.8 GB above). `panes` is the sum over rows, so the rows add up to it.
 - **Server:** periscope's own pid and its descendants (the tmux control clients, whatever `git`/`gh`/`ps` is running).
-- **Webview:** the `periscope-app` process and every process whose responsible pid is that app, found through
+- **Webview:** the `periscope-app` process (matched by the kernel's process name, `proc_name`: `ps` cuts the
+  `comm` column to 16 characters) and every process whose responsible pid is that app, found through
   libSystem's `responsibility_get_pid_responsible_for_pid`. That covers every WebKit helper: the live WebContent,
   any parked WebContent the recycle didn't reap, GPU and Networking. The WebKit helpers have launchd as their parent,
   so the process tree can't find them. With no `periscope-app` running (dashboard in a browser tab), `webview` is
@@ -76,24 +77,23 @@ and total from `sysctlbyname("vm.swapusage")`; free memory percent from `kern.me
 
 **D7 — The ↻ cycle hint keeps watching the claude process alone, measured as footprint.** The leak it targets lives
 in claude, not in its tool children. The thresholds become `MEM_WARN_MB` / `MEM_BAD_MB` at the same values (2 GB /
-4 GB); today's claudes sit at 250–550 MB, so nothing new trips. `mem_signal` reads the claude's footprint from the
-tick's measurement, and the chip sends `{tier, gb, age_s, trigger}` where `trigger` is `"mem"` or `"age"`, so
+4 GB); today's claudes sit at 250–550 MB, so nothing new trips. `claude_proc_for` reads the claude's footprint
+directly (`resources.footprint_mb`, one ~3 µs read), because the fan-out builds each row before `measure` runs; the chip sends `{tier, gb, age_s, trigger}` where `trigger` is `"mem"` or `"age"`, so
 `memHint` labels from it instead of repeating the 2 GB threshold in JS. `_claude_procs()` keeps its `ps` call for
 liveness and age but drops `rss=`; moving liveness off `ps` belongs to THI-450.
 
 ## Server
 
-`periscope/resources.py`, stdlib only, no periscope imports:
+`periscope/resources.py`, stdlib plus `agent_processes` (itself stdlib-only) for the snapshot and `descendants`:
 
-- `measure(snapshot, rows)` → `(per_row, totals)`. It reads every process once, assigns each to a group
-  (D3), computes footprint and CPU per group (D4, D5), and returns `{pane_id: {mem_mb, cpu_pct}}` for the rows and
-  `{server, webview, panes, elsewhere, machine}`. Each group is `{mem_mb, cpu_pct}`; `webview` may be `null`;
-  `machine` is D6's `{load1, swap_used_mb, swap_total_mb, mem_free_pct}`.
-- It also returns each claude's footprint for `mem_signal` (D7).
+- `measure(panes)` → `Measurement | None`, given `{pane_id: pane_pid}`. It reads every process once, assigns each
+  to a group (D3), computes footprint and CPU per group (D4, D5), and returns `panes: {pane_id: {mem_mb, cpu_pct}}`
+  and `totals: {server, webview, panes, elsewhere, machine}`. Each group is `{mem_mb, cpu_pct}`; `webview` may be
+  `null`; `machine` is D6's `{load1, swap_used_mb, swap_total_mb, mem_free_pct}`. `None` when the snapshot failed.
+- `footprint_mb(pid)` — one process's footprint, for the ↻ hint (D7).
 
 `build_state` calls `measure` after the fan-out and before the narrator merge. Each row gets `res`; the blob gets
-`resources`. The claude footprint reaches `mem_signal` after the fan-out, so the `mem` field is set there rather
-than inside `build_window_view`.
+`resources`.
 
 `/api/healthz` is unchanged: its only programmatic caller (`bin/periscope`) reads `.version`, and a narrow sample
 there would disturb the CPU history of every other group.

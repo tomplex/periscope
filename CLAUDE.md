@@ -124,6 +124,7 @@ would double-load every global.
 | `worktrees.py` / `worktree_spawn.py` / `repo_locks.py` / `gitutil.py` | Worktree cache + affiliation / spawn + two-window layout / per-repo git lock + per-dir open lock / shared git helpers |
 | `pids.py` | `@periscope_id` mint / stamp / rebind / resolve — pane identity |
 | `session_status.py` | Authoritative Claude-session state from `<config_dir>/sessions/<pid>.json` |
+| `resources.py` | Memory footprint + CPU per owner (each pane, server, webview, elsewhere) through libproc on the tick's process snapshot; `measure()` feeds `/api/state` |
 | `turns.py` | Pane transcript view (`GET /api/pane/turns`) |
 | `bg_commander.py` | Background command jobs + status sync |
 | `poke.py` | Daily session poke: one Haiku message per account at 08:00 so the 5h window resets ~13:00; verified, logged, prod-only |
