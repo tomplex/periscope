@@ -38,12 +38,20 @@ describe("<ResourcePill>", () => {
       { pid: "b", name: "heavy", res: g(6963, 58) },
     ];
     const html = render(<ResourcePill />);
-    const order = [">periscope server<", ">webview<", ">heavy<", ">light<", ">elsewhere<", "16.0G RAM"];
+    const order = [">periscope server<", ">webview<", ">all panes<", ">heavy<", ">light<", ">elsewhere<", "16.0G RAM"];
     const at = order.map((s) => html.indexOf(s));
     expect(at.every((i) => i >= 0)).toBe(true);
     expect([...at].sort((x, y) => x - y)).toEqual(at);
     expect(html).toContain("6.8G");
     expect(html).toContain("58%");
+  });
+
+  it("shows the panes' combined memory and CPU, above the per-pane lines", () => {
+    resources.value = R;
+    const html = render(<ResourcePill />);
+    expect(html).toContain(">all panes<");
+    expect(html).toContain("12.5G");  // 12800 MB: r.panes
+    expect(html).toContain("112%");
   });
 
   it("leaves the webview line out when there is no app", () => {

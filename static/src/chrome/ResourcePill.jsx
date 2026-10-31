@@ -54,6 +54,7 @@ function ResourcePopover({ r }) {
       <div class="tb-dd-menu res-menu" role="dialog" hidden={!open}>
         <Line label="periscope server" group={r.server} />
         {r.webview && <Line label="webview" group={r.webview} />}
+        <Line label="all panes" group={r.panes} />
         {paneLines(windows.value || []).map(({ w, mem_mb, cpu_pct }) => (
           <Line
             key={w.pid}
