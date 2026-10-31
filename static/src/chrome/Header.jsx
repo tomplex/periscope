@@ -139,9 +139,8 @@ export function Header() {
         <UsagePill />
         <ResourcePill />
         {/* The spawn pins stack as one block to the right of the usage
-            meters (.usage flexes, so this block sits at the meters' far edge):
-            account, model, effort, labels aligned so the chips read as a
-            3-row table. */}
+            meters and the resource pill: account, model, effort, labels
+            aligned so the chips read as a 3-row table. */}
         <div class="spawn-pins">
           <SpawnAccountPicker />
           <SpawnModelPicker />
