@@ -17,6 +17,7 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useEffect, useRef, useState } from "preact/hooks";
+import { fmtCpu, fmtMem } from "../chrome/resources.js";
 import { ChangesTab } from "../diff/ChangesTab.jsx";
 import { Inspector } from "../inspector/Inspector.jsx";
 import { getDetailMode, setDetailMode, setLastSelected } from "../prefs.js";
@@ -257,6 +258,16 @@ export function PaneHeader({ w }) {
   }
   if (w.agent && w.context_pct != null) {
     parts.push(<><span class="hsep">·</span><span>{w.context_pct}%</span></>);
+  }
+  if (w.res) {
+    parts.push(
+      <>
+        <span class="hsep">·</span>
+        <span class="header-res" title="this pane's whole process tree: memory footprint, and CPU per core (100% = one core)">
+          {`${fmtMem(w.res.mem_mb)} mem · ${fmtCpu(w.res.cpu_pct)} cpu`}
+        </span>
+      </>
+    );
   }
   if (w.agent === "claude" && w.mem) {
     const mh = memHint(w.mem);
