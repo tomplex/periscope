@@ -3,6 +3,8 @@ runs on fake snapshots and fake rusage readings."""
 
 import copy
 import os
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -17,6 +19,15 @@ def test_read_measures_this_process():
     assert r.footprint > 0
     assert r.cpu_ns > 0
     assert 0 < r.start <= resources._now()
+
+
+def test_read_counts_reaped_children():
+    # A child that burned 0.2 s of CPU and was reaped shows up in our total:
+    # rusage_info_v1's child_* fields are where D4's reaped CPU comes from.
+    before = resources._read(os.getpid()).cpu_ns
+    burn = "import time\nt = time.process_time()\nwhile time.process_time() - t < 0.2: pass"
+    subprocess.run([sys.executable, "-c", burn], check=True)
+    assert resources._read(os.getpid()).cpu_ns - before >= 150_000_000
 
 
 def test_read_gone_pid_is_none():
