@@ -290,9 +290,10 @@ button, input, textarea, select { font-family: inherit; }
   background: color-mix(in oklch, var(--s-danger) 14%, transparent);
   border-color: color-mix(in oklch, var(--s-danger) 45%, transparent);
 }
-/* What the update would pull: popover under the pill, right-anchored so a
-   long subject list grows away from the header's edge. */
-.update-dd { position: relative; display: inline-flex; align-self: center; }
+/* Popover under a header pill (update, resources), right-anchored so a long
+   list grows away from the header's edge. Shared by UpdatePill and
+   ResourcePill. */
+.pill-dd { position: relative; display: inline-flex; align-self: center; }
 /* Compound selector: .tb-dd-menu is declared later and would win on min-width/left. */
 .tb-dd-menu.update-menu { left: auto; right: 0; width: max-content; min-width: 360px; max-width: min(640px, 90vw); gap: 0; padding: 6px; }
 .update-menu-head { padding: 2px 6px 6px; font-size: 11px; color: var(--fg-3); }
@@ -301,7 +302,6 @@ button, input, textarea, select { font-family: inherit; }
   color: var(--s-danger); background: color-mix(in oklch, var(--s-danger) 12%, transparent); }
 .update-menu-error { margin: 0 0 6px; padding: 4px 6px; font-size: 11px; white-space: pre-wrap; color: var(--s-danger); }
 /* Resource pill (ResourcePill.jsx): neutral, it reports rather than calls to action. */
-.res-dd { position: relative; display: inline-flex; align-self: center; }
 .res-pill {
   flex: 0 0 auto;
   align-self: center;

@@ -14,7 +14,7 @@
 // those surfaces while only chrome is Preact-mounted.
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { multiAccount } from "../accounts.js";
-import { useEscape } from "../hooks/useEscape.js";
+import { usePopoverDismiss } from "../hooks/usePopoverDismiss.js";
 import { unresolvedTotal } from "../review/walkthrough.js";
 import { selectReviewsQueue } from "../split/alertFeed.js";
 import { reviews, windows } from "../store.js";
@@ -35,15 +35,7 @@ function Dropdown({ id, toggleClass, toggleLabel, title, children }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const close = useCallback(() => setOpen(false), []);
-  useEscape(close, open);
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, [open]);
+  usePopoverDismiss(ref, open, close);
   return (
     <div class="tb-dd" ref={ref}>
       <button

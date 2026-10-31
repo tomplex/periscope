@@ -3,8 +3,8 @@
 // panes heaviest first, then everything else on the machine and the machine's
 // load / swap / free memory. Hidden when the server sent no measurement (its
 // process snapshot failed that tick).
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { useEscape } from "../hooks/useEscape.js";
+import { useCallback, useRef, useState } from "preact/hooks";
+import { usePopoverDismiss } from "../hooks/usePopoverDismiss.js";
 import { selectPane } from "../split/alertFeed.js";
 import { resources, windows } from "../store.js";
 import { paneLabel } from "../util.js";
@@ -30,30 +30,17 @@ function Line({ label, group, onClick }) {
   return <div class="res-line">{children}</div>;
 }
 
-export function ResourcePill() {
+// The popover's open state lives here, not in <ResourcePill>, so a tick with
+// no measurement (the pill vanishing) unmounts this and discards it — no
+// separate close-when-hidden effect needed.
+function ResourcePopover({ r }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
-  const r = resources.value;
   const close = useCallback(() => setOpen(false), []);
-  useEscape(close, open);
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) close();
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, [open]);
-  // The pill can vanish with the popover open (a tick with no measurement);
-  // close it, or Escape stays bound to an invisible popover — returning null
-  // below doesn't unmount this component, so the open state would survive.
-  useEffect(() => {
-    if (!r && open) close();
-  }, [r, open]);
-  if (!r) return null;
+  usePopoverDismiss(ref, open, close);
 
   return (
-    <div class="res-dd" ref={ref}>
+    <div class="pill-dd" ref={ref}>
       <button
         type="button"
         class="res-pill"
@@ -80,4 +67,9 @@ export function ResourcePill() {
       </div>
     </div>
   );
+}
+
+export function ResourcePill() {
+  const r = resources.value;
+  return r && <ResourcePopover r={r} />;
 }
