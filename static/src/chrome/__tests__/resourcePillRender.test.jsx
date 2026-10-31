@@ -12,7 +12,7 @@ const R = {
   webview: g(2900, 40),
   panes: g(12800, 112),
   elsewhere: g(30000, 300),
-  machine: { load1: 52.3, swap_used_mb: 16896, swap_total_mb: 17818, mem_free_pct: 27 },
+  machine: { load1: 52.3, ram_mb: 16384, swap_used_mb: 16896, swap_total_mb: 17818, mem_free_pct: 27 },
 };
 
 afterEach(() => {
@@ -38,7 +38,7 @@ describe("<ResourcePill>", () => {
       { pid: "b", name: "heavy", res: g(6963, 58) },
     ];
     const html = render(<ResourcePill />);
-    const order = [">periscope server<", ">webview<", ">heavy<", ">light<", ">elsewhere<", "load 52.3"];
+    const order = [">periscope server<", ">webview<", ">heavy<", ">light<", ">elsewhere<", "16.0G RAM"];
     const at = order.map((s) => html.indexOf(s));
     expect(at.every((i) => i >= 0)).toBe(true);
     expect([...at].sort((x, y) => x - y)).toEqual(at);

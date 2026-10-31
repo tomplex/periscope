@@ -31,5 +31,5 @@ export function paneLines(windows) {
 }
 
 export function machineLine(m) {
-  return `load ${m.load1} · swap ${fmtMem(m.swap_used_mb)}/${fmtMem(m.swap_total_mb)} · ${m.mem_free_pct}% free`;
+  return `${fmtMem(m.ram_mb)} RAM · swap ${fmtMem(m.swap_used_mb)}/${fmtMem(m.swap_total_mb)} · ${m.mem_free_pct}% free · load ${m.load1}`;
 }

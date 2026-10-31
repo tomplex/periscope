@@ -40,8 +40,8 @@ describe("paneLines", () => {
 });
 
 describe("machineLine", () => {
-  it("load, swap and free memory", () => {
-    expect(machineLine({ load1: 52.3, swap_used_mb: 16896, swap_total_mb: 17818, mem_free_pct: 27 }))
-      .toBe("load 52.3 · swap 16.5G/17.4G · 27% free");
+  it("RAM first, so owners adding up past it read as overcommitment", () => {
+    expect(machineLine({ load1: 52.3, ram_mb: 16384, swap_used_mb: 16896, swap_total_mb: 17818, mem_free_pct: 27 }))
+      .toBe("16.0G RAM · swap 16.5G/17.4G · 27% free · load 52.3");
   });
 });

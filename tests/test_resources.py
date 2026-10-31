@@ -28,7 +28,8 @@ def test_footprint_mb_of_this_process():
 
 def test_machine_reads_the_kernel():
     m = resources.machine()
-    assert set(m) == {"load1", "swap_used_mb", "swap_total_mb", "mem_free_pct"}
+    assert set(m) == {"load1", "ram_mb", "swap_used_mb", "swap_total_mb", "mem_free_pct"}
+    assert m["ram_mb"] > 1024
     assert 0 <= m["swap_used_mb"] <= m["swap_total_mb"]
     assert 0 <= m["mem_free_pct"] <= 100
 
@@ -166,7 +167,7 @@ def _no_live_resources(monkeypatch):
     monkeypatch.setattr(resources, "_CORES", 1)
 
 
-MACHINE = {"load1": 1.0, "swap_used_mb": 0, "swap_total_mb": 0, "mem_free_pct": 50}
+MACHINE = {"load1": 1.0, "ram_mb": 16384, "swap_used_mb": 0, "swap_total_mb": 0, "mem_free_pct": 50}
 MB = 1 << 20
 
 

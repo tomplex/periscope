@@ -133,20 +133,24 @@ def footprint_mb(pid: int) -> int | None:
     return None if reading is None else reading.footprint >> 20
 
 
-def _sysctl(name: str, buf: ctypes.Structure | ctypes.c_int) -> None:
+def _sysctl(name: str, buf: ctypes.Structure | ctypes.c_int | ctypes.c_uint64) -> None:
     size = ctypes.c_size_t(ctypes.sizeof(buf))
     _libsystem.sysctlbyname(name.encode(), ctypes.byref(buf), ctypes.byref(size), None, ctypes.c_size_t(0))
 
 
 def machine() -> dict:
-    """Load, swap and free memory, straight from the kernel. mem_free_pct is the
-    figure `memory_pressure` prints."""
+    """Load, RAM, swap and free memory, straight from the kernel. RAM is the
+    yardstick: footprints count compressed and swapped pages, so the owners can
+    add up past it. mem_free_pct is the figure `memory_pressure` prints."""
+    ram = ctypes.c_uint64()
     swap = _SwapUsage()
     level = ctypes.c_int()
+    _sysctl("hw.memsize", ram)
     _sysctl("vm.swapusage", swap)
     _sysctl("kern.memorystatus_level", level)
     return {
         "load1": round(os.getloadavg()[0], 1),
+        "ram_mb": ram.value >> 20,
         "swap_used_mb": swap.used >> 20,
         "swap_total_mb": swap.total >> 20,
         "mem_free_pct": level.value,

@@ -73,8 +73,8 @@ for a server averaging 10%). A previous sample older than 10 s (a hub that idled
 missing. With no usable previous sample, `cpu_pct` is `null`, never 0. A 0 is either measured idle or an interval D4 clamped (a member reaped
 outside its group, e.g. a closed pane's shell).
 
-**D6 — The machine line reads the kernel directly, with no fork.** Load average from `os.getloadavg()`; swap used
-and total from `sysctlbyname("vm.swapusage")`; free memory percent from `kern.memorystatus_level`, the figure
+**D6 — The machine line reads the kernel directly, with no fork.** Load average from `os.getloadavg()`; physical RAM
+from `sysctlbyname("hw.memsize")`; swap used and total from `vm.swapusage`; free memory percent from `kern.memorystatus_level`, the figure
 `memory_pressure` prints.
 
 **D7 — The ↻ cycle hint keeps watching the claude process alone, measured as footprint.** The leak it targets lives
@@ -91,7 +91,7 @@ liveness and age but drops `rss=`; moving liveness off `ps` belongs to THI-450.
 - `measure(panes)` → `Measurement | None`, given `{pane_id: pane_pid}`. It reads every process once, assigns each
   to a group (D3), computes footprint and CPU per group (D4, D5), and returns `panes: {pane_id: {mem_mb, cpu_pct}}`
   and `totals: {server, webview, panes, elsewhere, machine}`. Each group is `{mem_mb, cpu_pct}`; `webview` may be
-  `null`; `machine` is D6's `{load1, swap_used_mb, swap_total_mb, mem_free_pct}`. `None` when the snapshot failed.
+  `null`; `machine` is D6's `{load1, ram_mb, swap_used_mb, swap_total_mb, mem_free_pct}`. `None` when the snapshot failed.
 - `footprint_mb(pid)` — one process's footprint, for the ↻ hint (D7).
 
 `build_state` calls `measure` after the fan-out and before the narrator merge. Each row gets `res`; the blob gets
@@ -105,7 +105,8 @@ there would disturb the CPU history of every other group.
 - **Header pill** after `UsagePill`: `▣ 18.1G`, the memory of server, webview and panes together. CPU stays out of
   the pill. Hidden when `resources` is absent.
 - **Popover** on click, one line each with memory and CPU: periscope server, webview, then every pane sorted by
-  memory (a line selects its pane), then elsewhere, then the machine line: `load 52 · swap 16.5/17.4G · 27% free`.
+  memory (a line selects its pane), then elsewhere, then the machine line: `16.0G RAM · swap 16.5G/17.4G · 27% free · load 52`. RAM leads because footprints count
+  compressed and swapped pages: the owners can add up past it, and that overcommitment is what the line shows.
   The CPU column's tooltip says 100% = every core busy; under 10% it shows one decimal. A `null` CPU shows `–`.
 - **Detail header**: `· 6.8G mem · 58% cpu` after the context %, for the selected pane.
 - Formatting (MB → `0.6G` / `512M`, CPU rounding, `null`) and the sort go in a pure `static/src/chrome/resources.js`,
