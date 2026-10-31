@@ -23,6 +23,10 @@ _RUSAGE_INFO_V1 = 1
 # their parent, so they're found by responsible pid instead.
 _APP_NAME = "periscope-app"
 
+# A previous sample older than this (a hub that idled with no subscribers)
+# would average hours into one number; it counts as missing.
+_STALE_NS = 10 * 1_000_000_000
+
 
 class _RusageInfoV1(ctypes.Structure):
     # <sys/resource.h> rusage_info_v1: the v0 fields recycle.rs binds, plus
@@ -153,3 +157,30 @@ def _assign(snapshot: dict[int, ProcessInfo], panes: dict[str, int]) -> tuple[di
     named["panes"] = set().union(*per_pane.values())
     named["elsewhere"] = set(snapshot) - claimed
     return named, per_pane
+
+
+@dataclass(frozen=True)
+class _Sample:
+    at: int  # ns, _now()'s clock
+    totals: dict[tuple[int, int], int]  # (pid, start) → cpu_ns, the group's members
+
+
+def _cpu_pct(prev: _Sample | None, cur: _Sample) -> float | None:
+    """The group's CPU per core since `prev` (100 = one core), or None with no
+    usable previous sample.
+
+    A member that vanished was reaped, and its whole CPU time reappears in its
+    parent's children time, so its last total comes off. A member reaped
+    outside the group never comes back, hence the clamp at 0."""
+    if prev is None or cur.at - prev.at > _STALE_NS:
+        return None
+    delta = 0
+    for ident, total in cur.totals.items():
+        if ident in prev.totals:
+            delta += total - prev.totals[ident]
+        elif ident[1] > prev.at:  # started since the previous sample
+            delta += total
+    for ident, total in prev.totals.items():
+        if ident not in cur.totals:
+            delta -= total
+    return round(max(delta, 0) / (cur.at - prev.at) * 100, 1)
