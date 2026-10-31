@@ -219,13 +219,15 @@ def measure(panes: dict[str, int]) -> Measurement | None:
     failed: an empty tree would collapse every pane to its shell and read as
     real."""
     global _prev, _last
-    snapshot = process_snapshot()
-    if snapshot is None:
-        return None
     with _lock:
         now = _now()
         if _last is not None and now - _last[0] < _MIN_INTERVAL_NS:
             return _last[1]
+        # After the throttle: an expired snapshot cache would otherwise fork
+        # `ps` for a call that returns the previous measurement anyway.
+        snapshot = process_snapshot()
+        if snapshot is None:
+            return None
         named, per_pane = _assign(snapshot, panes)
         readings = {pid: r for pid in snapshot if (r := _read(pid)) is not None}
         samples: dict[str, _Sample] = {}

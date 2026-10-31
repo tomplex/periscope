@@ -91,6 +91,7 @@ def test_assign_puts_every_process_in_one_group(monkeypatch):
 
 def test_assign_without_the_app_has_no_webview(monkeypatch):
     monkeypatch.setattr(resources, "_responsible", lambda pid: pid)
+    monkeypatch.setattr(resources, "_name", lambda pid: "")
     snap = {pid: p for pid, p in _snapshot().items() if pid != 500}
     named, _ = resources._assign(snap, {"%1": 100})
     assert "webview" not in named
@@ -215,6 +216,14 @@ def test_measure_within_half_a_second_returns_the_previous_measurement(fake):
     first = resources.measure(PANES)
     clock.t += S // 10
     assert resources.measure(PANES) is first
+
+
+def test_measure_within_half_a_second_takes_no_snapshot(fake, monkeypatch):
+    clock, _ = fake
+    resources.measure(PANES)
+    monkeypatch.setattr(resources, "process_snapshot", lambda: pytest.fail("snapshot taken inside the throttle"))
+    clock.t += S // 10
+    resources.measure(PANES)
 
 
 def test_measure_skips_unreadable_processes(fake, monkeypatch):
