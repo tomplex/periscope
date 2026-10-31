@@ -21,8 +21,9 @@ export function ownedMb(r) {
   return r.server.mem_mb + (r.webview?.mem_mb || 0) + r.panes.mem_mb;
 }
 
-// Popover pane lines, heaviest first. A row has no `res` when the server's
-// snapshot failed that tick.
+// Popover pane lines, heaviest first. A row has no `res` when it has no
+// pane_pid, or when the tick's process snapshot failed — the backend
+// recomputes when the pane set changes.
 export function paneLines(windows) {
   return windows
     .filter((w) => w.res)
