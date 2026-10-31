@@ -72,7 +72,7 @@ group:
 So a Bash tool command (claude → `zsh -c` → command, both exiting in one interval) counts only its last interval in
 claude's pane. A closed pane's shell is charged to the tmux server, and so is its claude, whose chain walks there
 too; the claude was orphaned to launchd (measured: the shell exits first), so the server never gains it, and the
-floor stops that charge eating the server's own CPU or anyone else's. A group's result is `null` when it exceeds
+floor caps the loss at that survivor's reaped-children time for the interval; its own CPU is never touched. A group's result is `null` when it exceeds
 every core for the whole interval, which only CPU from outside the interval can do. This catches the short-lived
 `git`/`gh`/`tsc` runs that live less than a tick, which own-time sampling would count as 0.
 

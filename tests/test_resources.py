@@ -199,6 +199,9 @@ def test_cpu_never_diffs_a_reused_pid_against_its_predecessor():
     prev = _sample(S, (1, 0, 5 * S, 0, 9), (9, 0, S, 0, 0))
     cur = _sample(2 * S, (9, 0, S, 5 * S, 0), (1, S + S // 2, S // 10, 0, 9))
     assert _cpu(prev, cur, {1, 9}) == 10.0
+    # Apart, each side must stand alone: matching on pid only would read the
+    # new pid 1 as -4.9 s against its predecessor and leave 9 its whole +5 s.
+    assert resources._cpu_pcts(prev, cur, {"a": {1}, "b": {9}}) == {"a": 10.0, "b": 0.0}
 
 
 def test_cpu_is_a_share_of_every_core(monkeypatch):
