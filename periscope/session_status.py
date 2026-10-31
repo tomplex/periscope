@@ -51,8 +51,8 @@ _CACHE_TTL_S = 1.0
 # pid -> current sessionId). by_pid holds a LIST because the same OS pid can
 # have a file in more than one account's dir (recycled pid, account swap).
 _index_cache: tuple[float, dict, dict[int, list[dict]]] | None = None
-# (built_at, {pid: age_s}) — one ps snapshot serves both pid
-# liveness (the key set) and the uptime cycle-hint.
+# (built_at, {pid: age_s}) — one ps snapshot serves both pid liveness (the
+# key set) and the uptime cycle-hint.
 _claude_procs_cache: tuple[float, dict[int, int]] | None = None
 _proc_table_cache: tuple[float, tuple[dict[int, list[int]], dict[int, str]]] | None = None
 _pane_pids_cache: tuple[float, dict[str, int]] | None = None

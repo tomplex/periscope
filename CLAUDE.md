@@ -144,7 +144,7 @@ commit `static/dist/` whenever `static/src/` changes** — boot has no build ste
 | Area | Modules |
 |---|---|
 | entry / state | `main.jsx`, `store.js` (transient signals), `prefs.js` (server-prefs cache — the persistence boundary), `poll.js` (the single `/api/state` loop) |
-| chrome | `chrome/{Header,FilterBar,UsagePill}.jsx` |
+| chrome | `chrome/{Header,FilterBar,UsagePill,ResourcePill}.jsx` (`chrome/resources.js`: the resource pill's pure formatting) |
 | split view | `split/{Split,Rail,RailRows,Detail,…}.jsx` + `split/railTree.js` — the only view. Rail is TRACK-anchored: Track → (derived Branch) → Pane; branch rows are derived from live `w.branch`, not entities |
 | review | `review/{Walkthrough,ReviewsQueue}.jsx` + `walkthrough.js` (the PR walkthrough view, the cross-track reviews queue, their pure helpers) |
 | terminal | `terminal/{Terminal,TerminalSearch}.jsx` + `terminalCore.js` (imperative xterm + `/ws/pane`) |

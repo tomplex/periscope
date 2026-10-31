@@ -35,7 +35,7 @@ Activity Monitor (100% = one core). Measured cost: ~3 µs per process, ~2 ms for
 
 **D2 — Measurement runs inside `build_state`, once per tick, on the tick's existing process snapshot.** It reads
 `agent_processes.process_snapshot()`, which the fan-out already takes every tick (`codex_process_for_pane`), so it
-adds no subprocess. When the snapshot is `None` (a `ps` failure), `res` and `resources` are `null` for that tick
+adds no subprocess while the fan-out finishes within the snapshot's 1 s cache; a slower tick forks one more `ps`. When the snapshot is `None` (a `ps` failure), `res` and `resources` are `null` for that tick
 rather than computed from an empty tree, which would collapse every pane to its shell. A separate sampler thread
 was rejected: it would need its own process table and a thread under `docs/testing.md`'s rules.
 
@@ -69,7 +69,8 @@ sampling would count as 0.
 run concurrently from the state hub, the REST fallback poll and other tabs. One lock covers read-diff-write. A
 caller within 0.5 s of the previous sample gets the previous measurement back instead of a new delta (5 ms windows measured 0%
 for a server averaging 10%). A previous sample older than 10 s (a hub that idled with no subscribers) counts as
-missing. With no usable previous sample, `cpu_pct` is `null`, never 0, so a zero always means "measured idle".
+missing. With no usable previous sample, `cpu_pct` is `null`, never 0. A 0 is either measured idle or an interval D4 clamped (a member reaped
+outside its group, e.g. a closed pane's shell).
 
 **D6 — The machine line reads the kernel directly, with no fork.** Load average from `os.getloadavg()`; swap used
 and total from `sysctlbyname("vm.swapusage")`; free memory percent from `kern.memorystatus_level`, the figure
