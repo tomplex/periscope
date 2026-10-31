@@ -143,6 +143,12 @@ def test_cpu_never_diffs_a_reused_pid_against_its_predecessor():
     assert _cpu(S, prev, 2 * S, cur) == 10.0
 
 
+def test_cpu_is_a_share_of_every_core(monkeypatch):
+    monkeypatch.setattr(resources, "_CORES", 10)
+    # 2.5 cores busy for a second on a 10-core machine: a quarter of it.
+    assert _cpu(0, {(1, 0): 0}, S, {(1, 0): 5 * S // 2}) == 25.0
+
+
 def test_cpu_treats_a_stale_previous_sample_as_missing():
     assert _cpu(0, {(1, 0): S}, 11 * S, {(1, 0): 2 * S}) is None
 
@@ -156,6 +162,8 @@ def _no_live_resources(monkeypatch):
     own fakes, and the smoke tests read the real test process."""
     monkeypatch.setattr(resources, "_prev", {})
     monkeypatch.setattr(resources, "_last", None)
+    # One core, so the CPU cases read in whole-core terms.
+    monkeypatch.setattr(resources, "_CORES", 1)
 
 
 MACHINE = {"load1": 1.0, "swap_used_mb": 0, "swap_total_mb": 0, "mem_free_pct": 50}

@@ -32,6 +32,10 @@ _STALE_NS = 10 * 1_000_000_000
 # server averaging 10%); a caller inside it gets the previous measurement.
 _MIN_INTERVAL_NS = 500_000_000
 
+# CPU is a share of the whole machine: a group listed next to the others reads
+# as a part of 100%, where per-core figures ran past it (2.25 cores = 225%).
+_CORES = os.sysconf("SC_NPROCESSORS_ONLN")
+
 
 class _RusageInfoV1(ctypes.Structure):
     # <sys/resource.h> rusage_info_v1: the v0 fields recycle.rs binds, plus
@@ -180,8 +184,8 @@ class _Sample:
 
 
 def _cpu_pct(prev: _Sample | None, cur: _Sample) -> float | None:
-    """The group's CPU per core since `prev` (100 = one core), or None with no
-    usable previous sample.
+    """The group's share of the machine's CPU since `prev` (100 = every core
+    busy), or None with no usable previous sample.
 
     A member that vanished was reaped, and its whole CPU time reappears in its
     parent's children time, so its last total comes off. A member reaped
@@ -197,7 +201,7 @@ def _cpu_pct(prev: _Sample | None, cur: _Sample) -> float | None:
     for ident, total in prev.totals.items():
         if ident not in cur.totals:
             delta -= total
-    return round(max(delta, 0) / (cur.at - prev.at) * 100, 1)
+    return round(max(delta, 0) / (cur.at - prev.at) / _CORES * 100, 1)
 
 
 @dataclass(frozen=True)

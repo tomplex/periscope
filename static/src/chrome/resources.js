@@ -1,14 +1,18 @@
 // Formatting and ordering behind <ResourcePill> and the detail header.
 // /api/state's `resources` groups and each row's `res` are
-// { mem_mb, cpu_pct }: memory footprint, and CPU per core (100 = one core
-// busy) — null until the server has two samples to diff.
+// { mem_mb, cpu_pct }: memory footprint, and the share of the whole
+// machine's CPU (100 = every core busy) — null until the server has two
+// samples to diff.
 
 export function fmtMem(mb) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)}G` : `${mb}M`;
 }
 
 export function fmtCpu(pct) {
-  return pct == null ? "–" : `${Math.round(pct)}%`;
+  if (pct == null) return "–";
+  // A pane is often a fraction of a percent of the machine; whole numbers
+  // would round it to 0.
+  return pct < 10 ? `${pct.toFixed(1)}%` : `${Math.round(pct)}%`;
 }
 
 // The pill's figure: what periscope and its panes hold. Elsewhere is the rest

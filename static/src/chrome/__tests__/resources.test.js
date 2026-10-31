@@ -12,9 +12,10 @@ describe("fmtMem", () => {
 });
 
 describe("fmtCpu", () => {
-  it("rounds per-core percent; unknown is a dash, never 0", () => {
+  it("one decimal under 10%, whole above; unknown is a dash, never 0", () => {
     expect(fmtCpu(57.6)).toBe("58%");
-    expect(fmtCpu(0)).toBe("0%");
+    expect(fmtCpu(4.66)).toBe("4.7%");
+    expect(fmtCpu(0)).toBe("0.0%");
     expect(fmtCpu(null)).toBe("–");
   });
 });

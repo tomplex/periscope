@@ -6,7 +6,7 @@ slice.
 
 ## What the measurements showed (2026-10-30, 11 panes)
 
-| Owner | Footprint | CPU |
+| Owner | Footprint | CPU (per core, as `top` reads) |
 |---|---|---|
 | Machine (16 GB RAM, 10 cores) | ~48 GB; 16.5 of 17.4 GB swap used | load avg 50–70 |
 | Panes, whole process subtrees | 12.8 GB | 112% |
@@ -30,8 +30,9 @@ THI-449 (recycle gate, unreaped WebContent) and THI-450 (subprocesses per tick) 
 what Activity Monitor calls Memory and what the shell's recycle already uses. Read through `ctypes` on
 `/usr/lib/libproc.dylib` with the `RUSAGE_INFO_V1` flavor, which adds the CPU time of a process's reaped children
 to the V0 fields `recycle.rs` binds. CPU times are mach absolute units, scaled by `mach_timebase_info` (125/3 on
-this machine). Stdlib only, so `uv run server.py`'s PEP-723 header doesn't change. CPU% is per core like `top` and
-Activity Monitor (100% = one core). Measured cost: ~3 µs per process, ~2 ms for every process on the machine.
+this machine). Stdlib only, so `uv run server.py`'s PEP-723 header doesn't change. CPU% is a share of the whole machine
+(100% = every core busy), not per core like `top`: groups listed side by side read as parts of one total, where
+per-core figures ran past 100% (2.25 cores = 225%). Measured cost: ~3 µs per process, ~2 ms for every process on the machine.
 
 **D2 — Measurement runs inside `build_state`, once per tick, on the tick's existing process snapshot.** It reads
 `agent_processes.process_snapshot()`, which the fan-out already takes every tick (`codex_process_for_pane`), so it
@@ -105,7 +106,7 @@ there would disturb the CPU history of every other group.
   the pill. Hidden when `resources` is absent.
 - **Popover** on click, one line each with memory and CPU: periscope server, webview, then every pane sorted by
   memory (a line selects its pane), then elsewhere, then the machine line: `load 52 · swap 16.5/17.4G · 27% free`.
-  The CPU column's tooltip says 100% = one core. A `null` CPU shows `–`.
+  The CPU column's tooltip says 100% = every core busy; under 10% it shows one decimal. A `null` CPU shows `–`.
 - **Detail header**: `· 6.8G mem · 58% cpu` after the context %, for the selected pane.
 - Formatting (MB → `0.6G` / `512M`, CPU rounding, `null`) and the sort go in a pure `static/src/chrome/resources.js`,
   tested with vitest, the way `usageSummary.js` backs `UsagePill`.

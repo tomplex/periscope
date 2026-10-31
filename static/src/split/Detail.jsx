@@ -263,7 +263,7 @@ export function PaneHeader({ w }) {
     parts.push(
       <>
         <span class="hsep">·</span>
-        <span class="header-res" title="this pane's whole process tree: memory footprint, and CPU per core (100% = one core)">
+        <span class="header-res" title="this pane's whole process tree: memory footprint, and its share of the machine's CPU (100% = every core busy)">
           {`${fmtMem(w.res.mem_mb)} mem · ${fmtCpu(w.res.cpu_pct)} cpu`}
         </span>
       </>

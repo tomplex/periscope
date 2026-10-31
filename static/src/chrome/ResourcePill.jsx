@@ -10,7 +10,7 @@ import { resources, windows } from "../store.js";
 import { paneLabel } from "../util.js";
 import { fmtCpu, fmtMem, machineLine, ownedMb, paneLines } from "./resources.js";
 
-const CPU_TIP = "CPU per core: 100% is one core fully busy";
+const CPU_TIP = "share of the whole machine's CPU: 100% is every core busy";
 
 function Line({ label, group, onClick }) {
   const children = (
