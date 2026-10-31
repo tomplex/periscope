@@ -171,8 +171,13 @@ def test_cpu_is_a_share_of_every_core(monkeypatch):
     assert _cpu(_sample(0, (1, 0, 0, 0)), _sample(S, (1, 0, 5 * S // 2, 0)), {1}) == 25.0
 
 
+def test_cpu_spans_a_slow_tick():
+    # A loaded machine was measured at 3–28 s a tick.
+    assert _cpu(_sample(0, (1, 0, S, 0)), _sample(30 * S, (1, 0, 4 * S, 0)), {1}) == 10.0
+
+
 def test_cpu_treats_a_stale_previous_sample_as_missing():
-    assert _cpu(_sample(0, (1, 0, S, 0)), _sample(11 * S, (1, 0, 2 * S, 0)), {1}) is None
+    assert _cpu(_sample(0, (1, 0, S, 0)), _sample(61 * S, (1, 0, 2 * S, 0)), {1}) is None
 
 
 # ── measure ──────────────────────────────────────────────────────────────

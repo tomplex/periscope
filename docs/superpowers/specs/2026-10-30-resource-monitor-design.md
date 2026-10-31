@@ -73,8 +73,8 @@ short-lived `git`/`gh`/`tsc` runs that live less than a tick, which own-time sam
 **D5 — Samples are taken under a lock, at most every 0.5 s, and never against stale history.** `build_state` can
 run concurrently from the state hub, the REST fallback poll and other tabs. One lock covers read-diff-write. A
 caller within 0.5 s of the previous sample, with the same panes, gets the previous measurement back instead of a new delta (5 ms windows measured 0%
-for a server averaging 10%). A previous sample older than 10 s (a hub that idled with no subscribers) counts as
-missing. With no usable previous sample, or an impossible delta (D4), `cpu_pct` is `null`, never 0. A 0 is either
+for a server averaging 10%). A previous sample older than 60 s (a hub that idled with no subscribers) counts as
+missing; a loaded machine was measured at 3–28 s a tick, so a slow tick still measures. With no usable previous sample, or an impossible delta (D4), `cpu_pct` is `null`, never 0. A 0 is either
 measured idle or an interval D4 clamped (a child orphaned before it exited).
 
 **D6 — The machine line reads the kernel directly, with no fork.** Load average from `os.getloadavg()`; physical RAM
@@ -126,7 +126,7 @@ there would disturb the CPU history of every other group.
   - CPU: first sample (`null`), steady second sample, pid reuse, a child started after the previous sample, a child
     that exits and is reaped by its parent, a closed pane's shell reaped by the tmux server in another group, a
     child its parent never reaped (clamped), a delta past every core (`null`);
-  - the 0.5 s and 10 s rules, and two threads sampling at once;
+  - the 0.5 s and 60 s rules, and two threads sampling at once;
   - a `None` snapshot;
   - one smoke test that reads the test process itself through the real `proc_pid_rusage`.
 - `tests/test_window_view.py`: `mem_signal` on footprint, each tier and trigger (updating today's RSS cases).

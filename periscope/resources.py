@@ -25,8 +25,9 @@ _RUSAGE_INFO_V1 = 1
 _APP_NAME = "periscope-app"
 
 # A previous sample older than this (a hub that idled with no subscribers)
-# would average hours into one number; it counts as missing.
-_STALE_NS = 10 * 1_000_000_000
+# would average hours into one number; it counts as missing. Well past the
+# slowest tick: a loaded machine was measured at 3–28 s a tick.
+_STALE_NS = 60 * 1_000_000_000
 
 # A delta over less than this reads noise (5 ms windows measured 0% for a
 # server averaging 10%); a caller inside it with the same panes gets the previous measurement.
