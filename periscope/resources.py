@@ -95,7 +95,8 @@ _NS_PER_TICK = _timebase.numer / _timebase.denom
 @dataclass(frozen=True)
 class Reading:
     footprint: int  # bytes
-    cpu_ns: int  # own CPU time plus its reaped children's
+    own_ns: int  # CPU time, user + system
+    children_ns: int  # its reaped children's CPU time
     start: int  # ns on _now()'s clock; (pid, start) is a process's identity
 
 
@@ -105,8 +106,12 @@ def _read(pid: int) -> Reading | None:
     info = _RusageInfoV1()
     if _libproc.proc_pid_rusage(pid, _RUSAGE_INFO_V1, ctypes.byref(info)) != 0:
         return None
-    ticks = info.user_time + info.system_time + info.child_user_time + info.child_system_time
-    return Reading(info.phys_footprint, int(ticks * _NS_PER_TICK), int(info.proc_start_abstime * _NS_PER_TICK))
+    return Reading(
+        info.phys_footprint,
+        int((info.user_time + info.system_time) * _NS_PER_TICK),
+        int((info.child_user_time + info.child_system_time) * _NS_PER_TICK),
+        int(info.proc_start_abstime * _NS_PER_TICK),
+    )
 
 
 def _responsible(pid: int) -> int:
@@ -183,10 +188,17 @@ def _assign(snapshot: dict[int, ProcessInfo], panes: dict[str, int]) -> tuple[di
 
 
 @dataclass(frozen=True)
+class _Proc:
+    start: int  # (pid, start) is its identity
+    own_ns: int
+    children_ns: int
+    ppid: int  # from the snapshot
+
+
+@dataclass(frozen=True)
 class _Sample:
     at: int  # ns, _now()'s clock
-    cpu_ns: dict[tuple[int, int], int]  # (pid, start) → cpu_ns, every readable process
-    ppid: dict[int, int]  # pid → parent pid, from the snapshot
+    procs: dict[int, _Proc]  # pid → every readable process
 
 
 def _cpu_pcts(prev: _Sample | None, cur: _Sample, groups: dict[str, set[int]]) -> dict[str, float | None]:
@@ -194,27 +206,38 @@ def _cpu_pcts(prev: _Sample | None, cur: _Sample, groups: dict[str, set[int]]) -
     busy), or None with no usable previous sample.
 
     A process that vanished was reaped, and its whole CPU time reappears in
-    its parent's children time, so its last total comes off the parent; an
-    orphan reaped by launchd (unreadable) comes off nothing. A group past
-    every core for the whole interval holds CPU from outside it: None."""
+    its reaper's children time: its last total was counted already, so it
+    comes off the children time of its nearest surviving ancestor. That
+    floors at 0 per ancestor: an orphan launchd reaped never reaches it.
+    A group past every core for the whole interval holds CPU from outside
+    it: None."""
     if prev is None or cur.at - prev.at > _STALE_NS:
         return dict.fromkeys(groups)
+
+    def alive(pid: int) -> bool:
+        return pid in cur.procs and pid in prev.procs and cur.procs[pid].start == prev.procs[pid].start
+
+    counted: dict[int, int] = {}  # surviving pid → its vanished descendants' last totals
+    for pid, p in prev.procs.items():
+        if alive(pid):
+            continue
+        ancestor = p.ppid
+        while ancestor in prev.procs and not alive(ancestor):
+            ancestor = prev.procs[ancestor].ppid
+        if ancestor in prev.procs:  # else launchd or another unreadable process
+            counted[ancestor] = counted.get(ancestor, 0) + p.own_ns + p.children_ns
     delta: dict[int, int] = {}
-    for (pid, start), ns in cur.cpu_ns.items():
-        if (pid, start) in prev.cpu_ns:
-            delta[pid] = ns - prev.cpu_ns[(pid, start)]
-        elif start > prev.at:  # started since the previous sample
-            delta[pid] = ns
-    alive = {pid for pid, _ in cur.cpu_ns}
-    for (pid, start), ns in prev.cpu_ns.items():
-        if (pid, start) not in cur.cpu_ns and (parent := prev.ppid[pid]) in alive:
-            delta[parent] = delta.get(parent, 0) - ns
+    for pid, c in cur.procs.items():
+        if alive(pid):
+            p = prev.procs[pid]
+            delta[pid] = c.own_ns - p.own_ns + max(0, c.children_ns - p.children_ns - counted.get(pid, 0))
+        else:  # none of it counted yet
+            delta[pid] = c.own_ns + c.children_ns
     elapsed = cur.at - prev.at
     out: dict[str, float | None] = {}
     for key, pids in groups.items():
         ns = sum(delta.get(pid, 0) for pid in pids)
-        # Below 0: a child its parent never reaped (orphaned before it exited).
-        out[key] = None if ns > elapsed * _CORES else round(max(ns, 0) / elapsed / _CORES * 100, 1)
+        out[key] = None if ns > elapsed * _CORES else round(ns / elapsed / _CORES * 100, 1)
     return out
 
 
@@ -248,9 +271,7 @@ def measure(snapshot: dict[int, ProcessInfo] | None, panes: dict[str, int]) -> M
         now = _now()
         readings = {pid: r for pid in snapshot if (r := _read(pid)) is not None}
         cur = _Sample(
-            now,
-            {(pid, r.start): r.cpu_ns for pid, r in readings.items()},
-            {pid: snapshot[pid].ppid for pid in readings},
+            now, {pid: _Proc(r.start, r.own_ns, r.children_ns, snapshot[pid].ppid) for pid, r in readings.items()}
         )
         groups = named | {f"pane:{pane_id}": pids for pane_id, pids in per_pane.items()}
         cpu = _cpu_pcts(_prev, cur, groups)

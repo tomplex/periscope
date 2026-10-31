@@ -59,26 +59,29 @@ was rejected: it would need its own process table and a thread under `docs/testi
   Processes `proc_pid_rusage` can't read (root-owned, or gone since the snapshot) are skipped.
 
 **D4 — A process is identified by (pid, start time), and a group's CPU accounts for exits.** Samples are keyed by
-`(pid, ri_proc_start_abstime)`, so a recycled pid never diffs against an unrelated process. A process's CPU total is
-its own time plus its reaped children's. Accounting is per process across the whole machine, then summed per group:
-- a process present in both samples counts the change in its total;
-- a process that started after the previous sample counts its whole total;
-- a process that vanished since the previous sample was reaped, and its whole CPU time reappears in its parent's
-  children time, so its last total comes off its parent (the parent pid it had in the previous snapshot), in
-  whichever group the parent sits now. A parent that is gone or unreadable (launchd, which reaps orphans) takes
-  nothing.
-So a closed pane's shell, reaped by the tmux server, is charged to elsewhere where the server gained it, and its
-orphaned claude (measured: the shell exits first and launchd reaps the claude) is charged to no one. A group's
-result is clamped at 0 (a child orphaned after the previous sample, whose parent never gains it), and is `null`
-when it exceeds every core for the whole interval, which only CPU from outside the interval can do. This catches the
-short-lived `git`/`gh`/`tsc` runs that live less than a tick, which own-time sampling would count as 0.
+`(pid, ri_proc_start_abstime)`, so a recycled pid never diffs against an unrelated process. Each process's own time
+and its reaped children's time are kept apart. Accounting is per process across the whole machine, then summed per
+group:
+- a process that vanished since the previous sample was reaped, and its whole CPU time reappears in its reaper's
+  children time. Its last total (own + children) was counted already, so it is charged to its nearest surviving
+  ancestor: walk the previous sample's parent chain past every process that vanished too. With no readable survivor
+  on the chain (launchd, which reaps orphans), it is charged to no one;
+- a process present in both samples counts the change in its own time, plus the change in its children time less
+  what was charged to it, floored at 0;
+- a process absent from the previous sample counts its whole total, none of which was counted before.
+So a Bash tool command (claude → `zsh -c` → command, both exiting in one interval) counts only its last interval in
+claude's pane. A closed pane's shell is charged to the tmux server, and so is its claude, whose chain walks there
+too; the claude was orphaned to launchd (measured: the shell exits first), so the server never gains it, and the
+floor stops that charge eating the server's own CPU or anyone else's. A group's result is `null` when it exceeds
+every core for the whole interval, which only CPU from outside the interval can do. This catches the short-lived
+`git`/`gh`/`tsc` runs that live less than a tick, which own-time sampling would count as 0.
 
 **D5 — Samples are taken under a lock, at most every 0.5 s, and never against stale history.** `build_state` can
 run concurrently from the state hub, the REST fallback poll and other tabs. One lock covers read-diff-write. A
 caller within 0.5 s of the previous sample, with the same panes, gets the previous measurement back instead of a new delta (5 ms windows measured 0%
 for a server averaging 10%). A previous sample older than 60 s (a hub that idled with no subscribers) counts as
 missing; a loaded machine was measured at 3–28 s a tick, so a slow tick still measures. With no usable previous sample, or an impossible delta (D4), `cpu_pct` is `null`, never 0. A 0 is either
-measured idle or an interval D4 clamped (a child orphaned before it exited).
+measured idle, or a reaper's children time D4 floored.
 
 **D6 — The machine line reads the kernel directly, with no fork.** Load average from `os.getloadavg()`; physical RAM
 from `sysctlbyname("hw.memsize")`; swap used and total from `vm.swapusage`; free memory percent from `kern.memorystatus_level`, the figure
@@ -132,9 +135,10 @@ there would disturb the CPU history of every other group.
 - `tests/test_resources.py`, over a fake snapshot and fake rusage:
   - group assignment, including a WebKit helper found by responsible pid, a process outside every group, and a
     server inside a pane's subtree (counted once);
-  - CPU: first sample (`null`), steady second sample, pid reuse, a child started after the previous sample, a child
-    that exits and is reaped by its parent, a closed pane's shell reaped by the tmux server in another group, a
-    child its parent never reaped (clamped), a delta past every core (`null`);
+  - CPU: first sample (`null`), steady second sample, pid reuse, a process absent from the previous sample, a child
+    that exits and is reaped by its parent, a Bash tool command whose `zsh -c` and command both exit in one
+    interval, a closed pane's shell reaped by the tmux server in another group, an orphan launchd reaped whose chain
+    reaches a survivor (floored, nothing stolen), a delta past every core (`null`);
   - the 0.5 s and 60 s rules, and two threads sampling at once (forced to overlap, so the test needs the lock);
   - a `None` snapshot;
   - smoke tests that read the test process itself through the real `proc_pid_rusage`, one of them after reaping a

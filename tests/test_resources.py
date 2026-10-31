@@ -18,17 +18,17 @@ from periscope import resources
 def test_read_measures_this_process():
     r = resources._read(os.getpid())
     assert r.footprint > 0
-    assert r.cpu_ns > 0
+    assert r.own_ns > 0
     assert 0 < r.start <= resources._now()
 
 
 def test_read_counts_reaped_children():
     # A child that burned 0.2 s of CPU and was reaped shows up in our total:
     # rusage_info_v1's child_* fields are where D4's reaped CPU comes from.
-    before = resources._read(os.getpid()).cpu_ns
+    before = resources._read(os.getpid()).children_ns
     burn = "import time\nt = time.process_time()\nwhile time.process_time() - t < 0.2: pass"
     subprocess.run([sys.executable, "-c", burn], check=True)
-    assert resources._read(os.getpid()).cpu_ns - before >= 150_000_000
+    assert resources._read(os.getpid()).children_ns - before >= 150_000_000
 
 
 def test_read_gone_pid_is_none():
@@ -129,8 +129,10 @@ S = 1_000_000_000  # one second in ns
 
 
 def _sample(at, *procs):
-    """A tick's sample of (pid, start, cpu_ns, ppid) processes."""
-    return resources._Sample(at, {(pid, start): ns for pid, start, ns, _ in procs}, {p[0]: p[3] for p in procs})
+    """A tick's sample of (pid, start, own_ns, children_ns, ppid) processes."""
+    return resources._Sample(
+        at, {pid: resources._Proc(start, own, kids, ppid) for pid, start, own, kids, ppid in procs}
+    )
 
 
 def _cpu(prev, cur, pids):
@@ -138,70 +140,80 @@ def _cpu(prev, cur, pids):
 
 
 def test_cpu_is_unknown_without_a_previous_sample():
-    assert _cpu(None, _sample(S, (1, 0, S, 0)), {1}) is None
+    assert _cpu(None, _sample(S, (1, 0, S, 0, 0)), {1}) is None
 
 
 def test_cpu_steady_process():
-    assert _cpu(_sample(0, (1, 0, S, 0)), _sample(S, (1, 0, S + S // 2, 0)), {1}) == 50.0
+    assert _cpu(_sample(0, (1, 0, S, 0, 0)), _sample(S, (1, 0, S + S // 2, 0, 0)), {1}) == 50.0
 
 
-def test_cpu_counts_a_process_started_since_the_previous_sample():
-    assert _cpu(_sample(S), _sample(2 * S, (2, S + S // 2, S // 5, 1)), {2}) == 20.0
-
-
-def test_cpu_ignores_an_old_process_new_to_the_sample():
-    # Started before the previous sample: its total isn't this interval's.
-    assert _cpu(_sample(S), _sample(2 * S, (2, S // 2, 7 * S, 1)), {2}) == 0.0
+def test_cpu_counts_the_whole_total_of_a_process_new_to_the_sample():
+    # Started before the previous sample but missing from it (it started after
+    # that tick's snapshot): none of its CPU was counted yet.
+    assert _cpu(_sample(S), _sample(2 * S, (2, S // 2, S // 10, S // 10, 1)), {2}) == 20.0
 
 
 def test_cpu_counts_a_reaped_child_once():
     # Child 2 had 0.3 s; it ran 0.1 s more and exited, and parent 1 reaped it:
-    # the parent's total gains the child's final 0.4 s plus 0.1 s of its own.
-    prev = _sample(0, (1, 0, S, 0), (2, 0, 3 * S // 10, 1))
-    cur = _sample(S, (1, 0, S + 4 * S // 10 + S // 10, 0))
+    # the parent's children time gains the child's final 0.4 s.
+    prev = _sample(0, (1, 0, S, 0, 0), (2, 0, 3 * S // 10, 0, 1))
+    cur = _sample(S, (1, 0, S + S // 10, 4 * S // 10, 0))
     assert _cpu(prev, cur, {1, 2}) == 20.0
+
+
+def test_cpu_counts_a_bash_tool_command_once(monkeypatch):
+    # Claude 101 runs zsh 300 → pytest 301 (10 s so far). In a 2 s tick pytest
+    # burns 1 s more and exits, zsh reaps it and exits, claude reaps zsh: 1 s
+    # in 2 s on 10 cores.
+    monkeypatch.setattr(resources, "_CORES", 10)
+    prev = _sample(0, (100, 0, S, 0, 1), (101, 0, 20 * S, 0, 100), (300, 0, S // 100, 0, 101), (301, 0, 10 * S, 0, 300))
+    cur = _sample(2 * S, (100, 0, S, 0, 1), (101, 0, 20 * S, S // 100 + 11 * S, 100))
+    assert _cpu(prev, cur, {100, 101}) == 5.0
 
 
 def test_cpu_charges_a_closed_panes_shell_to_its_reaper():
     # Pane %1 closes: tmux server 50 (elsewhere) reaps its shell 100 (2 s) and
     # gains it, plus 0.1 s of its own. The shell's claude 101 (30 s) was
-    # orphaned to launchd, which isn't readable: it comes off nothing.
-    prev = _sample(0, (50, 0, S, 1), (100, 0, 2 * S, 50), (101, 0, 30 * S, 100))
-    cur = _sample(S, (50, 0, 3 * S + S // 10, 1))
+    # orphaned to launchd, so the server never gains it.
+    prev = _sample(0, (50, 0, S, 0, 1), (100, 0, 2 * S, 0, 50), (101, 0, 30 * S, 0, 100))
+    cur = _sample(S, (50, 0, S + S // 10, 2 * S, 1))
     assert _cpu(prev, cur, {1, 50}) == 10.0
 
 
-def test_cpu_clamps_a_child_its_parent_never_reaped():
-    # Child 2 was orphaned before it exited: parent 1 never gains its 5 s.
-    prev = _sample(0, (1, 0, S, 0), (2, 0, 5 * S, 1))
-    assert _cpu(prev, _sample(S, (1, 0, S + S // 10, 0)), {1}) == 0.0
+def test_cpu_steals_nothing_for_an_orphan_launchd_reaped():
+    # Zsh 12 exits (reaped by 10); its child 13 (30 s) is orphaned to launchd
+    # and exits. 13's chain reaches 10, which never gains it: that charge
+    # floors 10's children time and leaves 20's 0.3 s alone.
+    prev = _sample(0, (10, 0, S, 0, 1), (12, 0, S // 100, 0, 10), (13, 0, 30 * S, 0, 12), (20, 0, S, 0, 1))
+    cur = _sample(S, (10, 0, S + S // 2, S // 100, 1), (20, 0, S + 3 * S // 10, 0, 1))
+    assert _cpu(prev, cur, {10, 20}) == 80.0
 
 
 def test_cpu_is_unknown_past_every_core_for_the_whole_interval():
     # Two seconds of CPU in one second on one core came from outside it.
-    assert _cpu(_sample(0, (1, 0, 0, 0)), _sample(S, (1, 0, 2 * S, 0)), {1}) is None
+    assert _cpu(_sample(0, (1, 0, 0, 0, 0)), _sample(S, (1, 0, 2 * S, 0, 0)), {1}) is None
 
 
 def test_cpu_never_diffs_a_reused_pid_against_its_predecessor():
     # pid 1 exited (5 s, reaped by 9) and a new pid 1 started since.
-    prev = _sample(S, (1, 0, 5 * S, 9), (9, 0, S, 0))
-    cur = _sample(2 * S, (9, 0, 6 * S, 0), (1, S + S // 2, S // 10, 9))
+    prev = _sample(S, (1, 0, 5 * S, 0, 9), (9, 0, S, 0, 0))
+    cur = _sample(2 * S, (9, 0, S, 5 * S, 0), (1, S + S // 2, S // 10, 0, 9))
     assert _cpu(prev, cur, {1, 9}) == 10.0
 
 
 def test_cpu_is_a_share_of_every_core(monkeypatch):
     monkeypatch.setattr(resources, "_CORES", 10)
     # 2.5 cores busy for a second on a 10-core machine: a quarter of it.
-    assert _cpu(_sample(0, (1, 0, 0, 0)), _sample(S, (1, 0, 5 * S // 2, 0)), {1}) == 25.0
+    assert _cpu(_sample(0, (1, 0, 0, 0, 0)), _sample(S, (1, 0, 5 * S // 2, 0, 0)), {1}) == 25.0
 
 
 def test_cpu_spans_a_slow_tick():
     # A loaded machine was measured at 3–28 s a tick.
-    assert _cpu(_sample(0, (1, 0, S, 0)), _sample(30 * S, (1, 0, 4 * S, 0)), {1}) == 10.0
+    assert _cpu(_sample(0, (1, 0, S, 0, 0)), _sample(30 * S, (1, 0, 4 * S, 0, 0)), {1}) == 10.0
 
 
 def test_cpu_treats_a_stale_previous_sample_as_missing():
-    assert _cpu(_sample(0, (1, 0, S, 0)), _sample(61 * S, (1, 0, 2 * S, 0)), {1}) is None
+    assert _cpu(_sample(0, (1, 0, S, 0, 0)), _sample(61 * S, (1, 0, 2 * S, 0, 0)), {1}) is None
 
 
 # ── measure ──────────────────────────────────────────────────────────────
@@ -239,7 +251,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(resources, "machine", lambda: MACHINE)
     monkeypatch.setattr(resources, "_now", clock)
     monkeypatch.setattr(
-        resources, "_read", lambda pid: resources.Reading(100 * MB, cpu[pid], 0) if pid in cpu else None
+        resources, "_read", lambda pid: resources.Reading(100 * MB, cpu[pid], 0, 0) if pid in cpu else None
     )
     return clock, cpu
 
@@ -308,7 +320,7 @@ def test_measure_stamps_the_sample_when_it_reads(fake, monkeypatch):
 
 
 def test_measure_skips_unreadable_processes(fake, monkeypatch):
-    monkeypatch.setattr(resources, "_read", lambda pid: None if pid == 102 else resources.Reading(100 * MB, 0, 0))
+    monkeypatch.setattr(resources, "_read", lambda pid: None if pid == 102 else resources.Reading(100 * MB, 0, 0, 0))
     assert resources.measure(_snapshot(), PANES).panes["%1"]["mem_mb"] == 200
 
 
