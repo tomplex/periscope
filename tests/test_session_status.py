@@ -122,10 +122,10 @@ def test_missing_sessions_dir_returns_none(tmp_path, monkeypatch):
 # ── live-claude pid detection parses ps output ───────────────────────────
 
 _PS_SAMPLE = (
-    " 9448  473120     01-02:08:58 /Users/tom/.local/bin/claude\n"
-    " 9876  605744        22:09:53 /Users/tom/.local/share/claude/versions/2.1.161\n"
-    "  329    1024        05:33 /usr/libexec/logd\n"
-    "    1     512     91-10:00:00 /sbin/launchd\n"
+    " 9448     01-02:08:58 /Users/tom/.local/bin/claude\n"
+    " 9876        22:09:53 /Users/tom/.local/share/claude/versions/2.1.161\n"
+    "  329        05:33 /usr/libexec/logd\n"
+    "    1     91-10:00:00 /sbin/launchd\n"
 )
 
 
@@ -138,15 +138,15 @@ def test_live_claude_pids_matches_claude_paths(monkeypatch):
     assert ss._live_claude_pids() == {9448, 9876}
 
 
-def test_claude_procs_carry_rss_and_age(monkeypatch):
+def test_claude_procs_carry_age(monkeypatch):
     class _R:
         stdout = _PS_SAMPLE
 
     monkeypatch.setattr(ss, "_claude_procs_cache", None)
     monkeypatch.setattr(ss.subprocess, "run", lambda *a, **k: _R())
     assert ss._claude_procs() == {
-        9448: (473120, 26 * 3600 + 8 * 60 + 58),
-        9876: (605744, 22 * 3600 + 9 * 60 + 53),
+        9448: 26 * 3600 + 8 * 60 + 58,
+        9876: 22 * 3600 + 9 * 60 + 53,
     }
 
 
@@ -181,8 +181,9 @@ def _seed_procs(tmp_path, monkeypatch, session, procs):
 def test_claude_proc_for_returns_stats(tmp_path, monkeypatch):
     # status "shell" is untrusted for STATE, but measurement still applies —
     # a bloated claude deserves the hint regardless of what it's doing.
-    _seed_procs(tmp_path, monkeypatch, _sess(300, "sid-m", "shell"), {300: (4_500_000, 4 * 86400)})
-    assert ss.claude_proc_for("sid-m") == {"pid": 300, "rss_kb": 4_500_000, "age_s": 4 * 86400}
+    _seed_procs(tmp_path, monkeypatch, _sess(300, "sid-m", "shell"), {300: 4 * 86400})
+    monkeypatch.setattr(ss.resources, "footprint_mb", {300: 4400}.get)
+    assert ss.claude_proc_for("sid-m") == {"pid": 300, "mem_mb": 4400, "age_s": 4 * 86400}
 
 
 def test_claude_proc_for_dead_pid_none(tmp_path, monkeypatch):
@@ -191,7 +192,7 @@ def test_claude_proc_for_dead_pid_none(tmp_path, monkeypatch):
 
 
 def test_claude_proc_for_unmapped_none(tmp_path, monkeypatch):
-    _seed_procs(tmp_path, monkeypatch, _sess(302, "sid-k", "busy"), {302: (1, 1)})
+    _seed_procs(tmp_path, monkeypatch, _sess(302, "sid-k", "busy"), {302: 1})
     assert ss.claude_proc_for("sid-nope") is None
     assert ss.claude_proc_for(None) is None
 

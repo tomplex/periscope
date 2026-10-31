@@ -24,7 +24,7 @@ from periscope.agent_processes import codex_process_for_pane
 from periscope.channels import channel_state_for
 from periscope.codex_sessions import codex_home
 from periscope.codex_state import reconcile_codex_state, rollout_edge_for
-from periscope.config import MEM_BAD_RSS_KB, MEM_WARN_AGE_S, MEM_WARN_RSS_KB
+from periscope.config import MEM_BAD_MB, MEM_WARN_AGE_S, MEM_WARN_MB
 from periscope.git_pr import (
     cached_git_state,
     cached_linked_pr_state,
@@ -223,20 +223,22 @@ def _pane_env_labels() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
 
 def mem_signal(proc: dict | None) -> dict | None:
     """Cycle-hint for a claude process, from claude_proc_for's stats dict:
-    "bad" at ≥MEM_BAD_RSS_KB, "warn" at ≥MEM_WARN_RSS_KB or ≥MEM_WARN_AGE_S,
-    None otherwise — None renders nothing, so a healthy pane costs no rail
-    space. Policy lives here (config thresholds); measurement stays in
-    session_status, which is a stdlib-only leaf that can't import config."""
+    "bad" at ≥MEM_BAD_MB of footprint, "warn" at ≥MEM_WARN_MB or
+    ≥MEM_WARN_AGE_S, None otherwise — None renders nothing, so a healthy pane
+    costs no rail space. `trigger` says which limit tripped, so the chip leads
+    with it. Policy (the config thresholds) lives here;
+    measurement in session_status and resources."""
     if not proc:
         return None
-    rss, age = proc["rss_kb"], proc["age_s"]
-    if rss >= MEM_BAD_RSS_KB:
-        tier = "bad"
-    elif rss >= MEM_WARN_RSS_KB or age >= MEM_WARN_AGE_S:
-        tier = "warn"
+    mb, age = proc["mem_mb"], proc["age_s"]
+    if mb is not None and mb >= MEM_WARN_MB:
+        trigger = "mem"
+    elif age >= MEM_WARN_AGE_S:
+        trigger = "age"
     else:
         return None
-    return {"tier": tier, "rss_gb": round(rss / (1024 * 1024), 1), "age_s": age}
+    tier = "bad" if mb is not None and mb >= MEM_BAD_MB else "warn"
+    return {"tier": tier, "trigger": trigger, "gb": None if mb is None else round(mb / 1024, 1), "age_s": age}
 
 
 # How far before needs_since the request's own row can be stamped. The hook

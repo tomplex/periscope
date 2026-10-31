@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 
-from periscope import store, updater, usage
+from periscope import resources, store, updater, usage
 from periscope.activity import pane_status_lines
 from periscope.channels import _channel_gc
 from periscope.panes import (
@@ -85,6 +85,12 @@ def build_state() -> dict:
 
     result = [view for view, _ in built]
     annotate_cost_pressure(result)
+
+    # Memory and CPU per owner, on this tick's process snapshot. Each row's
+    # pane_pid roots its pane's group; None when the snapshot failed.
+    measured = resources.measure({v["pane_id"]: int(v["pane_pid"]) for v in result if v.get("pane_pid")})
+    for view in result:
+        view["res"] = measured.panes.get(view["pane_id"]) if measured else None
 
     # Narrator status merge: ONE bulk read here, NOT per-pane inside
     # build_window_view — the 32-thread fan-out would serialize on
@@ -192,6 +198,9 @@ def build_state() -> dict:
         # rather than re-scanning /Applications every poll — detection is only
         # needed at the Settings write boundary, which already validates it.
         "editor": (get_settings().get("editor") or ""),
+        # server / webview / panes / elsewhere / machine (resources.measure);
+        # the header pill and its popover.
+        "resources": measured.totals if measured else None,
     }
 
 

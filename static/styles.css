@@ -300,6 +300,30 @@ button, input, textarea, select { font-family: inherit; }
 .update-menu-warn { margin: 0 0 6px; padding: 4px 6px; border-radius: var(--r-sm); font-size: 11px; line-height: 1.4;
   color: var(--s-danger); background: color-mix(in oklch, var(--s-danger) 12%, transparent); }
 .update-menu-error { margin: 0 0 6px; padding: 4px 6px; font-size: 11px; white-space: pre-wrap; color: var(--s-danger); }
+/* Resource pill (ResourcePill.jsx): neutral, it reports rather than calls to action. */
+.res-dd { position: relative; display: inline-flex; align-self: center; }
+.res-pill {
+  flex: 0 0 auto;
+  align-self: center;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--fg-2);
+  background: transparent;
+  border: 1px solid var(--line);
+}
+.res-pill:hover { color: var(--fg-1); }
+.tb-dd-menu.res-menu { left: auto; right: 0; width: max-content; min-width: 260px; gap: 0; padding: 6px; font-size: 11px; }
+.res-line { display: grid; grid-template-columns: 1fr 5ch 5ch; gap: 8px; padding: 2px 6px; border-radius: var(--r-sm); }
+button.res-line { font: inherit; color: inherit; background: none; border: 0; text-align: left; width: 100%; }
+.res-line.is-pane { cursor: pointer; }
+.res-line.is-pane:hover { background: color-mix(in oklch, var(--fg-1) 8%, transparent); }
+.res-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.res-mem, .res-cpu { text-align: right; font-variant-numeric: tabular-nums; }
+.res-cpu { color: var(--fg-3); cursor: help; }
+.res-machine { margin-top: 6px; padding: 4px 6px 0; border-top: 1px solid var(--line); color: var(--fg-3); }
 .update-notes { max-height: 50vh; overflow-y: auto; padding: 0 6px; font-size: 12px; line-height: 1.5; color: var(--fg-1); }
 .update-release + .update-release { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .update-release-head { margin-bottom: 4px; font-weight: 600; color: var(--fg-0); }

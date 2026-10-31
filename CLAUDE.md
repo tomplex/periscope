@@ -124,6 +124,7 @@ would double-load every global.
 | `worktrees.py` / `worktree_spawn.py` / `repo_locks.py` / `gitutil.py` | Worktree cache + affiliation / spawn + two-window layout / per-repo git lock + per-dir open lock / shared git helpers |
 | `pids.py` | `@periscope_id` mint / stamp / rebind / resolve — pane identity |
 | `session_status.py` | Authoritative Claude-session state from `<config_dir>/sessions/<pid>.json` |
+| `resources.py` | Memory footprint + CPU per owner (each pane, server, webview, elsewhere) through libproc on the tick's process snapshot; `measure()` feeds `/api/state` |
 | `turns.py` | Pane transcript view (`GET /api/pane/turns`) |
 | `bg_commander.py` | Background command jobs + status sync |
 | `poke.py` | Daily session poke: one Haiku message per account at 08:00 so the 5h window resets ~13:00; verified, logged, prod-only |
@@ -143,7 +144,7 @@ commit `static/dist/` whenever `static/src/` changes** — boot has no build ste
 | Area | Modules |
 |---|---|
 | entry / state | `main.jsx`, `store.js` (transient signals), `prefs.js` (server-prefs cache — the persistence boundary), `poll.js` (the single `/api/state` loop) |
-| chrome | `chrome/{Header,FilterBar,UsagePill}.jsx` |
+| chrome | `chrome/{Header,FilterBar,UsagePill,ResourcePill}.jsx` (`chrome/resources.js`: the resource pill's pure formatting) |
 | split view | `split/{Split,Rail,RailRows,Detail,…}.jsx` + `split/railTree.js` — the only view. Rail is TRACK-anchored: Track → (derived Branch) → Pane; branch rows are derived from live `w.branch`, not entities |
 | review | `review/{Walkthrough,ReviewsQueue}.jsx` + `walkthrough.js` (the PR walkthrough view, the cross-track reviews queue, their pure helpers) |
 | terminal | `terminal/{Terminal,TerminalSearch}.jsx` + `terminalCore.js` (imperative xterm + `/ws/pane`) |

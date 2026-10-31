@@ -99,25 +99,27 @@ export function shortestUniqueSuffix(name, allNames) {
   return name;
 }
 
-// GitHub PR URL for a pane's repo. `slug` ("owner/repo") is derived
-// server-side from `git remote get-url origin`; null when the repo's origin
-// isn't a GitHub remote — callers then render the PR badge unlinked.
-// Cycle-hint chip content for a bloated/aged Claude process. `mem` is the
-// server's `w.mem` ({tier: "warn"|"bad", rss_gb, age_s}) or null/undefined —
-// the server only sends it when a threshold tripped, so null → no chip.
-// Label leads with RSS when memory tripped the tier, uptime days otherwise.
+// Cycle-hint chip content (rail ↻ chip + detail header). `mem` is the
+// server's `w.mem` ({tier: "warn"|"bad", trigger: "mem"|"age", gb, age_s})
+// or null/undefined — the server only sends it when a threshold tripped, so
+// null → no chip. The label leads with whichever limit tripped. gb is null
+// when claude's footprint couldn't be read.
 export function memHint(mem) {
   if (!mem) return null;
   const days = Math.floor(mem.age_s / 86400);
   const hours = Math.floor((mem.age_s % 86400) / 3600);
   const up = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+  const what = mem.gb == null ? `Claude has been running ${up}` : `Claude is using ${mem.gb}GB after ${up}`;
   return {
-    label: mem.rss_gb >= 2 ? `${mem.rss_gb}G` : `${days}d`,
-    title: `Claude is using ${mem.rss_gb}GB after ${up} — consider exiting and resuming this session`,
+    label: mem.trigger === "mem" ? `${mem.gb}G` : `${days}d`,
+    title: `${what} — consider exiting and resuming this session`,
     cls: `mem-${mem.tier}`,
   };
 }
 
+// GitHub PR URL for a pane's repo. `slug` ("owner/repo") is derived
+// server-side from `git remote get-url origin`; null when the repo's origin
+// isn't a GitHub remote — callers then render the PR badge unlinked.
 export function prUrl(slug, pr) {
   return slug ? `https://github.com/${slug}/pull/${pr}` : null;
 }

@@ -23,8 +23,8 @@ Only busy/waiting/idle are mapped; `shell` and any unknown status return None so
 the caller falls back to scraping. The schema is undocumented Claude Code
 internals (version-tagged), so every read degrades to None on a shape change.
 
-Imports only stdlib — no periscope.* — so it stays a leaf the resolver layer
-(turns.py / window_view.py) can depend on freely."""
+Imports only stdlib and periscope's leaf modules (config, resources), never
+the resolver layer, so turns.py / window_view.py can depend on it freely."""
 
 import contextlib
 import json
@@ -34,7 +34,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from periscope import config
+from periscope import config, resources
 
 _SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
@@ -51,9 +51,9 @@ _CACHE_TTL_S = 1.0
 # pid -> current sessionId). by_pid holds a LIST because the same OS pid can
 # have a file in more than one account's dir (recycled pid, account swap).
 _index_cache: tuple[float, dict, dict[int, list[dict]]] | None = None
-# (built_at, {pid: (rss_kb, age_s)}) — one ps snapshot serves both pid
-# liveness (the key set) and the memory/uptime cycle-hint.
-_claude_procs_cache: tuple[float, dict[int, tuple[int, int]]] | None = None
+# (built_at, {pid: age_s}) — one ps snapshot serves both pid liveness (the
+# key set) and the uptime cycle-hint.
+_claude_procs_cache: tuple[float, dict[int, int]] | None = None
 _proc_table_cache: tuple[float, tuple[dict[int, list[int]], dict[int, str]]] | None = None
 _pane_pids_cache: tuple[float, dict[str, int]] | None = None
 
@@ -148,33 +148,33 @@ def parse_etime(s: str) -> int:
     return ((days * 24 + h) * 60 + m) * 60 + sec
 
 
-def _claude_procs() -> dict[int, tuple[int, int]]:
-    """{pid: (rss_kb, age_s)} of running `claude` processes, snapshotted once
-    per poll. The key set guards against honoring a session file whose process
-    has exited or whose pid was recycled; rss/etime feed the memory cycle-hint.
-    `comm` is the full executable path; claude's launcher (`.../bin/claude`)
-    and versioned binary (`.../share/claude/versions/<v>`) both contain
-    "claude". comm may itself contain spaces, hence maxsplit=3."""
+def _claude_procs() -> dict[int, int]:
+    """{pid: age_s} of running `claude` processes, snapshotted once per poll.
+    The key set guards against honoring a session file whose process has
+    exited or whose pid was recycled; age feeds the cycle-hint. `comm` is the
+    full executable path; claude's launcher (`.../bin/claude`) and versioned
+    binary (`.../share/claude/versions/<v>`) both contain "claude". comm may
+    itself contain spaces, hence maxsplit=2."""
     global _claude_procs_cache
     now = time.time()
     if _claude_procs_cache and now - _claude_procs_cache[0] < _CACHE_TTL_S:
         return _claude_procs_cache[1]
-    procs: dict[int, tuple[int, int]] = {}
+    procs: dict[int, int] = {}
     try:
         out = subprocess.run(
-            ["ps", "-axo", "pid=,rss=,etime=,comm="],
+            ["ps", "-axo", "pid=,etime=,comm="],
             capture_output=True,
             text=True,
             timeout=5,
         ).stdout
         for line in out.splitlines():
-            parts = line.split(None, 3)
-            if len(parts) != 4:
+            parts = line.split(None, 2)
+            if len(parts) != 3:
                 continue
-            pid_s, rss_s, etime, comm = parts
+            pid_s, etime, comm = parts
             if "claude" in comm.lower():
                 with contextlib.suppress(ValueError):
-                    procs[int(pid_s)] = (int(rss_s), parse_etime(etime))
+                    procs[int(pid_s)] = parse_etime(etime)
     except (OSError, subprocess.SubprocessError):
         pass
     _claude_procs_cache = (now, procs)
@@ -509,10 +509,11 @@ def live_session_id_for_pane(pane_id: str) -> str | None:
 
 
 def claude_proc_for(sid: str | None) -> dict | None:
-    """Process stats for a sessionId's claude: {"pid", "rss_kb", "age_s"}, or
-    None when unmapped or not a live claude. Measurement, not state — applies
-    even when the status is one session_state_for doesn't trust (a bloated
-    claude deserves the cycle-hint regardless of what it's doing)."""
+    """Process stats for a sessionId's claude: {"pid", "mem_mb", "age_s"}, or
+    None when unmapped or not a live claude. mem_mb is its footprint, None when
+    unreadable (exited since the ps snapshot). Measurement, not state — applies even when
+    the status is one session_state_for doesn't trust (a bloated claude
+    deserves the cycle-hint regardless of what it's doing)."""
     if not sid:
         return None
     d = _index().get(sid)
@@ -522,10 +523,10 @@ def claude_proc_for(sid: str | None) -> dict | None:
         pid = int(d.get("pid"))
     except (TypeError, ValueError):
         return None
-    info = _claude_procs().get(pid)
-    if info is None:
+    age = _claude_procs().get(pid)
+    if age is None:
         return None
-    return {"pid": pid, "rss_kb": info[0], "age_s": info[1]}
+    return {"pid": pid, "mem_mb": resources.footprint_mb(pid), "age_s": age}
 
 
 def session_state_for(sid: str | None) -> dict | None:
