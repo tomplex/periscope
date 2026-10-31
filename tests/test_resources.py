@@ -1,6 +1,7 @@
 """resources: footprint and CPU per group. Everything except the smoke tests
 runs on fake snapshots and fake rusage readings."""
 
+import contextlib
 import copy
 import os
 import subprocess
@@ -328,10 +329,8 @@ def test_measure_from_two_threads_at_once(fake, monkeypatch):
 
     def machine():
         computed.append(1)
-        try:
+        with contextlib.suppress(threading.BrokenBarrierError):
             barrier.wait()
-        except threading.BrokenBarrierError:
-            pass
         return MACHINE
 
     monkeypatch.setattr(resources, "machine", machine)

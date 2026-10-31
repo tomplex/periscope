@@ -248,7 +248,9 @@ def measure(snapshot: dict[int, ProcessInfo] | None, panes: dict[str, int]) -> M
         now = _now()
         readings = {pid: r for pid in snapshot if (r := _read(pid)) is not None}
         cur = _Sample(
-            now, {(pid, r.start): r.cpu_ns for pid, r in readings.items()}, {pid: snapshot[pid].ppid for pid in readings}
+            now,
+            {(pid, r.start): r.cpu_ns for pid, r in readings.items()},
+            {pid: snapshot[pid].ppid for pid in readings},
         )
         groups = named | {f"pane:{pane_id}": pids for pane_id, pids in per_pane.items()}
         cpu = _cpu_pcts(_prev, cur, groups)
