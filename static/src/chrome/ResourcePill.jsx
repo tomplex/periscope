@@ -35,8 +35,15 @@ function Line({ label, group, onClick }) {
 // separate close-when-hidden effect needed.
 function ResourcePopover({ r }) {
   const ref = useRef(null);
+  const btnRef = useRef(null);
   const [open, setOpen] = useState(false);
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => {
+    // Hiding the menu drops focus to <body> unless it moves first — send it
+    // back to the pill when a menu item or the pane list had it.
+    const hadFocus = ref.current?.contains(document.activeElement);
+    setOpen(false);
+    if (hadFocus) btnRef.current?.focus();
+  }, []);
   usePopoverDismiss(ref, open, close);
 
   return (
@@ -44,6 +51,7 @@ function ResourcePopover({ r }) {
       <button
         type="button"
         class="res-pill"
+        ref={btnRef}
         title="memory held by periscope's server, its webview and its panes — click for each one's memory and CPU"
         aria-haspopup="dialog"
         aria-expanded={open ? "true" : "false"}
@@ -51,7 +59,7 @@ function ResourcePopover({ r }) {
       >
         ▣ {fmtMem(ownedMb(r))}
       </button>
-      <div class="tb-dd-menu res-menu" role="dialog" hidden={!open}>
+      <div class="tb-dd-menu res-menu" role="dialog" aria-label="resource usage" hidden={!open}>
         <Line label="periscope server" group={r.server} />
         {r.webview && <Line label="webview" group={r.webview} />}
         <Line label="all panes" group={r.panes} />
