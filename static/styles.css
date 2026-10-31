@@ -2588,7 +2588,7 @@ body.col-resizing iframe { pointer-events: none; }
    can't wrap the header and resize the terminal. Sized to the widest form,
    "1023M mem · 100% cpu". */
 .detail-pane-header .header-res {
-  display: inline-block; white-space: nowrap; min-width: 20ch; text-align: right;
+  display: inline-block; white-space: nowrap; min-width: 22ch; text-align: right;
 }
 /* Per-pane model/effort pickers (SessionPickers.jsx): sized to sit in the
    header's text line rather than read as form fields. */
