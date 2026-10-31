@@ -259,6 +259,15 @@ export function PaneHeader({ w }) {
   if (w.agent && w.context_pct != null) {
     parts.push(<><span class="hsep">·</span><span>{w.context_pct}%</span></>);
   }
+  if (w.agent === "claude" && w.mem) {
+    const mh = memHint(w.mem);
+    parts.push(<><span class="hsep">·</span><span class={`header-mem ${mh.cls}`} title={mh.title}>↻ {mh.label}</span></>);
+  }
+  if (w.api_error) {
+    parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);
+  }
+  // After ↻ and API-error: its fixed width (styles.css .header-res) can't
+  // shift either chip.
   if (w.res) {
     parts.push(
       <>
@@ -268,13 +277,6 @@ export function PaneHeader({ w }) {
         </span>
       </>
     );
-  }
-  if (w.agent === "claude" && w.mem) {
-    const mh = memHint(w.mem);
-    parts.push(<><span class="hsep">·</span><span class={`header-mem ${mh.cls}`} title={mh.title}>↻ {mh.label}</span></>);
-  }
-  if (w.api_error) {
-    parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);
   }
   return (
     <header id="detail-pane-header" class="detail-pane-header" data-agent={w.agent || undefined}>

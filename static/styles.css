@@ -2584,6 +2584,12 @@ body.col-resizing iframe { pointer-events: none; }
 .detail-pane-header .header-ci.ci-running { color: var(--s-working); }
 .detail-pane-header .header-git { color: var(--s-needs); font-family: var(--mono); }
 .detail-pane-header .header-api-error { color: var(--s-danger); }
+/* Fixed box so crossing 10% CPU or 1 GB (fmtCpu/fmtMem's format breaks)
+   can't wrap the header and resize the terminal. Sized to the widest form,
+   "1023M mem · 100% cpu". */
+.detail-pane-header .header-res {
+  display: inline-block; white-space: nowrap; min-width: 20ch; text-align: right;
+}
 /* Per-pane model/effort pickers (SessionPickers.jsx): sized to sit in the
    header's text line rather than read as form fields. */
 .detail-pane-header .header-session-picks { display: inline-flex; gap: 4px; align-self: center; }
