@@ -315,7 +315,8 @@ button, input, textarea, select { font-family: inherit; }
   border: 1px solid var(--line);
 }
 .res-pill:hover { color: var(--fg-1); }
-.tb-dd-menu.res-menu { left: auto; right: 0; width: max-content; min-width: 260px; gap: 0; padding: 6px; font-size: 11px; }
+.tb-dd-menu.res-menu { left: auto; right: 0; width: max-content; min-width: 260px; max-width: min(420px, 90vw); gap: 0; padding: 6px; font-size: 11px; }
+.res-pane-lines { max-height: 50vh; overflow-y: auto; }
 .res-line { display: grid; grid-template-columns: 1fr 5ch 5ch; gap: 8px; padding: 2px 6px; border-radius: var(--r-sm); }
 button.res-line { font: inherit; color: inherit; background: none; border: 0; text-align: left; width: 100%; }
 .res-line.is-pane { cursor: pointer; }

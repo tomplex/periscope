@@ -55,14 +55,16 @@ function ResourcePopover({ r }) {
         <Line label="periscope server" group={r.server} />
         {r.webview && <Line label="webview" group={r.webview} />}
         <Line label="all panes" group={r.panes} />
-        {paneLines(windows.value || []).map(({ w, mem_mb, cpu_pct }) => (
-          <Line
-            key={w.pid}
-            label={paneLabel(w)}
-            group={{ mem_mb, cpu_pct }}
-            onClick={() => { selectPane(w); close(); }}
-          />
-        ))}
+        <div class="res-pane-lines">
+          {paneLines(windows.value || []).map(({ w, mem_mb, cpu_pct }) => (
+            <Line
+              key={w.pid}
+              label={paneLabel(w)}
+              group={{ mem_mb, cpu_pct }}
+              onClick={() => { selectPane(w); close(); }}
+            />
+          ))}
+        </div>
         <Line label="elsewhere" group={r.elsewhere} />
         <div class="res-machine">{machineLine(r.machine)}</div>
       </div>
