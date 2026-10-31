@@ -14,8 +14,14 @@ import ctypes
 import os
 from dataclasses import dataclass
 
+from periscope.agent_processes import ProcessInfo, descendants
+
 _u64 = ctypes.c_uint64
 _RUSAGE_INFO_V1 = 1
+
+# The Tauri shell's executable (src-tauri). Its WebKit helpers have launchd as
+# their parent, so they're found by responsible pid instead.
+_APP_NAME = "periscope-app"
 
 
 class _RusageInfoV1(ctypes.Structure):
@@ -123,3 +129,27 @@ def machine() -> dict:
         "swap_total_mb": swap.total >> 20,
         "mem_free_pct": level.value,
     }
+
+
+def _assign(snapshot: dict[int, ProcessInfo], panes: dict[str, int]) -> tuple[dict[str, set[int]], dict[str, set[int]]]:
+    """Every process in exactly one group: ({"server", "webview"?, "panes",
+    "elsewhere"} → pids, pane_id → pids). Claimed in that order, so a process
+    is never counted twice."""
+    claimed: set[int] = set()
+
+    def claim(pids: set[int]) -> set[int]:
+        fresh = pids - claimed
+        claimed.update(fresh)
+        return fresh
+
+    def subtree(root: int) -> set[int]:
+        return {p.pid for p in descendants(root, snapshot)}
+
+    named = {"server": claim(subtree(os.getpid()))}
+    apps = {p.pid for p in snapshot.values() if os.path.basename(p.comm) == _APP_NAME}
+    if apps:
+        named["webview"] = claim(apps | {pid for pid in snapshot if _responsible(pid) in apps})
+    per_pane = {pane_id: claim(subtree(root)) for pane_id, root in panes.items()}
+    named["panes"] = set().union(*per_pane.values())
+    named["elsewhere"] = set(snapshot) - claimed
+    return named, per_pane
