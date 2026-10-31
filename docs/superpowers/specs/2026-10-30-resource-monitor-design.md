@@ -21,7 +21,8 @@ claude 111 MB against 460 MB.
 ## Scope
 
 In: measurement, the header pill and popover, the detail-header numbers.
-Out, each its own later PR: dashboard freshness (`build_state` time, `/ws/state` frame gap), a 1 h history.
+Out, each its own later PR: dashboard freshness (`build_state` time, `/ws/state` frame gap), a 1 h history, the
+recycle-pending indicator (THI-449).
 THI-449 (recycle gate, unreaped WebContent) and THI-450 (subprocesses per tick) are separate tickets.
 
 ## Decisions
@@ -32,11 +33,13 @@ what Activity Monitor calls Memory and what the shell's recycle already uses. Re
 to the V0 fields `recycle.rs` binds. CPU times are mach absolute units, scaled by `mach_timebase_info` (125/3 on
 this machine). Stdlib only, so `uv run server.py`'s PEP-723 header doesn't change. CPU% is a share of the whole machine
 (100% = every core busy), not per core like `top`: groups listed side by side read as parts of one total, where
-per-core figures ran past 100% (2.25 cores = 225%). Measured cost: ~3 µs per process, ~2 ms for every process on the machine.
+per-core figures ran past 100% (2.25 cores = 225%). Measured cost of a whole pass, including D3's `proc_name` and
+responsible-pid calls for every process: 4–6 ms on ~750–790 processes (one rusage read is ~3 µs).
 
-**D2 — Measurement runs inside `build_state`, once per tick, on the tick's existing process snapshot.** It reads
-`agent_processes.process_snapshot()`, which the fan-out already takes every tick (`codex_process_for_pane`), so it
-adds no subprocess while the fan-out finishes within the snapshot's 1 s cache; a slower tick forks one more `ps`. When the snapshot is `None` (a `ps` failure), `res` and `resources` are `null` for that tick
+**D2 — Measurement runs inside `build_state`, once per tick, on the tick's existing process snapshot.**
+`build_state` takes `agent_processes.process_snapshot()` once, before the fan-out, whose `codex_process_for_pane`
+calls hit the same 1 s cache, and hands it to `measure` after the fan-out: no subprocess is added, however slow the
+tick. When the snapshot is `None` (a `ps` failure), `res` and `resources` are `null` for that tick
 rather than computed from an empty tree, which would collapse every pane to its shell. A separate sampler thread
 was rejected: it would need its own process table and a thread under `docs/testing.md`'s rules.
 
@@ -93,14 +96,15 @@ liveness and age but drops `rss=`; moving liveness off `ps` belongs to THI-450.
 
 `periscope/resources.py`, stdlib plus `agent_processes` (itself stdlib-only) for the snapshot and `descendants`:
 
-- `measure(panes)` → `Measurement | None`, given `{pane_id: pane_pid}`. It reads every process once, assigns each
-  to a group (D3), computes footprint and CPU per group (D4, D5), and returns `panes: {pane_id: {mem_mb, cpu_pct}}`
-  and `totals: {server, webview, panes, elsewhere, machine}`. Each group is `{mem_mb, cpu_pct}`; `webview` may be
-  `null`; `machine` is D6's `{load1, ram_mb, swap_used_mb, swap_total_mb, mem_free_pct}`. `None` when the snapshot failed.
+- `measure(snapshot, panes)` → `Measurement | None`, given the tick's process snapshot and `{pane_id: pane_pid}`.
+  It assigns each process to a group (D3), reads every process once (the sample is stamped just before the reads),
+  computes footprint and CPU per group (D4, D5), and returns `panes: {pane_id: {mem_mb, cpu_pct}}` and
+  `totals: {server, webview, panes, elsewhere, machine}`. Each group is `{mem_mb, cpu_pct}`; `webview` may be `null`;
+  `machine` is D6's `{load1, ram_mb, swap_used_mb, swap_total_mb, mem_free_pct}`. `None` when the snapshot is.
 - `footprint_mb(pid)` — one process's footprint, for the ↻ hint (D7).
 
-`build_state` calls `measure` after the fan-out and before the narrator merge. Each row gets `res`; the blob gets
-`resources`.
+`build_state` takes the snapshot before the fan-out (D2) and calls `measure` after it, before the narrator merge.
+Each row gets `res`; the blob gets `resources`.
 
 `/api/healthz` is unchanged: its only programmatic caller (`bin/periscope`) reads `.version`, and a narrow sample
 there would disturb the CPU history of every other group.
@@ -109,27 +113,32 @@ there would disturb the CPU history of every other group.
 
 - **Header pill** after `UsagePill`: `▣ 18.1G`, the memory of server, webview and panes together. CPU stays out of
   the pill. Hidden when `resources` is absent.
-- **Popover** on click, one line each with memory and CPU: periscope server, webview, then every pane sorted by
-  memory (a line selects its pane), then elsewhere, then the machine line: `16.0G RAM · swap 16.5G/17.4G · 27% free · load 52`. RAM leads because footprints count
-  compressed and swapped pages: the owners can add up past it, and that overcommitment is what the line shows.
+- **Popover** on click, one line each with memory and CPU: periscope server, webview, all panes (the `panes`
+  group), then every pane sorted by memory (a line selects its pane), then elsewhere, then the machine line:
+  `16.0G RAM · swap 16.5G/17.4G · 27% free · load 52.3`. RAM leads because footprints count compressed and swapped
+  pages: the groups can add up past it, and that overcommitment is what the line shows.
   The CPU column's tooltip says 100% = every core busy; under 10% it shows one decimal. A `null` CPU shows `–`.
-- **Detail header**: `· 6.8G mem · 58% cpu` after the context %, for the selected pane.
+- **Detail header**: `· 6.8G mem · 5.8% cpu` after the context %, for the selected pane (the heaviest pane above:
+  58% of one core is 5.8% of a 10-core machine).
 - Formatting (MB → `0.6G` / `512M`, CPU rounding, `null`) and the sort go in a pure `static/src/chrome/resources.js`,
   tested with vitest, the way `usageSummary.js` backs `UsagePill`.
 - `memHint` reads `gb` and `trigger`.
 
 ## Tests
 
-- `tests/conftest.py`: an autouse fixture stubs `resources.measure`'s system calls, so no test reads the real
-  machine's processes. Tests of `resources` itself replace the same seams with fakes.
+- `tests/conftest.py`: an autouse fixture stubs `build_state`'s snapshot (an empty one, no `ps`) and
+  `resources.measure`'s system calls, so no test reads the real machine's processes. Tests of `resources` itself
+  replace the same seams with fakes.
 - `tests/test_resources.py`, over a fake snapshot and fake rusage:
-  - group assignment, including a WebKit helper found by responsible pid and a process outside every group;
+  - group assignment, including a WebKit helper found by responsible pid, a process outside every group, and a
+    server inside a pane's subtree (counted once);
   - CPU: first sample (`null`), steady second sample, pid reuse, a child started after the previous sample, a child
     that exits and is reaped by its parent, a closed pane's shell reaped by the tmux server in another group, a
     child its parent never reaped (clamped), a delta past every core (`null`);
   - the 0.5 s and 60 s rules, and two threads sampling at once (forced to overlap, so the test needs the lock);
   - a `None` snapshot;
-  - one smoke test that reads the test process itself through the real `proc_pid_rusage`.
+  - smoke tests that read the test process itself through the real `proc_pid_rusage`, one of them after reaping a
+    CPU-burning child, so the `child_*` field offsets are checked.
 - `tests/test_window_view.py`: `mem_signal` on footprint, each tier and trigger (updating today's RSS cases).
 - `tests/routes/`: `/api/state` carries `res` and `resources`, and omits both when the snapshot is `None`.
 - vitest: `resources.js` formatting, `null` CPU and ordering; `memHint` with `gb`/`trigger` (updating
