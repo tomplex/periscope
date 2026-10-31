@@ -91,6 +91,17 @@ def test_assign_puts_every_process_in_one_group(monkeypatch):
     assert named["elsewhere"] == {1, 700}
 
 
+def test_assign_counts_a_server_inside_a_pane_once(monkeypatch):
+    # Periscope run from pane %1's shell: the server claims its subtree first.
+    monkeypatch.setattr(resources, "_responsible", {600: 500}.get)
+    monkeypatch.setattr(resources, "_name", lambda pid: {500: "periscope-app"}.get(pid, ""))
+    snapshot = _snapshot() | {SERVER: _proc(SERVER, 100, "/usr/bin/python3")}
+    named, per_pane = resources._assign(snapshot, {"%1": 100, "%2": 200})
+    assert named["server"] == {SERVER, 900}
+    assert per_pane["%1"] == {100, 101, 102}
+    assert sum(len(pids) for pids in named.values()) == len(snapshot)
+
+
 def test_assign_without_the_app_has_no_webview(monkeypatch):
     monkeypatch.setattr(resources, "_responsible", lambda pid: pid)
     monkeypatch.setattr(resources, "_name", lambda pid: "")
