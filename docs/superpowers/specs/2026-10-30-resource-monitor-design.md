@@ -127,7 +127,7 @@ there would disturb the CPU history of every other group.
   - CPU: first sample (`null`), steady second sample, pid reuse, a child started after the previous sample, a child
     that exits and is reaped by its parent, a closed pane's shell reaped by the tmux server in another group, a
     child its parent never reaped (clamped), a delta past every core (`null`);
-  - the 0.5 s and 60 s rules, and two threads sampling at once;
+  - the 0.5 s and 60 s rules, and two threads sampling at once (forced to overlap, so the test needs the lock);
   - a `None` snapshot;
   - one smoke test that reads the test process itself through the real `proc_pid_rusage`.
 - `tests/test_window_view.py`: `mem_signal` on footprint, each tier and trigger (updating today's RSS cases).

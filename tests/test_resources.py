@@ -297,15 +297,29 @@ def test_measure_is_none_when_the_snapshot_failed(fake):
     assert resources.measure(None, PANES) is None
 
 
-def test_measure_from_many_threads_at_once(fake):
+def test_measure_from_two_threads_at_once(fake, monkeypatch):
+    # Without the lock both callers compute and meet at the barrier; with it
+    # the barrier times out alone and the second caller gets the first's result.
+    barrier = threading.Barrier(2, timeout=0.5)
+    computed = []
+
+    def machine():
+        computed.append(1)
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return MACHINE
+
+    monkeypatch.setattr(resources, "machine", machine)
     out = []
-    threads = [threading.Thread(target=lambda: out.append(resources.measure(_snapshot(), PANES))) for _ in range(8)]
+    threads = [threading.Thread(target=lambda: out.append(resources.measure(_snapshot(), PANES))) for _ in range(2)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    assert len(out) == 8
-    assert all(m is out[0] for m in out)  # one computed, the rest inside 0.5 s
+    assert len(computed) == 1
+    assert out[0] is out[1]
 
 
 def test_measure_leaves_no_state_when_a_pass_fails(fake, monkeypatch):
