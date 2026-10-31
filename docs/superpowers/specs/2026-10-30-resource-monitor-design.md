@@ -57,21 +57,25 @@ was rejected: it would need its own process table and a thread under `docs/testi
 
 **D4 — A process is identified by (pid, start time), and a group's CPU accounts for exits.** Samples are keyed by
 `(pid, ri_proc_start_abstime)`, so a recycled pid never diffs against an unrelated process. A process's CPU total is
-its own time plus its reaped children's. A group's CPU over the interval is:
-- for each member present in both samples, the change in its total;
-- plus the whole total of a member that started after the previous sample;
-- minus the last total of each member that vanished since the previous sample, because when it is reaped its whole
-  CPU time reappears in its parent's children time.
-The result is clamped at 0: a vanished process reaped outside the group would otherwise subtract time the group
-never gains back. This catches the short-lived `git`/`gh`/`tsc` runs that live less than a tick, which own-time
-sampling would count as 0.
+its own time plus its reaped children's. Accounting is per process across the whole machine, then summed per group:
+- a process present in both samples counts the change in its total;
+- a process that started after the previous sample counts its whole total;
+- a process that vanished since the previous sample was reaped, and its whole CPU time reappears in its parent's
+  children time, so its last total comes off its parent (the parent pid it had in the previous snapshot), in
+  whichever group the parent sits now. A parent that is gone or unreadable (launchd, which reaps orphans) takes
+  nothing.
+So a closed pane's shell, reaped by the tmux server, is charged to elsewhere where the server gained it, and its
+orphaned claude (measured: the shell exits first and launchd reaps the claude) is charged to no one. A group's
+result is clamped at 0 (a child orphaned after the previous sample, whose parent never gains it), and is `null`
+when it exceeds every core for the whole interval, which only CPU from outside the interval can do. This catches the
+short-lived `git`/`gh`/`tsc` runs that live less than a tick, which own-time sampling would count as 0.
 
 **D5 — Samples are taken under a lock, at most every 0.5 s, and never against stale history.** `build_state` can
 run concurrently from the state hub, the REST fallback poll and other tabs. One lock covers read-diff-write. A
 caller within 0.5 s of the previous sample gets the previous measurement back instead of a new delta (5 ms windows measured 0%
 for a server averaging 10%). A previous sample older than 10 s (a hub that idled with no subscribers) counts as
-missing. With no usable previous sample, `cpu_pct` is `null`, never 0. A 0 is either measured idle or an interval D4 clamped (a member reaped
-outside its group, e.g. a closed pane's shell).
+missing. With no usable previous sample, or an impossible delta (D4), `cpu_pct` is `null`, never 0. A 0 is either
+measured idle or an interval D4 clamped (a child orphaned before it exited).
 
 **D6 — The machine line reads the kernel directly, with no fork.** Load average from `os.getloadavg()`; physical RAM
 from `sysctlbyname("hw.memsize")`; swap used and total from `vm.swapusage`; free memory percent from `kern.memorystatus_level`, the figure
@@ -120,7 +124,8 @@ there would disturb the CPU history of every other group.
 - `tests/test_resources.py`, over a fake snapshot and fake rusage:
   - group assignment, including a WebKit helper found by responsible pid and a process outside every group;
   - CPU: first sample (`null`), steady second sample, pid reuse, a child started after the previous sample, a child
-    that exits and is reaped by a member, a member reaped outside the group (clamped);
+    that exits and is reaped by its parent, a closed pane's shell reaped by the tmux server in another group, a
+    child its parent never reaped (clamped), a delta past every core (`null`);
   - the 0.5 s and 10 s rules, and two threads sampling at once;
   - a `None` snapshot;
   - one smoke test that reads the test process itself through the real `proc_pid_rusage`.

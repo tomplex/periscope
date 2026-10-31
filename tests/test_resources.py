@@ -104,54 +104,75 @@ def test_assign_without_the_app_has_no_webview(monkeypatch):
 S = 1_000_000_000  # one second in ns
 
 
-def _cpu(prev_at, prev, at, cur):
-    return resources._cpu_pct(resources._Sample(prev_at, prev), resources._Sample(at, cur))
+def _sample(at, *procs):
+    """A tick's sample of (pid, start, cpu_ns, ppid) processes."""
+    return resources._Sample(at, {(pid, start): ns for pid, start, ns, _ in procs}, {p[0]: p[3] for p in procs})
+
+
+def _cpu(prev, cur, pids):
+    return resources._cpu_pcts(prev, cur, {"g": pids})["g"]
 
 
 def test_cpu_is_unknown_without_a_previous_sample():
-    assert resources._cpu_pct(None, resources._Sample(S, {(1, 0): S})) is None
+    assert _cpu(None, _sample(S, (1, 0, S, 0)), {1}) is None
 
 
 def test_cpu_steady_process():
-    assert _cpu(0, {(1, 0): S}, S, {(1, 0): S + S // 2}) == 50.0
+    assert _cpu(_sample(0, (1, 0, S, 0)), _sample(S, (1, 0, S + S // 2, 0)), {1}) == 50.0
 
 
 def test_cpu_counts_a_process_started_since_the_previous_sample():
-    assert _cpu(S, {}, 2 * S, {(2, S + S // 2): S // 5}) == 20.0
+    assert _cpu(_sample(S), _sample(2 * S, (2, S + S // 2, S // 5, 1)), {2}) == 20.0
 
 
-def test_cpu_ignores_an_old_process_new_to_the_group():
+def test_cpu_ignores_an_old_process_new_to_the_sample():
     # Started before the previous sample: its total isn't this interval's.
-    assert _cpu(S, {}, 2 * S, {(2, S // 2): 7 * S}) == 0.0
+    assert _cpu(_sample(S), _sample(2 * S, (2, S // 2, 7 * S, 1)), {2}) == 0.0
 
 
 def test_cpu_counts_a_reaped_child_once():
     # Child 2 had 0.3 s; it ran 0.1 s more and exited, and parent 1 reaped it:
     # the parent's total gains the child's final 0.4 s plus 0.1 s of its own.
-    prev = {(1, 0): S, (2, 0): 3 * S // 10}
-    cur = {(1, 0): S + 4 * S // 10 + S // 10}
-    assert _cpu(0, prev, S, cur) == 20.0
+    prev = _sample(0, (1, 0, S, 0), (2, 0, 3 * S // 10, 1))
+    cur = _sample(S, (1, 0, S + 4 * S // 10 + S // 10, 0))
+    assert _cpu(prev, cur, {1, 2}) == 20.0
 
 
-def test_cpu_clamps_a_child_reaped_outside_the_group():
-    assert _cpu(0, {(1, 0): S, (2, 0): 5 * S}, S, {(1, 0): S + S // 10}) == 0.0
+def test_cpu_charges_a_closed_panes_shell_to_its_reaper():
+    # Pane %1 closes: tmux server 50 (elsewhere) reaps its shell 100 (2 s) and
+    # gains it, plus 0.1 s of its own. The shell's claude 101 (30 s) was
+    # orphaned to launchd, which isn't readable: it comes off nothing.
+    prev = _sample(0, (50, 0, S, 1), (100, 0, 2 * S, 50), (101, 0, 30 * S, 100))
+    cur = _sample(S, (50, 0, 3 * S + S // 10, 1))
+    assert _cpu(prev, cur, {1, 50}) == 10.0
+
+
+def test_cpu_clamps_a_child_its_parent_never_reaped():
+    # Child 2 was orphaned before it exited: parent 1 never gains its 5 s.
+    prev = _sample(0, (1, 0, S, 0), (2, 0, 5 * S, 1))
+    assert _cpu(prev, _sample(S, (1, 0, S + S // 10, 0)), {1}) == 0.0
+
+
+def test_cpu_is_unknown_past_every_core_for_the_whole_interval():
+    # Two seconds of CPU in one second on one core came from outside it.
+    assert _cpu(_sample(0, (1, 0, 0, 0)), _sample(S, (1, 0, 2 * S, 0)), {1}) is None
 
 
 def test_cpu_never_diffs_a_reused_pid_against_its_predecessor():
-    # pid 1 exited (5 s, reaped by member 9) and a new pid 1 started since.
-    prev = {(1, 0): 5 * S, (9, 0): S}
-    cur = {(9, 0): 6 * S, (1, S + S // 2): S // 10}
-    assert _cpu(S, prev, 2 * S, cur) == 10.0
+    # pid 1 exited (5 s, reaped by 9) and a new pid 1 started since.
+    prev = _sample(S, (1, 0, 5 * S, 9), (9, 0, S, 0))
+    cur = _sample(2 * S, (9, 0, 6 * S, 0), (1, S + S // 2, S // 10, 9))
+    assert _cpu(prev, cur, {1, 9}) == 10.0
 
 
 def test_cpu_is_a_share_of_every_core(monkeypatch):
     monkeypatch.setattr(resources, "_CORES", 10)
     # 2.5 cores busy for a second on a 10-core machine: a quarter of it.
-    assert _cpu(0, {(1, 0): 0}, S, {(1, 0): 5 * S // 2}) == 25.0
+    assert _cpu(_sample(0, (1, 0, 0, 0)), _sample(S, (1, 0, 5 * S // 2, 0)), {1}) == 25.0
 
 
 def test_cpu_treats_a_stale_previous_sample_as_missing():
-    assert _cpu(0, {(1, 0): S}, 11 * S, {(1, 0): 2 * S}) is None
+    assert _cpu(_sample(0, (1, 0, S, 0)), _sample(11 * S, (1, 0, 2 * S, 0)), {1}) is None
 
 
 # ── measure ──────────────────────────────────────────────────────────────
@@ -161,7 +182,7 @@ def test_cpu_treats_a_stale_previous_sample_as_missing():
 def _no_live_resources(monkeypatch):
     """Overrides conftest's stub of the same name: these tests install their
     own fakes, and the smoke tests read the real test process."""
-    monkeypatch.setattr(resources, "_prev", {})
+    monkeypatch.setattr(resources, "_prev", None)
     monkeypatch.setattr(resources, "_last", None)
     # One core, so the CPU cases read in whole-core terms.
     monkeypatch.setattr(resources, "_CORES", 1)

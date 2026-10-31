@@ -100,7 +100,7 @@ def _no_live_resources(monkeypatch):
         "machine",
         lambda: {"load1": 0.0, "ram_mb": 0, "swap_used_mb": 0, "swap_total_mb": 0, "mem_free_pct": 100},
     )
-    monkeypatch.setattr(resources, "_prev", {})
+    monkeypatch.setattr(resources, "_prev", None)
     monkeypatch.setattr(resources, "_last", None)
 
 

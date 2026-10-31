@@ -184,28 +184,37 @@ def _assign(snapshot: dict[int, ProcessInfo], panes: dict[str, int]) -> tuple[di
 @dataclass(frozen=True)
 class _Sample:
     at: int  # ns, _now()'s clock
-    cpu_ns: dict[tuple[int, int], int]  # (pid, start) → cpu_ns, the group's members
+    cpu_ns: dict[tuple[int, int], int]  # (pid, start) → cpu_ns, every readable process
+    ppid: dict[int, int]  # pid → parent pid, from the snapshot
 
 
-def _cpu_pct(prev: _Sample | None, cur: _Sample) -> float | None:
-    """The group's share of the machine's CPU since `prev` (100 = every core
+def _cpu_pcts(prev: _Sample | None, cur: _Sample, groups: dict[str, set[int]]) -> dict[str, float | None]:
+    """Each group's share of the machine's CPU since `prev` (100 = every core
     busy), or None with no usable previous sample.
 
-    A member that vanished was reaped, and its whole CPU time reappears in its
-    parent's children time, so its last total comes off. A member reaped
-    outside the group never comes back, hence the clamp at 0."""
+    A process that vanished was reaped, and its whole CPU time reappears in
+    its parent's children time, so its last total comes off the parent; an
+    orphan reaped by launchd (unreadable) comes off nothing. A group past
+    every core for the whole interval holds CPU from outside it: None."""
     if prev is None or cur.at - prev.at > _STALE_NS:
-        return None
-    delta = 0
-    for ident, total in cur.cpu_ns.items():
-        if ident in prev.cpu_ns:
-            delta += total - prev.cpu_ns[ident]
-        elif ident[1] > prev.at:  # started since the previous sample
-            delta += total
-    for ident, total in prev.cpu_ns.items():
-        if ident not in cur.cpu_ns:
-            delta -= total
-    return round(max(delta, 0) / (cur.at - prev.at) / _CORES * 100, 1)
+        return dict.fromkeys(groups)
+    delta: dict[int, int] = {}
+    for (pid, start), ns in cur.cpu_ns.items():
+        if (pid, start) in prev.cpu_ns:
+            delta[pid] = ns - prev.cpu_ns[(pid, start)]
+        elif start > prev.at:  # started since the previous sample
+            delta[pid] = ns
+    alive = {pid for pid, _ in cur.cpu_ns}
+    for (pid, start), ns in prev.cpu_ns.items():
+        if (pid, start) not in cur.cpu_ns and (parent := prev.ppid[pid]) in alive:
+            delta[parent] = delta.get(parent, 0) - ns
+    elapsed = cur.at - prev.at
+    out: dict[str, float | None] = {}
+    for key, pids in groups.items():
+        ns = sum(delta.get(pid, 0) for pid in pids)
+        # Below 0: a child its parent never reaped (orphaned before it exited).
+        out[key] = None if ns > elapsed * _CORES else round(max(ns, 0) / elapsed / _CORES * 100, 1)
+    return out
 
 
 @dataclass(frozen=True)
@@ -217,7 +226,7 @@ class Measurement:
 # build_state runs from the state hub, the REST fallback poll and other tabs at
 # once; the lock makes each read-diff-write of _prev whole.
 _lock = threading.Lock()
-_prev: dict[str, _Sample] = {}  # group key → its last sample
+_prev: _Sample | None = None
 _last: tuple[int, Measurement] | None = None
 
 
@@ -236,21 +245,18 @@ def measure(snapshot: dict[int, ProcessInfo] | None, panes: dict[str, int]) -> M
         # Stamped here, not before _assign: the sample is when it was read.
         now = _now()
         readings = {pid: r for pid in snapshot if (r := _read(pid)) is not None}
-        samples: dict[str, _Sample] = {}
-
-        def group(key: str, pids: set[int]) -> dict:
-            members = {(pid, readings[pid].start): readings[pid] for pid in pids if pid in readings}
-            cur = _Sample(now, {ident: r.cpu_ns for ident, r in members.items()})
-            samples[key] = cur
-            return {
-                "mem_mb": sum(r.footprint for r in members.values()) >> 20,
-                "cpu_pct": _cpu_pct(_prev.get(key), cur),
-            }
-
-        totals: dict = {"webview": None} | {key: group(key, pids) for key, pids in named.items()}
-        totals["machine"] = machine()
-        measurement = Measurement(
-            {pane_id: group(f"pane:{pane_id}", pids) for pane_id, pids in per_pane.items()}, totals
+        cur = _Sample(
+            now, {(pid, r.start): r.cpu_ns for pid, r in readings.items()}, {pid: snapshot[pid].ppid for pid in readings}
         )
-        _prev, _last = samples, (now, measurement)
+        groups = named | {f"pane:{pane_id}": pids for pane_id, pids in per_pane.items()}
+        cpu = _cpu_pcts(_prev, cur, groups)
+
+        def group(key: str) -> dict:
+            mem = sum(readings[pid].footprint for pid in groups[key] if pid in readings)
+            return {"mem_mb": mem >> 20, "cpu_pct": cpu[key]}
+
+        totals: dict = {"webview": None} | {key: group(key) for key in named}
+        totals["machine"] = machine()
+        measurement = Measurement({pane_id: group(f"pane:{pane_id}") for pane_id in per_pane}, totals)
+        _prev, _last = cur, (now, measurement)
         return measurement
