@@ -15,6 +15,7 @@ from fastapi import APIRouter
 
 from periscope import resources, store, updater, usage
 from periscope.activity import pane_status_lines
+from periscope.agent_processes import process_snapshot
 from periscope.channels import _channel_gc
 from periscope.panes import (
     RESUME_EXPIRY_S,
@@ -69,6 +70,9 @@ def build_state() -> dict:
     update_focus_from_windows(windows)
     _attach_git_then_resolve_pids(windows, full_roster=True)
     now_ts = int(time.time())
+    # Taken before the fan-out, whose codex_process_for_pane calls share its
+    # 1 s cache: measure below reads the same snapshot without a second `ps`.
+    snapshot = process_snapshot()
 
     # Parallel fan-out: capture()+parse per pane is the only per-poll
     # subprocess and dominates wall-clock. The serial git-warm + pid mint
@@ -86,9 +90,9 @@ def build_state() -> dict:
     result = [view for view, _ in built]
     annotate_cost_pressure(result)
 
-    # Memory and CPU per owner, on this tick's process snapshot. Each row's
-    # pane_pid roots its pane's group; None when the snapshot failed.
-    measured = resources.measure({v["pane_id"]: int(v["pane_pid"]) for v in result if v.get("pane_pid")})
+    # Memory and CPU per group. Each row's pane_pid roots its pane's group;
+    # None when the snapshot failed.
+    measured = resources.measure(snapshot, {v["pane_id"]: int(v["pane_pid"]) for v in result if v.get("pane_pid")})
     for view in result:
         view["res"] = measured.panes.get(view["pane_id"]) if measured else None
 

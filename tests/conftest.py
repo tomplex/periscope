@@ -85,13 +85,13 @@ def _no_live_session_scan(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_live_resources(monkeypatch):
     """Keep resources.measure off the real machine: no `ps` snapshot, no
-    rusage reads, no sysctl. Every /api/state build calls it, so without this
-    any route test would read the developer's real processes.
-    tests/test_resources.py overrides this fixture by name and installs its
-    own fakes."""
+    rusage reads, no sysctl. Every /api/state build takes a snapshot and
+    measures it, so without this any route test would read the developer's
+    real processes. tests/test_resources.py overrides this fixture by name and
+    installs its own fakes."""
     from periscope import resources
 
-    monkeypatch.setattr(resources, "process_snapshot", dict)
+    monkeypatch.setattr("periscope.routes.state.process_snapshot", dict)
     monkeypatch.setattr(resources, "_read", lambda pid: None)
     monkeypatch.setattr(resources, "_responsible", lambda pid: 0)
     monkeypatch.setattr(resources, "_name", lambda pid: "")

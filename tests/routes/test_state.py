@@ -424,9 +424,12 @@ def test_state_carries_each_panes_resources_and_the_totals(client, mocker, clean
     group = {"mem_mb": 512, "cpu_pct": 12.5}
     totals = {"server": group, "webview": None, "panes": group, "elsewhere": group, "machine": {"load1": 1.0}}
     measure = mocker.patch.object(resources, "measure", return_value=resources.Measurement({"%7": group}, totals))
+    snapshot = {4242: "the tick's snapshot"}
+    take = _patch(mocker, "process_snapshot", return_value=snapshot)
 
     body = client.get("/api/state").json()
-    measure.assert_called_once_with({"%7": 4242})
+    take.assert_called_once_with()
+    measure.assert_called_once_with(snapshot, {"%7": 4242})
     assert body["windows"][0]["res"] == group
     assert body["resources"] == totals
 

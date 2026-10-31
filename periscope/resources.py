@@ -15,7 +15,7 @@ import os
 import threading
 from dataclasses import dataclass
 
-from periscope.agent_processes import ProcessInfo, descendants, process_snapshot
+from periscope.agent_processes import ProcessInfo, descendants
 
 _u64 = ctypes.c_uint64
 _RUSAGE_INFO_V1 = 1
@@ -221,22 +221,20 @@ _prev: dict[str, _Sample] = {}  # group key → its last sample
 _last: tuple[int, Measurement] | None = None
 
 
-def measure(panes: dict[str, int]) -> Measurement | None:
+def measure(snapshot: dict[int, ProcessInfo] | None, panes: dict[str, int]) -> Measurement | None:
     """Footprint and CPU for each pane (pane_id → its root pid, tmux's
-    pane_pid) and every other group. None when this tick's process snapshot
-    failed: an empty tree would collapse every pane to its shell and read as
-    real."""
+    pane_pid) and every other group, over the tick's process snapshot. None
+    when the snapshot failed: an empty tree would collapse every pane to its
+    shell and read as real."""
     global _prev, _last
+    if snapshot is None:
+        return None
     with _lock:
-        now = _now()
-        if _last is not None and now - _last[0] < _MIN_INTERVAL_NS:
+        if _last is not None and _now() - _last[0] < _MIN_INTERVAL_NS:
             return _last[1]
-        # After the throttle: an expired snapshot cache would otherwise fork
-        # `ps` for a call that returns the previous measurement anyway.
-        snapshot = process_snapshot()
-        if snapshot is None:
-            return None
         named, per_pane = _assign(snapshot, panes)
+        # Stamped here, not before _assign: the sample is when it was read.
+        now = _now()
         readings = {pid: r for pid in snapshot if (r := _read(pid)) is not None}
         samples: dict[str, _Sample] = {}
 

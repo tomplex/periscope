@@ -184,7 +184,6 @@ def fake(monkeypatch):
     """A machine of _snapshot()'s processes, each 100 MB, CPU set per test."""
     clock = _Clock()
     cpu = dict.fromkeys(_snapshot(), 0)
-    monkeypatch.setattr(resources, "process_snapshot", _snapshot)
     monkeypatch.setattr(resources, "_responsible", {600: 500}.get)
     monkeypatch.setattr(resources, "_name", lambda pid: {500: "periscope-app"}.get(pid, ""))
     monkeypatch.setattr(resources, "machine", lambda: MACHINE)
@@ -199,7 +198,7 @@ PANES = {"%1": 100, "%2": 200}
 
 
 def test_measure_first_pass_has_memory_and_unknown_cpu(fake):
-    m = resources.measure(PANES)
+    m = resources.measure(_snapshot(), PANES)
     assert m.panes == {"%1": {"mem_mb": 300, "cpu_pct": None}, "%2": {"mem_mb": 100, "cpu_pct": None}}
     assert m.totals["server"] == {"mem_mb": 200, "cpu_pct": None}
     assert m.totals["webview"] == {"mem_mb": 200, "cpu_pct": None}
@@ -210,10 +209,10 @@ def test_measure_first_pass_has_memory_and_unknown_cpu(fake):
 
 def test_measure_second_pass_has_cpu(fake):
     clock, cpu = fake
-    resources.measure(PANES)
+    resources.measure(_snapshot(), PANES)
     clock.t += S
     cpu[102] += S // 2  # the pane's tool child: half a core
-    m = resources.measure(PANES)
+    m = resources.measure(_snapshot(), PANES)
     assert m.panes["%1"]["cpu_pct"] == 50.0
     assert m.panes["%2"]["cpu_pct"] == 0.0
     assert m.totals["panes"]["cpu_pct"] == 50.0
@@ -222,37 +221,52 @@ def test_measure_second_pass_has_cpu(fake):
 
 def test_measure_within_half_a_second_returns_the_previous_measurement(fake):
     clock, _ = fake
-    first = resources.measure(PANES)
+    first = resources.measure(_snapshot(), PANES)
     clock.t += S // 10
-    assert resources.measure(PANES) is first
+    assert resources.measure(_snapshot(), PANES) is first
 
 
-def test_measure_within_half_a_second_takes_no_snapshot(fake, monkeypatch):
+def test_measure_within_half_a_second_reads_nothing(fake, monkeypatch):
     clock, _ = fake
-    resources.measure(PANES)
-    monkeypatch.setattr(resources, "process_snapshot", lambda: pytest.fail("snapshot taken inside the throttle"))
+    resources.measure(_snapshot(), PANES)
+    monkeypatch.setattr(resources, "_read", lambda pid: pytest.fail("read inside the throttle"))
     clock.t += S // 10
-    resources.measure(PANES)
+    resources.measure(_snapshot(), PANES)
+
+
+def test_measure_stamps_the_sample_when_it_reads(fake, monkeypatch):
+    # Assigning groups took a second: the reads, and so the sample, come after.
+    clock, cpu = fake
+    resources.measure(_snapshot(), PANES)
+    clock.t += S
+
+    def slow_name(pid):
+        if pid == 1:
+            clock.t += S
+        return {500: "periscope-app"}.get(pid, "")
+
+    monkeypatch.setattr(resources, "_name", slow_name)
+    cpu[102] += S  # one core for the two seconds since the first sample
+    assert resources.measure(_snapshot(), PANES).panes["%1"]["cpu_pct"] == 50.0
 
 
 def test_measure_skips_unreadable_processes(fake, monkeypatch):
     monkeypatch.setattr(resources, "_read", lambda pid: None if pid == 102 else resources.Reading(100 * MB, 0, 0))
-    assert resources.measure(PANES).panes["%1"]["mem_mb"] == 200
+    assert resources.measure(_snapshot(), PANES).panes["%1"]["mem_mb"] == 200
 
 
-def test_measure_without_the_app_sends_no_webview(fake, monkeypatch):
-    monkeypatch.setattr(resources, "process_snapshot", lambda: {p: v for p, v in _snapshot().items() if p != 500})
-    assert resources.measure(PANES).totals["webview"] is None
+def test_measure_without_the_app_sends_no_webview(fake):
+    snapshot = {p: v for p, v in _snapshot().items() if p != 500}
+    assert resources.measure(snapshot, PANES).totals["webview"] is None
 
 
-def test_measure_is_none_when_the_snapshot_failed(fake, monkeypatch):
-    monkeypatch.setattr(resources, "process_snapshot", lambda: None)
-    assert resources.measure(PANES) is None
+def test_measure_is_none_when_the_snapshot_failed(fake):
+    assert resources.measure(None, PANES) is None
 
 
 def test_measure_from_many_threads_at_once(fake):
     out = []
-    threads = [threading.Thread(target=lambda: out.append(resources.measure(PANES))) for _ in range(8)]
+    threads = [threading.Thread(target=lambda: out.append(resources.measure(_snapshot(), PANES))) for _ in range(8)]
     for t in threads:
         t.start()
     for t in threads:
@@ -262,7 +276,7 @@ def test_measure_from_many_threads_at_once(fake):
 
 
 def test_measure_leaves_no_state_when_a_pass_fails(fake, monkeypatch):
-    resources.measure(PANES)
+    resources.measure(_snapshot(), PANES)
     clock, _ = fake
     clock.t += S
     prev_before, last_before = resources._prev, resources._last
@@ -272,6 +286,6 @@ def test_measure_leaves_no_state_when_a_pass_fails(fake, monkeypatch):
 
     monkeypatch.setattr(resources, "machine", boom)
     with pytest.raises(RuntimeError):
-        resources.measure(PANES)
+        resources.measure(_snapshot(), PANES)
     assert resources._prev == prev_before
     assert resources._last == last_before
