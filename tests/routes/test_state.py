@@ -104,7 +104,11 @@ def test_state_preserves_window_order_across_fanout(client, mocker, clean_state)
     _patch(mocker, "update_focus_from_windows")
     _patch(mocker, "_attach_git_then_resolve_pids")
     _patch(mocker, "all_projects", return_value={})
-    _patch(mocker, "build_window_view", side_effect=lambda w, now_ts: ({"index": w["index"]}, None))
+    _patch(
+        mocker,
+        "build_window_view",
+        side_effect=lambda w, now_ts: ({"index": w["index"], "pane_id": w["pane_id"]}, None),
+    )
     resp = client.get("/api/state")
     assert [v["index"] for v in resp.json()["windows"]] == [0, 1, 2, 3, 4]
 
@@ -122,7 +126,7 @@ def test_state_writes_stamps_once_after_join(client, mocker, clean_state):
     _patch(
         mocker,
         "build_window_view",
-        side_effect=lambda w, now_ts: ({"index": w["index"]}, (f"pid{w['index']}", 10, 5, 0)),
+        side_effect=lambda w, now_ts: ({"index": w["index"], "pane_id": w["pane_id"]}, (f"pid{w['index']}", 10, 5, 0)),
     )
     bulk = _patch(mocker, "set_window_fields_bulk")
     client.get("/api/state")
@@ -146,7 +150,7 @@ def test_state_isolates_one_pane_build_failure(client, mocker, clean_state):
     def fake_build(w, now_ts):
         if w["index"] == 0:
             raise RuntimeError("git blew up mid-build")  # NOT a capture error
-        return ({"index": 1, "state": "idle"}, None)
+        return ({"index": 1, "state": "idle", "pane_id": w["pane_id"]}, None)
 
     _patch(mocker, "build_window_view", side_effect=fake_build)
     resp = client.get("/api/state")
@@ -384,3 +388,55 @@ def test_state_keeps_the_walls_stretch_past_the_refresh_that_drops_them(client, 
     body = client.get("/api/state").json()
     assert body["walls"] is None
     assert body["wall_spans"] == [{"since": 1_792_598_460, "until": 1_792_603_799}]
+
+
+def _patch_one_window(mocker):
+    fake_windows = [
+        {
+            "session": "main",
+            "index": 0,
+            "name": "x",
+            "active": True,
+            "cwd": "/tmp",
+            "pid_raw": "",
+            "pane_id": "%7",
+            "pane_pid": "4242",
+            "pid": "abc123",
+        },
+    ]
+    _patch(mocker, "list_windows", return_value=fake_windows)
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "capture", return_value="$ ls\n")
+    _patch(mocker, "parse_pane", return_value={"agent": None, "spinner": None, "state": "shell"})
+    _patch(mocker, "cached_git_state", return_value={"branch": "main"})
+    _patch(mocker, "cached_pr_state", return_value={"pr": None})
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    _patch(mocker, "all_pane_ids", return_value={"%7"})
+    _patch(mocker, "_channel_gc")
+
+
+def test_state_carries_each_panes_resources_and_the_totals(client, mocker, clean_state):
+    from periscope import resources
+
+    _patch_one_window(mocker)
+    group = {"mem_mb": 512, "cpu_pct": 12.5}
+    totals = {"server": group, "webview": None, "panes": group, "elsewhere": group, "machine": {"load1": 1.0}}
+    measure = mocker.patch.object(resources, "measure", return_value=resources.Measurement({"%7": group}, totals))
+
+    body = client.get("/api/state").json()
+    measure.assert_called_once_with({"%7": 4242})
+    assert body["windows"][0]["res"] == group
+    assert body["resources"] == totals
+
+
+def test_state_sends_no_resources_when_the_snapshot_failed(client, mocker, clean_state):
+    from periscope import resources
+
+    _patch_one_window(mocker)
+    mocker.patch.object(resources, "measure", return_value=None)
+
+    body = client.get("/api/state").json()
+    assert body["windows"][0]["res"] is None
+    assert body["resources"] is None
