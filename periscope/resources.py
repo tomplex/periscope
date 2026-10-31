@@ -20,10 +20,8 @@ from periscope.agent_processes import ProcessInfo, descendants, process_snapshot
 _u64 = ctypes.c_uint64
 _RUSAGE_INFO_V1 = 1
 
-# The Tauri shell's executable (src-tauri), matched against the kernel's
-# process name via `_name` — `ps`'s comm column truncates to 16 characters,
-# which cuts the real name off. Its WebKit helpers have launchd as their
-# parent, so they're found by responsible pid instead.
+# The Tauri shell's executable (src-tauri), matched by `_name`. Its WebKit
+# helpers have launchd as their parent, so they're found by responsible pid.
 _APP_NAME = "periscope-app"
 
 # A previous sample older than this (a hub that idled with no subscribers)
@@ -114,8 +112,8 @@ def _responsible(pid: int) -> int:
 
 
 def _name(pid: int) -> str:
-    """The process's name from the kernel, untruncated — `ps`'s comm column
-    cuts it to 16 characters."""
+    """The process's name from the kernel (up to 32 characters) — `ps`'s comm
+    column cuts it to 16, which loses "periscope-app"."""
     buf = ctypes.create_string_buffer(64)
     _libproc.proc_name(pid, buf, ctypes.sizeof(buf))
     return buf.value.decode(errors="replace")
