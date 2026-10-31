@@ -21,6 +21,7 @@ import { reviews, windows } from "../store.js";
 import { track } from "../track.js";
 import { FilterBar } from "./FilterBar.jsx";
 import { PanelToggles } from "./PanelToggles.jsx";
+import { ResourcePill } from "./ResourcePill.jsx";
 import { SpawnAccountPicker } from "./SpawnAccountPicker.jsx";
 import { SpawnEffortPicker } from "./SpawnEffortPicker.jsx";
 import { SpawnModelPicker } from "./SpawnModelPicker.jsx";
@@ -136,6 +137,7 @@ export function Header() {
           periscope<i class="brand-cursor"></i>
         </span>
         <UsagePill />
+        <ResourcePill />
         {/* The spawn pins stack as one block to the right of the usage
             meters (.usage flexes, so this block sits at the meters' far edge):
             account, model, effort, labels aligned so the chips read as a
