@@ -1,4 +1,4 @@
-"""resources: footprint and CPU per owner. Everything except the smoke tests
+"""resources: footprint and CPU per group. Everything except the smoke tests
 runs on fake snapshots and fake rusage readings."""
 
 import os

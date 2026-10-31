@@ -1,4 +1,4 @@
-"""Memory footprint and CPU per owner: each pane, the periscope server, its
+"""Memory footprint and CPU per group: each pane, the periscope server, its
 webview, and everything else on the machine.
 
 Footprint (`phys_footprint`, Activity Monitor's Memory), not RSS: RSS leaves
@@ -140,7 +140,7 @@ def _sysctl(name: str, buf: ctypes.Structure | ctypes.c_int | ctypes.c_uint64) -
 
 def machine() -> dict:
     """Load, RAM, swap and free memory, straight from the kernel. RAM is the
-    yardstick: footprints count compressed and swapped pages, so the owners can
+    yardstick: footprints count compressed and swapped pages, so the groups can
     add up past it. mem_free_pct is the figure `memory_pressure` prints."""
     ram = ctypes.c_uint64()
     swap = _SwapUsage()
@@ -184,7 +184,7 @@ def _assign(snapshot: dict[int, ProcessInfo], panes: dict[str, int]) -> tuple[di
 @dataclass(frozen=True)
 class _Sample:
     at: int  # ns, _now()'s clock
-    totals: dict[tuple[int, int], int]  # (pid, start) → cpu_ns, the group's members
+    cpu_ns: dict[tuple[int, int], int]  # (pid, start) → cpu_ns, the group's members
 
 
 def _cpu_pct(prev: _Sample | None, cur: _Sample) -> float | None:
@@ -197,13 +197,13 @@ def _cpu_pct(prev: _Sample | None, cur: _Sample) -> float | None:
     if prev is None or cur.at - prev.at > _STALE_NS:
         return None
     delta = 0
-    for ident, total in cur.totals.items():
-        if ident in prev.totals:
-            delta += total - prev.totals[ident]
+    for ident, total in cur.cpu_ns.items():
+        if ident in prev.cpu_ns:
+            delta += total - prev.cpu_ns[ident]
         elif ident[1] > prev.at:  # started since the previous sample
             delta += total
-    for ident, total in prev.totals.items():
-        if ident not in cur.totals:
+    for ident, total in prev.cpu_ns.items():
+        if ident not in cur.cpu_ns:
             delta -= total
     return round(max(delta, 0) / (cur.at - prev.at) / _CORES * 100, 1)
 
