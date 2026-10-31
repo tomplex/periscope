@@ -510,10 +510,10 @@ def live_session_id_for_pane(pane_id: str) -> str | None:
 
 def claude_proc_for(sid: str | None) -> dict | None:
     """Process stats for a sessionId's claude: {"pid", "mem_mb", "age_s"}, or
-    None when unmapped or not a live claude. mem_mb is its footprint, None when
-    unreadable (exited since the ps snapshot). Measurement, not state — applies even when
-    the status is one session_state_for doesn't trust (a bloated claude
-    deserves the cycle-hint regardless of what it's doing)."""
+    None when unmapped or not a live claude (its footprint unreadable: exited
+    since the ps snapshot). mem_mb is its footprint. Measurement, not state —
+    applies even when the status is one session_state_for doesn't trust (a
+    bloated claude deserves the cycle-hint regardless of what it's doing)."""
     if not sid:
         return None
     d = _index().get(sid)
@@ -526,7 +526,10 @@ def claude_proc_for(sid: str | None) -> dict | None:
     age = _claude_procs().get(pid)
     if age is None:
         return None
-    return {"pid": pid, "mem_mb": resources.footprint_mb(pid), "age_s": age}
+    mb = resources.footprint_mb(pid)
+    if mb is None:
+        return None
+    return {"pid": pid, "mem_mb": mb, "age_s": age}
 
 
 def session_state_for(sid: str | None) -> dict | None:

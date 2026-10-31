@@ -84,7 +84,8 @@ from `sysctlbyname("hw.memsize")`; swap used and total from `vm.swapusage`; free
 **D7 — The ↻ cycle hint keeps watching the claude process alone, measured as footprint.** The leak it targets lives
 in claude, not in its tool children. The thresholds become `MEM_WARN_MB` / `MEM_BAD_MB` at the same values (2 GB /
 4 GB); today's claudes sit at 250–550 MB, so nothing new trips. `claude_proc_for` reads the claude's footprint
-directly (`resources.footprint_mb`, one ~3 µs read), because the fan-out builds each row before `measure` runs; the chip sends `{tier, gb, age_s, trigger}` where `trigger` is `"mem"` or `"age"`, so
+directly (`resources.footprint_mb`, one ~3 µs read), because the fan-out builds each row before `measure` runs; an unreadable footprint (the claude exited since `ps`) means
+no live claude, so `gb` is always a number. The chip sends `{tier, gb, age_s, trigger}` where `trigger` is `"mem"` or `"age"`, so
 `memHint` labels from it instead of repeating the 2 GB threshold in JS. `_claude_procs()` keeps its `ps` call for
 liveness and age but drops `rss=`; moving liveness off `ps` belongs to THI-450.
 

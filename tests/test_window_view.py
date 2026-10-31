@@ -831,14 +831,6 @@ def test_mem_signal_bad_overrides_warn():
     assert out["gb"] == 4.2
 
 
-def test_mem_signal_unreadable_footprint_trips_on_age_only():
-    from periscope.window_view import mem_signal
-
-    assert mem_signal({"pid": 1, "mem_mb": None, "age_s": 60}) is None
-    out = mem_signal({"pid": 1, "mem_mb": None, "age_s": 3 * 86400})
-    assert out == {"tier": "warn", "trigger": "age", "gb": None, "age_s": 3 * 86400}
-
-
 def test_view_surfaces_spawned_by_lineage(mocker, clean_state):
     """spawn_claude has recorded spawned_by since the tool shipped, but the
     payload never carried it — so a chain of delegated sessions rendered as

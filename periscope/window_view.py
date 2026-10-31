@@ -231,14 +231,14 @@ def mem_signal(proc: dict | None) -> dict | None:
     if not proc:
         return None
     mb, age = proc["mem_mb"], proc["age_s"]
-    if mb is not None and mb >= MEM_WARN_MB:
+    if mb >= MEM_WARN_MB:
         trigger = "mem"
     elif age >= MEM_WARN_AGE_S:
         trigger = "age"
     else:
         return None
-    tier = "bad" if mb is not None and mb >= MEM_BAD_MB else "warn"
-    return {"tier": tier, "trigger": trigger, "gb": None if mb is None else round(mb / 1024, 1), "age_s": age}
+    tier = "bad" if mb >= MEM_BAD_MB else "warn"
+    return {"tier": tier, "trigger": trigger, "gb": round(mb / 1024, 1), "age_s": age}
 
 
 # How far before needs_since the request's own row can be stamped. The hook

@@ -186,6 +186,13 @@ def test_claude_proc_for_returns_stats(tmp_path, monkeypatch):
     assert ss.claude_proc_for("sid-m") == {"pid": 300, "mem_mb": 4400, "age_s": 4 * 86400}
 
 
+def test_claude_proc_for_unreadable_footprint_none(tmp_path, monkeypatch):
+    # Exited since the ps snapshot: the next tick drops it from _claude_procs.
+    _seed_procs(tmp_path, monkeypatch, _sess(303, "sid-x", "busy"), {303: 60})
+    monkeypatch.setattr(ss.resources, "footprint_mb", lambda pid: None)
+    assert ss.claude_proc_for("sid-x") is None
+
+
 def test_claude_proc_for_dead_pid_none(tmp_path, monkeypatch):
     _seed_procs(tmp_path, monkeypatch, _sess(301, "sid-d", "busy"), {})
     assert ss.claude_proc_for("sid-d") is None
