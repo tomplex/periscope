@@ -36,6 +36,12 @@ def test_responsible_pid_of_this_process_is_a_pid():
     assert resources._responsible(os.getpid()) > 0
 
 
+def test_name_of_this_process_is_a_nonempty_str():
+    name = resources._name(os.getpid())
+    assert isinstance(name, str)
+    assert name
+
+
 # ── group assignment ─────────────────────────────────────────────────────
 
 from periscope.agent_processes import ProcessInfo
@@ -43,8 +49,8 @@ from periscope.agent_processes import ProcessInfo
 SERVER = os.getpid()
 
 
-def _proc(pid, ppid, comm="/bin/zsh"):
-    return ProcessInfo(pid=pid, ppid=ppid, started_at=0, comm=comm, argv=comm, state="S")
+def _proc(pid, ppid, comm="/bin/zsh", argv=None):
+    return ProcessInfo(pid=pid, ppid=ppid, started_at=0, comm=comm, argv=argv if argv is not None else comm, state="S")
 
 
 def _snapshot():
@@ -54,7 +60,13 @@ def _snapshot():
             _proc(1, 0, "/sbin/launchd"),
             _proc(SERVER, 1, "/usr/bin/python3"),
             _proc(900, SERVER, "/opt/homebrew/bin/tmux"),  # control-mode client
-            _proc(500, 1, "/Applications/Periscope.app/Contents/MacOS/periscope-app"),
+            # ps truncates comm= to 16 chars when it isn't the last column.
+            _proc(
+                500,
+                1,
+                comm="/Applications/Pe",
+                argv="/Applications/Periscope.app/Contents/MacOS/periscope-app",
+            ),
             _proc(600, 1, "/System/Library/.../com.apple.WebKit.WebContent"),
             _proc(100, 1, "/bin/zsh"),  # pane %1's root
             _proc(101, 100, "/opt/homebrew/bin/claude"),
@@ -67,6 +79,7 @@ def _snapshot():
 
 def test_assign_puts_every_process_in_one_group(monkeypatch):
     monkeypatch.setattr(resources, "_responsible", {600: 500}.get)
+    monkeypatch.setattr(resources, "_name", lambda pid: {500: "periscope-app"}.get(pid, ""))
     named, per_pane = resources._assign(_snapshot(), {"%1": 100, "%2": 200})
     assert named["server"] == {SERVER, 900}
     assert named["webview"] == {500, 600}  # the WebContent by responsible pid, not by parent
@@ -164,6 +177,7 @@ def fake(monkeypatch):
     cpu = dict.fromkeys(_snapshot(), 0)
     monkeypatch.setattr(resources, "process_snapshot", _snapshot)
     monkeypatch.setattr(resources, "_responsible", {600: 500}.get)
+    monkeypatch.setattr(resources, "_name", lambda pid: {500: "periscope-app"}.get(pid, ""))
     monkeypatch.setattr(resources, "machine", lambda: MACHINE)
     monkeypatch.setattr(resources, "_now", clock)
     monkeypatch.setattr(

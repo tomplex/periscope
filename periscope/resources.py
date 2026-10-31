@@ -20,8 +20,10 @@ from periscope.agent_processes import ProcessInfo, descendants, process_snapshot
 _u64 = ctypes.c_uint64
 _RUSAGE_INFO_V1 = 1
 
-# The Tauri shell's executable (src-tauri). Its WebKit helpers have launchd as
-# their parent, so they're found by responsible pid instead.
+# The Tauri shell's executable (src-tauri), matched against the kernel's
+# process name via `_name` — `ps`'s comm column truncates to 16 characters,
+# which cuts the real name off. Its WebKit helpers have launchd as their
+# parent, so they're found by responsible pid instead.
 _APP_NAME = "periscope-app"
 
 # A previous sample older than this (a hub that idled with no subscribers)
@@ -76,6 +78,7 @@ class _SwapUsage(ctypes.Structure):
 
 _libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
 _libproc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+_libproc.proc_name.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
 _libsystem = ctypes.CDLL("/usr/lib/libSystem.dylib")
 _libsystem.responsibility_get_pid_responsible_for_pid.argtypes = [ctypes.c_int]
 _libsystem.responsibility_get_pid_responsible_for_pid.restype = ctypes.c_int
@@ -108,6 +111,14 @@ def _responsible(pid: int) -> int:
     hosting the webview. A private libSystem call, like the shell's
     `_webProcessIdentifier`."""
     return _libsystem.responsibility_get_pid_responsible_for_pid(pid)
+
+
+def _name(pid: int) -> str:
+    """The process's name from the kernel, untruncated — `ps`'s comm column
+    cuts it to 16 characters."""
+    buf = ctypes.create_string_buffer(64)
+    _libproc.proc_name(pid, buf, ctypes.sizeof(buf))
+    return buf.value.decode(errors="replace")
 
 
 def _now() -> int:
@@ -155,7 +166,7 @@ def _assign(snapshot: dict[int, ProcessInfo], panes: dict[str, int]) -> tuple[di
         return {p.pid for p in descendants(root, snapshot)}
 
     named = {"server": claim(subtree(os.getpid()))}
-    apps = {p.pid for p in snapshot.values() if os.path.basename(p.comm) == _APP_NAME}
+    apps = {pid for pid in snapshot if _name(pid) == _APP_NAME}
     if apps:
         named["webview"] = claim(apps | {pid for pid in snapshot if _responsible(pid) in apps})
     per_pane = {pane_id: claim(subtree(root)) for pane_id, root in panes.items()}
