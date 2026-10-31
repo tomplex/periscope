@@ -247,6 +247,13 @@ def test_measure_within_half_a_second_returns_the_previous_measurement(fake):
     assert resources.measure(_snapshot(), PANES) is first
 
 
+def test_measure_within_half_a_second_measures_a_new_pane(fake):
+    clock, _ = fake
+    resources.measure(_snapshot(), {"%1": 100})
+    clock.t += S // 10
+    assert resources.measure(_snapshot(), PANES).panes["%2"]["mem_mb"] == 100
+
+
 def test_measure_within_half_a_second_reads_nothing(fake, monkeypatch):
     clock, _ = fake
     resources.measure(_snapshot(), PANES)

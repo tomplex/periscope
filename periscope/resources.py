@@ -29,7 +29,7 @@ _APP_NAME = "periscope-app"
 _STALE_NS = 10 * 1_000_000_000
 
 # A delta over less than this reads noise (5 ms windows measured 0% for a
-# server averaging 10%); a caller inside it gets the previous measurement.
+# server averaging 10%); a caller inside it with the same panes gets the previous measurement.
 _MIN_INTERVAL_NS = 500_000_000
 
 # CPU is a share of the whole machine: a group listed next to the others reads
@@ -227,7 +227,7 @@ class Measurement:
 # once; the lock makes each read-diff-write of _prev whole.
 _lock = threading.Lock()
 _prev: _Sample | None = None
-_last: tuple[int, Measurement] | None = None
+_last: tuple[int, dict[str, int], Measurement] | None = None  # at, panes, measurement
 
 
 def measure(snapshot: dict[int, ProcessInfo] | None, panes: dict[str, int]) -> Measurement | None:
@@ -239,8 +239,9 @@ def measure(snapshot: dict[int, ProcessInfo] | None, panes: dict[str, int]) -> M
     if snapshot is None:
         return None
     with _lock:
-        if _last is not None and _now() - _last[0] < _MIN_INTERVAL_NS:
-            return _last[1]
+        # Only for the same panes: a pane new to this tick would have no res.
+        if _last is not None and _last[1] == panes and _now() - _last[0] < _MIN_INTERVAL_NS:
+            return _last[2]
         named, per_pane = _assign(snapshot, panes)
         # Stamped here, not before _assign: the sample is when it was read.
         now = _now()
@@ -258,5 +259,5 @@ def measure(snapshot: dict[int, ProcessInfo] | None, panes: dict[str, int]) -> M
         totals: dict = {"webview": None} | {key: group(key) for key in named}
         totals["machine"] = machine()
         measurement = Measurement({pane_id: group(f"pane:{pane_id}") for pane_id in per_pane}, totals)
-        _prev, _last = cur, (now, measurement)
+        _prev, _last = cur, (now, panes, measurement)
         return measurement

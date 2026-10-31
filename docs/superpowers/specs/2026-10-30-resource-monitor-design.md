@@ -72,7 +72,7 @@ short-lived `git`/`gh`/`tsc` runs that live less than a tick, which own-time sam
 
 **D5 — Samples are taken under a lock, at most every 0.5 s, and never against stale history.** `build_state` can
 run concurrently from the state hub, the REST fallback poll and other tabs. One lock covers read-diff-write. A
-caller within 0.5 s of the previous sample gets the previous measurement back instead of a new delta (5 ms windows measured 0%
+caller within 0.5 s of the previous sample, with the same panes, gets the previous measurement back instead of a new delta (5 ms windows measured 0%
 for a server averaging 10%). A previous sample older than 10 s (a hub that idled with no subscribers) counts as
 missing. With no usable previous sample, or an impossible delta (D4), `cpu_pct` is `null`, never 0. A 0 is either
 measured idle or an interval D4 clamped (a child orphaned before it exited).
