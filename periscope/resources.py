@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import ctypes
 import os
+import threading
 from dataclasses import dataclass
 
-from periscope.agent_processes import ProcessInfo, descendants
+from periscope.agent_processes import ProcessInfo, descendants, process_snapshot
 
 _u64 = ctypes.c_uint64
 _RUSAGE_INFO_V1 = 1
@@ -26,6 +27,10 @@ _APP_NAME = "periscope-app"
 # A previous sample older than this (a hub that idled with no subscribers)
 # would average hours into one number; it counts as missing.
 _STALE_NS = 10 * 1_000_000_000
+
+# A delta over less than this reads noise (5 ms windows measured 0% for a
+# server averaging 10%); a caller inside it gets the previous measurement.
+_MIN_INTERVAL_NS = 500_000_000
 
 
 class _RusageInfoV1(ctypes.Structure):
@@ -184,3 +189,51 @@ def _cpu_pct(prev: _Sample | None, cur: _Sample) -> float | None:
         if ident not in cur.totals:
             delta -= total
     return round(max(delta, 0) / (cur.at - prev.at) * 100, 1)
+
+
+@dataclass(frozen=True)
+class Measurement:
+    panes: dict[str, dict]  # pane_id → {mem_mb, cpu_pct}
+    totals: dict  # server, webview (None without the app), panes, elsewhere: {mem_mb, cpu_pct}; machine
+
+
+# build_state runs from the state hub, the REST fallback poll and other tabs at
+# once; the lock makes each read-diff-write of _prev whole.
+_lock = threading.Lock()
+_prev: dict[str, _Sample] = {}  # group key → its last sample
+_last: tuple[int, Measurement] | None = None
+
+
+def measure(panes: dict[str, int]) -> Measurement | None:
+    """Footprint and CPU for each pane (pane_id → its root pid, tmux's
+    pane_pid) and every other group. None when this tick's process snapshot
+    failed: an empty tree would collapse every pane to its shell and read as
+    real."""
+    global _prev, _last
+    snapshot = process_snapshot()
+    if snapshot is None:
+        return None
+    with _lock:
+        now = _now()
+        if _last is not None and now - _last[0] < _MIN_INTERVAL_NS:
+            return _last[1]
+        named, per_pane = _assign(snapshot, panes)
+        readings = {pid: r for pid in snapshot if (r := _read(pid)) is not None}
+        prev, _prev = _prev, {}
+
+        def group(key: str, pids: set[int]) -> dict:
+            members = {(pid, readings[pid].start): readings[pid] for pid in pids if pid in readings}
+            cur = _Sample(now, {ident: r.cpu_ns for ident, r in members.items()})
+            _prev[key] = cur
+            return {
+                "mem_mb": sum(r.footprint for r in members.values()) >> 20,
+                "cpu_pct": _cpu_pct(prev.get(key), cur),
+            }
+
+        totals: dict = {"webview": None} | {key: group(key, pids) for key, pids in named.items()}
+        totals["machine"] = machine()
+        measurement = Measurement(
+            {pane_id: group(f"pane:{pane_id}", pids) for pane_id, pids in per_pane.items()}, totals
+        )
+        _last = (now, measurement)
+        return measurement

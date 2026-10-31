@@ -3,6 +3,8 @@ runs on fake snapshots and fake rusage readings."""
 
 import os
 
+import pytest
+
 from periscope import resources
 
 # ── the real system calls ────────────────────────────────────────────────
@@ -128,3 +130,101 @@ def test_cpu_never_diffs_a_reused_pid_against_its_predecessor():
 
 def test_cpu_treats_a_stale_previous_sample_as_missing():
     assert _cpu(0, {(1, 0): S}, 11 * S, {(1, 0): 2 * S}) is None
+
+
+# ── measure ──────────────────────────────────────────────────────────────
+
+import threading
+
+
+@pytest.fixture(autouse=True)
+def _no_live_resources(monkeypatch):
+    """Overrides conftest's stub of the same name: these tests install their
+    own fakes, and the smoke tests read the real test process."""
+    monkeypatch.setattr(resources, "_prev", {})
+    monkeypatch.setattr(resources, "_last", None)
+
+
+MACHINE = {"load1": 1.0, "swap_used_mb": 0, "swap_total_mb": 0, "mem_free_pct": 50}
+MB = 1 << 20
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 10 * S
+
+    def __call__(self):
+        return self.t
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    """A machine of _snapshot()'s processes, each 100 MB, CPU set per test."""
+    clock = _Clock()
+    cpu = dict.fromkeys(_snapshot(), 0)
+    monkeypatch.setattr(resources, "process_snapshot", _snapshot)
+    monkeypatch.setattr(resources, "_responsible", {600: 500}.get)
+    monkeypatch.setattr(resources, "machine", lambda: MACHINE)
+    monkeypatch.setattr(resources, "_now", clock)
+    monkeypatch.setattr(
+        resources, "_read", lambda pid: resources.Reading(100 * MB, cpu[pid], 0) if pid in cpu else None
+    )
+    return clock, cpu
+
+
+PANES = {"%1": 100, "%2": 200}
+
+
+def test_measure_first_pass_has_memory_and_unknown_cpu(fake):
+    m = resources.measure(PANES)
+    assert m.panes == {"%1": {"mem_mb": 300, "cpu_pct": None}, "%2": {"mem_mb": 100, "cpu_pct": None}}
+    assert m.totals["server"] == {"mem_mb": 200, "cpu_pct": None}
+    assert m.totals["webview"] == {"mem_mb": 200, "cpu_pct": None}
+    assert m.totals["panes"] == {"mem_mb": 400, "cpu_pct": None}
+    assert m.totals["elsewhere"] == {"mem_mb": 200, "cpu_pct": None}
+    assert m.totals["machine"] == MACHINE
+
+
+def test_measure_second_pass_has_cpu(fake):
+    clock, cpu = fake
+    resources.measure(PANES)
+    clock.t += S
+    cpu[102] += S // 2  # the pane's tool child: half a core
+    m = resources.measure(PANES)
+    assert m.panes["%1"]["cpu_pct"] == 50.0
+    assert m.panes["%2"]["cpu_pct"] == 0.0
+    assert m.totals["panes"]["cpu_pct"] == 50.0
+    assert m.totals["server"]["cpu_pct"] == 0.0
+
+
+def test_measure_within_half_a_second_returns_the_previous_measurement(fake):
+    clock, _ = fake
+    first = resources.measure(PANES)
+    clock.t += S // 10
+    assert resources.measure(PANES) is first
+
+
+def test_measure_skips_unreadable_processes(fake, monkeypatch):
+    monkeypatch.setattr(resources, "_read", lambda pid: None if pid == 102 else resources.Reading(100 * MB, 0, 0))
+    assert resources.measure(PANES).panes["%1"]["mem_mb"] == 200
+
+
+def test_measure_without_the_app_sends_no_webview(fake, monkeypatch):
+    monkeypatch.setattr(resources, "process_snapshot", lambda: {p: v for p, v in _snapshot().items() if p != 500})
+    assert resources.measure(PANES).totals["webview"] is None
+
+
+def test_measure_is_none_when_the_snapshot_failed(fake, monkeypatch):
+    monkeypatch.setattr(resources, "process_snapshot", lambda: None)
+    assert resources.measure(PANES) is None
+
+
+def test_measure_from_many_threads_at_once(fake):
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(resources.measure(PANES))) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(out) == 8
+    assert all(m is out[0] for m in out)  # one computed, the rest inside 0.5 s
