@@ -1,6 +1,7 @@
 """resources: footprint and CPU per group. Everything except the smoke tests
 runs on fake snapshots and fake rusage readings."""
 
+import copy
 import os
 import threading
 
@@ -326,7 +327,7 @@ def test_measure_leaves_no_state_when_a_pass_fails(fake, monkeypatch):
     resources.measure(_snapshot(), PANES)
     clock, _ = fake
     clock.t += S
-    prev_before, last_before = resources._prev, resources._last
+    prev_before, last_before = copy.deepcopy(resources._prev), copy.deepcopy(resources._last)
 
     def boom():
         raise RuntimeError("boom")
