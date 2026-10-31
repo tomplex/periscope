@@ -31,7 +31,7 @@ describe("agent presentation", () => {
   it("keeps Codex in terminal mode without Claude-only header controls", () => {
     const w = {
       agent: "codex", pid: "codex-1", target: "dev:1", state: "idle",
-      mem: { rss_gb: 4, age_s: 86400 },
+      mem: { tier: "bad", trigger: "mem", gb: 4, age_s: 86400 },
     };
     expect(computeMode(w)).toBe("terminal");
     const html = render(h(PaneHeader, { w }));
