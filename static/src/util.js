@@ -99,9 +99,6 @@ export function shortestUniqueSuffix(name, allNames) {
   return name;
 }
 
-// GitHub PR URL for a pane's repo. `slug` ("owner/repo") is derived
-// server-side from `git remote get-url origin`; null when the repo's origin
-// isn't a GitHub remote — callers then render the PR badge unlinked.
 // Cycle-hint chip content (rail ↻ chip + detail header). `mem` is the
 // server's `w.mem` ({tier: "warn"|"bad", trigger: "mem"|"age", gb, age_s})
 // or null/undefined — the server only sends it when a threshold tripped, so
@@ -120,6 +117,9 @@ export function memHint(mem) {
   };
 }
 
+// GitHub PR URL for a pane's repo. `slug` ("owner/repo") is derived
+// server-side from `git remote get-url origin`; null when the repo's origin
+// isn't a GitHub remote — callers then render the PR badge unlinked.
 export function prUrl(slug, pr) {
   return slug ? `https://github.com/${slug}/pull/${pr}` : null;
 }
