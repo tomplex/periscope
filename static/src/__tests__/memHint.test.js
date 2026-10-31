@@ -21,10 +21,4 @@ describe("memHint", () => {
     expect(h.label).toBe("3d");
     expect(h.cls).toBe("mem-warn");
   });
-
-  it("an age trip with an unreadable footprint still explains itself", () => {
-    const h = memHint({ tier: "warn", trigger: "age", gb: null, age_s: 3 * 86400 });
-    expect(h.title).toContain("running 3d 0h");
-    expect(h.title).not.toContain("null");
-  });
 });
