@@ -230,15 +230,15 @@ def measure(panes: dict[str, int]) -> Measurement | None:
             return _last[1]
         named, per_pane = _assign(snapshot, panes)
         readings = {pid: r for pid in snapshot if (r := _read(pid)) is not None}
-        prev, _prev = _prev, {}
+        samples: dict[str, _Sample] = {}
 
         def group(key: str, pids: set[int]) -> dict:
             members = {(pid, readings[pid].start): readings[pid] for pid in pids if pid in readings}
             cur = _Sample(now, {ident: r.cpu_ns for ident, r in members.items()})
-            _prev[key] = cur
+            samples[key] = cur
             return {
                 "mem_mb": sum(r.footprint for r in members.values()) >> 20,
-                "cpu_pct": _cpu_pct(prev.get(key), cur),
+                "cpu_pct": _cpu_pct(_prev.get(key), cur),
             }
 
         totals: dict = {"webview": None} | {key: group(key, pids) for key, pids in named.items()}
@@ -246,5 +246,5 @@ def measure(panes: dict[str, int]) -> Measurement | None:
         measurement = Measurement(
             {pane_id: group(f"pane:{pane_id}", pids) for pane_id, pids in per_pane.items()}, totals
         )
-        _last = (now, measurement)
+        _prev, _last = samples, (now, measurement)
         return measurement

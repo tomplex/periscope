@@ -2,6 +2,7 @@
 runs on fake snapshots and fake rusage readings."""
 
 import os
+import threading
 
 import pytest
 
@@ -147,8 +148,6 @@ def test_cpu_treats_a_stale_previous_sample_as_missing():
 
 # ── measure ──────────────────────────────────────────────────────────────
 
-import threading
-
 
 @pytest.fixture(autouse=True)
 def _no_live_resources(monkeypatch):
@@ -242,3 +241,19 @@ def test_measure_from_many_threads_at_once(fake):
         t.join()
     assert len(out) == 8
     assert all(m is out[0] for m in out)  # one computed, the rest inside 0.5 s
+
+
+def test_measure_leaves_no_state_when_a_pass_fails(fake, monkeypatch):
+    resources.measure(PANES)
+    clock, _ = fake
+    clock.t += S
+    prev_before, last_before = resources._prev, resources._last
+
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(resources, "machine", boom)
+    with pytest.raises(RuntimeError):
+        resources.measure(PANES)
+    assert resources._prev == prev_before
+    assert resources._last == last_before
