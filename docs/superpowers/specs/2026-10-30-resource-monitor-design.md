@@ -1,132 +1,136 @@
 # Resource monitor
 
-The dashboard shows how much memory and CPU each owner uses (agent sessions, the periscope server, its webview)
-so that lag with ~10 agents can be traced to an owner before anything is optimized. THI-448, first slice.
+The dashboard shows how much memory and CPU each owner uses (the panes, the periscope server, its webview, and
+everything else) so that lag with ~10 agents can be traced to an owner before anything is optimized. THI-448, first
+slice.
 
 ## What the measurements showed (2026-10-30, 11 panes)
 
 | Owner | Footprint | CPU |
 |---|---|---|
 | Machine (16 GB RAM, 10 cores) | ~48 GB; 16.5 of 17.4 GB swap used | load avg 50–70 |
-| Agent sessions, whole pane subtrees | 12.8 GB | 112% |
+| Panes, whole process subtrees | 12.8 GB | 112% |
 | ↳ heaviest pane | 6.8 GB, mostly `tsc`/`prettier`/`eslint`; its claude 446 MB | 58% |
-| Webview (WebKit `WebContent`) | 2.9 GB, peaked at 7.7 GB the same day | ~40% |
-| Periscope server + tmux control clients | 176 MB | ~7% |
+| Webview: `periscope-app` and its WebKit helpers | live WebContent 2–3 GB (7.7 GB peak), a parked WebContent never reaped 1.3 GB, GPU 79 MB | ~40% WebContent, GPU most CPU of the app |
+| Periscope server + tmux control clients | 176 MB | ~7% own, ~38% more in reaped children |
+| Elsewhere, e.g. an orphaned `lgtm` node server | 4.1 GB for that one process | ~0 |
 
 `ps` RSS left out compressed and swapped pages: the webview read 276 MB resident against 2,855 MB of footprint, one
-claude 111 MB against 460 MB. `proc_pid_rusage` read footprint and CPU time for 6 pids in ~1 ms without a fork, and
-its CPU deltas matched `top`.
+claude 111 MB against 460 MB.
 
 ## Scope
 
-In: measurement, the header pill and popover, the detail-header numbers, the webview through the shell.
-Out, each its own later PR: dashboard freshness (`build_state` time, `/ws/state` frame gap), a 1 h history, a
-"recycle pending" marker for the webview. THI-449 (recycle gate) and THI-450 (subprocesses per tick) are separate
-tickets.
+In: measurement, the header pill and popover, the detail-header numbers.
+Out, each its own later PR: dashboard freshness (`build_state` time, `/ws/state` frame gap), a 1 h history.
+THI-449 (recycle gate, unreaped WebContent) and THI-450 (subprocesses per tick) are separate tickets.
 
 ## Decisions
 
-**D1 — Memory is `phys_footprint`, CPU is the change in CPU time; both come from `proc_pid_rusage`.** Footprint is
-what Activity Monitor calls Memory and what the shell's recycle already uses; RSS hides exactly the pressure this
-feature exists to show. CPU% is per core like `top` (100% = one core), computed over the interval since the previous
-sample of the same process. Called through `ctypes` on `/usr/lib/libproc.dylib` with the `RUSAGE_INFO_V0` flavor
-(the struct the shell binds in `recycle.rs`); CPU times are mach absolute units, scaled by `mach_timebase_info`.
-Stdlib only, so `uv run server.py`'s PEP-723 header doesn't change.
+**D1 — Memory is `phys_footprint`; CPU is the change in CPU time; both come from `proc_pid_rusage`.** Footprint is
+what Activity Monitor calls Memory and what the shell's recycle already uses. Read through `ctypes` on
+`/usr/lib/libproc.dylib` with the `RUSAGE_INFO_V1` flavor, which adds the CPU time of a process's reaped children
+to the V0 fields `recycle.rs` binds. CPU times are mach absolute units, scaled by `mach_timebase_info` (125/3 on
+this machine). Stdlib only, so `uv run server.py`'s PEP-723 header doesn't change. CPU% is per core like `top` and
+Activity Monitor (100% = one core). Measured cost: ~3 µs per process, ~2 ms for every process on the machine.
 
-**D2 — Measurement runs inside `build_state`, once per hub tick, and adds no subprocess.** It reuses the process
-table (`session_status.proc_table()`) and the tmux pane roots (`_tmux_pane_pids()`) that each tick already forks
-for; the pane roots get cached alongside `pane_claude_pids()`'s result so they are read, not re-forked. A tick
-costs ~0.2 ms per process for the `proc_pid_rusage` calls (~25 ms at today's ~120 processes in pane subtrees). A
-separate sampler thread was rejected: it would need its own process table (another `ps`, or a larger `libproc`
-binding) and a thread under `docs/testing.md`'s rules, for steadier CPU windows nobody asked for yet.
+**D2 — Measurement runs inside `build_state`, once per tick, on the tick's existing process snapshot.** It reads
+`agent_processes.process_snapshot()`, which the fan-out already takes every tick (`codex_process_for_pane`), so it
+adds no subprocess. When the snapshot is `None` (a `ps` failure), `res` and `resources` are omitted for that tick
+rather than computed from an empty tree, which would collapse every pane to its shell. A separate sampler thread
+was rejected: it would need its own process table and a thread under `docs/testing.md`'s rules.
 
-**D3 — A process is identified by (pid, start time).** The previous CPU sample is keyed by the pair, using
-`ri_proc_start_abstime` from the same struct, so a recycled pid starts a fresh delta instead of reporting the
-difference between two unrelated processes. A process seen for the first time has no CPU% yet; it counts as 0 in
-sums. Entries for processes absent from a tick are dropped.
+**D3 — Every process on the machine lands in exactly one group.**
+- **Each window row's pane:** the row's `pane_pid` and all its descendants in the snapshot. The claude process alone
+  undercounts a busy session (446 MB against 6.8 GB above). `panes` is the sum over rows, so the rows add up to it.
+- **Server:** periscope's own pid and its descendants (the tmux control clients, whatever `git`/`gh`/`ps` is running).
+- **Webview:** the `periscope-app` process and every process whose responsible pid is that app, found through
+  libSystem's `responsibility_get_pid_responsible_for_pid`. That covers every WebKit helper: the live WebContent,
+  any parked WebContent the recycle didn't reap, GPU and Networking. The WebKit helpers have launchd as their parent,
+  so the process tree can't find them. With no `periscope-app` running (dashboard in a browser tab), `webview` is
+  `null`.
+- **Elsewhere:** every other process readable by the user. That includes the tmux server, non-active panes of split
+  windows, the `periscope-input` pane, daemons a session left running, and every other app. No attempt is made to
+  attribute these: the orphaned `lgtm` server's responsible process is Ghostty, the same as Ghostty's own processes.
+  Processes `proc_pid_rusage` can't read (root-owned, or gone since the snapshot) are skipped.
 
-**D4 — A session's numbers cover the pane's whole process subtree.** Rooted at the pane's `pane_pid`, walked with
-the same `proc_table()` children map `pane_claude_pids()` uses. The claude process alone undercounts a busy session
-(446 MB against 6.8 GB above). `sessions` is the total over every tmux pane, including panes that run no agent.
+**D4 — A process is identified by (pid, start time), and a group's CPU accounts for exits.** Samples are keyed by
+`(pid, ri_proc_start_abstime)`, so a recycled pid never diffs against an unrelated process. A process's CPU total is
+its own time plus its reaped children's. A group's CPU over the interval is:
+- for each member present in both samples, the change in its total;
+- plus the whole total of a member that started after the previous sample;
+- minus the last total of each member that vanished since the previous sample, because when it is reaped its whole
+  CPU time reappears in its parent's children time.
+The result is clamped at 0: a vanished process reaped outside the group would otherwise subtract time the group
+never gains back. This catches the short-lived `git`/`gh`/`tsc` runs that live less than a tick, which own-time
+sampling would count as 0.
 
-**D5 — The periscope server is its own process plus its children.** That covers the tmux control-mode clients and
-whatever `git`/`gh`/`ps` is running at that instant. The tmux server is not counted anywhere: it is shared, and it
-measured 74 MB and 0.4%.
+**D5 — Samples are taken under a lock, at most every 0.5 s, and never against stale history.** `build_state` can
+run concurrently from the state hub, the REST fallback poll and other tabs. One lock covers read-diff-write. A
+caller within 0.5 s of the previous sample gets the previous measurement back instead of a new delta (5 ms windows measured 0%
+for a server averaging 10%). A previous sample older than 10 s (a hub that idled with no subscribers) counts as
+missing. With no usable previous sample, `cpu_pct` is `null`, never 0, so a zero always means "measured idle".
 
-**D6 — The webview is measured by the server from a pid the shell writes to a file.** The shell already reads the
-`WebContent` pid every 60 s (`refresh_webcontent_pid`); it also writes it to `~/.config/periscope/webcontent.pid`,
-next to `shell.log` and `zoom`. The server reads the file each tick and measures that pid itself, but only when the
-file is less than 3 minutes old and `proc_pidpath` names a `com.apple.WebKit.WebContent` executable. Otherwise
-`webview` is `null`: an older `.app`, a quit app, or a dashboard viewed in a browser tab all just omit the line.
-The webview's `WebContent` has launchd as its parent and no sockets of its own (WebKit's networking process holds
-them), so the server cannot find it without the shell.
+**D6 — The machine line reads the kernel directly, with no fork.** Load average from `os.getloadavg()`; swap used
+and total from `sysctlbyname("vm.swapusage")`; free memory percent from `kern.memorystatus_level`, the figure
+`memory_pressure` prints.
 
-**D7 — The machine line reads the kernel directly, with no fork.** Load average from `os.getloadavg()`; swap used
-and total from `sysctlbyname("vm.swapusage")`; free memory percent from `kern.memorystatus_level` (the figure
-`memory_pressure` prints).
-
-**D8 — The ↻ cycle hint keeps watching the claude process alone, measured as footprint.** The leak it targets lives
-in claude, not in its tool children. `mem_signal` reads footprint instead of RSS, the thresholds are renamed to
-`MEM_BAD_FOOTPRINT_KB` / `MEM_WARN_FOOTPRINT_KB` and keep their values (4 GB / 2 GB), and the chip's `rss_gb` becomes
-`mem_gb`. Today's claudes sit at 250–550 MB of footprint, so nothing new trips. `_claude_procs()` keeps its `ps`
-call for liveness and age; moving that off `ps` belongs to THI-450.
-
-**D9 — Without `libproc` (not macOS), measurement is off.** One warning at first use; `res` and `resources` are
-absent from `/api/state`, and the UI renders nothing for them. A pid that exits or refuses access between the
-process table and the `proc_pid_rusage` call drops out of the sums; nothing in this path raises into `build_state`.
+**D7 — The ↻ cycle hint keeps watching the claude process alone, measured as footprint.** The leak it targets lives
+in claude, not in its tool children. The thresholds become `MEM_WARN_MB` / `MEM_BAD_MB` at the same values (2 GB /
+4 GB); today's claudes sit at 250–550 MB, so nothing new trips. `mem_signal` reads the claude's footprint from the
+tick's measurement, and the chip sends `{tier, gb, age_s, trigger}` where `trigger` is `"mem"` or `"age"`, so
+`memHint` labels from it instead of repeating the 2 GB threshold in JS. `_claude_procs()` keeps its `ps` call for
+liveness and age but drops `rss=`; moving liveness off `ps` belongs to THI-450.
 
 ## Server
 
-`periscope/resources.py` — stdlib only, no periscope imports, like `session_status`:
+`periscope/resources.py`, stdlib only, no periscope imports:
 
-- `usage(pids)` → `{pid: (footprint_bytes, cpu_ns, start)}` for the pids it could read.
-- `sample(pids)` — reads `usage`, diffs against the previous sample per (pid, start), returns `{pid: (footprint_bytes,
-  cpu_pct)}`, and updates the stored samples.
-- `subtree(root, kids)` → the root and all its descendants.
-- `machine()` → `{load1, swap_used_mb, swap_total_mb, mem_free_pct}`.
-- `webview_pid()` → the validated pid from D6, or `None`.
+- `measure(snapshot, rows)` → `(per_row, totals)`. It reads every process once, assigns each to a group
+  (D3), computes footprint and CPU per group (D4, D5), and returns `{pane_id: {mem_mb, cpu_pct}}` for the rows and
+  `{server, webview, panes, elsewhere, machine}`. Each group is `{mem_mb, cpu_pct}`; `webview` may be `null`;
+  `machine` is D6's `{load1, swap_used_mb, swap_total_mb, mem_free_pct}`.
+- It also returns each claude's footprint for `mem_signal` (D7).
 
-`build_state` calls one function in `resources` that samples every pid it needs in a single pass (all pane
-subtrees, the server subtree, the webview), then:
+`build_state` calls `measure` after the fan-out and before the narrator merge. Each row gets `res`; the blob gets
+`resources`. The claude footprint reaches `mem_signal` after the fan-out, so the `mem` field is set there rather
+than inside `build_window_view`.
 
-- each window row gets `res: {mem_mb, cpu_pct}` for its pane's subtree;
-- the blob gets `resources: {server, webview, sessions, machine}`, where `server`, `webview` and `sessions` are
-  `{mem_mb, cpu_pct}` (`webview` may be `null`) and `machine` is D7's dict.
-
-`/api/healthz` adds `resources: {server}` with the server's `{mem_mb, cpu_pct, children}`. It samples the server
-subtree itself and shares the stored CPU samples with `build_state`.
-
-## Shell
-
-`recycle.rs`: after `refresh_webcontent_pid` stores a pid, write it to `~/.config/periscope/webcontent.pid`
-(overwriting, so the mtime is the freshness signal), including right after a recycle rebuilds the webview. Failure
-to write is ignored, like `shell_log`. `docs/tauri-shell.md` gains a sentence on the file. The change needs an `.app`
-rebuild; until then D6's fallback applies.
+`/api/healthz` is unchanged: its only programmatic caller (`bin/periscope`) reads `.version`, and a narrow sample
+there would disturb the CPU history of every other group.
 
 ## UI
 
-- **Header pill** after `UsagePill`: `▣ 18.1G · 165%`, the sum of server, webview and sessions. Hidden when
-  `resources` is absent.
-- **Popover** on click: periscope server, webview, then every session sorted by memory (a row selects its pane),
-  then the machine line: `load 52 · swap 16.5/17.4G · 27% free`. The CPU column's tooltip says 100% = one core.
-- **Detail header**: a `· 6.8G · 58%` part after the context %, for the selected pane.
-- Formatting (MB→`0.6G`/`512M`, percent rounding) and sorting go in a pure `static/src/chrome/resources.js`, tested
-  with vitest, the way `usageSummary.js` backs `UsagePill`.
-- `memHint` reads `mem_gb`.
+- **Header pill** after `UsagePill`: `▣ 18.1G`, the memory of server, webview and panes together. CPU stays out of
+  the pill. Hidden when `resources` is absent.
+- **Popover** on click, one line each with memory and CPU: periscope server, webview, then every pane sorted by
+  memory (a line selects its pane), then elsewhere, then the machine line: `load 52 · swap 16.5/17.4G · 27% free`.
+  The CPU column's tooltip says 100% = one core. A `null` CPU shows `–`.
+- **Detail header**: `· 6.8G mem · 58% cpu` after the context %, for the selected pane.
+- Formatting (MB → `0.6G` / `512M`, CPU rounding, `null`) and the sort go in a pure `static/src/chrome/resources.js`,
+  tested with vitest, the way `usageSummary.js` backs `UsagePill`.
+- `memHint` reads `gb` and `trigger`.
 
 ## Tests
 
-- `tests/test_resources.py`: CPU% on a first sample (0), on a second, after a pid reuse (new start time → fresh
-  sample), and for a pid gone from the tick (dropped); subtree sums over a fake children map; `webview_pid` for a
-  missing file, a stale file, a pid whose path isn't `WebContent`, and a valid one; the no-`libproc` path. The
-  `proc_pid_rusage` call is behind one function the tests replace; one smoke test reads the test process itself.
-- `tests/test_window_view.py`: `mem_signal` on footprint at each tier.
-- `tests/routes/`: `/api/state` carries `res` and `resources`; `/api/healthz` carries `resources.server`.
-- vitest: `resources.js` formatting and ordering; `memHint` with `mem_gb`.
+- `tests/conftest.py`: an autouse fixture stubs `resources.measure`'s system calls, so no test reads the real
+  machine's processes. Tests of `resources` itself replace the same seams with fakes.
+- `tests/test_resources.py`, over a fake snapshot and fake rusage:
+  - group assignment, including a WebKit helper found by responsible pid and a process outside every group;
+  - CPU: first sample (`null`), steady second sample, pid reuse, a child started after the previous sample, a child
+    that exits and is reaped by a member, a member reaped outside the group (clamped);
+  - the 0.5 s and 10 s rules, and two threads sampling at once;
+  - a `None` snapshot;
+  - one smoke test that reads the test process itself through the real `proc_pid_rusage`.
+- `tests/test_window_view.py`: `mem_signal` on footprint, each tier and trigger (updating today's RSS cases).
+- `tests/routes/`: `/api/state` carries `res` and `resources`, and omits both when the snapshot is `None`.
+- vitest: `resources.js` formatting, `null` CPU and ordering; `memHint` with `gb`/`trigger` (updating
+  `memHint.test.js` and `agent.test.js`).
 
 ## Assumptions
 
-- Every process measured belongs to the user running periscope; `proc_pid_rusage` on a root-owned pid fails and the
-  pid is skipped (D9). Verified for claude, the server and `WebContent`.
-- ~120 processes per tick stays cheap enough at ~0.2 ms each; if a tick's measurement grows past ~50 ms, that shows
-  up in the freshness slice.
+- Periscope runs only on macOS (`ci.yml`: "periscope only runs on macOS hosts"), so `libproc` is always present.
+- `responsibility_get_pid_responsible_for_pid` is a private libSystem function, the same kind of private API the shell
+  already relies on (`_webProcessIdentifier`). It worked on this machine (macOS 27) for every WebKit helper.
+- Summing `phys_footprint` across the webview's processes doesn't double count; WebKit hands IOSurface ownership to
+  WebContent. Not proven for the GPU process.
+- A webview open on JS older than the server shows a malformed ↻ label until it reloads.
