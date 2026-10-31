@@ -226,8 +226,8 @@ def mem_signal(proc: dict | None) -> dict | None:
     "bad" at ≥MEM_BAD_MB of footprint, "warn" at ≥MEM_WARN_MB or
     ≥MEM_WARN_AGE_S, None otherwise — None renders nothing, so a healthy pane
     costs no rail space. `trigger` says which limit tripped, so the chip leads
-    with it. Policy lives here (config thresholds); measurement stays in
-    session_status, which can't import config."""
+    with it. Policy (the config thresholds) lives here;
+    measurement in session_status and resources."""
     if not proc:
         return None
     mb, age = proc["mem_mb"], proc["age_s"]

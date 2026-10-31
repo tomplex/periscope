@@ -23,8 +23,8 @@ Only busy/waiting/idle are mapped; `shell` and any unknown status return None so
 the caller falls back to scraping. The schema is undocumented Claude Code
 internals (version-tagged), so every read degrades to None on a shape change.
 
-Imports only stdlib — no periscope.* — so it stays a leaf the resolver layer
-(turns.py / window_view.py) can depend on freely."""
+Imports only stdlib and periscope's leaf modules (config, resources), never
+the resolver layer, so turns.py / window_view.py can depend on it freely."""
 
 import contextlib
 import json
@@ -510,8 +510,8 @@ def live_session_id_for_pane(pane_id: str) -> str | None:
 
 def claude_proc_for(sid: str | None) -> dict | None:
     """Process stats for a sessionId's claude: {"pid", "mem_mb", "age_s"}, or
-    None when unmapped or not a live claude. mem_mb is its footprint, None if
-    it exited since the ps snapshot. Measurement, not state — applies even when
+    None when unmapped or not a live claude. mem_mb is its footprint, None when
+    unreadable (exited since the ps snapshot). Measurement, not state — applies even when
     the status is one session_state_for doesn't trust (a bloated claude
     deserves the cycle-hint regardless of what it's doing)."""
     if not sid:
