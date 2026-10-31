@@ -806,30 +806,37 @@ def test_mem_signal_none_when_healthy():
     from periscope.window_view import mem_signal
 
     assert mem_signal(None) is None
-    assert mem_signal({"pid": 1, "rss_kb": 600_000, "age_s": 3600}) is None
+    assert mem_signal({"pid": 1, "mem_mb": 600, "age_s": 3600}) is None
 
 
-def test_mem_signal_warn_on_rss():
+def test_mem_signal_warn_on_footprint():
     from periscope.window_view import mem_signal
 
-    out = mem_signal({"pid": 1, "rss_kb": 2 * 1024 * 1024, "age_s": 60})
-    assert out == {"tier": "warn", "rss_gb": 2.0, "age_s": 60}
+    out = mem_signal({"pid": 1, "mem_mb": 2048, "age_s": 60})
+    assert out == {"tier": "warn", "trigger": "mem", "gb": 2.0, "age_s": 60}
 
 
 def test_mem_signal_warn_on_age_alone():
     from periscope.window_view import mem_signal
 
-    out = mem_signal({"pid": 1, "rss_kb": 500_000, "age_s": 3 * 86400})
-    assert out["tier"] == "warn"
-    assert out["rss_gb"] == 0.5
+    out = mem_signal({"pid": 1, "mem_mb": 500, "age_s": 3 * 86400})
+    assert out == {"tier": "warn", "trigger": "age", "gb": 0.5, "age_s": 3 * 86400}
 
 
 def test_mem_signal_bad_overrides_warn():
     from periscope.window_view import mem_signal
 
-    out = mem_signal({"pid": 1, "rss_kb": 4_400_000, "age_s": 60})
+    out = mem_signal({"pid": 1, "mem_mb": 4300, "age_s": 60})
     assert out["tier"] == "bad"
-    assert out["rss_gb"] == 4.2
+    assert out["gb"] == 4.2
+
+
+def test_mem_signal_unreadable_footprint_trips_on_age_only():
+    from periscope.window_view import mem_signal
+
+    assert mem_signal({"pid": 1, "mem_mb": None, "age_s": 60}) is None
+    out = mem_signal({"pid": 1, "mem_mb": None, "age_s": 3 * 86400})
+    assert out == {"tier": "warn", "trigger": "age", "gb": None, "age_s": 3 * 86400}
 
 
 def test_view_surfaces_spawned_by_lineage(mocker, clean_state):
