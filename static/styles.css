@@ -323,8 +323,8 @@ button.res-line { font: inherit; color: inherit; background: none; border: 0; te
 .res-line.is-pane:hover { background: color-mix(in oklch, var(--fg-1) 8%, transparent); }
 .res-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .res-mem, .res-cpu { text-align: right; font-variant-numeric: tabular-nums; }
-.res-cpu { color: var(--fg-3); cursor: help; }
-.res-machine { margin-top: 6px; padding: 4px 6px 0; border-top: 1px solid var(--line); color: var(--fg-3); }
+.res-cpu { color: var(--fg-2); cursor: help; }
+.res-machine { margin-top: 6px; padding: 4px 6px 0; border-top: 1px solid var(--line); color: var(--fg-2); }
 .update-notes { max-height: 50vh; overflow-y: auto; padding: 0 6px; font-size: 12px; line-height: 1.5; color: var(--fg-1); }
 .update-release + .update-release { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .update-release-head { margin-bottom: 4px; font-weight: 600; color: var(--fg-0); }
