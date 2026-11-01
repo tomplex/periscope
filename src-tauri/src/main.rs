@@ -132,10 +132,10 @@ fn main() {
                 _ => {}
             }
         })
-        // The focus atomic now lives in focus.rs. A webview recycle destroys
-        // the focused window without a Focused(false) first — tao's
-        // windowWillClose drops its delegate before that fires — so Destroyed
-        // resets it too.
+        // focus.rs keeps the window's focus for readers off the main thread.
+        // A webview recycle destroys the focused window without a
+        // Focused(false) first — tao's windowWillClose drops its delegate
+        // before that fires — so Destroyed resets it too.
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;

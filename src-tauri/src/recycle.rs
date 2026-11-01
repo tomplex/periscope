@@ -10,9 +10,11 @@
 //
 // Policy: every CHECK_INTERVAL_S the renderer's phys_footprint is read via
 // proc_pid_rusage (same number `footprint` prints; RSS is misleading — most
-// of the leak compresses). Over PERISCOPE_RECYCLE_GB (default 1.0) AND the
-// system input-idle for PERISCOPE_RECYCLE_IDLE_S (default 300s) → recycle.
-// The idle gate keeps the ~2s blip invisible; there is also a manual
+// of the leak compresses). Over PERISCOPE_RECYCLE_GB (default 2.0), the
+// renderer at least PERISCOPE_RECYCLE_MIN_AGE_S old (default 1800s, so a
+// fresh big renderer can't loop), and either unfocused for
+// PERISCOPE_RECYCLE_UNFOCUSED_S (default 30s) or system input-idle for
+// PERISCOPE_RECYCLE_IDLE_S (default 300s) → recycle. There is also a manual
 // View → Recycle Webview item with no gate.
 //
 // The WebContent pid comes from WKWebView's private `_webProcessIdentifier`
@@ -22,7 +24,8 @@
 // selector degrades to "manual recycle only" instead of crashing.
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use objc2::runtime::AnyObject;
 use objc2::{msg_send, sel};
@@ -37,19 +40,56 @@ const DASHBOARD_URL: &str = "http://127.0.0.1:17374";
 pub static RECYCLING: AtomicBool = AtomicBool::new(false);
 static WEBCONTENT_PID: AtomicI32 = AtomicI32::new(0);
 
+fn env_f64(name: &str, default: f64) -> f64 {
+    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+// A fresh dashboard already measures 1.1–1.6 GB; leaked renderers reach 3–7.7.
 fn threshold_bytes() -> u64 {
-    let gb: f64 = std::env::var("PERISCOPE_RECYCLE_GB")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1.0);
-    (gb * 1024.0 * 1024.0 * 1024.0) as u64
+    (env_f64("PERISCOPE_RECYCLE_GB", 2.0) * 1024.0 * 1024.0 * 1024.0) as u64
 }
 
 fn idle_gate_s() -> f64 {
-    std::env::var("PERISCOPE_RECYCLE_IDLE_S")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(300.0)
+    env_f64("PERISCOPE_RECYCLE_IDLE_S", 300.0)
+}
+
+fn unfocused_gate_s() -> f64 {
+    env_f64("PERISCOPE_RECYCLE_UNFOCUSED_S", 30.0)
+}
+
+fn min_age_s() -> f64 {
+    env_f64("PERISCOPE_RECYCLE_MIN_AGE_S", 1800.0)
+}
+
+// When the current renderer was built (the app's start, then each rebuild):
+// D1's minimum age, so a fresh renderer that is already big can't loop.
+static RENDERER_BORN: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn mark_renderer_born() {
+    *RENDERER_BORN.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+}
+
+fn renderer_age() -> Duration {
+    RENDERER_BORN.lock().unwrap_or_else(|e| e.into_inner()).map_or(Duration::ZERO, |t| t.elapsed())
+}
+
+struct Inputs {
+    footprint: u64,
+    threshold: u64,
+    age: Duration,
+    min_age: Duration,
+    unfocused_for: Option<Duration>,
+    unfocused_gate: Duration,
+    idle: Duration,
+    idle_gate: Duration,
+}
+
+/// Big enough, old enough, and either periscope has been left for another app
+/// (the leak grows from input inside it) or the machine has gone idle.
+fn should_recycle(i: &Inputs) -> bool {
+    i.footprint >= i.threshold
+        && i.age >= i.min_age
+        && (i.unfocused_for.is_some_and(|d| d >= i.unfocused_gate) || i.idle >= i.idle_gate)
 }
 
 // --- phys_footprint via proc_pid_rusage (flavor 0 already carries it) ---
@@ -260,15 +300,64 @@ extern "C" {
     fn proc_pidpath(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GB: u64 = 1024 * 1024 * 1024;
+    const MIN: u64 = 60;
+
+    fn inputs(footprint: u64, age_s: u64, unfocused_s: Option<u64>, idle_s: u64) -> Inputs {
+        Inputs {
+            footprint,
+            threshold: 2 * GB,
+            age: Duration::from_secs(age_s),
+            min_age: Duration::from_secs(30 * MIN),
+            unfocused_for: unfocused_s.map(Duration::from_secs),
+            unfocused_gate: Duration::from_secs(30),
+            idle: Duration::from_secs(idle_s),
+            idle_gate: Duration::from_secs(300),
+        }
+    }
+
+    #[test]
+    fn under_threshold_never_recycles() {
+        assert!(!should_recycle(&inputs(2 * GB - 1, 3600, Some(3600), 3600)));
+    }
+
+    #[test]
+    fn a_young_renderer_never_recycles() {
+        // A fresh dashboard measures 1.1–1.6 GB at once; without this the gate loops.
+        assert!(!should_recycle(&inputs(3 * GB, 30 * MIN - 1, Some(3600), 3600)));
+    }
+
+    #[test]
+    fn unfocused_long_enough_recycles() {
+        assert!(should_recycle(&inputs(3 * GB, 30 * MIN, Some(30), 0)));
+        assert!(!should_recycle(&inputs(3 * GB, 30 * MIN, Some(29), 0)));
+    }
+
+    #[test]
+    fn focused_or_unknown_waits_for_system_idle() {
+        assert!(!should_recycle(&inputs(3 * GB, 30 * MIN, None, 299)));
+        assert!(should_recycle(&inputs(3 * GB, 30 * MIN, None, 300)));
+    }
+}
+
 pub fn start_monitor(app: &AppHandle) {
+    mark_renderer_born();
     let handle = app.clone();
     std::thread::spawn(move || {
         let threshold = threshold_bytes();
-        let idle_needed = idle_gate_s();
+        let min_age = Duration::from_secs_f64(min_age_s());
+        let unfocused_gate = Duration::from_secs_f64(unfocused_gate_s());
+        let idle_gate = Duration::from_secs_f64(idle_gate_s());
         shell_log(&format!(
-            "[recycle] monitor started (threshold {} MB, idle gate {}s)",
+            "[recycle] monitor started (threshold {} MB, min age {}s, unfocused gate {}s, idle gate {}s)",
             threshold / (1024 * 1024),
-            idle_needed
+            min_age.as_secs(),
+            unfocused_gate.as_secs(),
+            idle_gate.as_secs()
         ));
         loop {
             std::thread::sleep(Duration::from_secs(CHECK_INTERVAL_S));
@@ -284,12 +373,26 @@ pub fn start_monitor(app: &AppHandle) {
             if fp < threshold {
                 continue;
             }
-            let idle = seconds_since_last_input();
-            if idle < idle_needed {
+            let inputs = Inputs {
+                footprint: fp,
+                threshold,
+                age: renderer_age(),
+                min_age,
+                unfocused_for: crate::focus::unfocused_for(),
+                unfocused_gate,
+                idle: Duration::from_secs_f64(seconds_since_last_input().max(0.0)),
+                idle_gate,
+            };
+            if !should_recycle(&inputs) {
+                let focus = match inputs.unfocused_for {
+                    Some(d) => format!("unfocused {}s", d.as_secs()),
+                    None => "focused".to_string(),
+                };
                 shell_log(&format!(
-                    "[recycle] over threshold ({} MB) but input {}s ago — waiting for idle",
+                    "[recycle] over threshold ({} MB), renderer {}s old, {focus}, input {}s ago — waiting",
                     fp / (1024 * 1024),
-                    idle as u64
+                    inputs.age.as_secs(),
+                    inputs.idle.as_secs()
                 ));
                 continue;
             }
