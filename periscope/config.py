@@ -152,12 +152,12 @@ def claude_subprocess_env(*, config_dir: str) -> dict[str, str]:
     return env
 
 
-# Claude cycle-hint thresholds (rail ↻ chip): red when a pane's claude RSS
-# crosses BAD, amber at WARN rss or WARN age. Healthy claudes idle around
-# 0.3–0.6GB; the leak class that motivated this shows up as multi-GB RSS on
-# multi-day processes.
-MEM_BAD_RSS_KB = 4 * 1024 * 1024  # 4GB
-MEM_WARN_RSS_KB = 2 * 1024 * 1024  # 2GB
+# Claude cycle-hint thresholds (rail ↻ chip): red when a pane's claude
+# footprint crosses BAD, amber at WARN footprint or WARN age. Healthy claudes
+# sit at 0.25–0.55GB of footprint; the leak class that motivated this shows
+# up as multi-GB on multi-day processes.
+MEM_BAD_MB = 4 * 1024  # 4GB
+MEM_WARN_MB = 2 * 1024  # 2GB
 MEM_WARN_AGE_S = 3 * 86400  # 3 days
 
 

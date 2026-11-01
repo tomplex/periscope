@@ -28,7 +28,7 @@
 // property"). Warn, don't block.
 import { signal } from "@preact/signals";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { useEscape } from "../hooks/useEscape.js";
+import { usePopoverDismiss } from "../hooks/usePopoverDismiss.js";
 import { renderMarkdown } from "../split/markdown.jsx";
 import { updateInfo } from "../store.js";
 import { apiCall, plural } from "../util.js";
@@ -78,15 +78,7 @@ export function UpdatePill() {
   const ref = useRef(null);
   const goRef = useRef(null);
   const close = useCallback(() => { popoverOpen.value = false; }, []);
-  useEscape(close, open);
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, [open]);
+  usePopoverDismiss(ref, open, close);
   const info = updateInfo.value;
   const behind = info?.behind || 0;
   const ahead = info?.ahead || 0;
@@ -183,7 +175,7 @@ export function UpdatePill() {
         : `${behindText} — click to see what's new`;
 
   return (
-    <div class="update-dd" ref={ref}>
+    <div class="pill-dd" ref={ref}>
       <button
         type="button"
         class={`update-pill${running ? " is-running" : ""}${error ? " is-error" : ""}`}

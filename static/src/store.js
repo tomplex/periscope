@@ -33,6 +33,7 @@ export const railSelection = signal(null);    // string highlight-key: "pane:<pi
 export const dragState = signal(null);
 export const usage = signal(null);
 export const updateInfo = signal(null);       // /api/state update summary: { behind, ahead, checked_at, running }
+export const resources = signal(null);        // /api/state resources: { server, webview, panes, elsewhere, machine }, or null when the server's snapshot failed
 export const accounts = signal([]);           // /api/state accounts: [{ id, label }] — the registry, in order
 export const moveTargets = signal({});        // /api/state move_targets: current account id -> move destination id
 export const spawnAccount = signal(null);     // pinned spawn account id, null = auto (launch_policy)
