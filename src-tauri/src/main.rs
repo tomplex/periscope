@@ -4,6 +4,7 @@
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Manager;
 
+mod focus;
 mod notifications;
 mod recycle;
 mod text_behavior;
@@ -131,10 +132,8 @@ fn main() {
                 _ => {}
             }
         })
-        // will_present runs on a thread UNUserNotificationCenter chooses, and
-        // only while the app is frontmost; an atomic kept from window events
-        // answers without a round trip to the main thread. A webview recycle
-        // destroys the focused window without a Focused(false) first — tao's
+        // The focus atomic now lives in focus.rs. A webview recycle destroys
+        // the focused window without a Focused(false) first — tao's
         // windowWillClose drops its delegate before that fires — so Destroyed
         // resets it too.
         .on_window_event(|window, event| {
@@ -142,8 +141,8 @@ fn main() {
                 return;
             }
             match event {
-                tauri::WindowEvent::Focused(focused) => notifications::set_focused(*focused),
-                tauri::WindowEvent::Destroyed => notifications::set_focused(false),
+                tauri::WindowEvent::Focused(focused) => focus::set_focused(*focused),
+                tauri::WindowEvent::Destroyed => focus::set_focused(false),
                 _ => {}
             }
         })
