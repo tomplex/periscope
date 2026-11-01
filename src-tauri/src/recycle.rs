@@ -152,24 +152,33 @@ fn seconds_since_last_input() -> f64 {
 
 // --- WebContent pid off the live WKWebView (main thread only) ---
 
-fn refresh_webcontent_pid(app: &AppHandle) {
+/// The live WebContent pid, read off the WKWebView on the main thread. 0 with
+/// no `main` window or an OS without the selector; None when the main thread
+/// didn't answer in time — a stale pid must never reach the sweep (wry reloads
+/// the page itself when its WebContent dies, so the live pid can change
+/// without a recycle).
+fn read_webcontent_pid(app: &AppHandle) -> Option<i32> {
     let Some(window) = app.get_webview_window("main") else {
-        return;
+        return Some(0);
     };
-    let _ = window.with_webview(|webview| {
-        let wk = webview.inner() as *mut AnyObject;
-        if wk.is_null() {
-            return;
-        }
-        unsafe {
-            let wk = &*wk;
-            let responds: bool = msg_send![wk, respondsToSelector: sel!(_webProcessIdentifier)];
-            if responds {
-                let pid: i32 = msg_send![wk, _webProcessIdentifier];
-                WEBCONTENT_PID.store(pid, Ordering::Relaxed);
+    let (tx, rx) = std::sync::mpsc::channel::<i32>();
+    window
+        .with_webview(move |webview| {
+            let wk = webview.inner() as *mut AnyObject;
+            let mut pid = 0;
+            if !wk.is_null() {
+                unsafe {
+                    let wk = &*wk;
+                    let responds: bool = msg_send![wk, respondsToSelector: sel!(_webProcessIdentifier)];
+                    if responds {
+                        pid = msg_send![wk, _webProcessIdentifier];
+                    }
+                }
             }
-        }
-    });
+            let _ = tx.send(pid);
+        })
+        .ok()?;
+    rx.recv_timeout(Duration::from_secs(2)).ok()
 }
 
 // Append-only shell log — `open`-launched apps have no visible stderr, and
@@ -270,7 +279,6 @@ pub fn recycle_now(app: &AppHandle) {
                 Ok(Ok(())) => {
                     shell_log("[recycle] webview rebuilt");
                     RECYCLING.store(false, Ordering::SeqCst);
-                    reap_old_webcontent(old_pid);
                     return;
                 }
                 Ok(Err(e)) => shell_log(&format!("[recycle] rebuild attempt {attempt} failed: {e}")),
@@ -283,38 +291,62 @@ pub fn recycle_now(app: &AppHandle) {
     });
 }
 
-// WebKit parks the displaced WebContent in its process cache instead of
-// exiting it — observed alive at 480MB 90s after the window it hosted was
-// destroyed, which would hoard exactly the leaked regions recycling exists to
-// free. Grace period, then SIGKILL — guarded by proc_pidpath so a reused pid
-// (some new unrelated process) is never the target.
-fn reap_old_webcontent(old_pid: i32) {
-    if old_pid <= 0 {
-        return;
+// WebKit parks a displaced WebContent in its process cache at full leaked
+// size instead of exiting it (observed alive at 480MB 90s after its window
+// was destroyed). Every check kills each WebContent this app is responsible
+// for, other than the live one, at or above SWEEP_FLOOR — which spares
+// WebKit's ~7 MB pre-warmed spare (the smallest displaced renderer the old
+// reaper ever killed was 522 MB). One path covers a normal recycle, a rebuild
+// that gave up, and anything else that leaves one behind.
+const SWEEP_FLOOR: u64 = 256 * 1024 * 1024;
+
+fn sweep_targets(candidates: &[(i32, u64)], live_pid: i32) -> Vec<i32> {
+    if live_pid <= 0 {
+        return Vec::new(); // the live renderer could be among them
     }
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(10));
-        let mut buf = [0u8; 4096];
-        let n = unsafe {
-            proc_pidpath(old_pid, buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len() as u32)
-        };
-        if n <= 0 {
-            shell_log(&format!("[recycle] old WebContent {old_pid} exited on its own"));
-            return;
-        }
-        let path = String::from_utf8_lossy(&buf[..n as usize]).into_owned();
-        if !path.contains("WebKit.WebContent") {
-            shell_log(&format!("[recycle] pid {old_pid} reused by {path}; not killing"));
-            return;
-        }
-        let fp = phys_footprint(old_pid).unwrap_or(0) / (1024 * 1024);
-        unsafe { libc::kill(old_pid, libc::SIGKILL) };
-        shell_log(&format!("[recycle] killed cached old WebContent {old_pid} ({fp} MB)"));
-    });
+    candidates
+        .iter()
+        .filter(|(pid, footprint)| *pid != live_pid && *footprint >= SWEEP_FLOOR)
+        .map(|(pid, _)| *pid)
+        .collect()
 }
 
 extern "C" {
+    fn proc_listallpids(buffer: *mut std::ffi::c_void, buffersize: i32) -> i32;
+    // Private libSystem: the process macOS holds responsible — for a WebKit
+    // helper, the app hosting the webview (periscope/resources.py uses it too).
+    fn responsibility_get_pid_responsible_for_pid(pid: i32) -> i32;
     fn proc_pidpath(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
+}
+
+/// (pid, footprint) of every WebContent process this app is responsible for.
+fn app_webcontents() -> Vec<(i32, u64)> {
+    let me = std::process::id() as i32;
+    let mut pids = vec![0i32; 8192];
+    // buffersize is in bytes; the return value is a count of pids.
+    let n = unsafe {
+        proc_listallpids(pids.as_mut_ptr() as *mut std::ffi::c_void, (pids.len() * 4) as i32)
+    };
+    pids.truncate(n.max(0) as usize);
+    pids.into_iter()
+        .filter(|&pid| pid > 0 && unsafe { responsibility_get_pid_responsible_for_pid(pid) } == me)
+        .filter(|&pid| {
+            let mut buf = [0u8; 4096];
+            let len = unsafe {
+                proc_pidpath(pid, buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len() as u32)
+            };
+            len > 0 && String::from_utf8_lossy(&buf[..len as usize]).contains("WebKit.WebContent")
+        })
+        .filter_map(|pid| phys_footprint(pid).map(|fp| (pid, fp)))
+        .collect()
+}
+
+fn sweep(live_pid: i32) {
+    for pid in sweep_targets(&app_webcontents(), live_pid) {
+        let fp = phys_footprint(pid).unwrap_or(0) / (1024 * 1024);
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        shell_log(&format!("[recycle] killed leftover WebContent {pid} ({fp} MB)"));
+    }
 }
 
 #[cfg(test)]
@@ -359,6 +391,19 @@ mod tests {
         assert!(!should_recycle(&inputs(3 * GB, 30 * MIN, None, 299)));
         assert!(should_recycle(&inputs(3 * GB, 30 * MIN, None, 300)));
     }
+
+    const MB: u64 = 1024 * 1024;
+
+    #[test]
+    fn sweep_takes_big_renderers_other_than_the_live_one() {
+        let candidates = [(10, 2048 * MB), (11, 7 * MB), (12, 300 * MB), (13, 255 * MB)];
+        assert_eq!(sweep_targets(&candidates, 10), vec![12]);
+    }
+
+    #[test]
+    fn sweep_does_nothing_while_the_live_renderer_is_unknown() {
+        assert!(sweep_targets(&[(12, 4096 * MB)], 0).is_empty());
+    }
 }
 
 pub fn start_monitor(app: &AppHandle) {
@@ -378,12 +423,13 @@ pub fn start_monitor(app: &AppHandle) {
         ));
         loop {
             std::thread::sleep(Duration::from_secs(CHECK_INTERVAL_S));
-            // pid read must touch the webview → main thread; measurement and
-            // policy stay here on the worker.
-            let h = handle.clone();
-            let _ = handle.run_on_main_thread(move || refresh_webcontent_pid(&h));
-            std::thread::sleep(Duration::from_millis(200));
-            let pid = WEBCONTENT_PID.load(Ordering::Relaxed);
+            let Some(pid) = read_webcontent_pid(&handle) else {
+                continue; // main thread busy: no fresh pid, so no sweep and no recycle this tick
+            };
+            WEBCONTENT_PID.store(pid, Ordering::Relaxed);
+            if !RECYCLING.load(Ordering::SeqCst) {
+                sweep(pid);
+            }
             let Some(fp) = phys_footprint(pid) else {
                 continue;
             };
