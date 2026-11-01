@@ -53,24 +53,29 @@ but later builds the window, its `Ok` reaches the channel before the "already ex
 behind it; the loop takes that `Ok` as the success it is (clearing `RECYCLING`). An "already exists" that arrives
 first still means the old window is registered, so the loop keeps retrying as today. No error text is matched.
 
-**D4 — A rebuild never activates the app unless periscope had focus.** `recycle_now` notes `focus::is_focused()`
-before `destroy()`. The rebuild builds the window `.focused(false)`, restores every saved state except visibility
-(`StateFlags::all() - StateFlags::VISIBLE`), shows it, and calls `set_focus()` only when periscope had focus — so the
-manual menu recycle keeps the window focused, and an unfocused-gate recycle leaves you in your terminal. It also
-records the rebuild time for D1's minimum age.
+**D4 — A rebuild doesn't force focus unless periscope had it.** `recycle_now` notes `focus::is_focused()`
+before `destroy()`. The rebuild restores every saved state except visibility
+(`StateFlags::all() - StateFlags::VISIBLE`), which removes the plugin's forced `activateIgnoringOtherApps: YES`, and
+calls `set_focus()` only when periscope had focus — so the manual menu recycle keeps the window focused. wry still
+calls `NSApplication::activate` for every webview it creates (macOS 14+), but that request is cooperative: macOS may
+decline it while another app is frontmost. Whether it does is the manual test's first question. It also records the
+rebuild time for D1's minimum age.
 
 **D5 — Every check sweeps leftover renderers, but only with a fresh live pid; the after-recycle reaper goes.** Once
 per `CHECK_INTERVAL_S`, the live WebContent pid is read on the main thread and the answer comes back on a channel
-with a timeout; the sweep runs only when this tick's read answered with a pid (and no recycle is in flight), so a
-stale pid after an unannounced renderer restart (wry reloads the page itself when its WebContent dies) can never be
-mistaken for a leftover. With no `main` window the pid is reset to 0. The sweep SIGKILLs every other WebContent the
-app is responsible for at or above 256 MB: candidates come from `proc_listallpids`, kept when their executable path
-(`proc_pidpath`) contains `WebKit.WebContent` and their responsible pid
-(`responsibility_get_pid_responsible_for_pid`, private libSystem, the call `periscope/resources.py` also uses) is
-this process. The floor spares WebKit's ~7 MB pre-warmed spare; the smallest displaced renderer the reaper ever
-killed was 522 MB. This one path replaces `reap_old_webcontent`'s 10 s kill: it covers a normal recycle (within one
-check, ≤ 60 s), a rebuild that gave up, and anything else that leaves one parked. Renderers left by an older run of
-the app die with it, so quitting the current app clears today's 41485.
+with a timeout; the sweep runs only when this tick's read answered with a pid and no recycle is in flight, and each
+kill re-checks both (recycle flag, rebuild time) immediately before signalling, so a stale pid after an unannounced
+renderer restart (wry reloads the page itself when its WebContent dies) or a recycle that finished mid-sweep is not
+mistaken for a leftover; what remains is a microsecond gap against a crash-reload, whose cost is one page reload.
+With no `main` window the pid is reset to 0. The sweep SIGKILLs every other WebContent the app is responsible for at
+or above 256 MB: candidates come from `proc_listallpids`, kept when their executable path (`proc_pidpath`) contains
+`WebKit.WebContent` and their responsible pid (`responsibility_get_pid_responsible_for_pid`, private libSystem, the
+call `periscope/resources.py` also uses) is this process. The floor spares WebKit's ~7 MB pre-warmed spare; the
+smallest displaced renderer the reaper ever killed was 522 MB. This one path replaces `reap_old_webcontent`'s 10 s
+kill: it covers a normal recycle (within one check, ≤ 60 s), a rebuild that gave up but left a window, and anything
+else that leaves one parked. (A give-up that left no window reads a live pid of 0 and sweeps nothing; quitting the
+app clears those renderers.) Renderers left by an older run of the app die with it, so quitting the current app
+clears today's 41485.
 
 **D6 — Policy is pure and unit-tested; the OS calls stay thin.** `should_recycle(Inputs) -> bool` and
 `sweep_targets(candidates, live_pid) -> Vec<pid>` hold the decisions and get `cargo test` cases next to
@@ -108,10 +113,19 @@ the app die with it, so quitting the current app clears today's 41485.
 
 ## Assumptions
 
+- wry's per-webview `NSApplication::activate` (macOS 14+) is declined while another app is frontmost, so an
+  unfocused-gate recycle leaves you where you are. If the manual test shows focus being taken, the fix is to record
+  the frontmost app before the rebuild and hand activation back to it.
+- A window shown while the app is inactive doesn't emit `Focused(true)`: after an unfocused recycle the next "waiting"
+  line must still read "unfocused Ns" with the time still counting, or the unfocused gate would be stuck.
+- The app has exactly one legitimate WebContent ≥ 256 MB. A service-worker renderer (`main.jsx` registers `/sw.js`)
+  or a future WebKit site-isolation process would break that; today's listing shows none.
+- Bad knob values (negative, NaN, infinite) fall back to the default rather than stopping the monitor thread.
+
 - `Focused(false)` fires on app switch and ⌘H (tao's `windowDidResignKey`; verified in source). Whether it fires on
   minimize is untested; if not, the idle gate still covers a minimized periscope.
-- A window built `.focused(false)` and shown with `show()` (`makeKeyAndOrderFront`) while the app is inactive does
-  not activate the app or cover the frontmost app's window. Verify in the manual test.
+- The rebuilt window, shown while the app is inactive, doesn't cover the frontmost app's window. Verify in the manual
+  test.
 - `proc_listallpids` takes a byte size and returns a count; it and `responsibility_get_pid_responsible_for_pid` link
   from Rust without a `#[link]` attribute (both verified in a scratch binary).
 - A displaced renderer is ≥ 256 MB by the time a check sees it; a smaller one is left until it grows or exits.
