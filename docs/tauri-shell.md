@@ -38,15 +38,28 @@ process, memory_pressure doesn't reclaim, synthetic events don't even
 reproduce it. The shell therefore destroys and recreates the webview window
 when the renderer's phys_footprint (via WKWebView's private
 `_webProcessIdentifier` + `proc_pid_rusage`) tops `PERISCOPE_RECYCLE_GB`
-(default 1.0) AND system input has been idle `PERISCOPE_RECYCLE_IDLE_S`
-(default 300s) — plus a manual View → Recycle Webview item. Two hard-won
-invariants: the rebuild must happen on a LATER tick than destroy() (same-tick
-rebuild exits the whole app; an ExitRequested veto in main.rs covers the
-windowless gap), and the displaced WebContent must be SIGKILLed after a grace
-period (WebKit parks it in its process cache at full leaked size instead of
-exiting — pid-identity-checked via proc_pidpath before the kill). Actions log
-to `~/.config/periscope/shell.log`. Test by lowering the thresholds via
-`launchctl setenv` (GUI apps don't inherit shell env) and watching that log.
+(default 2.0), the renderer has lived `PERISCOPE_RECYCLE_MIN_AGE_S` (default
+1800s) since the last rebuild, and either periscope has been unfocused
+`PERISCOPE_RECYCLE_UNFOCUSED_S` (default 30s) or system input has been idle
+`PERISCOPE_RECYCLE_IDLE_S` (default 300s) — plus a manual View → Recycle
+Webview item with no gate. The rebuild restores every saved window state but
+visibility and takes focus only if periscope had it when the recycle
+started, so a recycle firing while you've left for another app never pulls
+you back; every rebuild attempt's closure sends its result on one shared
+channel, so an attempt that times out but later builds the window still
+counts as the success it is instead of the loop giving up with the renderer
+leaked. Two hard-won invariants: the rebuild must happen on a LATER tick than
+destroy() (same-tick rebuild exits the whole app; an ExitRequested veto in
+main.rs covers the windowless gap), and a WebContent WebKit parks in its
+process cache at full leaked size instead of exiting must still be killed —
+every check re-reads the live WebContent pid on the main thread and, once
+that read answers with no recycle in flight, SIGKILLs any other app-owned
+WebContent (by `proc_listallpids` + `responsibility_get_pid_responsible_for_pid`)
+at or above 256 MB, sparing WebKit's ~7 MB pre-warmed spare. Actions log to
+`~/.config/periscope/shell.log`. Test by lowering `PERISCOPE_RECYCLE_GB`,
+`PERISCOPE_RECYCLE_MIN_AGE_S`, `PERISCOPE_RECYCLE_UNFOCUSED_S` and
+`PERISCOPE_RECYCLE_IDLE_S` via `launchctl setenv` (GUI apps don't inherit
+shell env; unset afterwards) and watching that log.
 
 **Zoom (`src-tauri/src/zoom.rs`).** A bare WKWebView has no ⌘+/⌘−, so
 View carries Zoom In (⌘=), Zoom Out (⌘-) and Actual Size (⌘0), stepping
