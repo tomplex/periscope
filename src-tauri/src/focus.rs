@@ -7,7 +7,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq)]
 enum Focus {
     Unknown, // launch, before the first window event
     Focused,

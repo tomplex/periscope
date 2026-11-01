@@ -46,31 +46,37 @@ fn env_f64(name: &str, default: f64) -> f64 {
 
 // A fresh dashboard already measures 1.1–1.6 GB; leaked renderers reach 3–7.7.
 fn threshold_bytes() -> u64 {
-    (env_f64("PERISCOPE_RECYCLE_GB", 2.0) * 1024.0 * 1024.0 * 1024.0) as u64
+    let gb = env_f64("PERISCOPE_RECYCLE_GB", 2.0);
+    let gb = if gb.is_finite() && gb >= 0.0 { gb } else { 2.0 };
+    (gb * 1024.0 * 1024.0 * 1024.0) as u64
 }
 
-fn idle_gate_s() -> f64 {
-    env_f64("PERISCOPE_RECYCLE_IDLE_S", 300.0)
-}
-
-fn unfocused_gate_s() -> f64 {
-    env_f64("PERISCOPE_RECYCLE_UNFOCUSED_S", 30.0)
-}
-
-fn min_age_s() -> f64 {
-    env_f64("PERISCOPE_RECYCLE_MIN_AGE_S", 1800.0)
+// Duration::from_secs_f64 panics on a negative, NaN, infinite or overflowing
+// value, and "inf"/"-1"/"1e30" all parse as f64 — a bad knob must not kill
+// the monitor thread.
+fn env_secs(name: &str, default_s: u64) -> Duration {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .and_then(|s| Duration::try_from_secs_f64(s).ok())
+        .unwrap_or(Duration::from_secs(default_s))
 }
 
 // When the current renderer was built (the app's start, then each rebuild):
-// D1's minimum age, so a fresh renderer that is already big can't loop.
+// PERISCOPE_RECYCLE_MIN_AGE_S's minimum age, so a fresh renderer that is
+// already big can't loop.
 static RENDERER_BORN: Mutex<Option<Instant>> = Mutex::new(None);
 
 fn mark_renderer_born() {
     *RENDERER_BORN.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
 }
 
+fn renderer_born_at() -> Option<Instant> {
+    *RENDERER_BORN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn renderer_age() -> Duration {
-    RENDERER_BORN.lock().unwrap_or_else(|e| e.into_inner()).map_or(Duration::ZERO, |t| t.elapsed())
+    renderer_born_at().map_or(Duration::ZERO, |t| t.elapsed())
 }
 
 struct Inputs {
@@ -150,13 +156,14 @@ fn seconds_since_last_input() -> f64 {
     unsafe { CGEventSourceSecondsSinceLastEventType(1, u32::MAX) }
 }
 
-// --- WebContent pid off the live WKWebView (main thread only) ---
+// --- WebContent pid off the live WKWebView (the read dispatches to the main thread) ---
 
 /// The live WebContent pid, read off the WKWebView on the main thread. 0 with
-/// no `main` window or an OS without the selector; None when the main thread
-/// didn't answer in time — a stale pid must never reach the sweep (wry reloads
-/// the page itself when its WebContent dies, so the live pid can change
-/// without a recycle).
+/// no `main` window or an OS without the selector; None with no fresh pid —
+/// the window going away, with_webview failing, or no answer within the
+/// timeout — a stale pid must never reach the sweep (wry reloads the page
+/// itself when its WebContent dies, so the live pid can change without a
+/// recycle).
 fn read_webcontent_pid(app: &AppHandle) -> Option<i32> {
     let Some(window) = app.get_webview_window("main") else {
         return Some(0);
@@ -250,15 +257,18 @@ pub fn recycle_now(app: &AppHandle) {
                 // recycle silently broke rail reordering until the app was
                 // relaunched.
                 .disable_drag_drop_handler()
-                .focused(false)
                 .build();
                 let _ = tx.send(match result {
                     Ok(window) => {
-                        // Everything but visibility: the plugin's VISIBLE restore
-                        // calls set_focus, i.e. activateIgnoringOtherApps — it would
-                        // pull you out of the app you left periscope for.
+                        // wry 0.55 calls NSApplication::activate on every webview it
+                        // builds on macOS 14+, regardless of `focused` — so a
+                        // `.focused(false)` builder flag and an explicit `show()`
+                        // changed nothing (the builder's default window is already
+                        // visible). Restoring everything but VISIBLE is what drops
+                        // the forced activateIgnoringOtherApps: YES; wry's own
+                        // activate() is cooperative, so macOS may decline it while
+                        // another app is frontmost (verified by the manual test).
                         let _ = window.restore_state(StateFlags::all() - StateFlags::VISIBLE);
-                        let _ = window.show();
                         if was_focused {
                             let _ = window.set_focus();
                         }
@@ -281,7 +291,9 @@ pub fn recycle_now(app: &AppHandle) {
                     RECYCLING.store(false, Ordering::SeqCst);
                     return;
                 }
-                Ok(Err(e)) => shell_log(&format!("[recycle] rebuild attempt {attempt} failed: {e}")),
+                // The channel is shared across every attempt, so a late Err can
+                // surface here for an earlier attempt than `attempt` names.
+                Ok(Err(e)) => shell_log(&format!("[recycle] a rebuild attempt failed: {e}")),
                 Err(_) => shell_log(&format!("[recycle] rebuild attempt {attempt} timed out")),
             }
         }
@@ -300,14 +312,14 @@ pub fn recycle_now(app: &AppHandle) {
 // that gave up, and anything else that leaves one behind.
 const SWEEP_FLOOR: u64 = 256 * 1024 * 1024;
 
-fn sweep_targets(candidates: &[(i32, u64)], live_pid: i32) -> Vec<i32> {
+fn sweep_targets(candidates: &[(i32, u64)], live_pid: i32) -> Vec<(i32, u64)> {
     if live_pid <= 0 {
         return Vec::new(); // the live renderer could be among them
     }
     candidates
         .iter()
+        .copied()
         .filter(|(pid, footprint)| *pid != live_pid && *footprint >= SWEEP_FLOOR)
-        .map(|(pid, _)| *pid)
         .collect()
 }
 
@@ -325,7 +337,10 @@ fn app_webcontents() -> Vec<(i32, u64)> {
     let mut pids = vec![0i32; 8192];
     // buffersize is in bytes; the return value is a count of pids.
     let n = unsafe {
-        proc_listallpids(pids.as_mut_ptr() as *mut std::ffi::c_void, (pids.len() * 4) as i32)
+        proc_listallpids(
+            pids.as_mut_ptr() as *mut std::ffi::c_void,
+            std::mem::size_of_val(pids.as_slice()) as i32,
+        )
     };
     pids.truncate(n.max(0) as usize);
     pids.into_iter()
@@ -341,9 +356,15 @@ fn app_webcontents() -> Vec<(i32, u64)> {
         .collect()
 }
 
-fn sweep(live_pid: i32) {
-    for pid in sweep_targets(&app_webcontents(), live_pid) {
-        let fp = phys_footprint(pid).unwrap_or(0) / (1024 * 1024);
+// `renderer_born` is the value RENDERER_BORN held when the live pid was read;
+// a recycle can finish between that read and a kill here, so every kill is
+// rechecked against the live state instead of trusting the snapshot.
+fn sweep(live_pid: i32, renderer_born: Option<Instant>) {
+    for (pid, footprint) in sweep_targets(&app_webcontents(), live_pid) {
+        if RECYCLING.load(Ordering::SeqCst) || renderer_born_at() != renderer_born {
+            continue; // a rebuild landed since the pid read; this candidate may now be live
+        }
+        let fp = footprint / (1024 * 1024);
         unsafe { libc::kill(pid, libc::SIGKILL) };
         shell_log(&format!("[recycle] killed leftover WebContent {pid} ({fp} MB)"));
     }
@@ -392,12 +413,33 @@ mod tests {
         assert!(should_recycle(&inputs(3 * GB, 30 * MIN, None, 300)));
     }
 
+    #[test]
+    fn env_secs_falls_back_on_bad_values() {
+        assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_UNSET", 7), Duration::from_secs(7));
+
+        std::env::set_var("PERISCOPE_TEST_ENV_SECS_INF", "inf");
+        assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_INF", 7), Duration::from_secs(7));
+
+        std::env::set_var("PERISCOPE_TEST_ENV_SECS_NEG", "-1");
+        assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_NEG", 7), Duration::from_secs(7));
+
+        std::env::set_var("PERISCOPE_TEST_ENV_SECS_OK", "45");
+        assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_OK", 7), Duration::from_secs_f64(45.0));
+    }
+
+    #[test]
+    fn threshold_bytes_falls_back_on_bad_gb() {
+        std::env::set_var("PERISCOPE_RECYCLE_GB", "-1");
+        assert_eq!(threshold_bytes(), (2.0 * 1024.0 * 1024.0 * 1024.0) as u64);
+        std::env::remove_var("PERISCOPE_RECYCLE_GB");
+    }
+
     const MB: u64 = 1024 * 1024;
 
     #[test]
     fn sweep_takes_big_renderers_other_than_the_live_one() {
         let candidates = [(10, 2048 * MB), (11, 7 * MB), (12, 300 * MB), (13, 255 * MB)];
-        assert_eq!(sweep_targets(&candidates, 10), vec![12]);
+        assert_eq!(sweep_targets(&candidates, 10), vec![(12, 300 * MB)]);
     }
 
     #[test]
@@ -411,9 +453,9 @@ pub fn start_monitor(app: &AppHandle) {
     let handle = app.clone();
     std::thread::spawn(move || {
         let threshold = threshold_bytes();
-        let min_age = Duration::from_secs_f64(min_age_s());
-        let unfocused_gate = Duration::from_secs_f64(unfocused_gate_s());
-        let idle_gate = Duration::from_secs_f64(idle_gate_s());
+        let min_age = env_secs("PERISCOPE_RECYCLE_MIN_AGE_S", 1800);
+        let unfocused_gate = env_secs("PERISCOPE_RECYCLE_UNFOCUSED_S", 30);
+        let idle_gate = env_secs("PERISCOPE_RECYCLE_IDLE_S", 300);
         shell_log(&format!(
             "[recycle] monitor started (threshold {} MB, min age {}s, unfocused gate {}s, idle gate {}s)",
             threshold / (1024 * 1024),
@@ -423,12 +465,13 @@ pub fn start_monitor(app: &AppHandle) {
         ));
         loop {
             std::thread::sleep(Duration::from_secs(CHECK_INTERVAL_S));
+            let renderer_born = renderer_born_at(); // snapshot before the pid read; sweep rechecks against it
             let Some(pid) = read_webcontent_pid(&handle) else {
-                continue; // main thread busy: no fresh pid, so no sweep and no recycle this tick
+                continue; // no fresh pid: no sweep and no recycle this tick
             };
             WEBCONTENT_PID.store(pid, Ordering::Relaxed);
             if !RECYCLING.load(Ordering::SeqCst) {
-                sweep(pid);
+                sweep(pid, renderer_born);
             }
             let Some(fp) = phys_footprint(pid) else {
                 continue;
@@ -436,20 +479,22 @@ pub fn start_monitor(app: &AppHandle) {
             if fp < threshold {
                 continue;
             }
+            let unfocused_for = crate::focus::unfocused_for();
+            let is_focused = crate::focus::is_focused(); // read alongside unfocused_for, not later in the log path
             let inputs = Inputs {
                 footprint: fp,
                 threshold,
                 age: renderer_age(),
                 min_age,
-                unfocused_for: crate::focus::unfocused_for(),
+                unfocused_for,
                 unfocused_gate,
-                idle: Duration::from_secs_f64(seconds_since_last_input().max(0.0)),
+                idle: Duration::try_from_secs_f64(seconds_since_last_input()).unwrap_or_default(),
                 idle_gate,
             };
             if !should_recycle(&inputs) {
                 let focus = match inputs.unfocused_for {
                     Some(d) => format!("unfocused {}s", d.as_secs()),
-                    None if crate::focus::is_focused() => "focused".to_string(),
+                    None if is_focused => "focused".to_string(),
                     None => "focus unknown".to_string(),
                 };
                 shell_log(&format!(
