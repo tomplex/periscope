@@ -199,6 +199,7 @@ pub fn recycle_now(app: &AppHandle) {
     if RECYCLING.swap(true, Ordering::SeqCst) {
         return; // one at a time
     }
+    let was_focused = crate::focus::is_focused(); // before destroy() sets focus to false
     let old_pid = WEBCONTENT_PID.load(Ordering::Relaxed);
     let fp = phys_footprint(old_pid).unwrap_or(0);
     shell_log(&format!(
@@ -213,10 +214,17 @@ pub fn recycle_now(app: &AppHandle) {
     }
     let handle = app.clone();
     std::thread::spawn(move || {
+        // One channel for every attempt. The main thread runs the closures in
+        // order, so an attempt that timed out but later built the window sends
+        // its Ok ahead of the "already exists" errors of the attempts queued
+        // behind it — 10-28 20:51 gave up on exactly that and leaked a 1.1 GB
+        // renderer. An "already exists" that comes first is the OLD window still
+        // registered (22 of 440 recycles), and the loop retries as before.
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
         for attempt in 1..=10 {
             std::thread::sleep(Duration::from_millis(if attempt == 1 { 250 } else { 1000 }));
-            let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
             let h = handle.clone();
+            let tx = tx.clone();
             let ok = handle.run_on_main_thread(move || {
                 let result = tauri::WebviewWindowBuilder::new(
                     &h,
@@ -233,13 +241,22 @@ pub fn recycle_now(app: &AppHandle) {
                 // recycle silently broke rail reordering until the app was
                 // relaunched.
                 .disable_drag_drop_handler()
+                .focused(false)
                 .build();
                 let _ = tx.send(match result {
                     Ok(window) => {
-                        let _ = window.restore_state(StateFlags::all());
+                        // Everything but visibility: the plugin's VISIBLE restore
+                        // calls set_focus, i.e. activateIgnoringOtherApps — it would
+                        // pull you out of the app you left periscope for.
+                        let _ = window.restore_state(StateFlags::all() - StateFlags::VISIBLE);
+                        let _ = window.show();
+                        if was_focused {
+                            let _ = window.set_focus();
+                        }
                         // A fresh WKWebView starts at pageZoom 1.0.
                         crate::zoom::apply(&window);
                         WEBCONTENT_PID.store(0, Ordering::Relaxed); // re-learned next tick
+                        mark_renderer_born();
                         Ok(())
                     }
                     Err(e) => Err(e.to_string()),
@@ -386,7 +403,8 @@ pub fn start_monitor(app: &AppHandle) {
             if !should_recycle(&inputs) {
                 let focus = match inputs.unfocused_for {
                     Some(d) => format!("unfocused {}s", d.as_secs()),
-                    None => "focused".to_string(),
+                    None if crate::focus::is_focused() => "focused".to_string(),
+                    None => "focus unknown".to_string(),
                 };
                 shell_log(&format!(
                     "[recycle] over threshold ({} MB), renderer {}s old, {focus}, input {}s ago — waiting",
