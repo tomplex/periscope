@@ -224,9 +224,14 @@ pub fn recycle_now(app: &AppHandle) {
     // Persist the frame for the plugin to restore on the rebuilt window; its
     // own save fires on exit only.
     let _ = app.save_window_state(StateFlags::all());
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.destroy();
-    }
+    let was_minimized = match app.get_webview_window("main") {
+        Some(window) => {
+            let minimized = window.is_minimized().unwrap_or(false);
+            let _ = window.destroy();
+            minimized
+        }
+        None => false,
+    };
     let handle = app.clone();
     std::thread::spawn(move || {
         // One channel for every attempt. The main thread runs the closures in
@@ -263,6 +268,11 @@ pub fn recycle_now(app: &AppHandle) {
                 // with the app you're in.
                 let _ = tx.send(match result {
                     Ok(window) => {
+                        // The builder makes a shown window, and the plugin has no
+                        // minimized state to restore.
+                        if was_minimized {
+                            let _ = window.minimize();
+                        }
                         // A fresh WKWebView starts at pageZoom 1.0.
                         crate::zoom::apply(&window);
                         WEBCONTENT_PID.store(0, Ordering::Relaxed); // re-learned next tick
