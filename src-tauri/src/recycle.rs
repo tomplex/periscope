@@ -361,19 +361,14 @@ fn app_webcontents() -> Vec<i32> {
         .collect()
 }
 
-// `renderer_born` is the value RENDERER_BORN held when the live pid was read;
-// a recycle can finish between that read and a kill here, so every kill is
-// rechecked against the live state instead of trusting the snapshot.
-fn sweep(live_pid: i32, renderer_born: Option<Instant>) {
-    let candidates = app_webcontents();
-    let targets = sweep_targets(&candidates, &mut live_renderers().seen, live_pid);
-    for pid in targets {
-        if RECYCLING.load(Ordering::SeqCst) || renderer_born_at() != renderer_born {
-            continue; // a rebuild landed since the pid read; this candidate may now be live
+/// Kills each target while `still_valid` holds, rechecked before every kill: a
+/// recycle can finish mid-sweep and make a target the live renderer.
+fn sweep(targets: &[i32], still_valid: impl Fn() -> bool, mut kill: impl FnMut(i32)) {
+    for &pid in targets {
+        if !still_valid() {
+            return;
         }
-        let fp = phys_footprint(pid).unwrap_or(0) / (1024 * 1024);
-        unsafe { libc::kill(pid, libc::SIGKILL) };
-        shell_log(&format!("[recycle] killed leftover WebContent {pid} ({fp} MB)"));
+        kill(pid);
     }
 }
 
@@ -466,6 +461,21 @@ mod tests {
         assert_eq!(sweep_targets(&[10, 12], &mut seen, 10), vec![12]);
         assert_eq!(seen, BTreeSet::from([10, 12]));
     }
+
+    #[test]
+    fn sweep_stops_killing_once_the_recheck_fails() {
+        let valid = std::cell::Cell::new(true);
+        let mut killed = Vec::new();
+        sweep(
+            &[12, 13, 14],
+            || valid.get(),
+            |pid| {
+                killed.push(pid);
+                valid.set(false); // a rebuild landed after the first kill
+            },
+        );
+        assert_eq!(killed, vec![12]);
+    }
 }
 
 pub fn start_monitor(app: &AppHandle) {
@@ -490,7 +500,16 @@ pub fn start_monitor(app: &AppHandle) {
                 continue; // no fresh pid: no sweep and no recycle this tick
             };
             if !RECYCLING.load(Ordering::SeqCst) {
-                sweep(pid, renderer_born);
+                let targets = sweep_targets(&app_webcontents(), &mut live_renderers().seen, pid);
+                sweep(
+                    &targets,
+                    || !RECYCLING.load(Ordering::SeqCst) && renderer_born_at() == renderer_born,
+                    |target| {
+                        let fp = phys_footprint(target).unwrap_or(0) / (1024 * 1024);
+                        unsafe { libc::kill(target, libc::SIGKILL) };
+                        shell_log(&format!("[recycle] killed leftover WebContent {target} ({fp} MB)"));
+                    },
+                );
             }
             {
                 let mut renderers = live_renderers();
