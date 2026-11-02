@@ -3,6 +3,7 @@
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Manager;
+use tauri_plugin_window_state::StateFlags;
 
 mod focus;
 mod notifications;
@@ -19,7 +20,15 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Everything but VISIBLE: the plugin restores state on every window it
+        // sees, each recycle's rebuild included, and its VISIBLE restore calls
+        // set_focus (activateIgnoringOtherApps: YES), pulling you out of the
+        // app you're in. tauri.conf.json already shows the startup window.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // macOS expects an App menu with at least Quit; without a menu
