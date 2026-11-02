@@ -3,7 +3,9 @@
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Manager;
+use tauri_plugin_window_state::StateFlags;
 
+mod focus;
 mod notifications;
 mod recycle;
 mod text_behavior;
@@ -18,7 +20,15 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Everything but VISIBLE: the plugin restores state on every window it
+        // sees, each recycle's rebuild included, and its VISIBLE restore calls
+        // set_focus (activateIgnoringOtherApps: YES), pulling you out of the
+        // app you're in. tauri.conf.json already shows the startup window.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // macOS expects an App menu with at least Quit; without a menu
@@ -131,19 +141,17 @@ fn main() {
                 _ => {}
             }
         })
-        // will_present runs on a thread UNUserNotificationCenter chooses, and
-        // only while the app is frontmost; an atomic kept from window events
-        // answers without a round trip to the main thread. A webview recycle
-        // destroys the focused window without a Focused(false) first — tao's
-        // windowWillClose drops its delegate before that fires — so Destroyed
-        // resets it too.
+        // focus.rs keeps the window's focus for readers off the main thread.
+        // A webview recycle destroys the focused window without a
+        // Focused(false) first — tao's windowWillClose drops its delegate
+        // before that fires — so Destroyed resets it too.
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
             }
             match event {
-                tauri::WindowEvent::Focused(focused) => notifications::set_focused(*focused),
-                tauri::WindowEvent::Destroyed => notifications::set_focused(false),
+                tauri::WindowEvent::Focused(focused) => focus::set_focused(*focused),
+                tauri::WindowEvent::Destroyed => focus::set_focused(false),
                 _ => {}
             }
         })

@@ -32,7 +32,7 @@
 // banners carry no buttons; an older webview registers none.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use block2::{DynBlock, RcBlock};
 use objc2::rc::{autoreleasepool, Retained};
@@ -70,16 +70,6 @@ const ID_PREFIX: &str = "periscope-route|";
 const INFO_KEY: &str = "periscope";
 
 static SEQ: AtomicUsize = AtomicUsize::new(0);
-
-/// Whether the dashboard window has focus, kept by main.rs's window events.
-/// will_present runs on a thread UNUserNotificationCenter chooses, and only
-/// while the app is frontmost; an atomic kept from window events answers
-/// without a round trip to the main thread.
-static FOCUSED: AtomicBool = AtomicBool::new(false);
-
-pub fn set_focused(focused: bool) {
-    FOCUSED.store(focused, Ordering::Relaxed);
-}
 
 /// `#[serde(default)]` alone only covers a *missing* field — `"subtitle":
 /// null` still deserializes to `None`/unit and fails the `String` field,
@@ -408,7 +398,7 @@ define_class!(
         ) {
             let quiet =
                 info_of(&notification.request().content()).is_some_and(|i| i.quiet_when_focused);
-            let options = if should_present(quiet, FOCUSED.load(Ordering::Relaxed)) {
+            let options = if should_present(quiet, crate::focus::is_focused()) {
                 UNNotificationPresentationOptions::Banner
                     | UNNotificationPresentationOptions::List
                     | UNNotificationPresentationOptions::Sound
