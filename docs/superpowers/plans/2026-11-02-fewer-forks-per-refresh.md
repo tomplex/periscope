@@ -4,37 +4,40 @@
 
 **Goal:** `build_state` measures its own cost, forks one `tmux` and one `ps` per refresh instead of six processes, keeps git off the request path, and runs every `gh` without a keychain read (THI-450; spec `docs/superpowers/specs/2026-11-02-fewer-forks-per-refresh-design.md`).
 
-**Architecture:** A Python audit hook (`periscope/forks.py`) counts every `subprocess.Popen` by command over a rolling minute; `build_state` and the state hub record their timings there and `/api/state` reports them as `refresh`. One `list-panes -a` (`tmux.list_panes`, refreshed by every `list_windows`) and one `ps` (`agent_processes.process_snapshot`) feed every per-refresh reader; git reads two commands per cwd behind a jittered stale-while-revalidate cache, and `gh` goes through one `gh.run` that carries a token read once an hour.
+**Architecture:** A Python audit hook (`periscope/forks.py`) counts every `subprocess.Popen` by command over a rolling minute; `build_state` and the state hub record their timings there and `/api/state` reports them as `refresh`. One `list-panes -a` (`tmux.list_panes`, refreshed by every `list_windows`) and one locale-pinned `ps` (`agent_processes.process_snapshot`, executable from argv[0]) feed every per-refresh reader; git reads two commands per cwd behind a jittered stale-while-revalidate cache, and `gh` goes through one `gh.run` that carries a token read every 10 minutes.
 
-**Tech Stack:** Python 3.14 / FastAPI / pytest + pytest-mock; Preact + `@preact/signals`, Vite, vitest; tmux, git (porcelain v2), gh.
+**Tech Stack:** Python 3.14 / FastAPI / pytest + pytest-mock; Preact + `@preact/signals`, Vite, vitest; tmux, git (porcelain v2), gh, macOS `ps`.
 
 ---
 
 ## Conventions
 
 - **Worktree:** `/Users/thibaultdody/dev/worktrees/periscope/thi-450-fewer-forks` (branch `thibaultdody/thi-450-build_state-runs-too-many-subprocesses-per-tick-so-the`). Every path below is relative to it. Never touch the prod tree `/Users/thibaultdody/github/tomplex/periscope` or anything on `:17374`.
-- **Read first:** the spec, `docs/invariants.md` (#1, #8, #11, #13, #18, #19), `docs/testing.md`, `tests/conftest.py`.
+- **First, once:** the worktree has no `.venv` and the repo pins no Python, so uv would pick CPython 3.15 and fail to build watchfiles. Run `uv venv --python 3.14 && uv sync` (prod's `../main/.venv` is 3.14.7). It also has no `node_modules`: run `npm install` before any `npm`/`npx` command.
+- **Read first:** the spec, `docs/invariants.md` (#1, #8, #11, #13, #14, #18, #19), `docs/testing.md`, `tests/conftest.py`.
 - **Python tests:** `uv run pytest -q <paths>`; full suite `uv run pytest -q`.
-- **Frontend:** the worktree has no `node_modules` — run `npm install` once before any `npm`/`npx` command. Tests `npm test`; build `npm run build`.
+- **Frontend:** `npm test`; build `npm run build`.
 - **Gate:** `bin/check; echo "exit=$?"` — read the real exit code, never pipe it through `tail`/`head`.
 - **Before each commit:** `uv run ruff check --fix <py paths> && uv run ruff format <py paths>` on the task's Python files (sorts imports the steps add).
 - **Commits:** one per task, single-line subject `area: what (THI-450)`, a blank line, then the implementing model's attribution line. Commit only the task's paths: new files need `git add <file>` first, then `git commit -m "<subject>" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- <paths>`. Replace the Co-Authored-By line with your own model's if you are not Claude Opus 5.5.
 - **Background work** goes through `periscope.log._bg` (invariant #8). Tests never start a real background thread for it: they patch the module's `_bg`, as `test_reviews.py` already does.
-- **No test forks real tmux, ps or gh.** `tests/conftest.py` seeds each new snapshot cache with an unexpiring empty entry (the `_config_dirs_cache` pattern `test_session_status.py` already uses); a test of the real path resets the seed itself.
+- **No test forks real tmux, ps or gh by accident.** `tests/conftest.py` seeds each new snapshot cache with an unexpiring empty entry (the `_config_dirs_cache` pattern `test_session_status.py` already uses); a test of the real path resets the seed itself. Two tests fork on purpose: the live-tmux oracle (Task 4) and the live-`ps` executable test (Task 3).
 
 ## File structure
 
 | File | Change | Responsibility |
 |---|---|---|
 | `periscope/forks.py` | Create | Audit hook, rolling fork counter, build/gap timings, the `refresh` block |
-| `periscope/app.py` | Modify (lifespan, ~L54–58) | Install the hook |
+| `periscope/app.py` | Modify (lifespan, first lines) | Install the hook |
 | `periscope/routes/state.py` | Modify (L16, L69, L167–208) | Time `build_state`; add `refresh` to the blob |
-| `periscope/state_hub.py` | Modify (imports, `_run_loop` L96–111) | Record the gap between broadcasts |
+| `periscope/routes/healthz.py` | Modify (imports, `healthz`) | The full per-command `forks` map |
+| `periscope/state_hub.py` | Modify (imports, `_run_loop` L96–111) | Record the gap between broadcasts, reset on idle |
+| `periscope/agent_processes.py` | Modify (`ProcessInfo`, `_PS_ROW_RE`, `parse_ps_snapshot`, `_take_snapshot`, `_is_codex_executable`) | `args`-only `ps` under `LC_ALL=C`; `exe` from argv[0] |
 | `periscope/session_status.py` | Modify (L29–58, L128–241, L243–259) | `proc_table` / `_claude_procs` from `process_snapshot`; `_tmux_pane_pids` from `tmux.recent_panes`; `parse_etime` deleted |
 | `periscope/window_view.py` | Modify (comment L164–171) | Comment names the shared snapshot |
-| `periscope/tmux.py` | Modify (imports, `_run` L33–43, new section) | `list_panes` / `recent_panes`; `_run(env=)` |
+| `periscope/tmux.py` | Modify (imports, `_run` L33–43, new section) | `list_panes` / `recent_panes` (`\x1f`-separated); `_run(env=)` |
 | `periscope/panes.py` | Modify (L21, L385–449) | `list_windows` and `all_pane_ids` read `list_panes` / `recent_panes` |
-| `periscope/git_pr.py` | Modify (L18–43, L65–128, gh call sites) | Two-command `git_state_for`, repo-identity cache, SWR `cached_git_state`, `gh.run` |
+| `periscope/git_pr.py` | Modify (L18–43, L65–128, gh call sites) | Two-command `git_state_for` + work-tree-less fallback, identity cache, SWR `cached_git_state`, `gh.run` |
 | `periscope/gh.py` | Create | The one way periscope runs `gh` |
 | `periscope/reviews.py`, `periscope/cleanup.py`, `periscope/projects.py` | Modify (their `gh` call) | Use `gh.run` |
 | `static/src/store.js`, `static/src/poll.js` | Modify | `refresh` signal |
@@ -42,7 +45,9 @@
 | `static/dist/*` | Rebuild | Committed bundle |
 | `tests/conftest.py` | Modify | Seed tmux / ps / gh-token caches; fresh git caches |
 | `tests/test_forks.py`, `tests/test_gh.py` | Create | Hook, counter, stats; gh environment |
-| `tests/test_panes.py`, `tests/test_tmux.py`, `tests/test_session_status.py`, `tests/test_git_pr.py`, `tests/test_reviews.py`, `tests/test_state_hub.py`, `tests/routes/test_state.py` | Modify | Cases per task |
+| `tests/test_agent_processes.py` | Rewrite | Real-format `ps` rows, argv[0], locale, live `ps` |
+| `tests/test_resources.py` | Modify (`_proc`, L67–84) | `ProcessInfo.exe` |
+| `tests/test_panes.py`, `tests/test_tmux.py`, `tests/test_session_status.py`, `tests/test_git_pr.py`, `tests/test_reviews.py`, `tests/test_state_hub.py`, `tests/routes/test_state.py`, `tests/routes/test_healthz.py` | Modify | Cases per task |
 | `static/src/chrome/__tests__/resources.test.js`, `resourcePillRender.test.jsx` | Modify | Refresh line |
 | `docs/invariants.md`, `docs/testing.md`, `CLAUDE.md` | Modify | Snapshot note, conftest seeds, module table |
 
@@ -88,7 +93,7 @@ def _popen(*argv):
         (["git", "-C", "/repo", "status", "--porcelain=v2"], "git status"),
         (["git", "--no-optional-locks", "-C", "repo", "diff", "HEAD"], "git diff"),
         (["/opt/homebrew/bin/tmux", "-L", "periscope-x", "list-panes", "-a"], "tmux list-panes"),
-        (["ps", "-axo", "pid=,ppid=,lstart=,state=,comm=,args="], "ps"),
+        (["ps", "-axo", "pid=,ppid=,lstart=,state=,args="], "ps"),
         (["ps", "eww", "-o", "pid=,command=", "-p", "1,2"], "ps eww"),
         (["gh", "pr", "list", "--head", "x"], "gh pr"),
         (["/bin/sh", "-c", "echo hi"], "sh"),
@@ -101,10 +106,18 @@ def test_command_key_is_the_binary_and_its_subcommand(argv, key):
 
 def test_hook_ignores_every_other_audit_event():
     forks._on_audit("open", ("/etc/hosts", "r", 0))
-    # An argv the key can't be read from is dropped, never raised: raising
-    # would abort the Popen being audited.
-    forks._on_audit("subprocess.Popen", ("x", [], None, None))
+    forks._on_audit("subprocess.Popen", ("x", [], None, None))  # no argv[0]: uncounted
     assert forks.fork_counts() == {}
+
+
+def test_hook_never_raises_into_the_audited_popen(monkeypatch):
+    # An exception escaping an audit hook aborts the Popen it audits.
+    class Broken:
+        def append(self, item):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(forks, "_forks", Broken())
+    _popen("git", "-C", "/r", "status")
 
 
 def test_counts_roll_off_after_a_minute(monkeypatch):
@@ -147,8 +160,11 @@ Expected: collection error `ImportError: cannot import name 'forks' from 'perisc
 
 Counted by a Python audit hook on `subprocess.Popen` — the event
 `subprocess.run`, `check_output` and asyncio's subprocesses all raise — so no
-call site changes and background threads count too."""
+call site changes and background threads count too. It sees only the server's
+own forks: what a child spawns (gh's `security`, `gh send-telemetry`) needs a
+process-tree sample."""
 
+import contextlib
 import os
 import re
 import sys
@@ -194,16 +210,15 @@ def _prune(q: deque, now: float) -> None:
 def _on_audit(event: str, args: tuple[Any, ...]) -> None:
     if event != "subprocess.Popen":
         return
-    # args is (executable, argv, cwd, env). An exception here would abort the
-    # Popen being audited, so an argv the key can't be read from goes uncounted.
-    try:
+    # args is (executable, argv, cwd, env). An exception escaping an audit hook
+    # aborts the Popen it audits, so nothing below may raise: a fork this
+    # can't count goes uncounted.
+    with contextlib.suppress(Exception):
         key = _command_key(args[1])
-    except Exception:
-        return
-    now = time.monotonic()
-    with _lock:
-        _forks.append((now, key))
-        _prune(_forks, now)
+        now = time.monotonic()
+        with _lock:
+            _forks.append((now, key))
+            _prune(_forks, now)
 
 
 def install() -> None:
@@ -254,8 +269,8 @@ git commit -m "forks: an audit hook counts every fork the server makes, by comma
 ## Task 2: Each refresh reports its cost
 
 **Files:**
-- Modify: `periscope/forks.py` (append), `periscope/routes/state.py` (import L16; `build_state` L69 and L167–208), `periscope/state_hub.py` (imports; `_run_loop` L96–111)
-- Test: `tests/test_forks.py`, `tests/routes/test_state.py`, `tests/test_state_hub.py`
+- Modify: `periscope/forks.py` (append), `periscope/routes/state.py` (import L16; `build_state` L69 and L167–208), `periscope/state_hub.py` (imports; `_run_loop` L96–111), `periscope/routes/healthz.py` (import L18; `healthz`)
+- Test: `tests/test_forks.py`, `tests/routes/test_state.py`, `tests/test_state_hub.py`, `tests/routes/test_healthz.py`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -267,6 +282,7 @@ def _fresh_counters(monkeypatch):
     monkeypatch.setattr(forks, "_forks", deque())
     monkeypatch.setattr(forks, "_builds", deque())
     monkeypatch.setattr(forks, "_last_gap", None)
+    monkeypatch.setattr(forks, "_slow_logged_at", None)
 ```
 
 and append:
@@ -315,6 +331,18 @@ def test_a_slow_build_is_logged_with_its_top_forkers(caplog):
     assert "git status" in caplog.text
 
 
+def test_slow_builds_are_logged_at_most_once_a_minute(caplog, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(forks, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    with caplog.at_level(logging.WARNING, logger="periscope"):
+        forks.record_build(3.4)
+        clock[0] += 30
+        forks.record_build(3.5)
+        clock[0] += 31
+        forks.record_build(3.6)
+    assert [r.args[0] for r in caplog.records] == [3.4, 3.6]
+
+
 def test_a_normal_build_logs_nothing(caplog):
     with caplog.at_level(logging.WARNING, logger="periscope"):
         forks.record_build(2.9)
@@ -335,6 +363,19 @@ def test_state_reports_what_the_refresh_cost(client, mocker, clean_state):
     r = client.get("/api/state").json()["refresh"]
     assert set(r) == {"build_s", "build_max_s", "gap_s", "forks_per_min", "top_forks"}
     assert 0 <= r["build_s"] <= r["build_max_s"]
+```
+
+In `tests/routes/test_healthz.py`, append:
+
+```python
+def test_healthz_lists_the_last_minutes_forks(monkeypatch):
+    # The refresh block carries only the top five; measuring needs them all.
+    from collections import Counter
+
+    monkeypatch.setattr(healthz, "_codex_hook_health", dict)
+    monkeypatch.setattr(healthz, "resurrect_status", lambda root: {})
+    monkeypatch.setattr(healthz.forks, "fork_counts", lambda: Counter({"git status": 2, "ps": 1}))
+    assert TestClient(app).get("/api/healthz").json()["forks"] == {"git status": 2, "ps": 1}
 ```
 
 In `tests/test_state_hub.py`, add `import contextlib` to the imports and append:
@@ -373,16 +414,19 @@ def test_run_loop_records_gaps_between_broadcasts_but_not_across_idle(monkeypatc
 
 - [ ] **Step 2: Run them and see them fail**
 
-Run: `uv run pytest -q tests/test_forks.py tests/routes/test_state.py tests/test_state_hub.py`
-Expected: `AttributeError: <module 'periscope.forks'> does not have the attribute '_builds'` from the fixture, `KeyError: 'refresh'` in the route test, and `AttributeError: ... 'periscope.state_hub' ... has no attribute 'forks'` in the hub test.
+Run: `uv run pytest -q tests/test_forks.py tests/routes/test_state.py tests/test_state_hub.py tests/routes/test_healthz.py`
+Expected: `AttributeError: <module 'periscope.forks'> does not have the attribute '_builds'` from the fixture, `KeyError: 'refresh'` in the route test, `AttributeError: … 'periscope.routes.healthz' … 'forks'` and `… 'periscope.state_hub' … has no attribute 'forks'`.
 
 - [ ] **Step 3: Implement**
 
-Append to `periscope/forks.py` (and add `from periscope.log import log` to its imports; update the module docstring's first line to "Every fork the server makes, counted by command over a rolling minute, and what each dashboard refresh costs (/api/state `refresh`)."):
+Append to `periscope/forks.py` (add `from periscope.log import log` to its imports; the module docstring's first line becomes "Every fork the server makes, counted by command over a rolling minute, and what each dashboard refresh costs (/api/state `refresh`)."):
 
 ```python
-# A build this slow is logged with the commands that forked most.
+# A build this slow is logged with the commands that forked most — at most
+# once a minute, since a slow machine makes every build slow.
 _SLOW_BUILD_S = 3.0
+_SLOW_LOG_EVERY_S = 60.0
+_slow_logged_at: float | None = None
 # (monotonic time, build_state seconds), oldest first.
 _builds: deque[tuple[float, float]] = deque()
 # The state hub's last gap between two broadcasts; None until it has made two.
@@ -396,9 +440,14 @@ def _secs(s: float | None) -> float | None:
 def record_build(seconds: float) -> None:
     """Note one build_state's duration; a slow one is logged with the commands
     that forked most over the last minute."""
+    global _slow_logged_at
+    now = time.monotonic()
     with _lock:
-        _builds.append((time.monotonic(), seconds))
-    if seconds > _SLOW_BUILD_S:
+        _builds.append((now, seconds))
+        log_it = seconds > _SLOW_BUILD_S and (_slow_logged_at is None or now - _slow_logged_at >= _SLOW_LOG_EVERY_S)
+        if log_it:
+            _slow_logged_at = now
+    if log_it:
         log.warning(
             "slow refresh: build_state took %.1f s; top forks in the last minute: %s",
             seconds,
@@ -484,6 +533,14 @@ with
 
 These three edits are the whole change to `build_state`.
 
+`periscope/routes/healthz.py`: L18 becomes `from periscope import config, forks`, and `healthz()`'s dict gains, after `"resurrect": …`:
+
+```python
+        # The last minute's forks by command (forks.py); /api/state's
+        # `refresh` carries only the top five.
+        "forks": dict(forks.fork_counts()),
+```
+
 `periscope/state_hub.py`: add `import time` to the stdlib imports and `from periscope import forks` above `from periscope.log import log`; replace `_run_loop` with:
 
 ```python
@@ -516,42 +573,172 @@ async def _run_loop(loop: asyncio.AbstractEventLoop, build_state: Callable[[], d
 
 - [ ] **Step 4: Run the tests and see them pass**
 
-Run: `uv run pytest -q tests/test_forks.py tests/routes/test_state.py tests/test_state_hub.py`
+Run: `uv run pytest -q tests/test_forks.py tests/routes/test_state.py tests/test_state_hub.py tests/routes/test_healthz.py`
 Expected: all pass.
 
 - [ ] **Step 5: Commit** (Task 9 measures "before" at this commit — keep the subject exactly)
 
 ```sh
-uv run ruff check --fix periscope/forks.py periscope/routes/state.py periscope/state_hub.py tests/test_forks.py tests/routes/test_state.py tests/test_state_hub.py && uv run ruff format periscope/forks.py periscope/routes/state.py periscope/state_hub.py tests/test_forks.py tests/routes/test_state.py tests/test_state_hub.py
-git commit -m "state: /api/state reports what each refresh costs (THI-450)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- periscope/forks.py periscope/routes/state.py periscope/state_hub.py tests/test_forks.py tests/routes/test_state.py tests/test_state_hub.py
+uv run ruff check --fix periscope/forks.py periscope/routes/state.py periscope/routes/healthz.py periscope/state_hub.py tests/test_forks.py tests/routes/test_state.py tests/routes/test_healthz.py tests/test_state_hub.py && uv run ruff format periscope/forks.py periscope/routes/state.py periscope/routes/healthz.py periscope/state_hub.py tests/test_forks.py tests/routes/test_state.py tests/routes/test_healthz.py tests/test_state_hub.py
+git commit -m "state: /api/state reports what each refresh costs (THI-450)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- periscope/forks.py periscope/routes/state.py periscope/routes/healthz.py periscope/state_hub.py tests/test_forks.py tests/routes/test_state.py tests/routes/test_healthz.py tests/test_state_hub.py
 ```
 
 ---
 
-## Task 3: One process table per refresh
+## Task 3: One process table per refresh, with whole executables
 
 Done before the tmux snapshot (the suggested order swapped) so that when Task 4 drops conftest's `_tmux_pane_pids` stub, `proc_table` already reads a seeded `ps` snapshot and no test can fork real `ps`.
 
-**Files:**
-- Modify: `periscope/session_status.py` (imports L37; docstring last paragraph; cache block L44–58; delete `parse_etime` L128–148; `_claude_procs` L151–181; `proc_table` L188–218), `periscope/window_view.py` (comment L164–171), `tests/conftest.py` (`_no_live_session_scan`)
-- Test: `tests/test_session_status.py`
+`process_snapshot`'s `ps -axo pid=,ppid=,lstart=,state=,comm=,args=` gets two things wrong on macOS. `comm` is cut to 16 characters when it isn't the last column: `/Users/tom/.local/bin/claude` reads `/Users/tom/.loca`, and `/usr/local/bin/codex` reads `/usr/local/bin/c`, so the codex check misses a codex launched by absolute path (THI-453's main case). And `lstart` prints in the locale (`mer. 30 sept.` under fr_FR), which the row regex can't read, so the whole table comes back empty. The fix drops `comm` from the format, takes the executable from argv[0] (`ProcessInfo.exe`), and runs `ps` with `LC_ALL=C`. Dropping the column also removes a mis-split: `comm` is space-padded to 16 characters, and a short executable path containing a space would break the whitespace split.
 
-- [ ] **Step 1: Write the failing tests** — in `tests/test_session_status.py`:
+**Files:**
+- Modify: `periscope/agent_processes.py` (`ProcessInfo`, `_PS_ROW_RE`, `parse_ps_snapshot`, `_take_snapshot`, `_is_codex_executable`), `periscope/session_status.py` (imports L37; docstring last paragraph; cache block L44–58; delete `parse_etime` L128–148; `_claude_procs` L151–181; `proc_table` L188–218), `periscope/window_view.py` (comment L164–171), `tests/conftest.py` (`_no_live_session_scan`)
+- Test: `tests/test_agent_processes.py` (rewrite), `tests/test_resources.py` (`_proc` + the periscope-app row, L67–84), `tests/test_session_status.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `tests/test_agent_processes.py` with:
+
+```python
+import subprocess
+
+from periscope import agent_processes as ap
+
+# `ps -axo pid=,ppid=,lstart=,state=,args=` rows, shaped as macOS prints them.
+PS = """\
+  100     1 Wed Jul 29 10:00:00 2026     Ss   -zsh
+  101   100 Wed Jul 29 10:00:01 2026     S+   /usr/local/bin/codex --model o4-mini
+  102   100 Wed Jul 29 10:00:02 2026     S    sh -c echo codex
+"""
+
+
+def setup_function():
+    ap.clear_caches()
+
+
+def test_parse_takes_the_executable_from_argv():
+    snapshot = ap.parse_ps_snapshot(PS)
+    codex = snapshot[101]
+    assert (codex.pid, codex.ppid, codex.state) == (101, 100, "S+")
+    assert codex.exe == "/usr/local/bin/codex"
+    assert codex.argv == "/usr/local/bin/codex --model o4-mini"
+    assert snapshot[100].exe == "-zsh"
+
+
+def test_a_french_lstart_reads_nothing():
+    # Why _take_snapshot pins LC_ALL=C: the row regex reads only C-locale dates.
+    assert ap.parse_ps_snapshot("  100     1 mer. 29 juil. 10:00:00 2026     Ss   -zsh\n") == {}
+
+
+def test_snapshot_runs_ps_in_the_c_locale(mocker):
+    ap.clear_caches()
+    run = mocker.patch(
+        "subprocess.run", return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=PS, stderr="")
+    )
+    assert sorted(ap.process_snapshot()) == [100, 101, 102]
+    assert run.call_args.args[0] == ["ps", "-axo", "pid=,ppid=,lstart=,state=,args="]
+    assert run.call_args.kwargs["env"]["LC_ALL"] == "C"
+
+
+def test_snapshot_reads_a_full_path_executable_from_live_ps(monkeypatch):
+    # comm= read this process as "/Users/tom/.loca"; a French locale emptied the table.
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+    ap.clear_caches()
+    proc = subprocess.Popen(["/Users/tom/.local/bin/claude", "30"], executable="/bin/sleep")
+    try:
+        info = ap.process_snapshot()[proc.pid]
+    finally:
+        proc.kill()
+        proc.wait()
+    assert info.exe == "/Users/tom/.local/bin/claude"
+    assert info.argv == "/Users/tom/.local/bin/claude 30"
+
+
+def test_codex_launched_by_absolute_path(mocker):
+    mocker.patch.object(ap, "process_snapshot", return_value=ap.parse_ps_snapshot(PS))
+    assert ap.codex_process_for_pane("%1", 100) is True
+
+
+def test_wrapped_codex_descendant(mocker):
+    snapshot = ap.parse_ps_snapshot(
+        PS.replace("  101   100", "  101   103") + "  103   100 Wed Jul 29 10:00:01 2026     S    /bin/wrapper\n"
+    )
+    mocker.patch.object(ap, "process_snapshot", return_value=snapshot)
+    assert ap.codex_process_for_pane("%1", "100") is True
+
+
+def test_argv_mention_does_not_identify_codex(mocker):
+    snapshot = ap.parse_ps_snapshot("\n".join(line for line in PS.splitlines() if "local/bin/codex" not in line))
+    mocker.patch.object(ap, "process_snapshot", return_value=snapshot)
+    assert ap.codex_process_for_pane("%1", 100) is False
+
+
+def test_snapshot_failure_is_no_opinion(mocker):
+    mocker.patch.object(ap, "process_snapshot", return_value=None)
+    assert ap.codex_process_for_pane("%1", 100) is None
+
+
+def test_zombie_codex_is_not_live(mocker):
+    snapshot = ap.parse_ps_snapshot(PS.replace("S+   /usr/local/bin/codex", "Z    /usr/local/bin/codex"))
+    mocker.patch.object(ap, "process_snapshot", return_value=snapshot)
+    assert ap.codex_process_for_pane("%1", 100) is False
+
+
+def test_pid_reuse_invalidates_cached_agent(mocker):
+    first = ap.parse_ps_snapshot(PS)
+    second = ap.parse_ps_snapshot(
+        PS.replace("Wed Jul 29 10:00:00 2026", "Wed Jul 29 11:00:00 2026", 1).replace(
+            "/usr/local/bin/codex --model o4-mini", "/bin/sleep 20"
+        )
+    )
+    snapshots = iter((first, second))
+    mocker.patch.object(ap, "process_snapshot", side_effect=lambda: next(snapshots))
+    assert ap.codex_process_for_pane("%1", 100) is True
+    assert ap.codex_process_for_pane("%1", 100) is False
+
+
+def test_agent_pid_start_mismatch_invalidates_cached_agent(mocker):
+    first = ap.parse_ps_snapshot(PS)
+    second = ap.parse_ps_snapshot(
+        PS.replace("Wed Jul 29 10:00:01 2026", "Wed Jul 29 11:00:01 2026").replace(
+            "/usr/local/bin/codex --model o4-mini", "/bin/sleep 20"
+        )
+    )
+    snapshots = iter((first, second))
+    mocker.patch.object(ap, "process_snapshot", side_effect=lambda: next(snapshots))
+    assert ap.codex_process_for_pane("%1", 100) is True
+    assert ap.codex_process_for_pane("%1", 100) is False
+```
+
+`tests/test_resources.py` — replace `_proc`, and the periscope-app row (with its "ps truncates comm=" comment) inside `_snapshot()`:
+
+```python
+def _proc(pid, ppid, exe="/bin/zsh", argv=None):
+    return ProcessInfo(pid=pid, ppid=ppid, started_at=0, exe=exe, argv=argv if argv is not None else exe, state="S")
+```
+
+```python
+            _proc(500, 1, "/Applications/Periscope.app/Contents/MacOS/periscope-app"),
+```
+
+`tests/test_session_status.py`:
   - add `from datetime import datetime`, `from types import SimpleNamespace` and `from periscope import agent_processes` to the imports;
-  - in `_reset_caches`, delete the two lines `monkeypatch.setattr(ss, "_claude_procs_cache", None)` and `monkeypatch.setattr(ss, "_proc_table_cache", None)`;
+  - in `_reset_caches`, delete `monkeypatch.setattr(ss, "_claude_procs_cache", None)` and `monkeypatch.setattr(ss, "_proc_table_cache", None)`;
   - delete `_PS_SAMPLE`, `test_live_claude_pids_matches_claude_paths`, `test_claude_procs_carry_age`, the `── etime parsing` header and `test_parse_etime` (L122–169), and put in their place:
 
 ```python
 # ── live claudes and the process table come off process_snapshot ─────────
 
 # The processes the old `ps -axo pid=,etime=,comm=` sample listed (etimes
-# 01-02:08:58, 22:09:53, 05:33, 91-10:00:00), as process_snapshot's
-# `pid ppid lstart state comm args` rows read at _PS_NOW.
+# 01-02:08:58, 22:09:53, 05:33, 91-10:00:00) plus a plugin server whose argv
+# mentions .claude, as process_snapshot's real `… lstart= state= args=` rows
+# read at _PS_NOW.
 _PS_SNAPSHOT = (
-    " 9448     1 Thu Jul 30 10:00:00 2026 S    /Users/tom/.local/bin/claude claude --resume 0b6f2a1e-1111-2222-3333-444455556666\n"
-    " 9876  9448 Thu Jul 30 13:59:05 2026 S    /Users/tom/.local/share/claude/versions/2.1.161 claude\n"
-    "  329     1 Fri Jul 31 12:03:25 2026 Ss   /usr/libexec/logd /usr/libexec/logd\n"
-    "    1     0 Fri May  1 02:08:58 2026 Ss   /sbin/launchd /sbin/launchd\n"
+    " 9448     1 Thu Jul 30 10:00:00 2026     S+   /Users/tom/.local/bin/claude --resume 0b6f2a1e-1111-2222-3333-444455556666\n"
+    " 9876  9448 Thu Jul 30 13:59:05 2026     S    /Users/tom/.local/share/claude/versions/2.1.161\n"
+    "11023     1 Thu Jul 30 14:19:27 2026     S    node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js --port 9900\n"
+    "  329     1 Fri Jul 31 12:03:25 2026     Ss   /usr/libexec/logd\n"
+    "    1     0 Fri May  1 02:08:58 2026     Ss   /sbin/launchd\n"
 )
 _PS_NOW = datetime(2026, 7, 31, 12, 8, 58).timestamp()
 
@@ -562,6 +749,7 @@ def _snapshot(monkeypatch, text=_PS_SNAPSHOT):
 
 
 def test_live_claude_pids_matches_claude_paths(monkeypatch):
+    # Full-path launcher and versioned binary both count; `node …/.claude/…` doesn't.
     _snapshot(monkeypatch)
     assert ss._live_claude_pids() == {9448, 9876}
 
@@ -577,13 +765,14 @@ def test_claude_procs_age_from_start_time(monkeypatch):
 
 def test_proc_table_matches_the_command_table(monkeypatch):
     # What `ps -axo pid=,ppid=,command=` gave: children by parent in ps order,
-    # and each pid's full argv.
+    # and each pid's full command line.
     _snapshot(monkeypatch)
     kids, cmds = ss.proc_table()
-    assert kids == {1: [9448, 329], 9448: [9876], 0: [1]}
+    assert kids == {1: [9448, 11023, 329], 9448: [9876], 0: [1]}
     assert cmds == {
-        9448: "claude --resume 0b6f2a1e-1111-2222-3333-444455556666",
-        9876: "claude",
+        9448: "/Users/tom/.local/bin/claude --resume 0b6f2a1e-1111-2222-3333-444455556666",
+        9876: "/Users/tom/.local/share/claude/versions/2.1.161",
+        11023: "node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js --port 9900",
         329: "/usr/libexec/logd",
         1: "/sbin/launchd",
     }
@@ -609,10 +798,83 @@ def test_one_ps_serves_the_whole_refresh(monkeypatch, mocker):
 
 - [ ] **Step 2: Run them and see them fail**
 
-Run: `uv run pytest -q tests/test_session_status.py`
-Expected: the five new tests fail — today's `_claude_procs` / `proc_table` fork their own `ps` and never read `process_snapshot`: the fixture pids are absent from the machine's real `ps` output, and in `test_one_ps_serves_the_whole_refresh` the patched `subprocess.run` raises `AssertionError: session_status forked its own ps`.
+Run: `uv run pytest -q tests/test_agent_processes.py tests/test_resources.py tests/test_session_status.py`
+Expected: `AttributeError: 'ProcessInfo' object has no attribute 'exe'` / `TypeError: ProcessInfo.__init__() got an unexpected keyword argument 'exe'`; the locale and live-`ps` tests fail on the `comm=` format and the missing `env`; the session_status tests fail because `_claude_procs` / `proc_table` fork their own `ps` (in `test_one_ps_serves_the_whole_refresh` the patched `subprocess.run` raises `AssertionError: session_status forked its own ps`).
 
-- [ ] **Step 3: Implement** — `periscope/session_status.py`:
+- [ ] **Step 3: Implement**
+
+`periscope/agent_processes.py` — replace `ProcessInfo`, `_PS_ROW_RE`, `parse_ps_snapshot`, `_take_snapshot` and `_is_codex_executable` with:
+
+```python
+@dataclass(frozen=True)
+class ProcessInfo:
+    pid: int
+    ppid: int
+    started_at: int
+    # argv[0]: the executable as launched. Not ps's comm, which macOS cuts to
+    # 16 characters unless it is the last column (`/Users/tom/.loca`).
+    exe: str
+    argv: str
+    state: str
+
+
+_PS_ROW_RE = re.compile(
+    r"^\s*(\d+)\s+(\d+)\s+"
+    r"(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+"
+    r"(\S+)(?:\s+(.*))?$"
+)
+```
+
+```python
+def parse_ps_snapshot(output: str) -> dict[int, ProcessInfo]:
+    """Parse the `pid ppid lstart state args` rows :func:`_take_snapshot` reads."""
+    result: dict[int, ProcessInfo] = {}
+    for line in output.splitlines():
+        match = _PS_ROW_RE.match(line)
+        if not match:
+            continue
+        pid, ppid, started, state, argv = match.groups()
+        try:
+            started_at = int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").timestamp())
+        except ValueError:
+            continue
+        argv = (argv or "").strip()
+        info = ProcessInfo(
+            pid=int(pid),
+            ppid=int(ppid),
+            started_at=started_at,
+            exe=argv.split(maxsplit=1)[0] if argv else "",
+            argv=argv,
+            state=state,
+        )
+        result[info.pid] = info
+    return result
+
+
+def _take_snapshot() -> dict[int, ProcessInfo] | None:
+    try:
+        proc = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,lstart=,state=,args="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            # lstart prints in the locale (`mer. 30 sept.` under fr_FR), which
+            # the row regex can't read.
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_ps_snapshot(proc.stdout)
+```
+
+```python
+def _is_codex_executable(proc: ProcessInfo) -> bool:
+    # Match the executable itself, never an arbitrary mention in argv.
+    return os.path.basename(proc.exe).lower() in {"codex", "codex.exe"}
+```
+
+`periscope/session_status.py`:
   - L37: `from periscope import agent_processes, config, resources`
   - Docstring's last paragraph becomes: "Imports only stdlib and periscope's leaf modules (config, resources, agent_processes), never the resolver layer, so turns.py / window_view.py can depend on it freely."
   - Replace the cache block (L44–58) with:
@@ -640,20 +902,21 @@ def _claude_procs() -> dict[int, int]:
     """{pid: age_s} of running `claude` processes, from the refresh's process
     snapshot. The key set guards against honoring a session file whose
     process has exited or whose pid was recycled; age (now minus start) feeds
-    the cycle-hint. `comm` is the executable path; claude's launcher
-    (`.../bin/claude`) and versioned binary (`.../share/claude/versions/<v>`)
-    both contain "claude"."""
+    the cycle-hint. A claude is a process whose executable (argv[0]) says so:
+    the launcher (`claude`, `.../bin/claude`) and the versioned binary
+    (`.../share/claude/versions/<v>`) both do; a `node` whose arguments merely
+    mention ~/.claude doesn't."""
     now = time.time()
     return {
         p.pid: int(now - p.started_at)
         for p in (agent_processes.process_snapshot() or {}).values()
-        if "claude" in p.comm.lower()
+        if "claude" in p.exe.lower()
     }
 ```
 
 ```python
 def proc_table() -> tuple[dict[int, list[int]], dict[int, str]]:
-    """(ppid -> child pids, pid -> command) for every process, from the
+    """(ppid -> child pids, pid -> command line) for every process, from the
     refresh's process snapshot. Empty when ps failed."""
     kids: dict[int, list[int]] = {}
     cmds: dict[int, str] = {}
@@ -719,14 +982,14 @@ def _no_live_session_scan(monkeypatch):
 
 - [ ] **Step 4: Run the tests and see them pass**
 
-Run: `uv run pytest -q tests/test_session_status.py tests/test_agent_processes.py tests/test_window_view.py tests/test_resources.py tests/routes/test_state.py tests/test_channels.py tests/test_resurrect.py`
-Expected: all pass. Then `uv run pytest -q` — all pass.
+Run: `uv run pytest -q tests/test_agent_processes.py tests/test_resources.py tests/test_session_status.py tests/test_window_view.py tests/routes/test_state.py tests/test_channels.py tests/test_resurrect.py`
+Expected: all pass. Then `uv run pytest -q` — all pass. `grep -rnE "\.comm\b|comm=comm" periscope tests` prints nothing (no reader of the old field is left).
 
 - [ ] **Step 5: Commit**
 
 ```sh
-uv run ruff check --fix periscope/session_status.py periscope/window_view.py tests/conftest.py tests/test_session_status.py && uv run ruff format periscope/session_status.py periscope/window_view.py tests/conftest.py tests/test_session_status.py
-git commit -m "session_status: proc_table and live claudes read the refresh's one process snapshot (THI-450)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- periscope/session_status.py periscope/window_view.py tests/conftest.py tests/test_session_status.py
+uv run ruff check --fix periscope/agent_processes.py periscope/session_status.py periscope/window_view.py tests/conftest.py tests/test_agent_processes.py tests/test_resources.py tests/test_session_status.py && uv run ruff format periscope/agent_processes.py periscope/session_status.py periscope/window_view.py tests/conftest.py tests/test_agent_processes.py tests/test_resources.py tests/test_session_status.py
+git commit -m "agent_processes: one C-locale ps per refresh, executable from argv[0]; proc_table and live claudes read it (THI-450)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- periscope/agent_processes.py periscope/session_status.py periscope/window_view.py tests/conftest.py tests/test_agent_processes.py tests/test_resources.py tests/test_session_status.py
 ```
 
 ---
@@ -735,34 +998,46 @@ git commit -m "session_status: proc_table and live claudes read the refresh's on
 
 `list_windows` keeps forking a fresh `list-panes -a` on every call: open_ops reads freshly created windows straight back ("list_windows() is a live shell-out, so freshly-stamped windows are visible synchronously"), and `pids` stamps `@periscope_id` with a bare `tmux set-option`, so a cached answer would show a just-stamped window unstamped and re-mint it (invariants #11, #13). Each call refreshes the shared snapshot, and `all_pane_ids` and `session_status._tmux_pane_pids` read that snapshot (1 s, locked) — so a refresh forks tmux once, at its `list_windows`.
 
+Fields are separated by `\x1f` (ASCII unit separator): tmux prints a tab in a window name or path verbatim (checked with `od -c`), which a tab separator would split out of shape. A newline still splits a row in two; such fragments are skipped and logged once — the residual risk is in the spec's assumptions.
+
 **Files:**
-- Modify: `periscope/tmux.py` (imports; new section after `_tmux_argv`/`tmux`), `periscope/panes.py` (L21; `all_pane_ids` + `list_windows` L385–449), `periscope/session_status.py` (imports; docstring; `_tmux_pane_pids` L221–241; `pane_claude_pids` docstring), `tests/conftest.py` (`_no_live_session_scan`)
+- Modify: `periscope/tmux.py` (imports; new section after `def tmux`), `periscope/panes.py` (L21; `all_pane_ids` + `list_windows` L385–449), `periscope/session_status.py` (imports; docstring; `_tmux_pane_pids` L221–241; `pane_claude_pids` docstring), `tests/conftest.py` (`_no_live_session_scan`)
 - Test: `tests/test_tmux.py`, `tests/test_panes.py`, `tests/test_session_status.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-`tests/test_tmux.py` — add `import periscope.tmux as tmux_mod` and `from types import SimpleNamespace` to the imports; append:
+`tests/test_tmux.py` — add `import logging`, `import periscope.tmux as tmux_mod` and `from types import SimpleNamespace` to the imports; append:
 
 ```python
-_ROW = "main\t0\tshell\t1\t/home/tom\t\t%5\t1717250000\t@1\t4242\tzsh\t\t1"
+_FIELDS = ["main", "0", "shell", "1", "/home/tom", "", "%5", "1717250000", "@1", "4242", "zsh", "", "1"]
+_ROW = "\x1f".join(_FIELDS)
 
 
 def test_list_panes_asks_for_every_field_in_one_call(monkeypatch):
     calls = []
     monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or "")
     tmux_mod.list_panes()
-    assert calls == [("list-panes", "-a", "-F", "\t".join(f"#{{{f}}}" for f in tmux_mod.PANE_FIELDS))]
+    assert calls == [("list-panes", "-a", "-F", "\x1f".join(f"#{{{f}}}" for f in tmux_mod.PANE_FIELDS))]
 
 
 def test_list_panes_reads_every_field(monkeypatch):
     monkeypatch.setattr(tmux_mod, "tmux", lambda *a: _ROW + "\n")
-    assert tmux_mod.list_panes() == [dict(zip(tmux_mod.PANE_FIELDS, _ROW.split("\t"), strict=True))]
+    assert tmux_mod.list_panes() == [dict(zip(tmux_mod.PANE_FIELDS, _FIELDS, strict=True))]
 
 
-def test_list_panes_skips_a_row_a_newline_in_a_path_split(monkeypatch):
-    broken = _ROW.replace("/home/tom", "/home/to\nm")
+def test_a_tab_in_a_window_name_is_kept(monkeypatch):
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: _ROW.replace("shell", "tab\tname") + "\n")
+    assert tmux_mod.list_panes()[0]["window_name"] == "tab\tname"
+
+
+def test_a_row_a_newline_split_is_skipped_and_logged_once(monkeypatch, caplog):
+    broken = _ROW.replace("shell", "new\nline")
+    monkeypatch.setattr(tmux_mod, "_unparsed_logged", False)
     monkeypatch.setattr(tmux_mod, "tmux", lambda *a: broken + "\n" + _ROW.replace("%5", "%6") + "\n")
-    assert [p["pane_id"] for p in tmux_mod.list_panes()] == ["%6"]
+    with caplog.at_level(logging.WARNING, logger="periscope"):
+        assert [p["pane_id"] for p in tmux_mod.list_panes()] == ["%6"]
+        tmux_mod.list_panes()
+    assert len(caplog.records) == 1
 
 
 def test_recent_panes_reuses_a_snapshot_under_a_second_old(monkeypatch):
@@ -787,11 +1062,15 @@ def test_recent_panes_reuses_a_snapshot_under_a_second_old(monkeypatch):
 # periscope's own input session comes last.
 _PANES = (
     "\n".join(
-        [
-            "main\t0\tshell\t1\t/home/tom/dev/foo\tpid-a\t%5\t1717250000\t@1\t4241\tzsh\t\t0",
-            "main\t0\tshell\t1\t/home/tom/dev/bar\tpid-a\t%6\t1717250000\t@1\t4242\tnvim\t\t1",
-            "main\t1\tclaude\t0\t/home/tom/dev/baz\tpid-b\t%7\t1717250100\t@2\t4243\tclaude\t1717249990 /home/tom/dev/my baz\t1",
-            f"{INPUT_CTL_SESSION}\t0\tctl\t1\t/tmp\t\t%9\t1717250200\t@3\t4244\tsh\t\t1",
+        "\x1f".join(row)
+        for row in [
+            ["main", "0", "shell", "1", "/home/tom/dev/foo", "pid-a", "%5", "1717250000", "@1", "4241", "zsh", "", "0"],
+            ["main", "0", "shell", "1", "/home/tom/dev/bar", "pid-a", "%6", "1717250000", "@1", "4242", "nvim", "", "1"],
+            [
+                "main", "1", "claude", "0", "/home/tom/dev/baz", "pid-b", "%7", "1717250100", "@2", "4243", "claude",
+                "1717249990 /home/tom/dev/my baz", "1",
+            ],
+            [INPUT_CTL_SESSION, "0", "ctl", "1", "/tmp", "", "%9", "1717250200", "@3", "4244", "sh", "", "1"],
         ]
     )
     + "\n"
@@ -958,7 +1237,7 @@ These exercise the real `_tmux_pane_pids`: Step 3 drops conftest's stub of it (t
 - [ ] **Step 2: Run them and see them fail**
 
 Run: `uv run pytest -q tests/test_tmux.py tests/test_panes.py tests/test_session_status.py`
-Expected: `AttributeError: module 'periscope.tmux' has no attribute 'list_panes'` / `PANE_FIELDS` / `_panes_snapshot`; the list_windows fixture tests fail because `list_windows` still asks `list-windows` (the patched `tmux_mod.tmux` isn't the `tmux` name `panes.py` imported).
+Expected: `AttributeError: module 'periscope.tmux' has no attribute 'list_panes'` / `PANE_FIELDS` / `_panes_snapshot` / `_unparsed_logged`; the list_windows fixture tests fail because `list_windows` still asks `list-windows` through the `tmux` name `panes.py` imported; the `_tmux_pane_pids` tests get the stub's `{}`.
 
 - [ ] **Step 3: Implement**
 
@@ -984,25 +1263,35 @@ PANE_FIELDS = (
     "@periscope_opened",
     "pane_active",
 )
-_PANES_FMT = "\t".join(f"#{{{f}}}" for f in PANE_FIELDS)
+# \x1f (unit separator) between fields: tmux prints a tab inside a window name
+# or path verbatim, which a tab separator would split out of shape.
+_PANES_FMT = "\x1f".join(f"#{{{f}}}" for f in PANE_FIELDS)
 _PANES_TTL_S = 1.0
 _panes_lock = threading.Lock()
 # (monotonic time, rows) from the last list_panes().
 _panes_snapshot: tuple[float, list[dict[str, str]]] | None = None
+_unparsed_logged = False
 
 
 def list_panes() -> list[dict[str, str]]:
     """Every pane as {field: value} over PANE_FIELDS, from a fresh
     `list-panes -a` that becomes the snapshot recent_panes serves. [] when
     tmux has no server."""
-    global _panes_snapshot
+    global _panes_snapshot, _unparsed_logged
     rows = []
     for line in tmux("list-panes", "-a", "-F", _PANES_FMT).split("\n"):
-        fields = line.split("\t")
-        # tmux prints a tab or newline inside a name or path verbatim, which
-        # splits that row out of shape; skip it rather than misread it.
+        if not line:
+            continue
+        fields = line.split("\x1f")
         if len(fields) == len(PANE_FIELDS):
             rows.append(dict(zip(PANE_FIELDS, fields, strict=True)))
+        elif not _unparsed_logged:
+            # A newline in a window name or path splits its pane's row in two;
+            # the pane drops out of this snapshot. Said once per process.
+            from periscope.log import log
+
+            log.warning("list-panes row skipped (a newline in a window name or path?): %r", line)
+            _unparsed_logged = True
     _panes_snapshot = (time.monotonic(), rows)
     return rows
 
@@ -1136,7 +1425,7 @@ def _no_live_session_scan(monkeypatch):
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `uv run pytest -q tests/test_tmux.py tests/test_panes.py tests/test_session_status.py tests/test_pids.py tests/routes/test_state.py tests/test_open_ops.py tests/test_channels.py`
-Expected: all pass. Then `uv run pytest -q`. A test that patches `periscope.tmux.tmux` with capture text and now reaches `list_windows` gets `[]` (the field-count rule skips its rows); if one asserted on windows it got from the real server through `list_windows`, patch `list_windows` at its import site instead, as `tests/routes/test_state.py` does.
+Expected: all pass. Then `uv run pytest -q`. A test that patches `periscope.tmux.tmux` with capture text and now reaches `list_windows` gets `[]` (its rows don't have the field count); if one asserted on windows it got from the real server through `list_windows`, patch `list_windows` at its import site instead, as `tests/routes/test_state.py` does.
 
 - [ ] **Step 5: Commit**
 
@@ -1149,6 +1438,8 @@ git commit -m "panes: one list-panes per refresh serves list_windows, all_pane_i
 
 ## Task 5: Git in two commands, repo identity cached for 10 minutes
 
+The status exit code is the repo check. When status says there is no work tree (`fatal: this operation must be run in a work tree` — checked for a bare-container layout, a cwd inside `.git` and a plain bare repo), one `rev-parse --abbrev-ref HEAD` gives the branch and the state reads `clean`; the identity is filled as for any repo. Checked on git: from a repo subdirectory, the old `ls-files -o` counted that subdirectory only (`?2`, deeper `clean`) where status counts the whole repo (`?3`) — kept on purpose, like `diff HEAD`.
+
 **Files:**
 - Modify: `periscope/git_pr.py` (imports L18–31, constants L33–43, `git_state_for` L65–116), `tests/conftest.py` (new fixture)
 - Test: `tests/test_git_pr.py` (imports L7–23, `_reset_caches` L26–36, L50–122 replaced, L411–445 replaced)
@@ -1158,7 +1449,10 @@ git commit -m "panes: one list-panes per refresh serves list_windows, all_pane_i
   - Replace `test_git_state_for_returns_branch_for_mocked_git_repo`, `_mock_git` and the four `test_git_state_*` tests after it (L50–122) with:
 
 ```python
-def _mock_git(mocker, *, status="# branch.oid 0123456789abcdef0123456789abcdef01234567\n# branch.head main", diff="", code=0):
+_HEAD = "# branch.oid 0123456789abcdef0123456789abcdef01234567\n# branch.head main\n"
+
+
+def _mock_git(mocker, *, status=_HEAD, diff="", code=0):
     """Patch _run so git_state_for sees one `status --porcelain=v2 --branch`
     answer and one `diff --shortstat` answer; repo identity falls back."""
 
@@ -1171,9 +1465,6 @@ def _mock_git(mocker, *, status="# branch.oid 0123456789abcdef0123456789abcdef01
 
     mocker.patch("periscope.git_pr._run", side_effect=fake_run)
     mocker.patch("periscope.gitutil._run", side_effect=fake_run)
-
-
-_HEAD = "# branch.oid 0123456789abcdef0123456789abcdef01234567\n# branch.head main\n"
 
 
 def test_git_state_counts_untracked_files(tmp_path, mocker):
@@ -1213,8 +1504,24 @@ def test_git_state_detached_head_is_the_short_sha(tmp_path, mocker):
 
 
 def test_git_state_none_when_status_fails(tmp_path, mocker):
-    _mock_git(mocker, status="fatal: not a git repository", code=128)
+    _mock_git(mocker, status="fatal: not a git repository (or any of the parent directories): .git", code=128)
     assert git_state_for(str(tmp_path)) is None
+
+
+def test_git_reads_take_no_optional_locks(tmp_path, mocker):
+    # A dashboard refresh must not take the index lock from under the user's
+    # own git commands; `git diff` refreshes the index too.
+    _mock_git(mocker)
+    git_state_for(str(tmp_path))
+    git_cmds = [c.args[0] for c in git_pr._run.call_args_list]
+    assert [c[c.index("-C") + 2] for c in git_cmds] == ["status", "diff"]
+    assert all("--no-optional-locks" in c for c in git_cmds)
+
+
+def test_git_state_passes_its_timeout_to_git(tmp_path, mocker):
+    _mock_git(mocker)
+    git_state_for(str(tmp_path), timeout=10.0)
+    assert {c.kwargs["timeout"] for c in git_pr._run.call_args_list} == {10.0}
 
 
 # --- the two-command read against real repos -------------------------------
@@ -1362,6 +1669,25 @@ def test_two_command_read_matches_the_seven_command_read(build, want, tmp_path, 
         assert got["branch"] == want[0] or (want[0] is None and got["branch"].startswith("@"))
 
 
+def test_a_subdirectory_counts_the_whole_repos_untracked_entries(tmp_path, git_identity):
+    # The one place the two reads differ on purpose: ls-files -o was scoped to
+    # the cwd, status is whole-repo — as diff HEAD's line counts already were.
+    repo = _committed(tmp_path)
+    (repo / "pkg" / "deep").mkdir(parents=True)
+    (repo / "pkg" / "mod.py").write_text("x\n")
+    (repo / "pkg" / "deep" / "tracked.py").write_text("x\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "pkg")
+    (repo / "pkg" / "new.py").write_text("x\n")
+    (repo / "pkg" / "scratch").mkdir()
+    (repo / "pkg" / "scratch" / "x.txt").write_text("x\n")
+    (repo / "root-new.txt").write_text("x\n")
+    for sub, old in (("pkg", "?2"), ("pkg/deep", "clean")):
+        path = str(repo / sub)
+        assert _seven_command_state(path)["git"] == old
+        assert git_state_for(path)["git"] == "?3"
+
+
 def test_unborn_branch_reads_its_name(tmp_path, git_identity):
     # `rev-parse --abbrev-ref HEAD` fails before the first commit, and _run
     # handed its stderr back as the branch; porcelain v2 names the branch.
@@ -1376,6 +1702,35 @@ def test_unborn_branch_reads_its_name(tmp_path, git_identity):
         "repo_key": os.path.realpath(repo),
         "repo_label": "repo",
     }
+
+
+def test_a_bare_container_reads_its_branch_and_repo(tmp_path, git_identity):
+    # The layout whose .git file says `gitdir: ./.bare` has no work tree at the
+    # container; it still has a branch and a repo, and its pane stays in its track.
+    src = _committed(tmp_path)
+    box = tmp_path / "box"
+    box.mkdir()
+    _git(tmp_path, "clone", "-q", "--bare", str(src), str(box / ".bare"))
+    _git(box / ".bare", "remote", "set-url", "origin", "git@github.com:tom/box.git")
+    (box / ".git").write_text("gitdir: ./.bare\n")
+    assert git_state_for(str(box)) == {
+        "branch": "main",
+        "git": "clean",
+        "repo_slug": "tom/box",
+        "repo_key": os.path.realpath(box),
+        "repo_label": "box",
+    }
+
+
+def test_a_git_dir_without_a_work_tree_reads_its_branch(tmp_path, git_identity):
+    # A cwd inside .git, and a plain bare repo: no work tree, still a branch.
+    repo = _committed(tmp_path)
+    inside = git_state_for(str(repo / ".git"))
+    assert (inside["branch"], inside["git"]) == ("main", "clean")
+    bare = tmp_path / "plain.git"
+    _git(tmp_path, "clone", "-q", "--bare", str(repo), str(bare))
+    plain = git_state_for(str(bare))
+    assert (plain["branch"], plain["git"]) == ("main", "clean")
 
 
 def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypatch, git_identity):
@@ -1404,15 +1759,6 @@ def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypa
     clock[0] += 601
     git_state_for(repo)
     assert subcommands() == ["status", "diff", "rev-parse", "remote"]
-
-
-def test_git_reads_take_no_optional_locks(tmp_path, mocker):
-    # A dashboard refresh must not take the index lock from under the user's
-    # own git commands; `git diff` refreshes the index too.
-    _mock_git(mocker)
-    git_state_for(str(tmp_path))
-    git_cmds = [c.args[0] for c in git_pr._run.call_args_list]
-    assert all("--no-optional-locks" in c for c in git_cmds)
 ```
 
   - Replace `test_git_state_includes_repo_key_and_label` (L411–445) with:
@@ -1476,49 +1822,61 @@ _repo_identity_cache: dict[str, tuple[float, str, str | None]] = {}
   - replace `git_state_for` with:
 
 ```python
-def git_state_for(path: str) -> dict | None:
+def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
     """Return {branch, git, repo_slug, repo_key, repo_label} for the git repo at
     `path`, or None. Two forks: one status for branch, ahead and untracked, one
-    diff for line counts; repo_key and repo_slug come from a per-path cache."""
+    diff for line counts; repo_key and repo_slug come from a per-path cache.
+    `timeout` bounds each git call (the background refresh allows longer)."""
     if not path or not os.path.isdir(path):
         return None
     # --no-optional-locks: a dashboard read must not take the index lock from
     # under the user's own git commands (status and diff both refresh the index).
     code, status = _run(
-        ["git", "--no-optional-locks", "-C", path, "status", "--porcelain=v2", "--branch", "--untracked-files=normal"]
+        ["git", "--no-optional-locks", "-C", path, "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+        timeout=timeout,
     )
-    if code != 0:
+    if code == 0:
+        head = oid = ""
+        ahead = new = 0
+        for line in status.splitlines():
+            if line.startswith("# branch.head "):
+                head = line.removeprefix("# branch.head ")
+            elif line.startswith("# branch.oid "):
+                oid = line.removeprefix("# branch.oid ")
+            elif line.startswith("# branch.ab "):
+                # Present only when the upstream exists: "+<ahead> -<behind>".
+                ahead = int(line.split()[2].lstrip("+"))
+            elif line.startswith("? "):
+                # Untracked; `git diff HEAD` ignores these, so a worktree whose
+                # only change is brand-new files would read "clean". A
+                # wholly-untracked directory is one entry.
+                new += 1
+        branch = f"@{oid[:7]}" if head == "(detached)" else head
+        # Compact diff stats vs HEAD (covers staged + unstaged together).
+        _, diff = _run(["git", "--no-optional-locks", "-C", path, "diff", "HEAD", "--shortstat"], timeout=timeout)
+        adds_m = re.search(r"(\d+) insertion", diff)
+        dels_m = re.search(r"(\d+) deletion", diff)
+        adds = int(adds_m.group(1)) if adds_m else 0
+        dels = int(dels_m.group(1)) if dels_m else 0
+        bits = []
+        if adds or dels:
+            bits.append(f"+{adds} -{dels}")
+        if new:
+            bits.append(f"?{new}")
+        state = " ".join(bits) if bits else "clean"
+        if ahead > 0:
+            state += " *"
+    elif "must be run in a work tree" in status:
+        # A git dir with no work tree here — a bare-container layout (a dir
+        # whose .git file says `gitdir: ./.bare`), a cwd inside .git, a bare
+        # repo — still has a branch and a repo; there is nothing to diff.
+        code, head = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=timeout)
+        if code != 0:
+            return None
+        branch = head if head != "HEAD" else "?"
+        state = "clean"
+    else:
         return None
-    head = oid = ""
-    ahead = new = 0
-    for line in status.splitlines():
-        if line.startswith("# branch.head "):
-            head = line.removeprefix("# branch.head ")
-        elif line.startswith("# branch.oid "):
-            oid = line.removeprefix("# branch.oid ")
-        elif line.startswith("# branch.ab "):
-            # Present only when the upstream exists: "+<ahead> -<behind>".
-            ahead = int(line.split()[2].lstrip("+"))
-        elif line.startswith("? "):
-            # Untracked; `git diff HEAD` ignores these, so a worktree whose only
-            # change is brand-new files would read "clean". A wholly-untracked
-            # directory is one entry.
-            new += 1
-    branch = f"@{oid[:7]}" if head == "(detached)" else head
-    # Compact diff stats vs HEAD (covers staged + unstaged together).
-    _, diff = _run(["git", "--no-optional-locks", "-C", path, "diff", "HEAD", "--shortstat"])
-    adds_m = re.search(r"(\d+) insertion", diff)
-    dels_m = re.search(r"(\d+) deletion", diff)
-    adds = int(adds_m.group(1)) if adds_m else 0
-    dels = int(dels_m.group(1)) if dels_m else 0
-    bits = []
-    if adds or dels:
-        bits.append(f"+{adds} -{dels}")
-    if new:
-        bits.append(f"?{new}")
-    state = " ".join(bits) if bits else "clean"
-    if ahead > 0:
-        state += " *"
     # `repo_slug` (owner/repo) lets the frontend build PR URLs without
     # hardcoding a repo — periscope watches panes across many repos.
     # repo_key is the full repo path (handles both sibling and inline
@@ -1578,7 +1936,7 @@ def test_first_sight_reads_synchronously(swr):
     # The pid resolver matches panes on (branch, cwd) after a tmux restart, so
     # a cwd's first read can't come back without its branch.
     assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
-    assert swr.inner.call_count == 1
+    swr.inner.assert_called_once_with("/foo")
     swr.bg.assert_not_called()
 
 
@@ -1600,15 +1958,57 @@ def test_stale_entry_is_served_and_refreshed_once_in_the_background(swr):
     assert swr.inner.call_count == 1  # nothing ran on the request path
 
 
-def test_background_refresh_lands_and_frees_the_path(swr):
+def test_background_refresh_lands_with_the_longer_timeout(swr):
     git_pr.cached_git_state("/foo")
     swr.clock[0] += 16
     git_pr.cached_git_state("/foo")
     swr.inner.return_value = {"branch": "feat", "git": "+1 -0"}
     git_pr._refresh_git_state("/foo")
+    swr.inner.assert_called_with("/foo", timeout=git_pr._GIT_BG_TIMEOUT_S)
     assert "/foo" not in git_pr._git_refreshing
     assert git_pr.cached_git_state("/foo") == {"branch": "feat", "git": "+1 -0"}
     swr.bg.assert_called_once()  # the landed entry is fresh again
+
+
+def test_a_failed_background_read_keeps_the_last_state(swr, tmp_path):
+    # A status that timed out says nothing new: keep what we had, retry at the
+    # next expiry.
+    path = str(tmp_path)
+    git_pr.cached_git_state(path)
+    swr.clock[0] += 16
+    git_pr.cached_git_state(path)
+    swr.inner.return_value = None
+    git_pr._refresh_git_state(path)
+    assert git_pr._git_cache[path] == (swr.clock[0] + git_pr._GIT_TTL, {"branch": "main", "git": "clean"})
+
+
+def test_a_vanished_cwd_clears(swr):
+    git_pr.cached_git_state("/no/such/dir")
+    swr.clock[0] += 16
+    git_pr.cached_git_state("/no/such/dir")
+    swr.inner.return_value = None
+    git_pr._refresh_git_state("/no/such/dir")
+    assert git_pr.cached_git_state("/no/such/dir") is None
+
+
+def test_a_refresh_that_raises_releases_the_path(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    git_pr.cached_git_state("/foo")
+    swr.inner.side_effect = OSError("git vanished")
+    with pytest.raises(OSError):
+        git_pr._refresh_git_state("/foo")
+    assert "/foo" not in git_pr._git_refreshing
+
+
+def test_a_refresh_that_cant_start_releases_the_path(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    swr.bg.side_effect = RuntimeError("can't start new thread")
+    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
+    assert "/foo" not in git_pr._git_refreshing
+    git_pr.cached_git_state("/foo")
+    assert swr.bg.call_count == 2  # the next read tries again
 
 
 def test_empty_path_is_none(swr):
@@ -1635,13 +2035,16 @@ Run: `uv run pytest -q tests/test_git_pr.py`
 Expected: conftest error `AttributeError: module 'periscope.git_pr' has no attribute '_git_refreshing'`.
 
 - [ ] **Step 3: Implement** — `periscope/git_pr.py`:
-  - add `import random` to the imports.
+  - add `import random` to the imports; `from periscope.log import _bg, log` (was `_bg`).
   - replace the `_git_cache` line (L39) with:
 
 ```python
 # ± this much on each entry's next refresh, so cwds first read in one refresh
 # don't all expire in the same later one.
 _GIT_JITTER_S = 5.0
+# The background read is off the request path, so it may wait longer on a
+# slow repo than the first-sight read does.
+_GIT_BG_TIMEOUT_S = 10.0
 # path -> (refresh due at, state)
 _git_cache: dict[str, tuple[float, dict | None]] = {}
 _git_refreshing: set[str] = set()
@@ -1668,7 +2071,14 @@ def cached_git_state(path: str) -> dict | None:
         if cached is not None:
             if time.time() >= cached[0] and path not in _git_refreshing:
                 _git_refreshing.add(path)
-                _bg("git-state", _refresh_git_state, path)
+                try:
+                    _bg("git-state", _refresh_git_state, path)
+                except RuntimeError:
+                    # Thread.start fails when the process is out of threads:
+                    # release the path so a later read retries, and serve what
+                    # we have.
+                    _git_refreshing.discard(path)
+                    log.warning("git-state refresh for %s not started", path, exc_info=True)
             return cached[1]
     data = git_state_for(path)
     with _git_lock:
@@ -1678,8 +2088,14 @@ def cached_git_state(path: str) -> dict | None:
 
 def _refresh_git_state(path: str) -> None:
     try:
-        data = git_state_for(path)
+        data = git_state_for(path, timeout=_GIT_BG_TIMEOUT_S)
         with _git_lock:
+            previous = _git_cache.get(path)
+            # Nothing back for a cwd that is still a directory is a status that
+            # timed out or failed far more often than a repo that stopped being
+            # one: keep the last state and retry at the next expiry.
+            if data is None and previous is not None and previous[1] is not None and os.path.isdir(path):
+                data = previous[1]
             _git_cache[path] = (_next_git_due(), data)
     finally:
         with _git_lock:
@@ -1702,7 +2118,7 @@ git commit -m "git_pr: cached git state refreshes in the background on a jittere
 
 ## Task 7: gh reads its token once
 
-gh's error for a bad token was checked against gh 2.103.3: `HTTP 401: Bad credentials (https://api.github.com/graphql)`, exit 1. `gh help environment` documents `GH_TOKEN` (takes precedence over stored credentials), `GH_TELEMETRY=false` and `GH_NO_UPDATE_NOTIFIER`.
+gh 2.103.3 answers a bad token with `HTTP 401: Bad credentials (https://api.github.com/graphql)` (exit 1); `gh run list` prefixes it (`failed to get runs: HTTP 401: …`); the search API behind the reviews queue's `--author @me` / `--search review-requested:@me` says `non-200 OK status code: 401 Unauthorized body: …`. `gh help environment` documents `GH_TOKEN` (takes precedence over stored credentials), `GH_TELEMETRY=false` and `GH_NO_UPDATE_NOTIFIER`.
 
 **Files:**
 - Create: `periscope/gh.py`
@@ -1714,8 +2130,8 @@ gh's error for a bad token was checked against gh 2.103.3: `HTTP 401: Bad creden
 Create `tests/test_gh.py`:
 
 ```python
-"""gh — every `gh` periscope runs carries a token read once, not a keychain
-read per call, and runs with telemetry and the update check off."""
+"""gh — every `gh` periscope runs carries a token read every 10 minutes, not a
+keychain read per call, and runs with telemetry and the update check off."""
 
 import os
 import re
@@ -1731,6 +2147,13 @@ from periscope import gh
 def _no_gh_token(monkeypatch):
     """Overrides conftest's seeded "no token" entry: these tests read it."""
     monkeypatch.setattr(gh, "_token_cache", None)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(gh, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    return now
 
 
 def _fake(monkeypatch, *, token="tok-1", answers=None):
@@ -1762,39 +2185,55 @@ def test_a_call_carries_the_token_and_runs_quiet(monkeypatch):
     assert env["PATH"] == os.environ["PATH"]  # the rest of the environment rides along
 
 
-def test_the_token_is_read_once_an_hour(monkeypatch):
-    clock = [1000.0]
-    monkeypatch.setattr(gh, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+def test_the_token_is_read_every_ten_minutes(monkeypatch, clock):
     calls = _fake(monkeypatch)
     gh.run("pr", "list")
+    clock[0] += 599
     gh.run("pr", "view", "1")
     assert _token_reads(calls) == 1
-    clock[0] += 3601
+    clock[0] += 2
     gh.run("pr", "list")
     assert _token_reads(calls) == 2
 
 
-def test_an_auth_failure_rereads_the_token(monkeypatch):
-    calls = _fake(monkeypatch, answers=[(1, "HTTP 401: Bad credentials (https://api.github.com/graphql)")])
-    assert gh.run("pr", "list")[0] == 1
-    gh.run("pr", "list")
-    assert _token_reads(calls) == 2
-
-
-def test_other_failures_keep_the_token(monkeypatch):
-    calls = _fake(monkeypatch, answers=[(1, "no pull requests found for branch \"x\"")])
-    gh.run("pr", "view", "9")
-    gh.run("pr", "list")
-    assert _token_reads(calls) == 1
-
-
-def test_without_a_token_calls_still_run(monkeypatch):
+def test_a_failed_token_read_is_retried_after_a_minute(monkeypatch, clock):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     calls = _fake(monkeypatch, token=None)
     assert gh.run("pr", "list") == (0, "[]")
-    cmd, env = calls[-1]
-    assert cmd == ["gh", "pr", "list"]
-    assert "GH_TOKEN" not in env
+    assert "GH_TOKEN" not in calls[-1][1]  # no token: the call still runs
+    clock[0] += 59
+    gh.run("pr", "list")
+    assert _token_reads(calls) == 1
+    clock[0] += 2
+    gh.run("pr", "list")
+    assert _token_reads(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "HTTP 401: Bad credentials (https://api.github.com/graphql)",
+        "failed to get runs: HTTP 401: Bad credentials (https://api.github.com/repos/tom/x/actions/runs)",
+        'non-200 OK status code: 401 Unauthorized body: "{\\"message\\":\\"Bad credentials\\"}"',
+    ],
+)
+def test_a_401_rereads_the_token_at_most_once_a_minute(monkeypatch, clock, answer):
+    calls = _fake(monkeypatch, answers=[(1, answer), (1, answer), (1, answer)])
+    gh.run("pr", "list")  # read 1, then 401
+    clock[0] += 30
+    gh.run("pr", "list")  # inside the minute: the same token, still 401
+    assert _token_reads(calls) == 1
+    clock[0] += 31
+    gh.run("pr", "list")
+    assert _token_reads(calls) == 2
+
+
+def test_other_failures_keep_the_token(monkeypatch, clock):
+    calls = _fake(monkeypatch, answers=[(1, 'no pull requests found for branch "x"')])
+    gh.run("pr", "view", "9")
+    clock[0] += 61
+    gh.run("pr", "list")
+    assert _token_reads(calls) == 1
 
 
 def test_every_gh_call_goes_through_gh_run():
@@ -1845,7 +2284,7 @@ def _no_gh_token(monkeypatch):
     credentials. tests/test_gh.py overrides this fixture by name."""
     from periscope import gh
 
-    monkeypatch.setattr(gh, "_token_cache", (math.inf, None))
+    monkeypatch.setattr(gh, "_token_cache", (0.0, math.inf, None))
 ```
 
 - [ ] **Step 2: Run them and see them fail**
@@ -1880,30 +2319,41 @@ Create `periscope/gh.py`:
 
 gh's macOS keyring execs `/usr/bin/security` on every call to read its stored
 token. GH_TOKEN takes precedence over stored credentials, so the token is read
-once with `gh auth token` and handed to each call; telemetry and the update
-check are off, each of which forks again per call."""
+with `gh auth token` every 10 minutes (so `gh auth switch` lands soon) and
+handed to each call; telemetry and the update check are off, each of which
+forks again per call."""
 
 import os
+import re
 import threading
 import time
 
 from periscope.tmux import _run
 
-_TOKEN_TTL_S = 3600.0
+_TOKEN_TTL_S = 600.0
+# A failed `gh auth token` is retried after this long, and a 401 re-reads the
+# token no sooner than this after the last read: a remote GH_TOKEN can't
+# authenticate to (a *.ghe.com host) answers 401 on every call.
+_RETRY_S = 60.0
 _QUIET = {"GH_TELEMETRY": "false", "GH_NO_UPDATE_NOTIFIER": "1"}
+# gh's 401s: `HTTP 401: Bad credentials (…)`, `failed to get runs: HTTP 401: …`,
+# and the search API's `non-200 OK status code: 401 Unauthorized body: …`.
+_AUTH_FAILED_RE = re.compile(r"\b401\b|Bad credentials")
 _lock = threading.Lock()
-# (read at, token); None when `gh auth token` failed — calls then run on gh's
-# own credentials, as before.
-_token_cache: tuple[float, str | None] | None = None
+# (read at, good until, token); token None when `gh auth token` failed — calls
+# then run on gh's own credentials, as before.
+_token_cache: tuple[float, float, str | None] | None = None
 
 
 def _token() -> str | None:
     global _token_cache
     with _lock:
-        if _token_cache is None or time.monotonic() - _token_cache[0] >= _TOKEN_TTL_S:
+        now = time.monotonic()
+        if _token_cache is None or now >= _token_cache[1]:
             code, out = _run(["gh", "auth", "token"], env={**os.environ, **_QUIET})
-            _token_cache = (time.monotonic(), out if code == 0 and out else None)
-        return _token_cache[1]
+            token = out if code == 0 and out else None
+            _token_cache = (now, now + (_TOKEN_TTL_S if token else _RETRY_S), token)
+        return _token_cache[2]
 
 
 def run(*args: str, cwd: str | None = None, timeout: float = 3.0) -> tuple[int, str]:
@@ -1914,15 +2364,17 @@ def run(*args: str, cwd: str | None = None, timeout: float = 3.0) -> tuple[int, 
     if token:
         env["GH_TOKEN"] = token
     code, out = _run(["gh", *args], cwd=cwd, timeout=timeout, env=env)
-    # A revoked or rotated token answers HTTP 401; drop it so the next call
-    # reads it again.
-    if code != 0 and token and "HTTP 401" in out:
+    if code != 0 and token and _AUTH_FAILED_RE.search(out):
+        # A revoked or rotated token: read it again once _RETRY_S has passed
+        # since the last read.
         with _lock:
-            _token_cache = None
+            if _token_cache is not None:
+                read_at, good_until, cached = _token_cache
+                _token_cache = (read_at, min(good_until, read_at + _RETRY_S), cached)
     return code, out
 ```
 
-`periscope/git_pr.py` — add `from periscope import config, gh` (replacing `from periscope import config`). In `pr_state_for`, replace the `_run([...], cwd=path, timeout=8.0)` call with:
+`periscope/git_pr.py` — `from periscope import config, gh` (replacing `from periscope import config`). In `pr_state_for`, replace the `_run([...], cwd=path, timeout=8.0)` call with:
 
 ```python
     code, out = gh.run(
@@ -2064,7 +2516,7 @@ Expected: all pass; then `uv run pytest -q`.
 ```sh
 uv run ruff check --fix periscope/gh.py periscope/tmux.py periscope/git_pr.py periscope/reviews.py periscope/cleanup.py periscope/projects.py tests/conftest.py tests/test_gh.py tests/test_tmux.py tests/test_git_pr.py tests/test_reviews.py && uv run ruff format periscope/gh.py periscope/tmux.py periscope/git_pr.py periscope/reviews.py periscope/cleanup.py periscope/projects.py tests/conftest.py tests/test_gh.py tests/test_tmux.py tests/test_git_pr.py tests/test_reviews.py
 git add periscope/gh.py tests/test_gh.py
-git commit -m "gh: every gh call carries a token read once an hour, telemetry and update check off (THI-450)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- periscope/gh.py periscope/tmux.py periscope/git_pr.py periscope/reviews.py periscope/cleanup.py periscope/projects.py tests/conftest.py tests/test_gh.py tests/test_tmux.py tests/test_git_pr.py tests/test_reviews.py
+git commit -m "gh: every gh call carries a token read every 10 minutes, telemetry and update check off (THI-450)" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- periscope/gh.py periscope/tmux.py periscope/git_pr.py periscope/reviews.py periscope/cleanup.py periscope/projects.py tests/conftest.py tests/test_gh.py tests/test_tmux.py tests/test_git_pr.py tests/test_reviews.py
 ```
 
 ---
@@ -2119,7 +2571,7 @@ describe("refreshTip", () => {
 
 - [ ] **Step 2: Run them and see them fail**
 
-Run: `npm install` (once), then `npx vitest run static/src/chrome/__tests__/resources.test.js static/src/chrome/__tests__/resourcePillRender.test.jsx`
+Run: `npx vitest run static/src/chrome/__tests__/resources.test.js static/src/chrome/__tests__/resourcePillRender.test.jsx`
 Expected: `refreshLine is not a function` / `does not provide an export named 'refresh'`.
 
 - [ ] **Step 3: Implement**
@@ -2130,7 +2582,7 @@ Expected: `refreshLine is not a function` / `does not provide an export named 'r
 export const refresh = signal(null);          // /api/state refresh: { build_s, build_max_s, gap_s, forks_per_min, top_forks } — what a dashboard refresh costs (forks.py)
 ```
 
-`static/src/poll.js` — add `refresh,` to the store import (alphabetical, after `projects,`) and, in `applyState`, after `resources.value = data.resources || null;`:
+`static/src/poll.js` — add `refresh,` to the store import (after `projects,`) and, in `applyState`, after `resources.value = data.resources || null;`:
 
 ```js
     refresh.value = data.refresh || null;
@@ -2233,14 +2685,15 @@ seeds `tmux._panes_snapshot`, `agent_processes._snapshot_cache` and
 `gh._token_cache` with unexpiring empty entries, and clears git_pr's per-path
 caches (a stale entry would start a real `_bg` git refresh). A test of one of
 those paths resets the seed itself (`tests/test_gh.py` overrides
-`_no_gh_token` by name).
+`_no_gh_token` by name). The live-tmux oracle in `test_panes.py` and the
+live-`ps` test in `test_agent_processes.py` fork on purpose.
 ```
 
 `CLAUDE.md` — add two rows to the server module table, after the `log.py` row:
 
 ```markdown
-| `forks.py` | Audit-hook fork counter + each refresh's cost (`/api/state` `refresh`, the resource popover's last line) |
-| `gh.py` | Every `gh` call: token read once an hour, telemetry and update check off |
+| `forks.py` | Audit-hook fork counter + each refresh's cost (`/api/state` `refresh`, the resource popover's last line; the full map on `/api/healthz`) |
+| `gh.py` | Every `gh` call: token read every 10 minutes, telemetry and update check off |
 ```
 
 Commit:
@@ -2253,23 +2706,31 @@ git commit -m "docs: window rows come from one list-panes; conftest seeds; forks
 
 Run: `uv run pytest -q` — Expected: all pass.
 Run: `npm test` — Expected: all pass.
-Run: `bin/check; echo "exit=$?"` — Expected: `exit=0`. Fix anything it reports in the file that introduced it and amend nothing: commit the fix as `area: … (THI-450)`.
+Run: `bin/check; echo "exit=$?"` — Expected: `exit=0`. Fix anything it reports in the file that introduced it, committed as `area: … (THI-450)`.
 Run: `npm run build && git status --short static/dist` — Expected: no output (dist is fresh).
 
-- [ ] **Step 3: Measure before and after, back to back, on :17375**
+- [ ] **Step 3: Measure before and after, interleaved, on :17375**
 
-"Before" is Task 2's commit (refresh block present, old fork pattern); "after" is this branch's head. Both read the same live tmux panes.
+"Before" is Task 2's commit (refresh block and the healthz `forks` map present, old fork pattern); "after" is this branch's head. Both read the same live tmux panes; the runs go before, after, before, after so load drift hits both. Three measures per run:
+- `refresh` (build, gap, forks/min) over a 90 s `/ws/state` subscription, and the full `forks` map from `/api/healthz` at its end;
+- a 60 s sample of the server's process tree for what its children spawn — the audit hook can't see gh's `security` and `gh send-telemetry`, so D6 is proven here, as the spec's own measurement was;
+- the pane count.
 
-Write the measuring client to `$TMPDIR/thi450_measure.py` (not committed):
+A dev server (`is_prod()` false) skips the narrator, the session poke and the MCP listener, so its absolute numbers are below prod's; compare the runs with each other only.
+
+Write three files under `$TMPDIR` (not committed).
+
+`$TMPDIR/thi450_measure.py`:
 
 ```python
-"""Subscribe to the dev server's /ws/state and print the refresh block once
-the last minute is all steady state."""
+"""Subscribe to the dev server's /ws/state for N seconds; print the last
+refresh block, the mean build over the second half, and the full fork map."""
 
 import asyncio
 import json
 import sys
 import time
+import urllib.request
 
 import websockets
 
@@ -2282,42 +2743,140 @@ async def main(seconds: float) -> None:
         while time.monotonic() < end:
             blob = json.loads(await ws.recv())
             builds.append(blob["refresh"]["build_s"])
-        tail = builds[len(builds) // 2 :]
-        print(
-            json.dumps(
-                {"panes": len(blob["windows"]), "frames": len(builds), "build_s_mean_2nd_half": round(sum(tail) / len(tail), 2), **blob["refresh"]},
-                indent=1,
-            )
+    tail = builds[len(builds) // 2 :]
+    forks = json.loads(urllib.request.urlopen("http://127.0.0.1:17375/api/healthz").read())["forks"]
+    print(
+        json.dumps(
+            {
+                "panes": len(blob["windows"]),
+                "frames": len(builds),
+                "build_s_mean_2nd_half": round(sum(tail) / len(tail), 2),
+                "refresh": blob["refresh"],
+                "forks": dict(sorted(forks.items(), key=lambda kv: -kv[1])),
+            },
+            indent=1,
         )
+    )
 
 
-asyncio.run(main(float(sys.argv[1]) if len(sys.argv) > 1 else 120))
+asyncio.run(main(float(sys.argv[1])))
 ```
 
-Check :17375 is free: `lsof -ti tcp:17375` prints nothing (if it prints pids, another dev server is up — stop it first, never anything on :17374).
+`$TMPDIR/thi450_children.py`:
 
-Each server runs in the background — the `( … &)` form below, or your Bash tool's background mode with the same command; stop it by its port, never by process name (prod also runs `uv run server.py`).
+```python
+"""Sample the :17375 server's process tree every 100 ms for N seconds and count
+what it spawned, gh's own children (`security`, `gh send-telemetry`)
+included — the in-process audit hook can't see those."""
 
-Before (`--force` on the remove only because uv leaves a `.venv` in the throwaway detached worktree):
+import collections
+import json
+import os
+import subprocess
+import sys
+import time
+
+
+def table():
+    kids, args = collections.defaultdict(list), {}
+    out = subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,args="], capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"}
+    ).stdout
+    for line in out.splitlines():
+        bits = line.split(None, 2)
+        if len(bits) == 3:
+            kids[int(bits[1])].append(int(bits[0]))
+            args[int(bits[0])] = bits[2]
+    return kids, args
+
+
+roots = {
+    int(p)
+    for p in subprocess.run(["lsof", "-ti", "tcp:17375", "-sTCP:LISTEN"], capture_output=True, text=True).stdout.split()
+}
+seen: dict[int, str] = {}
+telemetry_anywhere: set[int] = set()
+end = time.monotonic() + float(sys.argv[1])
+while time.monotonic() < end:
+    kids, args = table()
+    stack = list(roots)
+    while stack:
+        for child in kids.get(stack.pop(), []):
+            if child not in roots:
+                seen.setdefault(child, args[child])
+            stack.append(child)
+    telemetry_anywhere |= {p for p, a in args.items() if "send-telemetry" in a}
+    time.sleep(0.1)
+by_binary = collections.Counter(os.path.basename(a.split()[0]) for a in seen.values())
+print(
+    json.dumps(
+        {
+            "children_seen": len(seen),
+            "security": by_binary.get("security", 0),
+            "gh_send_telemetry_in_tree": sum("send-telemetry" in a for a in seen.values()),
+            # gh may detach it; this one counts every user's gh, so it is an upper bound.
+            "gh_send_telemetry_anywhere": len(telemetry_anywhere),
+            "by_binary": by_binary.most_common(20),
+        },
+        indent=1,
+    )
+)
+```
+
+`$TMPDIR/thi450_run_one.sh` (stops the server by its port, never by process name — prod also runs `uv run server.py`):
 
 ```sh
+#!/bin/sh
+# thi450_run_one.sh <label> <checkout>
+set -u
+until [ -z "$(lsof -ti tcp:17375)" ]; do sleep 1; done
+(cd "$2" && PERISCOPE_PORT=17375 PERISCOPE_DEV=1 nohup uv run server.py > "$TMPDIR/thi450-$1.log" 2>&1 &)
+until curl -sf http://127.0.0.1:17375/api/healthz > /dev/null; do sleep 1; done
+sleep 30  # first-sight git reads and the PR prewarm settle
+uv run --with websockets python "$TMPDIR/thi450_measure.py" 90 > "$TMPDIR/thi450-$1.json" &
+m=$!
+sleep 15
+uv run python "$TMPDIR/thi450_children.py" 60 > "$TMPDIR/thi450-$1-children.json"
+wait $m
+pids=$(lsof -ti tcp:17375); [ -n "$pids" ] && kill $pids
+grep -c "slow refresh" "$TMPDIR/thi450-$1.log"
+```
+
+Then, from the worktree root (each `thi450_run_one.sh` call takes ~2.5 min — run each in its own command; `--force` on the remove only because uv leaves a `.venv` in the throwaway detached worktree):
+
+```sh
+chmod +x "$TMPDIR/thi450_run_one.sh"
+[ -z "$(lsof -ti tcp:17375)" ] || echo "something is on :17375 — stop it first (never anything on :17374)"
 BEFORE=$(git log --format=%H -1 -F --grep="state: /api/state reports what each refresh costs (THI-450)")
 git worktree add --detach "$TMPDIR/thi450-before" "$BEFORE"
-(cd "$TMPDIR/thi450-before" && PERISCOPE_PORT=17375 PERISCOPE_DEV=1 uv run server.py > "$TMPDIR/thi450-before.log" 2>&1 &)
-until curl -sf http://127.0.0.1:17375/api/healthz > /dev/null; do sleep 1; done
-uv run --with websockets python "$TMPDIR/thi450_measure.py" 120 | tee "$TMPDIR/thi450-before.json"
-pids=$(lsof -ti tcp:17375); [ -n "$pids" ] && kill $pids
-git worktree remove --force "$TMPDIR/thi450-before"
+(cd "$TMPDIR/thi450-before" && uv venv --python 3.14 && uv sync)
 ```
-
-After (from the worktree root):
 
 ```sh
-until [ -z "$(lsof -ti tcp:17375)" ]; do sleep 1; done
-(PERISCOPE_PORT=17375 PERISCOPE_DEV=1 uv run server.py > "$TMPDIR/thi450-after.log" 2>&1 &)
-until curl -sf http://127.0.0.1:17375/api/healthz > /dev/null; do sleep 1; done
-uv run --with websockets python "$TMPDIR/thi450_measure.py" 120 | tee "$TMPDIR/thi450-after.json"
-pids=$(lsof -ti tcp:17375); [ -n "$pids" ] && kill $pids
+"$TMPDIR/thi450_run_one.sh" before-1 "$TMPDIR/thi450-before"
 ```
 
-Expected: `after.forks_per_min` well under `before.forks_per_min`; in `after.top_forks`, `tmux list-panes` and `ps` at about one per refresh (≈ 60/min at a 1 s cadence), no `tmux list-windows`, no `security`, no `git rev-list` / `git ls-files`, `git status` near (cwds × 4)/min; `build_s` and `gap_s` no worse. If `slow refresh` warnings appear in either log, keep them. Record both JSON blocks (and the pane count) in the PR description under "Before / after", next to the remaining assumptions from the spec.
+```sh
+"$TMPDIR/thi450_run_one.sh" after-1 "$PWD"
+```
+
+```sh
+"$TMPDIR/thi450_run_one.sh" before-2 "$TMPDIR/thi450-before"
+```
+
+```sh
+"$TMPDIR/thi450_run_one.sh" after-2 "$PWD"
+```
+
+```sh
+git worktree remove --force "$TMPDIR/thi450-before"
+for f in before-1 after-1 before-2 after-2; do echo "== $f"; cat "$TMPDIR/thi450-$f.json" "$TMPDIR/thi450-$f-children.json"; done
+```
+
+Expected, both "after" runs against both "before" runs:
+- `refresh.forks_per_min` well under before's;
+- in `forks`, `tmux list-panes` and `ps` at about one per refresh (≈ the frame rate), no `tmux list-windows`, no `git rev-list` / `git ls-files` / `git rev-parse` beyond the 10-minute identity reads, `git status` and `git diff` near (cwds × 4)/min;
+- in the children sample, `security` and `gh_send_telemetry_in_tree` at 0 (before: non-zero whenever a `gh` call fell in the window);
+- `build_s` and `gap_s` no worse.
+
+Record all four JSON pairs, the pane count and any `slow refresh` lines in the PR description under "Before / after", next to the spec's assumptions.
