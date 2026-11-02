@@ -443,3 +443,16 @@ def test_state_sends_no_resources_when_the_snapshot_failed(client, mocker, clean
     body = client.get("/api/state").json()
     assert body["windows"][0]["res"] is None
     assert body["resources"] is None
+
+
+def test_state_reports_what_the_refresh_cost(client, mocker, clean_state):
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    _patch(mocker, "all_pane_ids", return_value=set())
+
+    r = client.get("/api/state").json()["refresh"]
+    assert set(r) == {"build_s", "build_max_s", "gap_s", "forks_per_min", "top_forks"}
+    assert 0 <= r["build_s"] <= r["build_max_s"]

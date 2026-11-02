@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 
-from periscope import resources, store, updater, usage
+from periscope import forks, resources, store, updater, usage
 from periscope.activity import pane_status_lines
 from periscope.agent_processes import process_snapshot
 from periscope.channels import _channel_gc
@@ -66,6 +66,7 @@ def build_state() -> dict:
     execution is already tolerated — multiple browser tabs hit /api/state at
     once today — so the hub running it alongside a REST poll adds no new race.
     """
+    started = time.monotonic()
     windows = list_windows()
     update_focus_from_windows(windows)
     _attach_git_then_resolve_pids(windows, full_roster=True)
@@ -165,7 +166,7 @@ def build_state() -> dict:
     from periscope.channels import recent_alerts
 
     walls = usage.walls()
-    return {
+    blob = {
         "windows": result,
         "projects": projects_view,
         "workspaces": workspaces_view,
@@ -206,6 +207,11 @@ def build_state() -> dict:
         # the header pill and its popover.
         "resources": measured.totals if measured else None,
     }
+    forks.record_build(time.monotonic() - started)
+    # What this refresh cost and how often the hub pushes one (forks.py) — the
+    # resource popover's last line.
+    blob["refresh"] = forks.refresh_stats()
+    return blob
 
 
 @router.get("/api/state")

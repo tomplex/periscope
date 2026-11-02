@@ -1,4 +1,5 @@
-"""Every fork the server makes, counted by command over a rolling minute.
+"""Every fork the server makes, counted by command over a rolling minute, and
+what each dashboard refresh costs (/api/state `refresh`).
 
 Counted by a Python audit hook on `subprocess.Popen` — the event
 `subprocess.run`, `check_output` and asyncio's subprocesses all raise — so no
@@ -15,6 +16,8 @@ import time
 from collections import Counter, deque
 from collections.abc import Sequence
 from typing import Any
+
+from periscope.log import log
 
 _WINDOW_S = 60.0
 # The subcommand is the first word-like argument after the binary, so
@@ -78,3 +81,62 @@ def fork_counts() -> Counter[str]:
     with _lock:
         _prune(_forks, now)
         return Counter(key for _, key in _forks)
+
+
+# A build this slow is logged with the commands that forked most — at most
+# once a minute, since a slow machine makes every build slow.
+_SLOW_BUILD_S = 3.0
+_SLOW_LOG_EVERY_S = 60.0
+_slow_logged_at: float | None = None
+# (monotonic time, build_state seconds), oldest first.
+_builds: deque[tuple[float, float]] = deque()
+# The state hub's last gap between two broadcasts; None until it has made two.
+_last_gap: float | None = None
+
+
+def _secs(s: float | None) -> float | None:
+    return None if s is None else round(s, 2)
+
+
+def record_build(seconds: float) -> None:
+    """Note one build_state's duration; a slow one is logged with the commands
+    that forked most over the last minute."""
+    global _slow_logged_at
+    now = time.monotonic()
+    with _lock:
+        _builds.append((now, seconds))
+        log_it = seconds > _SLOW_BUILD_S and (_slow_logged_at is None or now - _slow_logged_at >= _SLOW_LOG_EVERY_S)
+        if log_it:
+            _slow_logged_at = now
+    if log_it:
+        log.warning(
+            "slow refresh: build_state took %.1f s; top forks in the last minute: %s",
+            seconds,
+            fork_counts().most_common(5),
+        )
+
+
+def record_gap(seconds: float) -> None:
+    """Note the state hub's gap between two broadcasts — how often a dashboard
+    actually updates."""
+    global _last_gap
+    _last_gap = seconds
+
+
+def refresh_stats() -> dict:
+    """/api/state's `refresh` block: the last build, the slowest over the last
+    minute, the hub's last gap, and the minute's forks — total and the five
+    largest commands."""
+    counts = fork_counts()
+    now = time.monotonic()
+    with _lock:
+        _prune(_builds, now)
+        last = _builds[-1][1] if _builds else None
+        slowest = max((s for _, s in _builds), default=None)
+    return {
+        "build_s": _secs(last),
+        "build_max_s": _secs(slowest),
+        "gap_s": _secs(_last_gap),
+        "forks_per_min": sum(counts.values()),
+        "top_forks": counts.most_common(5),
+    }

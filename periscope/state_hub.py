@@ -13,8 +13,10 @@ surface without raising this rate.
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import Callable
 
+from periscope import forks
 from periscope.log import log
 
 # Self-throttled: each cycle computes, then sleeps this long, then repeats — so
@@ -93,9 +95,13 @@ async def run() -> None:
 
 
 async def _run_loop(loop: asyncio.AbstractEventLoop, build_state: Callable[[], dict]) -> None:
+    # When the last broadcast went out. Reset by an idle stretch: the gap
+    # across one is how long nobody watched, not a refresh interval.
+    last_at: float | None = None
     while True:
         if not _subscribers:
             # Nobody watching: compute nothing. Wait for a subscriber (or kick).
+            last_at = None
             _wake.clear()
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(_wake.wait(), timeout=_IDLE_POLL_S)
@@ -103,6 +109,10 @@ async def _run_loop(loop: asyncio.AbstractEventLoop, build_state: Callable[[], d
         try:
             blob = await loop.run_in_executor(None, build_state)
             _broadcast(json.dumps(blob))
+            now = time.monotonic()
+            if last_at is not None:
+                forks.record_gap(now - last_at)
+            last_at = now
         except Exception:
             log.warning("state broadcast tick failed", exc_info=True)
         # Sleep the interval, but cut it short if an event kicks us.
