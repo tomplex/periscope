@@ -387,6 +387,82 @@ fn sweep(targets: &[i32], still_valid: impl Fn() -> bool, mut kill: impl FnMut(i
     }
 }
 
+
+pub fn start_monitor(app: &AppHandle) {
+    mark_renderer_born();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let threshold = threshold_bytes();
+        let min_age = env_secs("PERISCOPE_RECYCLE_MIN_AGE_S", 1800);
+        let unfocused_gate = env_secs("PERISCOPE_RECYCLE_UNFOCUSED_S", 30);
+        let idle_gate = env_secs("PERISCOPE_RECYCLE_IDLE_S", 300);
+        shell_log(&format!(
+            "[recycle] monitor started (threshold {} MB, min age {}s, unfocused gate {}s, idle gate {}s)",
+            threshold / (1024 * 1024),
+            min_age.as_secs(),
+            unfocused_gate.as_secs(),
+            idle_gate.as_secs()
+        ));
+        loop {
+            std::thread::sleep(Duration::from_secs(CHECK_INTERVAL_S));
+            let renderer_born = renderer_born_at(); // snapshot before the pid read; sweep rechecks against it
+            let Some(pid) = read_webcontent_pid(&handle) else {
+                continue; // no fresh pid: no sweep and no recycle this tick
+            };
+            if !RECYCLING.load(Ordering::SeqCst) {
+                let targets = sweep_targets(&app_webcontents(), &mut live_renderers().seen, pid);
+                sweep(
+                    &targets,
+                    || !RECYCLING.load(Ordering::SeqCst) && renderer_born_at() == renderer_born,
+                    |target| {
+                        let fp = phys_footprint(target).unwrap_or(0) / (1024 * 1024);
+                        unsafe { libc::kill(target, libc::SIGKILL) };
+                        shell_log(&format!("[recycle] killed leftover WebContent {target} ({fp} MB)"));
+                    },
+                );
+            }
+            {
+                let mut renderers = live_renderers();
+                renderers.last = Some(pid);
+                renderers.seen.insert(pid);
+            }
+            let Some(fp) = phys_footprint(pid) else {
+                continue;
+            };
+            if fp < threshold {
+                continue;
+            }
+            let focus = crate::focus::focus(); // one snapshot for the gate and the log line
+            let inputs = Inputs {
+                footprint: fp,
+                threshold,
+                age: renderer_age(),
+                min_age,
+                unfocused_for: focus.unfocused_for(),
+                unfocused_gate,
+                idle: Duration::try_from_secs_f64(seconds_since_last_input()).unwrap_or_default(),
+                idle_gate,
+            };
+            if !should_recycle(&inputs) {
+                let focus = match focus {
+                    Focus::UnfocusedSince(t) => format!("unfocused {}s", t.elapsed().as_secs()),
+                    Focus::Focused => "focused".to_string(),
+                    Focus::Unknown => "focus unknown".to_string(),
+                };
+                shell_log(&format!(
+                    "[recycle] over threshold ({} MB), renderer {}s old, {focus}, input {}s ago — waiting",
+                    fp / (1024 * 1024),
+                    inputs.age.as_secs(),
+                    inputs.idle.as_secs()
+                ));
+                continue;
+            }
+            let h = handle.clone();
+            let _ = handle.run_on_main_thread(move || recycle_now(&h));
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,79 +642,4 @@ mod tests {
         );
         assert_eq!(killed, vec![12]);
     }
-}
-
-pub fn start_monitor(app: &AppHandle) {
-    mark_renderer_born();
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        let threshold = threshold_bytes();
-        let min_age = env_secs("PERISCOPE_RECYCLE_MIN_AGE_S", 1800);
-        let unfocused_gate = env_secs("PERISCOPE_RECYCLE_UNFOCUSED_S", 30);
-        let idle_gate = env_secs("PERISCOPE_RECYCLE_IDLE_S", 300);
-        shell_log(&format!(
-            "[recycle] monitor started (threshold {} MB, min age {}s, unfocused gate {}s, idle gate {}s)",
-            threshold / (1024 * 1024),
-            min_age.as_secs(),
-            unfocused_gate.as_secs(),
-            idle_gate.as_secs()
-        ));
-        loop {
-            std::thread::sleep(Duration::from_secs(CHECK_INTERVAL_S));
-            let renderer_born = renderer_born_at(); // snapshot before the pid read; sweep rechecks against it
-            let Some(pid) = read_webcontent_pid(&handle) else {
-                continue; // no fresh pid: no sweep and no recycle this tick
-            };
-            if !RECYCLING.load(Ordering::SeqCst) {
-                let targets = sweep_targets(&app_webcontents(), &mut live_renderers().seen, pid);
-                sweep(
-                    &targets,
-                    || !RECYCLING.load(Ordering::SeqCst) && renderer_born_at() == renderer_born,
-                    |target| {
-                        let fp = phys_footprint(target).unwrap_or(0) / (1024 * 1024);
-                        unsafe { libc::kill(target, libc::SIGKILL) };
-                        shell_log(&format!("[recycle] killed leftover WebContent {target} ({fp} MB)"));
-                    },
-                );
-            }
-            {
-                let mut renderers = live_renderers();
-                renderers.last = Some(pid);
-                renderers.seen.insert(pid);
-            }
-            let Some(fp) = phys_footprint(pid) else {
-                continue;
-            };
-            if fp < threshold {
-                continue;
-            }
-            let focus = crate::focus::focus(); // one snapshot for the gate and the log line
-            let inputs = Inputs {
-                footprint: fp,
-                threshold,
-                age: renderer_age(),
-                min_age,
-                unfocused_for: focus.unfocused_for(),
-                unfocused_gate,
-                idle: Duration::try_from_secs_f64(seconds_since_last_input()).unwrap_or_default(),
-                idle_gate,
-            };
-            if !should_recycle(&inputs) {
-                let focus = match focus {
-                    Focus::UnfocusedSince(t) => format!("unfocused {}s", t.elapsed().as_secs()),
-                    Focus::Focused => "focused".to_string(),
-                    Focus::Unknown => "focus unknown".to_string(),
-                };
-                shell_log(&format!(
-                    "[recycle] over threshold ({} MB), renderer {}s old, {focus}, input {}s ago — waiting",
-                    fp / (1024 * 1024),
-                    inputs.age.as_secs(),
-                    inputs.idle.as_secs()
-                ));
-                continue;
-            }
-            let h = handle.clone();
-            let _ = handle.run_on_main_thread(move || recycle_now(&h));
-        }
-    });
 }
