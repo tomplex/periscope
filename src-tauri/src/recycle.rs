@@ -289,14 +289,10 @@ pub fn recycle_now(app: &AppHandle) {
                 .build();
                 let _ = tx.send(match result {
                     Ok(window) => {
-                        // wry 0.55 calls NSApplication::activate on every webview it
-                        // builds on macOS 14+, regardless of `focused` — so a
-                        // `.focused(false)` builder flag and an explicit `show()`
-                        // changed nothing (the builder's default window is already
-                        // visible). Restoring everything but VISIBLE is what drops
-                        // the forced activateIgnoringOtherApps: YES; wry's own
-                        // activate() is cooperative, so macOS may decline it while
-                        // another app is frontmost (verified by the manual test).
+                        // Everything but VISIBLE: the plugin's VISIBLE restore calls
+                        // set_focus (activateIgnoringOtherApps: YES). wry's own
+                        // activate() on every webview it builds still lands, so an
+                        // unfocused recycle hands focus back once the rebuild is in.
                         let _ = window.restore_state(StateFlags::all() - StateFlags::VISIBLE);
                         if was_focused {
                             let _ = window.set_focus();
@@ -319,10 +315,19 @@ pub fn recycle_now(app: &AppHandle) {
                     shell_log("[recycle] webview rebuilt");
                     RECYCLING.store(false, Ordering::SeqCst);
                     if let Some(pid) = hand_back_to {
-                        // After wry's own activate() has landed.
+                        // After wry's own activate() has landed. Only while Periscope
+                        // (wry's activation) or that app is frontmost: if you moved
+                        // to a third app meanwhile, stay there.
                         std::thread::sleep(Duration::from_millis(500));
-                        let _ = handle.run_on_main_thread(move || activate_app(pid));
-                        shell_log(&format!("[recycle] handed focus back to pid {pid}"));
+                        let _ = handle.run_on_main_thread(move || match frontmost_other_app() {
+                            Some(other) if other != pid => {
+                                shell_log(&format!("[recycle] left focus with pid {other}"))
+                            }
+                            _ => {
+                                activate_app(pid);
+                                shell_log(&format!("[recycle] handed focus back to pid {pid}"));
+                            }
+                        });
                     }
                     return;
                 }
