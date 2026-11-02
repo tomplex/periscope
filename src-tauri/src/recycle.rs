@@ -2,11 +2,10 @@
 //
 // Real (trusted) user input mints IOSurface-backed regions in the WebContent
 // process that nothing reclaims: not idle, not page reload (same process),
-// not memory_pressure -l critical. Measured 2026-07-28: ~2.5 regions per rail
-// click, 197 → 922 regions in an hour of use, 2645 regions ≈ 4.8GB after four
-// days — the renderer was swapping the machine. Only WebContent process death
-// frees them, and a reload reuses the process — so we destroy and recreate
-// the webview window itself.
+// not memory_pressure -l critical. ~2.5 regions per rail click; 2645 regions
+// ≈ 4.8GB after four days had the renderer swapping the machine. Only
+// WebContent process death frees them, and a reload reuses the process — so
+// we destroy and recreate the webview window itself.
 //
 // Policy: every CHECK_INTERVAL_S the renderer's phys_footprint is read via
 // proc_pid_rusage (same number `footprint` prints; RSS is misleading — most
@@ -217,8 +216,8 @@ fn dirs_path() -> std::path::PathBuf {
 
 // Destroy the sole window, then rebuild it on a later tick. Rebuilding the
 // same label in the same main-thread closure as destroy() killed the whole
-// app (observed 2026-07-28: process gone, no window) — the deferred rebuild
-// plus the ExitRequested veto in main.rs covers the windowless gap.
+// app (process gone, no window) — the deferred rebuild plus the
+// ExitRequested veto in main.rs covers the windowless gap.
 pub fn recycle_now(app: &AppHandle) {
     if RECYCLING.swap(true, Ordering::SeqCst) {
         return; // one at a time

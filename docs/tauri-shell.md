@@ -35,36 +35,42 @@ IOSurface-backed graphics regions under real (trusted) user input — ~2.5
 regions per rail click, measured 2026-07-28; 2645 regions ≈ 4.8GB killed a
 4-day renderer. Nothing in-page fixes it: reload reuses the WebContent
 process, memory_pressure doesn't reclaim, synthetic events don't even
-reproduce it. The shell therefore destroys and recreates the webview window
-when the renderer's phys_footprint (via WKWebView's private
-`_webProcessIdentifier` + `proc_pid_rusage`) tops `PERISCOPE_RECYCLE_GB`
-(default 2.0), the renderer has lived `PERISCOPE_RECYCLE_MIN_AGE_S` (default
-1800s) since the last rebuild, and either periscope has been unfocused
-`PERISCOPE_RECYCLE_UNFOCUSED_S` (default 30s) or system input has been idle
-`PERISCOPE_RECYCLE_IDLE_S` (default 300s) — plus a manual View → Recycle
-Webview item with no gate. The rebuild restores every saved window state but
-visibility and takes focus only if periscope had it when the recycle
-started. wry still activates the app for every webview it creates (macOS
-14+), and macOS honours that even while you're in another app, so a recycle
-that started unfocused notes the frontmost app and activates it again 0.5 s
-after the rebuild, provided Periscope or that app is still frontmost — you
-stay where you were. Every rebuild attempt's closure sends its result on one
-shared channel, so an attempt that times out but later builds the window
-still counts as the success it is instead of the loop giving up with the
-renderer leaked. Two hard-won invariants: the rebuild must happen on a LATER
-tick than destroy() (same-tick rebuild exits the whole app; an ExitRequested
-veto in main.rs covers the windowless gap), and a WebContent WebKit parks in
-its process cache at full leaked size instead of exiting must still be
-killed — every check re-reads the live WebContent pid on the main thread
-and, once that read answers with no recycle in flight, SIGKILLs any other
-app-owned WebContent (by `proc_listallpids` +
-`responsibility_get_pid_responsible_for_pid`) at or above 256 MB, sparing
-WebKit's ~7 MB pre-warmed spare. Actions log to
-`~/.config/periscope/shell.log`. Test by lowering `PERISCOPE_RECYCLE_GB`,
-`PERISCOPE_RECYCLE_MIN_AGE_S`, `PERISCOPE_RECYCLE_UNFOCUSED_S` and
-`PERISCOPE_RECYCLE_IDLE_S` with `open --env NAME=value Periscope.app` (GUI
-apps don't inherit shell env, and a `launchctl setenv` from a Claude Code
-shell didn't reach an app launched with `open`) and watching that log.
+reproduce it. So the shell destroys and recreates the webview window, and
+logs what it does to `~/.config/periscope/shell.log`.
+
+- **Gate.** Every minute the monitor reads the renderer's phys_footprint
+  (WKWebView's private `_webProcessIdentifier` + `proc_pid_rusage`). It
+  recycles when that tops `PERISCOPE_RECYCLE_GB` (default 2.0), the renderer
+  has lived `PERISCOPE_RECYCLE_MIN_AGE_S` (default 1800s) since the last
+  rebuild, and either periscope has been unfocused
+  `PERISCOPE_RECYCLE_UNFOCUSED_S` (default 30s) or system input has been idle
+  `PERISCOPE_RECYCLE_IDLE_S` (default 300s). View → Recycle Webview recycles
+  with no gate.
+- **Rebuild without activation.** The window-state plugin restores every
+  window it sees, each rebuild included, and its VISIBLE restore calls
+  `set_focus` (`activateIgnoringOtherApps: YES`), so main.rs gives it every
+  flag but VISIBLE. Nothing in the rebuild then activates the app — wry's own
+  `activate()` is declined while another app is frontmost — and keystrokes
+  stay with the app you're in. A minimized window is minimized again.
+- **One result channel.** Every rebuild attempt sends its result on one
+  shared channel, so an attempt that times out but later builds the window
+  counts as the success it is instead of the loop giving up with the
+  renderer leaked.
+- **Sweep of renderers seen live.** Every check kills each app-owned
+  WebContent (`proc_listallpids` + `responsibility_get_pid_responsible_for_pid`)
+  that the monitor read as live on an earlier tick and that isn't live now,
+  rechecking before each kill that no rebuild has landed since the live pid
+  was read. The live pid is spared even when seen before: WebKit's process
+  cache can hand a parked renderer back to a new webview.
+- **Invariant: the rebuild runs on a LATER tick than `destroy()`.** A
+  same-tick rebuild exits the whole app; an ExitRequested veto in main.rs
+  covers the windowless gap.
+- **Invariant: a displaced WebContent must be killed.** WebKit parks it in its
+  process cache at full leaked size instead of exiting it; the sweep is what
+  frees it.
+- **Testing.** Lower the knobs with `open --env NAME=value Periscope.app`
+  (GUI apps don't inherit shell env, and a `launchctl setenv` from a Claude
+  Code shell didn't reach an app launched with `open`) and watch `shell.log`.
 
 **Zoom (`src-tauri/src/zoom.rs`).** A bare WKWebView has no ⌘+/⌘−, so
 View carries Zoom In (⌘=), Zoom Out (⌘-) and Actual Size (⌘0), stepping
