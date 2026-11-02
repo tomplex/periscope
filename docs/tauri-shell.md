@@ -44,8 +44,10 @@ when the renderer's phys_footprint (via WKWebView's private
 `PERISCOPE_RECYCLE_IDLE_S` (default 300s) — plus a manual View → Recycle
 Webview item with no gate. The rebuild restores every saved window state but
 visibility and takes focus only if periscope had it when the recycle
-started, so a recycle firing while you've left for another app never pulls
-you back; every rebuild attempt's closure sends its result on one shared
+started. wry still activates the app for every webview it creates (macOS
+14+), and macOS honours that even while you're in another app, so a recycle
+that started unfocused notes the frontmost app and activates it again 0.5 s
+after the rebuild — you stay where you were; every rebuild attempt's closure sends its result on one shared
 channel, so an attempt that times out but later builds the window still
 counts as the success it is instead of the loop giving up with the renderer
 leaked. Two hard-won invariants: the rebuild must happen on a LATER tick than
@@ -58,8 +60,9 @@ WebContent (by `proc_listallpids` + `responsibility_get_pid_responsible_for_pid`
 at or above 256 MB, sparing WebKit's ~7 MB pre-warmed spare. Actions log to
 `~/.config/periscope/shell.log`. Test by lowering `PERISCOPE_RECYCLE_GB`,
 `PERISCOPE_RECYCLE_MIN_AGE_S`, `PERISCOPE_RECYCLE_UNFOCUSED_S` and
-`PERISCOPE_RECYCLE_IDLE_S` via `launchctl setenv` (GUI apps don't inherit
-shell env; unset afterwards) and watching that log.
+`PERISCOPE_RECYCLE_IDLE_S` with `open --env NAME=value Periscope.app` (GUI
+apps don't inherit shell env, and a `launchctl setenv` from a Claude Code
+shell didn't reach an app launched with `open`) and watching that log.
 
 **Zoom (`src-tauri/src/zoom.rs`).** A bare WKWebView has no ⌘+/⌘−, so
 View carries Zoom In (⌘=), Zoom Out (⌘-) and Actual Size (⌘0), stepping

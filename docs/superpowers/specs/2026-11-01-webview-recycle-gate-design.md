@@ -57,9 +57,11 @@ first still means the old window is registered, so the loop keeps retrying as to
 before `destroy()`. The rebuild restores every saved state except visibility
 (`StateFlags::all() - StateFlags::VISIBLE`), which removes the plugin's forced `activateIgnoringOtherApps: YES`, and
 calls `set_focus()` only when periscope had focus — so the manual menu recycle keeps the window focused. wry still
-calls `NSApplication::activate` for every webview it creates (macOS 14+), but that request is cooperative: macOS may
-decline it while another app is frontmost. Whether it does is the manual test's first question. It also records the
-rebuild time for D1's minimum age.
+calls `NSApplication::activate` for every webview it creates (macOS 14+), and the manual test showed macOS honours
+it while another app is frontmost (a recycle with Claude frontmost left Periscope frontmost 0.5 s later). So a
+recycle that started unfocused notes the frontmost app's pid (`NSWorkspace.frontmostApplication`) before
+`destroy()`, and 0.5 s after the rebuild lands activates it again (`NSRunningApplication activateWithOptions:`);
+verified: Claude stayed frontmost through two recycles. It also records the rebuild time for D1's minimum age.
 
 **D5 — Every check sweeps leftover renderers, but only with a fresh live pid; the after-recycle reaper goes.** Once
 per `CHECK_INTERVAL_S`, the live WebContent pid is read on the main thread and the answer comes back on a channel
@@ -101,9 +103,9 @@ clears today's 41485.
   - `sweep_targets`: skips the live pid, skips < 256 MB, takes nothing when the live pid is unknown (0), keeps
     ≥ 256 MB others.
   - `focus`: Unknown → Focused → UnfocusedSince (clock runs, a repeated false keeps it) → Focused.
-- Manual, on the rebuilt `.app` (replacing the running app needs the user's go-ahead), with
-  `launchctl setenv PERISCOPE_RECYCLE_GB 0.5`, `…_MIN_AGE_S 60` and `…_UNFOCUSED_S 10` (GUI apps don't inherit shell
-  env; unset afterwards):
+- Manual, on the rebuilt `.app` (replacing the running app needs the user's go-ahead), launched with
+  `open --env PERISCOPE_RECYCLE_GB=0.2 --env …_MIN_AGE_S=60 --env …_UNFOCUSED_S=10` (`launchctl setenv` from the
+  agent's shell did not reach the app):
   - switching to another app for 10 s recycles, and you **stay** in that app (D4);
   - no second recycle within the minimum age;
   - the manual menu recycle leaves periscope focused;
@@ -113,11 +115,13 @@ clears today's 41485.
 
 ## Assumptions
 
-- wry's per-webview `NSApplication::activate` (macOS 14+) is declined while another app is frontmost, so an
-  unfocused-gate recycle leaves you where you are. If the manual test shows focus being taken, the fix is to record
-  the frontmost app before the rebuild and hand activation back to it.
-- A window shown while the app is inactive doesn't emit `Focused(true)`: after an unfocused recycle the next "waiting"
-  line must still read "unfocused Ns" with the time still counting, or the unfocused gate would be stuck.
+- Handing focus back 0.5 s after the rebuild lands comes after wry's activation; verified on macOS 27 (Claude stayed
+  frontmost at every sample from 0.25 s to 5 s). A slower machine could show Periscope briefly before the hand-back.
+- After a hand-back the unfocused clock restarts (wry's activation emits `Focused(true)`, the hand-back
+  `Focused(false)`); verified: the next "waiting" line read "unfocused 59s". With the 30 min minimum age this only
+  delays the next recycle by the 30 s gate.
+- Not exercised by the manual test (no UI scripting available): the manual menu recycle while focused, and whether
+  minimizing counts as unfocused.
 - The app has exactly one legitimate WebContent ≥ 256 MB. A service-worker renderer (`main.jsx` registers `/sw.js`)
   or a future WebKit site-isolation process would break that; today's listing shows none.
 - Bad knob values (negative, NaN, infinite) fall back to the default rather than stopping the monitor thread.
