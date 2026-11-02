@@ -387,7 +387,6 @@ fn sweep(targets: &[i32], still_valid: impl Fn() -> bool, mut kill: impl FnMut(i
     }
 }
 
-
 pub fn start_monitor(app: &AppHandle) {
     mark_renderer_born();
     let handle = app.clone();

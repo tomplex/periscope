@@ -82,8 +82,8 @@ private libSystem, the call `periscope/resources.py` also uses) is this process.
 seen set other than this tick's live pid (WebKit's process cache can hand a parked renderer back to a new webview),
 and drops seen pids that are no longer candidates. Each kill re-checks (recycle flag, rebuild time) immediately
 before signalling, so a stale pid after an unannounced renderer restart (wry reloads the page itself when its
-WebContent dies) or a recycle that finished mid-sweep is not mistaken for a leftover; what remains is a microsecond
-gap against a crash-reload, whose cost is one page reload. Every renderer the sweep killed in the log was one the
+WebContent dies) or a recycle that finished mid-sweep is not mistaken for a leftover; what remains is a few-millisecond
+gap (pid read, scan, kill) against a crash-reload, whose cost is one page reload. Every renderer the sweep killed in the log was one the
 monitor had read live (each "killed leftover WebContent N" names the pid of the preceding "destroying webview"), so
 the seen set replaces a size floor: WebKit's pre-warmed spare, a service-worker renderer or the Web Inspector is
 never a target. This one path replaces `reap_old_webcontent`'s 10 s kill: it covers a normal recycle (within one
