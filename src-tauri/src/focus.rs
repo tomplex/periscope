@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq)]
-enum Focus {
+pub enum Focus {
     Unknown, // launch, before the first window event
     Focused,
     UnfocusedSince(Instant),
@@ -16,7 +16,18 @@ enum Focus {
 
 static FOCUS: Mutex<Focus> = Mutex::new(Focus::Unknown);
 
-fn state() -> Focus {
+impl Focus {
+    /// How long periscope has been unfocused; None while focused or not yet known.
+    pub fn unfocused_for(self) -> Option<Duration> {
+        match self {
+            Focus::UnfocusedSince(t) => Some(t.elapsed()),
+            _ => None,
+        }
+    }
+}
+
+/// One locked read: a reader that needs more than one answer asks this snapshot.
+pub fn focus() -> Focus {
     *FOCUS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -32,15 +43,7 @@ pub fn set_focused(focused: bool) {
 }
 
 pub fn is_focused() -> bool {
-    state() == Focus::Focused
-}
-
-/// How long periscope has been unfocused; None while focused or not yet known.
-pub fn unfocused_for() -> Option<Duration> {
-    match state() {
-        Focus::UnfocusedSince(t) => Some(t.elapsed()),
-        _ => None,
-    }
+    focus() == Focus::Focused
 }
 
 #[cfg(test)]
@@ -50,23 +53,23 @@ mod tests {
     // One test: the state is process-global and cargo runs tests in parallel.
     #[test]
     fn tracks_focus_and_how_long_it_has_been_lost() {
-        assert_eq!(unfocused_for(), None); // Unknown at start
+        assert_eq!(focus().unfocused_for(), None); // Unknown at start
         assert!(!is_focused());
 
         set_focused(true);
         assert!(is_focused());
-        assert_eq!(unfocused_for(), None);
+        assert_eq!(focus().unfocused_for(), None);
 
         set_focused(false);
         assert!(!is_focused());
         std::thread::sleep(Duration::from_millis(30));
-        let first = unfocused_for().expect("unfocused");
+        let first = focus().unfocused_for().expect("unfocused");
         assert!(first >= Duration::from_millis(30));
 
         set_focused(false); // a recycle's Destroyed
-        assert!(unfocused_for().expect("unfocused") >= first);
+        assert!(focus().unfocused_for().expect("unfocused") >= first);
 
         set_focused(true);
-        assert_eq!(unfocused_for(), None);
+        assert_eq!(focus().unfocused_for(), None);
     }
 }

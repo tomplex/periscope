@@ -34,6 +34,8 @@ use objc2::{msg_send, sel};
 use tauri::{AppHandle, Manager, WebviewUrl};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+use crate::focus::Focus;
+
 const CHECK_INTERVAL_S: u64 = 60;
 const DASHBOARD_URL: &str = "http://127.0.0.1:17374";
 
@@ -611,23 +613,22 @@ pub fn start_monitor(app: &AppHandle) {
             if fp < threshold {
                 continue;
             }
-            let unfocused_for = crate::focus::unfocused_for();
-            let is_focused = crate::focus::is_focused(); // read alongside unfocused_for, not later in the log path
+            let focus = crate::focus::focus(); // one snapshot for the gate and the log line
             let inputs = Inputs {
                 footprint: fp,
                 threshold,
                 age: renderer_age(),
                 min_age,
-                unfocused_for,
+                unfocused_for: focus.unfocused_for(),
                 unfocused_gate,
                 idle: Duration::try_from_secs_f64(seconds_since_last_input()).unwrap_or_default(),
                 idle_gate,
             };
             if !should_recycle(&inputs) {
-                let focus = match inputs.unfocused_for {
-                    Some(d) => format!("unfocused {}s", d.as_secs()),
-                    None if is_focused => "focused".to_string(),
-                    None => "focus unknown".to_string(),
+                let focus = match focus {
+                    Focus::UnfocusedSince(t) => format!("unfocused {}s", t.elapsed().as_secs()),
+                    Focus::Focused => "focused".to_string(),
+                    Focus::Unknown => "focus unknown".to_string(),
                 };
                 shell_log(&format!(
                     "[recycle] over threshold ({} MB), renderer {}s old, {focus}, input {}s ago — waiting",
