@@ -54,24 +54,22 @@ fn live_renderers() -> std::sync::MutexGuard<'static, LiveRenderers> {
     LIVE_RENDERERS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn env_f64(name: &str, default: f64) -> f64 {
-    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+// A knob that isn't a finite, non-negative number falls back to its default
+// ("inf", "NaN" and "-1" all parse as f64).
+fn env_number(name: &str) -> Option<f64> {
+    std::env::var(name).ok()?.parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0)
 }
 
 // A fresh dashboard already measures 1.1–1.6 GB; leaked renderers reach 3–7.7.
 fn threshold_bytes() -> u64 {
-    let gb = env_f64("PERISCOPE_RECYCLE_GB", 2.0);
-    let gb = if gb.is_finite() && gb >= 0.0 { gb } else { 2.0 };
+    let gb = env_number("PERISCOPE_RECYCLE_GB").unwrap_or(2.0);
     (gb * 1024.0 * 1024.0 * 1024.0) as u64
 }
 
-// Duration::from_secs_f64 panics on a negative, NaN, infinite or overflowing
-// value, and "inf"/"-1"/"1e30" all parse as f64 — a bad knob must not kill
-// the monitor thread.
+// A finite value can still overflow a Duration ("1e30"), where from_secs_f64
+// would panic the monitor thread.
 fn env_secs(name: &str, default_s: u64) -> Duration {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
+    env_number(name)
         .and_then(|s| Duration::try_from_secs_f64(s).ok())
         .unwrap_or(Duration::from_secs(default_s))
 }
