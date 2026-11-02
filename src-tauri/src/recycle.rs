@@ -438,6 +438,12 @@ mod tests {
         std::env::set_var("PERISCOPE_TEST_ENV_SECS_INF", "inf");
         assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_INF", 7), Duration::from_secs(7));
 
+        std::env::set_var("PERISCOPE_TEST_ENV_SECS_NAN", "NaN");
+        assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_NAN", 7), Duration::from_secs(7));
+
+        std::env::set_var("PERISCOPE_TEST_ENV_SECS_HUGE", "1e30");
+        assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_HUGE", 7), Duration::from_secs(7));
+
         std::env::set_var("PERISCOPE_TEST_ENV_SECS_NEG", "-1");
         assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_NEG", 7), Duration::from_secs(7));
 
@@ -445,10 +451,17 @@ mod tests {
         assert_eq!(env_secs("PERISCOPE_TEST_ENV_SECS_OK", 7), Duration::from_secs_f64(45.0));
     }
 
+    // One test: PERISCOPE_RECYCLE_GB is process-global and cargo runs tests in parallel.
     #[test]
-    fn threshold_bytes_falls_back_on_bad_gb() {
-        std::env::set_var("PERISCOPE_RECYCLE_GB", "-1");
-        assert_eq!(threshold_bytes(), (2.0 * 1024.0 * 1024.0 * 1024.0) as u64);
+    fn threshold_bytes_defaults_to_2_gb_and_falls_back_on_bad_gb() {
+        std::env::remove_var("PERISCOPE_RECYCLE_GB");
+        assert_eq!(threshold_bytes(), 2 * GB);
+        for bad in ["-1", "inf", "NaN"] {
+            std::env::set_var("PERISCOPE_RECYCLE_GB", bad);
+            assert_eq!(threshold_bytes(), 2 * GB, "PERISCOPE_RECYCLE_GB={bad}");
+        }
+        std::env::set_var("PERISCOPE_RECYCLE_GB", "0.5");
+        assert_eq!(threshold_bytes(), GB / 2);
         std::env::remove_var("PERISCOPE_RECYCLE_GB");
     }
 
