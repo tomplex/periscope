@@ -23,7 +23,8 @@
 // debug-build app, guarded by respondsToSelector so an OS that drops the
 // selector degrades to "manual recycle only" instead of crashing.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -38,7 +39,19 @@ const DASHBOARD_URL: &str = "http://127.0.0.1:17374";
 // Set while a recycle is mid-flight so the ExitRequested handler in main.rs
 // can veto the "last window closed → quit" path between destroy and rebuild.
 pub static RECYCLING: AtomicBool = AtomicBool::new(false);
-static WEBCONTENT_PID: AtomicI32 = AtomicI32::new(0);
+
+// The WebContent pids the monitor has read as live: `last` names the renderer
+// a recycle destroys, `seen` is what the sweep may kill once it isn't live.
+struct LiveRenderers {
+    last: Option<i32>,
+    seen: BTreeSet<i32>,
+}
+
+static LIVE_RENDERERS: Mutex<LiveRenderers> = Mutex::new(LiveRenderers { last: None, seen: BTreeSet::new() });
+
+fn live_renderers() -> std::sync::MutexGuard<'static, LiveRenderers> {
+    LIVE_RENDERERS.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn env_f64(name: &str, default: f64) -> f64 {
     std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
@@ -120,9 +133,6 @@ extern "C" {
 }
 
 fn phys_footprint(pid: i32) -> Option<u64> {
-    if pid <= 0 {
-        return None;
-    }
     let mut info = RusageInfoV0 {
         ri_uuid: [0; 16],
         ri_user_time: 0,
@@ -158,16 +168,13 @@ fn seconds_since_last_input() -> f64 {
 
 // --- WebContent pid off the live WKWebView (the read dispatches to the main thread) ---
 
-/// The live WebContent pid, read off the WKWebView on the main thread. 0 with
-/// no `main` window or an OS without the selector; None with no fresh pid —
-/// the window going away, with_webview failing, or no answer within the
+/// The live WebContent pid, read off the WKWebView on the main thread. None
+/// with no `main` window, an OS without the selector, or no answer within the
 /// timeout — a stale pid must never reach the sweep (wry reloads the page
 /// itself when its WebContent dies, so the live pid can change without a
 /// recycle).
 fn read_webcontent_pid(app: &AppHandle) -> Option<i32> {
-    let Some(window) = app.get_webview_window("main") else {
-        return Some(0);
-    };
+    let window = app.get_webview_window("main")?;
     let (tx, rx) = std::sync::mpsc::channel::<i32>();
     window
         .with_webview(move |webview| {
@@ -185,7 +192,7 @@ fn read_webcontent_pid(app: &AppHandle) -> Option<i32> {
             let _ = tx.send(pid);
         })
         .ok()?;
-    rx.recv_timeout(Duration::from_secs(2)).ok()
+    rx.recv_timeout(Duration::from_secs(2)).ok().filter(|&pid| pid > 0)
 }
 
 // Append-only shell log — `open`-launched apps have no visible stderr, and
@@ -215,10 +222,11 @@ pub fn recycle_now(app: &AppHandle) {
     if RECYCLING.swap(true, Ordering::SeqCst) {
         return; // one at a time
     }
-    let old_pid = WEBCONTENT_PID.load(Ordering::Relaxed);
-    let fp = phys_footprint(old_pid).unwrap_or(0);
+    let old_pid = live_renderers().last;
+    let fp = old_pid.and_then(phys_footprint).unwrap_or(0);
     shell_log(&format!(
-        "[recycle] destroying webview (WebContent pid {old_pid}, footprint {} MB)",
+        "[recycle] destroying webview (WebContent pid {}, footprint {} MB)",
+        old_pid.map_or("unknown".to_string(), |pid| pid.to_string()),
         fp / (1024 * 1024)
     ));
     // Persist the frame for the plugin to restore on the rebuilt window; its
@@ -275,7 +283,7 @@ pub fn recycle_now(app: &AppHandle) {
                         }
                         // A fresh WKWebView starts at pageZoom 1.0.
                         crate::zoom::apply(&window);
-                        WEBCONTENT_PID.store(0, Ordering::Relaxed); // re-learned next tick
+                        live_renderers().last = None; // re-learned next tick
                         mark_renderer_born();
                         Ok(())
                     }
@@ -307,21 +315,18 @@ pub fn recycle_now(app: &AppHandle) {
 // WebKit parks a displaced WebContent in its process cache at full leaked
 // size instead of exiting it (observed alive at 480MB 90s after its window
 // was destroyed). Every check kills each WebContent this app is responsible
-// for, other than the live one, at or above SWEEP_FLOOR — which spares
-// WebKit's ~7 MB pre-warmed spare (the smallest displaced renderer the old
-// reaper ever killed was 522 MB). One path covers a normal recycle, a rebuild
-// that gave up, and anything else that leaves one behind.
-const SWEEP_FLOOR: u64 = 256 * 1024 * 1024;
+// for that the monitor read as live on an earlier tick and that isn't live
+// now — never WebKit's pre-warmed spare or another renderer the page never
+// ran in. The live pid is spared even when seen before: WebKit's process
+// cache can hand a parked renderer back to a new webview. One path covers a
+// normal recycle, a rebuild that gave up, and anything else that leaves one
+// behind.
 
-fn sweep_targets(candidates: &[(i32, u64)], live_pid: i32) -> Vec<(i32, u64)> {
-    if live_pid <= 0 {
-        return Vec::new(); // the live renderer could be among them
-    }
-    candidates
-        .iter()
-        .copied()
-        .filter(|(pid, footprint)| *pid != live_pid && *footprint >= SWEEP_FLOOR)
-        .collect()
+/// The candidates in `seen` other than `live_pid`; drops the pids that are no
+/// longer candidates from `seen`.
+fn sweep_targets(candidates: &[i32], seen: &mut BTreeSet<i32>, live_pid: i32) -> Vec<i32> {
+    seen.retain(|pid| candidates.contains(pid));
+    seen.iter().copied().filter(|&pid| pid != live_pid).collect()
 }
 
 extern "C" {
@@ -332,8 +337,8 @@ extern "C" {
     fn proc_pidpath(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
 }
 
-/// (pid, footprint) of every WebContent process this app is responsible for.
-fn app_webcontents() -> Vec<(i32, u64)> {
+/// Every WebContent process this app is responsible for.
+fn app_webcontents() -> Vec<i32> {
     let me = std::process::id() as i32;
     let mut pids = vec![0i32; 8192];
     // buffersize is in bytes; the return value is a count of pids.
@@ -353,7 +358,6 @@ fn app_webcontents() -> Vec<(i32, u64)> {
             };
             len > 0 && String::from_utf8_lossy(&buf[..len as usize]).contains("WebKit.WebContent")
         })
-        .filter_map(|pid| phys_footprint(pid).map(|fp| (pid, fp)))
         .collect()
 }
 
@@ -361,11 +365,13 @@ fn app_webcontents() -> Vec<(i32, u64)> {
 // a recycle can finish between that read and a kill here, so every kill is
 // rechecked against the live state instead of trusting the snapshot.
 fn sweep(live_pid: i32, renderer_born: Option<Instant>) {
-    for (pid, footprint) in sweep_targets(&app_webcontents(), live_pid) {
+    let candidates = app_webcontents();
+    let targets = sweep_targets(&candidates, &mut live_renderers().seen, live_pid);
+    for pid in targets {
         if RECYCLING.load(Ordering::SeqCst) || renderer_born_at() != renderer_born {
             continue; // a rebuild landed since the pid read; this candidate may now be live
         }
-        let fp = footprint / (1024 * 1024);
+        let fp = phys_footprint(pid).unwrap_or(0) / (1024 * 1024);
         unsafe { libc::kill(pid, libc::SIGKILL) };
         shell_log(&format!("[recycle] killed leftover WebContent {pid} ({fp} MB)"));
     }
@@ -435,17 +441,30 @@ mod tests {
         std::env::remove_var("PERISCOPE_RECYCLE_GB");
     }
 
-    const MB: u64 = 1024 * 1024;
-
     #[test]
-    fn sweep_takes_big_renderers_other_than_the_live_one() {
-        let candidates = [(10, 2048 * MB), (11, 7 * MB), (12, 300 * MB), (13, 255 * MB)];
-        assert_eq!(sweep_targets(&candidates, 10), vec![(12, 300 * MB)]);
+    fn sweep_takes_renderers_seen_live_that_are_no_longer_live() {
+        let mut seen = BTreeSet::from([10, 12]);
+        assert_eq!(sweep_targets(&[10, 11, 12], &mut seen, 10), vec![12]);
     }
 
     #[test]
-    fn sweep_does_nothing_while_the_live_renderer_is_unknown() {
-        assert!(sweep_targets(&[(12, 4096 * MB)], 0).is_empty());
+    fn sweep_never_takes_the_live_renderer() {
+        // WebKit's process cache can hand a parked renderer back to a new webview.
+        let mut seen = BTreeSet::from([10]);
+        assert!(sweep_targets(&[10], &mut seen, 10).is_empty());
+    }
+
+    #[test]
+    fn sweep_never_takes_a_renderer_it_has_not_seen_live() {
+        let mut seen = BTreeSet::new();
+        assert!(sweep_targets(&[11], &mut seen, 10).is_empty());
+    }
+
+    #[test]
+    fn sweep_forgets_renderers_that_are_gone() {
+        let mut seen = BTreeSet::from([10, 12, 99]);
+        assert_eq!(sweep_targets(&[10, 12], &mut seen, 10), vec![12]);
+        assert_eq!(seen, BTreeSet::from([10, 12]));
     }
 }
 
@@ -470,9 +489,13 @@ pub fn start_monitor(app: &AppHandle) {
             let Some(pid) = read_webcontent_pid(&handle) else {
                 continue; // no fresh pid: no sweep and no recycle this tick
             };
-            WEBCONTENT_PID.store(pid, Ordering::Relaxed);
             if !RECYCLING.load(Ordering::SeqCst) {
                 sweep(pid, renderer_born);
+            }
+            {
+                let mut renderers = live_renderers();
+                renderers.last = Some(pid);
+                renderers.seen.insert(pid);
             }
             let Some(fp) = phys_footprint(pid) else {
                 continue;
