@@ -28,7 +28,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use objc2::runtime::AnyObject;
-use objc2::{msg_send, sel};
+use objc2::{class, msg_send, sel};
 use tauri::{AppHandle, Manager, WebviewUrl};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
@@ -207,6 +207,34 @@ fn dirs_path() -> std::path::PathBuf {
     std::path::PathBuf::from(home).join(".config/periscope/shell.log")
 }
 
+// --- handing focus back after a rebuild (main thread) ---
+
+// wry activates the app for every webview it creates (macOS 14+), and macOS
+// honours it even while you're in another app: on 2026-11-01 a recycle fired
+// with Claude frontmost and left Periscope frontmost 0.5 s later. So a recycle
+// that started unfocused notes the frontmost app and activates it again.
+fn frontmost_other_app() -> Option<i32> {
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
+        if app.is_null() {
+            return None;
+        }
+        let pid: i32 = msg_send![app, processIdentifier];
+        (pid != std::process::id() as i32).then_some(pid)
+    }
+}
+
+fn activate_app(pid: i32) {
+    unsafe {
+        let app: *mut AnyObject =
+            msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
+        if !app.is_null() {
+            let _: bool = msg_send![app, activateWithOptions: 0usize];
+        }
+    }
+}
+
 // Destroy the sole window, then rebuild it on a later tick. Rebuilding the
 // same label in the same main-thread closure as destroy() killed the whole
 // app (observed 2026-07-28: process gone, no window) — the deferred rebuild
@@ -216,6 +244,7 @@ pub fn recycle_now(app: &AppHandle) {
         return; // one at a time
     }
     let was_focused = crate::focus::is_focused(); // before destroy() sets focus to false
+    let hand_back_to = if was_focused { None } else { frontmost_other_app() };
     let old_pid = WEBCONTENT_PID.load(Ordering::Relaxed);
     let fp = phys_footprint(old_pid).unwrap_or(0);
     shell_log(&format!(
@@ -289,6 +318,12 @@ pub fn recycle_now(app: &AppHandle) {
                 Ok(Ok(())) => {
                     shell_log("[recycle] webview rebuilt");
                     RECYCLING.store(false, Ordering::SeqCst);
+                    if let Some(pid) = hand_back_to {
+                        // After wry's own activate() has landed.
+                        std::thread::sleep(Duration::from_millis(500));
+                        let _ = handle.run_on_main_thread(move || activate_app(pid));
+                        shell_log(&format!("[recycle] handed focus back to pid {pid}"));
+                    }
                     return;
                 }
                 // The channel is shared across every attempt, so a late Err can
