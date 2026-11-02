@@ -4,6 +4,7 @@ These fixtures sandbox side-effecting helpers so tests don't write to
 ~/.config/periscope or bind real unix sockets.
 """
 
+import math
 import os
 import shutil
 import subprocess
@@ -66,17 +67,18 @@ def _no_live_session_scan(monkeypatch):
     (`tmux list-panes` + `ps`), and it runs on every /api/state poll — so any
     test that builds a window view would otherwise fork against the developer's
     real tmux server and read their real ~/.claude/sessions. Stubbing the tmux
-    seam makes pane_claude_pids() return {} by its own no-panes path (no ps
-    fork either), so every test falls back to the pane_sessions row unless it
-    opts in. Tests of the live path patch these same seams themselves, which
+    seam makes pane_claude_pids() return {} by its own no-panes path, and an
+    unexpiring empty process snapshot answers proc_table() / _claude_procs()
+    without forking `ps`; every test falls back to the pane_sessions row unless
+    it opts in. Tests of the live path patch these same seams themselves, which
     overrides this."""
     try:
-        from periscope import session_status
+        from periscope import agent_processes, session_status
     except ImportError:
         return
     monkeypatch.setattr(session_status, "_tmux_pane_pids", dict, raising=False)
     monkeypatch.setattr(session_status, "_pane_pids_cache", None, raising=False)
-    monkeypatch.setattr(session_status, "_proc_table_cache", None, raising=False)
+    monkeypatch.setattr(agent_processes, "_snapshot_cache", (math.inf, {}), raising=False)
     # pane_config_dirs' 15s TTL outlives a test — a populated cache would bleed
     # one test's pane->config-dir map into every later view build.
     monkeypatch.setattr(session_status, "_config_dirs_cache", None, raising=False)

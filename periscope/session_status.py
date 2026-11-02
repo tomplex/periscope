@@ -23,8 +23,9 @@ Only busy/waiting/idle are mapped; `shell` and any unknown status return None so
 the caller falls back to scraping. The schema is undocumented Claude Code
 internals (version-tagged), so every read degrades to None on a shape change.
 
-Imports only stdlib and periscope's leaf modules (config, resources), never
-the resolver layer, so turns.py / window_view.py can depend on it freely."""
+Imports only stdlib and periscope's leaf modules (config, resources,
+agent_processes), never the resolver layer, so turns.py / window_view.py can
+depend on it freely."""
 
 import contextlib
 import json
@@ -34,7 +35,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from periscope import config, resources
+from periscope import agent_processes, config, resources
 
 _SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
@@ -43,18 +44,16 @@ _SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 _STATE_MAP = {"busy": "working", "waiting": "needs-input", "idle": "idle"}
 
 # Per-poll caches. build_window_view calls session_state_for once per pane every
-# ~3s poll; scanning ~30 tiny files and one `ps` per pane would be wasteful, so
-# both are built once and reused for the brief window a single poll spans.
+# refresh; scanning ~30 tiny files per pane would be wasteful, so the session
+# index and the pane -> claude walk are built once and reused for the brief
+# window a single refresh spans. Processes come from the refresh's one `ps`
+# (agent_processes.process_snapshot).
 _CACHE_TTL_S = 1.0
 # (built_at, {sid: file}, {pid: [files newest-first]}) — one scan of every live
 # account's sessions dir answers both directions (sessionId -> state,
 # pid -> current sessionId). by_pid holds a LIST because the same OS pid can
 # have a file in more than one account's dir (recycled pid, account swap).
 _index_cache: tuple[float, dict, dict[int, list[dict]]] | None = None
-# (built_at, {pid: age_s}) — one ps snapshot serves both pid liveness (the
-# key set) and the uptime cycle-hint.
-_claude_procs_cache: tuple[float, dict[int, int]] | None = None
-_proc_table_cache: tuple[float, tuple[dict[int, list[int]], dict[int, str]]] | None = None
 _pane_pids_cache: tuple[float, dict[str, int]] | None = None
 
 _CONFIG_DIR_RE = re.compile(r"\bCLAUDE_CONFIG_DIR=(\S+)")
@@ -125,60 +124,20 @@ def _index() -> dict:
     return _indexes()[0]
 
 
-def parse_etime(s: str) -> int:
-    """ps `etime` ([[dd-]hh:]mm:ss) → seconds; 0 on any malformed input."""
-    s = s.strip()
-    days = 0
-    if "-" in s:
-        d, _, s = s.partition("-")
-        try:
-            days = int(d)
-        except ValueError:
-            return 0
-    parts = s.split(":")
-    if not 2 <= len(parts) <= 3:
-        return 0
-    try:
-        nums = [int(p) for p in parts]
-    except ValueError:
-        return 0
-    while len(nums) < 3:
-        nums.insert(0, 0)
-    h, m, sec = nums
-    return ((days * 24 + h) * 60 + m) * 60 + sec
-
-
 def _claude_procs() -> dict[int, int]:
-    """{pid: age_s} of running `claude` processes, snapshotted once per poll.
-    The key set guards against honoring a session file whose process has
-    exited or whose pid was recycled; age feeds the cycle-hint. `comm` is the
-    full executable path; claude's launcher (`.../bin/claude`) and versioned
-    binary (`.../share/claude/versions/<v>`) both contain "claude". comm may
-    itself contain spaces, hence maxsplit=2."""
-    global _claude_procs_cache
+    """{pid: age_s} of running `claude` processes, from the refresh's process
+    snapshot. The key set guards against honoring a session file whose
+    process has exited or whose pid was recycled; age (now minus start) feeds
+    the cycle-hint. A claude is a process whose executable (argv[0]) says so:
+    the launcher (`claude`, `.../bin/claude`) and the versioned binary
+    (`.../share/claude/versions/<v>`) both do; a `node` whose arguments merely
+    mention ~/.claude doesn't."""
     now = time.time()
-    if _claude_procs_cache and now - _claude_procs_cache[0] < _CACHE_TTL_S:
-        return _claude_procs_cache[1]
-    procs: dict[int, int] = {}
-    try:
-        out = subprocess.run(
-            ["ps", "-axo", "pid=,etime=,comm="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-        for line in out.splitlines():
-            parts = line.split(None, 2)
-            if len(parts) != 3:
-                continue
-            pid_s, etime, comm = parts
-            if "claude" in comm.lower():
-                with contextlib.suppress(ValueError):
-                    procs[int(pid_s)] = parse_etime(etime)
-    except (OSError, subprocess.SubprocessError):
-        pass
-    _claude_procs_cache = (now, procs)
-    return procs
+    return {
+        p.pid: int(now - p.started_at)
+        for p in (agent_processes.process_snapshot() or {}).values()
+        if "claude" in p.exe.lower()
+    }
 
 
 def _live_claude_pids() -> set[int]:
@@ -186,35 +145,13 @@ def _live_claude_pids() -> set[int]:
 
 
 def proc_table() -> tuple[dict[int, list[int]], dict[int, str]]:
-    """(ppid -> child pids, pid -> command) for every process. Empty on any ps
-    failure. Snapshotted for _CACHE_TTL_S so one poll's worth of subtree walks
-    costs a single fork."""
-    global _proc_table_cache
-    now = time.time()
-    if _proc_table_cache and now - _proc_table_cache[0] < _CACHE_TTL_S:
-        return _proc_table_cache[1]
+    """(ppid -> child pids, pid -> command line) for every process, from the
+    refresh's process snapshot. Empty when ps failed."""
     kids: dict[int, list[int]] = {}
     cmds: dict[int, str] = {}
-    try:
-        out = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,command="],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return kids, cmds  # not cached: a transient ps failure shouldn't stick
-    for line in out.splitlines():
-        bits = line.split(maxsplit=2)
-        if len(bits) < 3:
-            continue
-        try:
-            pid, ppid = int(bits[0]), int(bits[1])
-        except ValueError:
-            continue
-        kids.setdefault(ppid, []).append(pid)
-        cmds[pid] = bits[2]
-    _proc_table_cache = (now, (kids, cmds))
+    for p in (agent_processes.process_snapshot() or {}).values():
+        kids.setdefault(p.ppid, []).append(p.pid)
+        cmds[p.pid] = p.argv
     return kids, cmds
 
 

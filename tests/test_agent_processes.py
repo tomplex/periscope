@@ -1,9 +1,12 @@
+import subprocess
+
 from periscope import agent_processes as ap
 
+# `ps -axo pid=,ppid=,lstart=,state=,args=` rows, shaped as macOS prints them.
 PS = """\
-  100     1 Mon Jul 29 10:00:00 2026 S    /bin/zsh zsh
-  101   100 Mon Jul 29 10:00:01 2026 S    /usr/local/bin/codex codex
-  102   100 Mon Jul 29 10:00:02 2026 S    /bin/sh sh -c echo codex
+  100     1 Wed Jul 29 10:00:00 2026     Ss   -zsh
+  101   100 Wed Jul 29 10:00:01 2026     S+   /usr/local/bin/codex --model o4-mini
+  102   100 Wed Jul 29 10:00:02 2026     S    sh -c echo codex
 """
 
 
@@ -11,15 +14,52 @@ def setup_function():
     ap.clear_caches()
 
 
-def test_parse_and_direct_codex_process(mocker):
+def test_parse_takes_the_executable_from_argv():
     snapshot = ap.parse_ps_snapshot(PS)
-    mocker.patch.object(ap, "process_snapshot", return_value=snapshot)
+    codex = snapshot[101]
+    assert (codex.pid, codex.ppid, codex.state) == (101, 100, "S+")
+    assert codex.exe == "/usr/local/bin/codex"
+    assert codex.argv == "/usr/local/bin/codex --model o4-mini"
+    assert snapshot[100].exe == "-zsh"
+
+
+def test_a_french_lstart_reads_nothing():
+    # Why _take_snapshot pins LC_ALL=C: the row regex reads only C-locale dates.
+    assert ap.parse_ps_snapshot("  100     1 mer. 29 juil. 10:00:00 2026     Ss   -zsh\n") == {}
+
+
+def test_snapshot_runs_ps_in_the_c_locale(mocker):
+    ap.clear_caches()
+    run = mocker.patch(
+        "subprocess.run", return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=PS, stderr="")
+    )
+    assert sorted(ap.process_snapshot()) == [100, 101, 102]
+    assert run.call_args.args[0] == ["ps", "-axo", "pid=,ppid=,lstart=,state=,args="]
+    assert run.call_args.kwargs["env"]["LC_ALL"] == "C"
+
+
+def test_snapshot_reads_a_full_path_executable_from_live_ps(monkeypatch):
+    # comm= read this process as "/Users/tom/.loca"; a French locale emptied the table.
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+    ap.clear_caches()
+    proc = subprocess.Popen(["/Users/tom/.local/bin/claude", "30"], executable="/bin/sleep")
+    try:
+        info = ap.process_snapshot()[proc.pid]
+    finally:
+        proc.kill()
+        proc.wait()
+    assert info.exe == "/Users/tom/.local/bin/claude"
+    assert info.argv == "/Users/tom/.local/bin/claude 30"
+
+
+def test_codex_launched_by_absolute_path(mocker):
+    mocker.patch.object(ap, "process_snapshot", return_value=ap.parse_ps_snapshot(PS))
     assert ap.codex_process_for_pane("%1", 100) is True
 
 
 def test_wrapped_codex_descendant(mocker):
     snapshot = ap.parse_ps_snapshot(
-        PS.replace("  101   100", "  101   103") + "  103   100 Mon Jul 29 10:00:01 2026 S    /bin/wrapper wrapper\n"
+        PS.replace("  101   100", "  101   103") + "  103   100 Wed Jul 29 10:00:01 2026     S    /bin/wrapper\n"
     )
     mocker.patch.object(ap, "process_snapshot", return_value=snapshot)
     assert ap.codex_process_for_pane("%1", "100") is True
@@ -37,7 +77,7 @@ def test_snapshot_failure_is_no_opinion(mocker):
 
 
 def test_zombie_codex_is_not_live(mocker):
-    snapshot = ap.parse_ps_snapshot(PS.replace("2026 S    /usr/local/bin/codex", "2026 Z    /usr/local/bin/codex"))
+    snapshot = ap.parse_ps_snapshot(PS.replace("S+   /usr/local/bin/codex", "Z    /usr/local/bin/codex"))
     mocker.patch.object(ap, "process_snapshot", return_value=snapshot)
     assert ap.codex_process_for_pane("%1", 100) is False
 
@@ -45,8 +85,8 @@ def test_zombie_codex_is_not_live(mocker):
 def test_pid_reuse_invalidates_cached_agent(mocker):
     first = ap.parse_ps_snapshot(PS)
     second = ap.parse_ps_snapshot(
-        PS.replace("Mon Jul 29 10:00:00 2026", "Mon Jul 29 11:00:00 2026", 1).replace(
-            "/usr/local/bin/codex codex", "/bin/sleep sleep 20"
+        PS.replace("Wed Jul 29 10:00:00 2026", "Wed Jul 29 11:00:00 2026", 1).replace(
+            "/usr/local/bin/codex --model o4-mini", "/bin/sleep 20"
         )
     )
     snapshots = iter((first, second))
@@ -58,8 +98,8 @@ def test_pid_reuse_invalidates_cached_agent(mocker):
 def test_agent_pid_start_mismatch_invalidates_cached_agent(mocker):
     first = ap.parse_ps_snapshot(PS)
     second = ap.parse_ps_snapshot(
-        PS.replace("Mon Jul 29 10:00:01 2026", "Mon Jul 29 11:00:01 2026").replace(
-            "/usr/local/bin/codex codex", "/bin/sleep sleep 20"
+        PS.replace("Wed Jul 29 10:00:01 2026", "Wed Jul 29 11:00:01 2026").replace(
+            "/usr/local/bin/codex --model o4-mini", "/bin/sleep 20"
         )
     )
     snapshots = iter((first, second))

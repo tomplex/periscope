@@ -4,10 +4,13 @@ working/needs-input/idle signal."""
 
 import json
 import time
+from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 import periscope.session_status as ss
+from periscope import agent_processes
 
 
 @pytest.fixture(autouse=True)
@@ -17,8 +20,6 @@ def _reset_caches(monkeypatch):
     # empty rather than cleared: _build_index consults pane_config_dirs(), and
     # an empty cache miss would fork real tmux/ps inside every index test.
     monkeypatch.setattr(ss, "_index_cache", None)
-    monkeypatch.setattr(ss, "_claude_procs_cache", None)
-    monkeypatch.setattr(ss, "_proc_table_cache", None)
     monkeypatch.setattr(ss, "_pane_pids_cache", None)
     monkeypatch.setattr(ss, "_config_dirs_cache", (time.time(), {}), raising=False)
 
@@ -119,54 +120,73 @@ def test_missing_sessions_dir_returns_none(tmp_path, monkeypatch):
     assert ss.session_state_for("sid-any") is None
 
 
-# ── live-claude pid detection parses ps output ───────────────────────────
+# ── live claudes and the process table come off process_snapshot ─────────
 
-_PS_SAMPLE = (
-    " 9448     01-02:08:58 /Users/tom/.local/bin/claude\n"
-    " 9876        22:09:53 /Users/tom/.local/share/claude/versions/2.1.161\n"
-    "  329        05:33 /usr/libexec/logd\n"
-    "    1     91-10:00:00 /sbin/launchd\n"
+# The processes the old `ps -axo pid=,etime=,comm=` sample listed (etimes
+# 01-02:08:58, 22:09:53, 05:33, 91-10:00:00) plus a plugin server whose argv
+# mentions .claude, as process_snapshot's real `… lstart= state= args=` rows
+# read at _PS_NOW.
+_PS_SNAPSHOT = (
+    " 9448     1 Thu Jul 30 10:00:00 2026     S+   /Users/tom/.local/bin/claude --resume 0b6f2a1e-1111-2222-3333-444455556666\n"
+    " 9876  9448 Thu Jul 30 13:59:05 2026     S    /Users/tom/.local/share/claude/versions/2.1.161\n"
+    "11023     1 Thu Jul 30 14:19:27 2026     S    node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js --port 9900\n"
+    "  329     1 Fri Jul 31 12:03:25 2026     Ss   /usr/libexec/logd\n"
+    "    1     0 Fri May  1 02:08:58 2026     Ss   /sbin/launchd\n"
 )
+_PS_NOW = datetime(2026, 7, 31, 12, 8, 58).timestamp()
+
+
+def _snapshot(monkeypatch, text=_PS_SNAPSHOT):
+    monkeypatch.setattr(agent_processes, "process_snapshot", lambda: agent_processes.parse_ps_snapshot(text))
+    monkeypatch.setattr(ss, "time", SimpleNamespace(time=lambda: _PS_NOW))
 
 
 def test_live_claude_pids_matches_claude_paths(monkeypatch):
-    class _R:
-        stdout = _PS_SAMPLE
-
-    monkeypatch.setattr(ss, "_claude_procs_cache", None)
-    monkeypatch.setattr(ss.subprocess, "run", lambda *a, **k: _R())
+    # Full-path launcher and versioned binary both count; `node …/.claude/…` doesn't.
+    _snapshot(monkeypatch)
     assert ss._live_claude_pids() == {9448, 9876}
 
 
-def test_claude_procs_carry_age(monkeypatch):
-    class _R:
-        stdout = _PS_SAMPLE
-
-    monkeypatch.setattr(ss, "_claude_procs_cache", None)
-    monkeypatch.setattr(ss.subprocess, "run", lambda *a, **k: _R())
+def test_claude_procs_age_from_start_time(monkeypatch):
+    # The same ages `ps etime` reported: now minus each process's start.
+    _snapshot(monkeypatch)
     assert ss._claude_procs() == {
         9448: 26 * 3600 + 8 * 60 + 58,
         9876: 22 * 3600 + 9 * 60 + 53,
     }
 
 
-# ── etime parsing ([[dd-]hh:]mm:ss) ──────────────────────────────────────
+def test_proc_table_matches_the_command_table(monkeypatch):
+    # What `ps -axo pid=,ppid=,command=` gave: children by parent in ps order,
+    # and each pid's full command line.
+    _snapshot(monkeypatch)
+    kids, cmds = ss.proc_table()
+    assert kids == {1: [9448, 11023, 329], 9448: [9876], 0: [1]}
+    assert cmds == {
+        9448: "/Users/tom/.local/bin/claude --resume 0b6f2a1e-1111-2222-3333-444455556666",
+        9876: "/Users/tom/.local/share/claude/versions/2.1.161",
+        11023: "node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js --port 9900",
+        329: "/usr/libexec/logd",
+        1: "/sbin/launchd",
+    }
 
 
-@pytest.mark.parametrize(
-    "s,secs",
-    [
-        ("05:33", 5 * 60 + 33),
-        ("22:09:53", 22 * 3600 + 9 * 60 + 53),
-        ("01-02:08:58", 86400 + 2 * 3600 + 8 * 60 + 58),
-        ("3-00:00:01", 3 * 86400 + 1),
-        ("", 0),
-        ("garbage", 0),
-        ("1:2:3:4", 0),
-    ],
-)
-def test_parse_etime(s, secs):
-    assert ss.parse_etime(s) == secs
+def test_ps_failure_reads_as_no_processes(monkeypatch):
+    monkeypatch.setattr(agent_processes, "process_snapshot", lambda: None)
+    assert ss._claude_procs() == {}
+    assert ss.proc_table() == ({}, {})
+
+
+def test_one_ps_serves_the_whole_refresh(monkeypatch, mocker):
+    monkeypatch.setattr(agent_processes, "_snapshot_cache", None)
+    take = mocker.patch.object(
+        agent_processes, "_take_snapshot", return_value=agent_processes.parse_ps_snapshot(_PS_SNAPSHOT)
+    )
+    mocker.patch("subprocess.run", side_effect=AssertionError("session_status forked its own ps"))
+    ss.proc_table()
+    ss._claude_procs()
+    agent_processes.process_snapshot()
+    take.assert_called_once()
 
 
 # ── claude_proc_for: measurement independent of status trust ─────────────

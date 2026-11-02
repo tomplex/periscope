@@ -21,7 +21,9 @@ class ProcessInfo:
     pid: int
     ppid: int
     started_at: int
-    comm: str
+    # argv[0]: the executable as launched. Not ps's comm, which macOS cuts to
+    # 16 characters unless it is the last column (`/Users/tom/.loca`).
+    exe: str
     argv: str
     state: str
 
@@ -29,7 +31,7 @@ class ProcessInfo:
 _PS_ROW_RE = re.compile(
     r"^\s*(\d+)\s+(\d+)\s+"
     r"(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+"
-    r"(\S+)\s+(\S+)(?:\s+(.*))?$"
+    r"(\S+)(?:\s+(.*))?$"
 )
 _PS_TTL_S = 1.0
 _lock = threading.Lock()
@@ -39,23 +41,24 @@ _pane_cache: dict[str, tuple[int, int, int, int]] = {}
 
 
 def parse_ps_snapshot(output: str) -> dict[int, ProcessInfo]:
-    """Parse macOS ``ps`` output emitted by :func:`_take_snapshot`."""
+    """Parse the `pid ppid lstart state args` rows :func:`_take_snapshot` reads."""
     result: dict[int, ProcessInfo] = {}
     for line in output.splitlines():
         match = _PS_ROW_RE.match(line)
         if not match:
             continue
-        pid, ppid, started, state, comm, argv = match.groups()
+        pid, ppid, started, state, argv = match.groups()
         try:
             started_at = int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").timestamp())
         except ValueError:
             continue
+        argv = (argv or "").strip()
         info = ProcessInfo(
             pid=int(pid),
             ppid=int(ppid),
             started_at=started_at,
-            comm=comm,
-            argv=argv or comm,
+            exe=argv.split(maxsplit=1)[0] if argv else "",
+            argv=argv,
             state=state,
         )
         result[info.pid] = info
@@ -65,11 +68,14 @@ def parse_ps_snapshot(output: str) -> dict[int, ProcessInfo]:
 def _take_snapshot() -> dict[int, ProcessInfo] | None:
     try:
         proc = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,lstart=,state=,comm=,args="],
+            ["ps", "-axo", "pid=,ppid=,lstart=,state=,args="],
             check=True,
             capture_output=True,
             text=True,
             timeout=2,
+            # lstart prints in the locale (`mer. 30 sept.` under fr_FR), which
+            # the row regex can't read.
+            env={**os.environ, "LC_ALL": "C"},
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -90,7 +96,7 @@ def process_snapshot() -> dict[int, ProcessInfo] | None:
 
 def _is_codex_executable(proc: ProcessInfo) -> bool:
     # Match the executable itself, never an arbitrary mention in argv.
-    return os.path.basename(proc.comm).lower() in {"codex", "codex.exe"}
+    return os.path.basename(proc.exe).lower() in {"codex", "codex.exe"}
 
 
 def descendants(root_pid: int, snapshot: dict[int, ProcessInfo]):
