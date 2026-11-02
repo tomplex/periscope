@@ -25,6 +25,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -242,18 +243,10 @@ pub fn recycle_now(app: &AppHandle) {
     };
     let handle = app.clone();
     std::thread::spawn(move || {
-        // One channel for every attempt. The main thread runs the closures in
-        // order, so an attempt that timed out but later built the window sends
-        // its Ok ahead of the "already exists" errors of the attempts queued
-        // behind it — 10-28 20:51 gave up on exactly that and leaked a 1.1 GB
-        // renderer. An "already exists" that comes first is the OLD window still
-        // registered (22 of 440 recycles), and the loop retries as before.
-        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
-        for attempt in 1..=10 {
+        let submit = |attempt: u32, tx: Sender<Result<(), String>>| {
             std::thread::sleep(Duration::from_millis(if attempt == 1 { 250 } else { 1000 }));
             let h = handle.clone();
-            let tx = tx.clone();
-            let ok = handle.run_on_main_thread(move || {
+            let queued = handle.run_on_main_thread(move || {
                 let result = tauri::WebviewWindowBuilder::new(
                     &h,
                     "main",
@@ -290,26 +283,49 @@ pub fn recycle_now(app: &AppHandle) {
                     Err(e) => Err(e.to_string()),
                 });
             });
-            if ok.is_err() {
+            if queued.is_err() {
                 shell_log("[recycle] run_on_main_thread failed; retrying");
-                continue;
             }
-            match rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(Ok(())) => {
-                    shell_log("[recycle] webview rebuilt");
-                    RECYCLING.store(false, Ordering::SeqCst);
-                    return;
-                }
-                // The channel is shared across every attempt, so a late Err can
-                // surface here for an earlier attempt than `attempt` names.
-                Ok(Err(e)) => shell_log(&format!("[recycle] a rebuild attempt failed: {e}")),
-                Err(_) => shell_log(&format!("[recycle] rebuild attempt {attempt} timed out")),
-            }
+            queued.is_ok()
+        };
+        let log = |msg: &str| shell_log(&format!("[recycle] {msg}"));
+        if await_rebuild(REBUILD_ATTEMPTS, Duration::from_secs(5), submit, log) {
+            shell_log("[recycle] webview rebuilt");
+        } else {
+            shell_log(&format!("[recycle] giving up after {REBUILD_ATTEMPTS} attempts — app may now exit"));
         }
-        // Give up: clear the exit veto so the windowless app can quit normally.
-        shell_log("[recycle] giving up after 10 attempts — app may now exit");
+        // Clears the exit veto too: after a give-up the windowless app can quit.
         RECYCLING.store(false, Ordering::SeqCst);
     });
+}
+
+const REBUILD_ATTEMPTS: u32 = 10;
+
+/// Submits rebuild attempts until one reports Ok; false after `attempts`
+/// without one. Every attempt sends on one channel: the main thread runs them
+/// in order, so an attempt that timed out but later built the window sends its
+/// Ok ahead of the "already exists" errors of the attempts queued behind it.
+/// An "already exists" that comes first is the old window still registered,
+/// and the next attempt retries. `submit` returns whether it queued the attempt.
+fn await_rebuild(
+    attempts: u32,
+    timeout: Duration,
+    mut submit: impl FnMut(u32, Sender<Result<(), String>>) -> bool,
+    log: impl Fn(&str),
+) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    for attempt in 1..=attempts {
+        if !submit(attempt, tx.clone()) {
+            continue;
+        }
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(())) => return true,
+            // A late Err can belong to an earlier attempt than `attempt` names.
+            Ok(Err(e)) => log(&format!("a rebuild attempt failed: {e}")),
+            Err(_) => log(&format!("rebuild attempt {attempt} timed out")),
+        }
+    }
+    false
 }
 
 // WebKit parks a displaced WebContent in its process cache at full leaked
@@ -460,6 +476,68 @@ mod tests {
         let mut seen = BTreeSet::from([10, 12, 99]);
         assert_eq!(sweep_targets(&[10, 12], &mut seen, 10), vec![12]);
         assert_eq!(seen, BTreeSet::from([10, 12]));
+    }
+
+    const ALREADY_EXISTS: &str = "a webview with label `main` already exists";
+    const SHORT: Duration = Duration::from_millis(10);
+
+    #[test]
+    fn a_late_ok_from_a_timed_out_attempt_is_a_rebuild() {
+        let mut first = None;
+        let rebuilt = await_rebuild(
+            REBUILD_ATTEMPTS,
+            SHORT,
+            |attempt, tx| {
+                match attempt {
+                    1 => first = Some(tx), // times out
+                    2 => {
+                        // The main thread gets to attempt 1, then attempt 2 finds its window.
+                        let _ = first.take().expect("attempt 1's sender").send(Ok(()));
+                        let _ = tx.send(Err(ALREADY_EXISTS.into()));
+                    }
+                    _ => {
+                        let _ = tx.send(Err(ALREADY_EXISTS.into()));
+                    }
+                }
+                true
+            },
+            |_| {},
+        );
+        assert!(rebuilt);
+    }
+
+    #[test]
+    fn an_old_window_still_registered_is_retried() {
+        let mut submitted = 0;
+        let rebuilt = await_rebuild(
+            REBUILD_ATTEMPTS,
+            SHORT,
+            |attempt, tx| {
+                submitted += 1;
+                let _ = tx.send(if attempt == 1 { Err(ALREADY_EXISTS.into()) } else { Ok(()) });
+                true
+            },
+            |_| {},
+        );
+        assert!(rebuilt);
+        assert_eq!(submitted, 2);
+    }
+
+    #[test]
+    fn a_rebuild_gives_up_after_every_attempt_fails() {
+        let mut submitted = 0;
+        let rebuilt = await_rebuild(
+            REBUILD_ATTEMPTS,
+            SHORT,
+            |_, tx| {
+                submitted += 1;
+                let _ = tx.send(Err("boom".into()));
+                true
+            },
+            |_| {},
+        );
+        assert!(!rebuilt);
+        assert_eq!(submitted, REBUILD_ATTEMPTS);
     }
 
     #[test]
