@@ -116,20 +116,24 @@ clears today's 41485.
 ## Assumptions
 
 - Handing focus back 0.5 s after the rebuild lands comes after wry's activation; verified on macOS 27 (Claude stayed
-  frontmost at every sample from 0.25 s to 5 s). A slower machine could show Periscope briefly before the hand-back.
+  frontmost at every sample from 0.25 s to 5 s). Periscope may show for about 0.5 s on each unfocused recycle; on a
+  slower machine wry's activation could land after the hand-back and Periscope would keep focus.
+- The hand-back targets the app frontmost when the recycle started, and runs only while Periscope or that app is
+  frontmost, so moving to a third app during the ~1 s gap is respected. A deliberate click into Periscope during the
+  gap looks like wry's activation and is reverted.
 - After a hand-back the unfocused clock restarts (wry's activation emits `Focused(true)`, the hand-back
   `Focused(false)`); verified: the next "waiting" line read "unfocused 59s". With the 30 min minimum age this only
   delays the next recycle by the 30 s gate.
-- Not exercised by the manual test (no UI scripting available): the manual menu recycle while focused, and whether
-  minimizing counts as unfocused.
-- The app has exactly one legitimate WebContent ≥ 256 MB. A service-worker renderer (`main.jsx` registers `/sw.js`)
-  or a future WebKit site-isolation process would break that; today's listing shows none.
+- Not exercised by the manual test (no UI scripting available): the manual menu recycle while focused; whether
+  minimizing counts as unfocused (a minimized or hidden Periscope comes back shown, since MINIMIZED isn't a restored
+  flag and wry's activation unhides the app); an idle-gate recycle while the screen is locked (the frontmost app is
+  then probably loginwindow); a fullscreen Periscope in another Space (the Space may switch twice).
+- The app has exactly one legitimate WebContent ≥ 256 MB. A service-worker renderer (`main.jsx` registers `/sw.js`),
+  a future WebKit site-isolation process, or the Web Inspector frontend in a debug build would break that; today's
+  listing shows none.
 - Bad knob values (negative, NaN, infinite) fall back to the default rather than stopping the monitor thread.
-
 - `Focused(false)` fires on app switch and ⌘H (tao's `windowDidResignKey`; verified in source). Whether it fires on
   minimize is untested; if not, the idle gate still covers a minimized periscope.
-- The rebuilt window, shown while the app is inactive, doesn't cover the frontmost app's window. Verify in the manual
-  test.
 - `proc_listallpids` takes a byte size and returns a count; it and `responsibility_get_pid_responsible_for_pid` link
   from Rust without a `#[link]` attribute (both verified in a scratch binary).
 - A displaced renderer is ≥ 256 MB by the time a check sees it; a smaller one is left until it grows or exits.
