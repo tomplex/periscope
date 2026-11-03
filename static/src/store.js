@@ -34,7 +34,7 @@ export const dragState = signal(null);
 export const usage = signal(null);
 export const updateInfo = signal(null);       // /api/state update summary: { behind, ahead, checked_at, running }
 export const resources = signal(null);        // /api/state resources: { server, webview, panes, elsewhere, machine }, or null when the server's snapshot failed
-export const refresh = signal(null);          // /api/state refresh: { build_s, build_max_s, gap_s, forks_per_min, top_forks } — what a dashboard refresh costs (forks.py)
+export const buildStats = signal(null);       // /api/state build_stats: { build_s, build_max_s, gap_s, forks_per_min, top_forks } — what a dashboard poll costs (forks.py)
 export const accounts = signal([]);           // /api/state accounts: [{ id, label }] — the registry, in order
 export const moveTargets = signal({});        // /api/state move_targets: current account id -> move destination id
 export const spawnAccount = signal(null);     // pinned spawn account id, null = auto (launch_policy)

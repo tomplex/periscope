@@ -95,8 +95,8 @@ def test_a_ps_slower_than_the_ttl_is_still_served_after_it(monkeypatch, mocker):
 
 
 def test_a_pinned_snapshot_outlives_the_ttl_for_its_block_only(monkeypatch, mocker):
-    # build_state pins one table for the whole refresh, its fan-out threads
-    # included; an off-refresh caller keeps the TTL.
+    # build_state pins one table for the whole poll, its fan-out threads
+    # included; an off-poll caller keeps the TTL.
     clock = _Clock(monkeypatch)
     take = mocker.patch.object(ap, "_take_snapshot", side_effect=lambda: ap.parse_ps_snapshot(PS))
     with ap.pinned_snapshot():
@@ -108,8 +108,8 @@ def test_a_pinned_snapshot_outlives_the_ttl_for_its_block_only(monkeypatch, mock
             assert list(pool.map(lambda _: ctx.copy().run(ap.process_snapshot), range(2))) == [first, first]
         assert take.call_count == 1
         with ThreadPoolExecutor(1) as pool:
-            off_refresh = pool.submit(ap.process_snapshot).result()
-        assert off_refresh is not first
+            off_poll = pool.submit(ap.process_snapshot).result()
+        assert off_poll is not first
         assert take.call_count == 2
     clock.now += 5
     assert ap.process_snapshot() is not first
@@ -122,24 +122,24 @@ def test_overlapping_pinned_blocks_each_keep_their_own_snapshot(monkeypatch, moc
     mocker.patch.object(ap, "_take_snapshot", side_effect=lambda: ap.parse_ps_snapshot(PS))
     a_took, b_took = threading.Event(), threading.Event()
 
-    def refresh_a():
+    def poll_a():
         with ap.pinned_snapshot():
             first = ap.process_snapshot()
             a_took.set()
             b_took.wait(5)
             return first, ap.process_snapshot()
 
-    def refresh_b():
+    def poll_b():
         with ap.pinned_snapshot():
             first = ap.process_snapshot()
             b_took.set()
             return first, ap.process_snapshot()
 
     with ThreadPoolExecutor(2) as pool:
-        a = pool.submit(refresh_a)
+        a = pool.submit(poll_a)
         a_took.wait(5)
         clock.now += 5  # B's ps runs after A's has expired
-        b = pool.submit(refresh_b)
+        b = pool.submit(poll_b)
         (a_first, a_last), (b_first, b_last) = a.result(), b.result()
     assert a_first is a_last
     assert b_first is b_last

@@ -3,7 +3,7 @@
 
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it } from "vitest";
-import { refresh, resources, windows } from "../../store.js";
+import { buildStats, resources, windows } from "../../store.js";
 import { ResourcePill } from "../ResourcePill.jsx";
 
 const g = (mem_mb, cpu_pct) => ({ mem_mb, cpu_pct });
@@ -18,7 +18,7 @@ const R = {
 afterEach(() => {
   resources.value = null;
   windows.value = [];
-  refresh.value = null;
+  buildStats.value = null;
 });
 
 describe("<ResourcePill>", () => {
@@ -60,15 +60,15 @@ describe("<ResourcePill>", () => {
     expect(render(<ResourcePill />)).not.toContain(">webview<");
   });
 
-  it("closes with what a refresh costs, its top commands in the tooltip", () => {
+  it("closes with what a poll costs, server-wide, its top commands in the tooltip", () => {
     resources.value = R;
-    refresh.value = { build_s: 0.4, build_max_s: 2.3, gap_s: 1.1, forks_per_min: 140, top_forks: [["git status", 40]] };
+    buildStats.value = { build_s: 0.4, build_max_s: 2.3, gap_s: 1.1, forks_per_min: 140, top_forks: [["git status", 40]] };
     const html = render(<ResourcePill />);
-    expect(html).toContain("refresh 0.4 s · every 1.1 s · 140 forks/min");
+    expect(html).toContain("poll 0.4 s · every 1.1 s · server 140 forks/min");
     expect(html).toContain("git status ×40");
   });
 
-  it("has no refresh line before the server reports one", () => {
+  it("has no poll line before the server reports one", () => {
     resources.value = R;
     expect(render(<ResourcePill />)).not.toContain("forks/min");
   });

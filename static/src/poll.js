@@ -11,13 +11,13 @@
 import {
   accounts,
   alerts,
+  buildStats,
   dragState,
   editingTarget,
   editor as editorSignal,
   launchDefault,
   moveTargets,
   projects,
-  refresh,
   resources,
   reviews,
   spawnAccount,
@@ -68,7 +68,7 @@ function applyState(data) {
     usage.value = { plan: data.usage_plan, fallback: data.usage, poke: data.poke || {} };
     updateInfo.value = data.update || null;
     resources.value = data.resources || null;
-    refresh.value = data.refresh || null;
+    buildStats.value = data.build_stats || null;
     accounts.value = data.accounts || [];
     moveTargets.value = data.move_targets || {};
     spawnAccount.value = data.spawn_account || null;

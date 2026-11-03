@@ -116,7 +116,7 @@ would double-load every global.
 | `config.py` | Cross-cutting paths + constants; `instance_file()` keeps prod/dev stores apart |
 | `log.py` | Logging + `_bg` / `_task` crash wrappers — every thread/task goes through these so crashes surface |
 | `pidfile.py` | Single-instance reclaim (reloader child counts as the same instance) |
-| `forks.py` | Audit-hook fork counter + each refresh's cost (`/api/state` `refresh`, the resource popover's last line; the full map on `/api/healthz`) |
+| `forks.py` | Audit-hook fork counter + each poll's cost (`/api/state` `build_stats`, the resource popover's poll block; the full map on `/api/healthz`) |
 | `gh.py` | Every `gh` call: token read every 10 minutes, telemetry and update check off |
 | `tmux.py` / `tmux_input.py` / `tmux_mirror.py` | Subprocess wrappers / persistent control-mode input client / control-mode pane mirror with reconcile frames |
 | `store.py` | `state.json` layer (`_STATE`, load/write, migrations) |

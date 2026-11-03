@@ -47,14 +47,15 @@ count too. Installed once in the app's lifespan; the hook returns at once for ev
 body is guarded — an exception escaping an audit hook aborts the Popen it audits. The hook can't see the processes
 the server's children spawn (gh's `security` and `send-telemetry`); those are measured by sampling the process tree.
 
-**D2 — Each refresh reports its cost.** `build_state` records its duration; the state hub records the gap between
+**D2 — Each poll reports its cost.** `build_state` records its duration; the state hub records the gap between
 broadcasts (what a dashboard actually sees) and forgets it when it goes idle, so the first push after nobody watched
-doesn't report the idle stretch. `/api/state` carries `refresh: {build_s, build_max_s, gap_s, forks_per_min,
-top_forks}` (last build, max over 60 s, last gap or null, total and the five largest commands over 60 s);
-`/api/healthz` carries the full per-command `forks` map. The resource popover (THI-448) shows one line:
-`refresh 0.4 s · every 1.1 s · 140 forks/min`, with the slowest build and the top commands in its tooltip — a
-`refresh` signal in `store.js`, set by `poll.js`, read by `ResourcePill.jsx`, formatted by `resources.js`, styled in
-`static/styles.css`. A build slower than 3 s logs a warning naming its top forkers, at most once a minute.
+doesn't report the idle stretch. `/api/state` carries `build_stats: {build_s, build_max_s, gap_s, forks_per_min,
+top_forks}` (last build, max over 60 s, last gap or null; `forks_per_min`/`top_forks` are server-wide over the last
+60 s — every fork the server makes, not just this poll's). `/api/healthz` carries the full per-command `forks` map.
+The resource popover (THI-448) shows one line: `poll 0.4 s · every 1.1 s · server 140 forks/min`, with the slowest
+build and the top commands in its tooltip — a `buildStats` signal in `store.js`, set by `poll.js`, read by
+`ResourcePill.jsx`, formatted by `resources.js`, styled in `static/styles.css`. A build slower than 3 s logs a
+warning naming its top forkers, at most once a minute.
 
 **D3 — One tmux call per refresh.** `tmux.list_panes()` runs one `tmux list-panes -a -F <window fields + pane fields
 + pane_active>` through `_tmux_argv` (so it honours `PERISCOPE_TMUX_SOCKET`), fields separated by `\x1f` (a tab in a
@@ -123,10 +124,10 @@ re-read on every call). `tmux._run` takes an `env`.
 
 ## Changes
 
-- `periscope/forks.py` (new): the audit hook, the rolling counter, build and gap timings, the `refresh` stats (D1,
+- `periscope/forks.py` (new): the audit hook, the rolling counter, build and gap timings, the `build_stats` block (D1,
   D2).
 - `periscope/app.py`: installs the hook in the lifespan.
-- `periscope/routes/state.py`, `periscope/state_hub.py`: build duration, broadcast gap reset on idle, the `refresh`
+- `periscope/routes/state.py`, `periscope/state_hub.py`: build duration, broadcast gap reset on idle, the `build_stats`
   block (D2); `build_state` pins both snapshots and runs its fan-out in copies of that context (D3, D4).
   `periscope/routes/healthz.py`: the full `forks` map.
 - `periscope/tmux.py`: `list_panes` / `panes_snapshot` / `pinned_snapshot` and the `\x1f`-separated format (D3);
@@ -141,7 +142,7 @@ re-read on every call). `tmux._run` takes an `env`.
   refresh, jitter, lock, keep-on-failure (D5); `gh.run` at its call sites (D6).
 - `periscope/gh.py` (new): the `gh` environment and token (D6); `reviews.py`, `cleanup.py`, `projects.py` call it.
 - `static/src/store.js`, `static/src/poll.js`, `static/src/chrome/resources.js`,
-  `static/src/chrome/ResourcePill.jsx`, `static/styles.css`, rebuilt `static/dist/`: the refresh line (D2).
+  `static/src/chrome/ResourcePill.jsx`, `static/styles.css`, rebuilt `static/dist/`: the poll line (D2).
 - `tests/conftest.py`: seeds `tmux._panes_snapshot`, `agent_processes._snapshot_cache` and `gh._token_cache` with
   unexpiring empty entries (replacing the `_tmux_pane_pids` stub) and clears git_pr's per-path caches, so no test
   forks real tmux, ps or gh or starts a git refresh thread; tests of those paths reset the seed.
@@ -152,24 +153,24 @@ re-read on every call). `tmux._run` takes an `env`.
 ## Testing
 
 - `tests/test_forks.py`: command keys; the hook counts real `subprocess.run` / `Popen`; other audit events are
-  ignored; a failing body never raises; the window rolls; `refresh_stats`; the slow-build warning and its once-a-minute
+  ignored; a failing body never raises; the window rolls; `build_stats`; the slow-poll warning and its once-a-minute
   limit.
 - `tests/test_state_hub.py`: gaps recorded between broadcasts, none across an idle stretch. `tests/routes/test_state.py`,
-  `tests/routes/test_healthz.py`: the `refresh` block and the `forks` map.
+  `tests/routes/test_healthz.py`: the `build_stats` block and the `forks` map.
 - `tests/test_agent_processes.py`: fixtures rebuilt as real `ps … args=` rows; argv[0] as the executable (a codex by
   absolute path is found); `ps` runs with `LC_ALL=C`; a French `lstart` reads nothing; a live `ps` run on a process
   whose argv[0] is `/Users/tom/.local/bin/claude`, with `LC_ALL=fr_FR.UTF-8` in the environment, reads the full path.
 - `tests/test_session_status.py`: `command_lines` and `_claude_procs` built from a `process_snapshot` fixture match
   today's outputs (age from start time; a `node …/.claude/plugins/…` process is not a claude, in the pane walk too);
-  one `ps` serves the refresh; the walk takes the nearest claude and is rebuilt when either snapshot changes;
+  one `ps` serves the poll; the walk takes the nearest claude and is rebuilt when either snapshot changes;
   `_tmux_pane_pids` reads the snapshot and honours the socket.
 - `tests/test_agent_processes.py`, `tests/test_tmux.py`, `tests/routes/test_state.py`: a `ps` slower than the TTL is
   still served after it; a pinned snapshot outlives the TTL for its block and its copied contexts only; overlapping
-  blocks keep their own; a failed `ps` serves a table under 15 s old, else `None`; a refresh whose fan-out runs 3 s
-  forks `ps` and `list-panes` once, and an off-refresh caller after it forks again.
+  blocks keep their own; a failed `ps` serves a table under 15 s old, else `None`; a poll whose fan-out runs 3 s
+  forks `ps` and `list-panes` once, and an off-poll caller after it forks again.
 - `tests/test_tmux.py`, `tests/test_panes.py`: windows derived from a list-panes fixture match today's
   `list_windows` rows exactly; a live tmux server checked against today's `list-windows` parser; `all_pane_ids`
-  includes background panes; an empty tmux answer; one `list-panes` per refresh; `list_windows` never serves the
+  includes background panes; an empty tmux answer; one `list-panes` per poll; `list_windows` never serves the
   snapshot; a tab in a name is kept; a newline-split row is skipped and logged once.
 - `tests/test_git_pr.py`: porcelain-v2 fixtures for clean, dirty, untracked-only, detached, ahead, no-upstream and
   non-repo, each compared on a real repo with the seven-command read; a repo subdirectory (whole-repo untracked count,
@@ -180,9 +181,9 @@ re-read on every call). `tmux._run` takes an `env`.
 - `tests/test_gh.py`: the environment carries `GH_TOKEN`/`GH_TELEMETRY`/`GH_NO_UPDATE_NOTIFIER`; the token is reused
   for 10 minutes; a failed read is retried after 60 s; each 401 shape re-reads, at most once per 60 s; other failures
   keep the token; no token → calls still run; no `["gh", …]` argv outside `gh.py`.
-- vitest: the refresh line's formatting and its render.
+- vitest: the poll line's formatting and its render.
 - Before/after: interleaved runs (before, after, before, after) of a dev server on :17375 against the same panes —
-  `refresh` and the full `forks` map from the server, plus a process-tree sampler for gh's children (`security`,
+  `build_stats` and the full `forks` map from the server, plus a process-tree sampler for gh's children (`security`,
   `send-telemetry`), recorded in the PR. A dev server (`is_prod()` false) skips the narrator, the session poke and the
   MCP listener, so its absolute numbers are below prod's; the comparison is between the two runs.
 
@@ -220,12 +221,12 @@ re-read on every call). `tmux._run` takes an `env`.
   window from the full roster (its `pane_tracks` row can be pruned, #19; boot housekeeping also prunes its
   `pane_sessions`/`pane_status`/`pane_workspaces` rows). Before this change a tab or newline there crashed the whole
   `list_windows`.
-- Inside a refresh, `all_pane_ids` and the pane-to-claude map read the rows the refresh's `list_windows` read, as old
-  as the refresh (~0.15 s idle, 3–13 s under THI-450's load); elsewhere up to 1 s old. A pane created in that window
-  is missing from the refresh's windows too, and reads as "no claude yet" off it, failing open (#14, #16). The
-  channel-alert GC reads the same rows, so an alert recorded for a pane created during the refresh is dropped from
+- Inside a poll, `all_pane_ids` and the pane-to-claude map read the rows the poll's `list_windows` read, as old
+  as the poll (~0.15 s idle, 3–13 s under THI-450's load); elsewhere up to 1 s old. A pane created in that window
+  is missing from the poll's windows too, and reads as "no claude yet" off it, failing open (#14, #16). The
+  channel-alert GC reads the same rows, so an alert recorded for a pane created during the poll is dropped from
   the in-memory feed (the activity record keeps it). An alert needs the pane's Claude to start and run a turn: longer
-  than an idle refresh, not certainly longer than a 13 s loaded one.
+  than an idle poll, not certainly longer than a 13 s loaded one.
 - One `ps` table per refresh (2 s timeout) feeds session state, the pane → claude map, codex detection and
   resources. `ps` takes ~50 ms over ~640 processes idle and 0.5–1.7 s at load average 50–70 (THI-450), so it can
   time out under load; the last table, if under 15 s old, stands in, and a claude that exited or started since reads

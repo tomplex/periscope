@@ -125,6 +125,6 @@ def healthz():
         "codex_hook": _codex_hook_health(),
         "resurrect": resurrect_status(config.REPO_ROOT),
         # The last minute's forks by command (forks.py); /api/state's
-        # `refresh` carries only the top five.
+        # `build_stats` carries only the top five.
         "forks": dict(forks.fork_counts()),
     }

@@ -329,8 +329,8 @@ def test_panes_snapshot_reuses_a_snapshot_under_a_second_old(monkeypatch):
 
 
 def test_pinned_rows_outlive_the_ttl_for_their_block_only(monkeypatch):
-    # build_state pins its list_windows' rows for the whole refresh; an
-    # off-refresh caller keeps the TTL.
+    # build_state pins its list_windows' rows for the whole poll; an
+    # off-poll caller keeps the TTL.
     clock = [100.0]
     calls = []
     monkeypatch.setattr(tmux_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]))

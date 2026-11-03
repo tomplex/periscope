@@ -1168,7 +1168,7 @@ def test_list_windows_never_serves_the_snapshot(monkeypatch):
     assert len(calls) == 2
 
 
-def test_one_list_panes_serves_the_whole_refresh(monkeypatch):
+def test_one_list_panes_serves_the_whole_poll(monkeypatch):
     calls = []
     monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or _PANES)
     windows = list_windows()

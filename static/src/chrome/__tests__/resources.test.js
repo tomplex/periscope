@@ -1,7 +1,7 @@
 // resources.js — formatting and ordering behind <ResourcePill> and the
 // detail header's mem/cpu part.
 import { describe, expect, it } from "vitest";
-import { fmtCpu, fmtMem, machineLine, ownedMb, paneLines, refreshLine, refreshTip } from "../resources.js";
+import { buildStatsLine, buildStatsTip, fmtCpu, fmtMem, machineLine, ownedMb, paneLines } from "../resources.js";
 
 describe("fmtMem", () => {
   it("megabytes under a gigabyte, one decimal of gigabytes above", () => {
@@ -46,20 +46,20 @@ describe("machineLine", () => {
   });
 });
 
-describe("refreshLine", () => {
-  it("build time, the push interval and forks per minute", () => {
-    expect(refreshLine({ build_s: 0.43, build_max_s: 1.2, gap_s: 1.07, forks_per_min: 140, top_forks: [] }))
-      .toBe("refresh 0.4 s · every 1.1 s · 140 forks/min");
+describe("buildStatsLine", () => {
+  it("build time, the push interval and forks per minute, server-wide", () => {
+    expect(buildStatsLine({ build_s: 0.43, build_max_s: 1.2, gap_s: 1.07, forks_per_min: 140, top_forks: [] }))
+      .toBe("poll 0.4 s · every 1.1 s · server 140 forks/min");
   });
   it("leaves the interval out until the server has pushed twice", () => {
-    expect(refreshLine({ build_s: 0.4, build_max_s: 0.4, gap_s: null, forks_per_min: 9, top_forks: [] }))
-      .toBe("refresh 0.4 s · 9 forks/min");
+    expect(buildStatsLine({ build_s: 0.4, build_max_s: 0.4, gap_s: null, forks_per_min: 9, top_forks: [] }))
+      .toBe("poll 0.4 s · server 9 forks/min");
   });
 });
 
-describe("refreshTip", () => {
+describe("buildStatsTip", () => {
   it("the slowest build in the last minute, then the top commands", () => {
-    expect(refreshTip({ build_s: 0.4, build_max_s: 2.31, gap_s: 1, forks_per_min: 52, top_forks: [["git status", 40], ["ps", 12]] }))
+    expect(buildStatsTip({ build_s: 0.4, build_max_s: 2.31, gap_s: 1, forks_per_min: 52, top_forks: [["git status", 40], ["ps", 12]] }))
       .toBe("slowest 2.3 s in the last minute\ngit status ×40\nps ×12");
   });
 });

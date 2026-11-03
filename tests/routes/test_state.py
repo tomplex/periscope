@@ -445,7 +445,7 @@ def test_state_sends_no_resources_when_the_snapshot_failed(client, mocker, clean
     assert body["resources"] is None
 
 
-def test_state_reports_what_the_refresh_cost(client, mocker, clean_state):
+def test_state_reports_what_the_poll_cost(client, mocker, clean_state):
     _patch(mocker, "list_windows", return_value=[])
     _patch(mocker, "update_focus_from_windows")
     _patch(mocker, "_attach_git_then_resolve_pids")
@@ -453,14 +453,14 @@ def test_state_reports_what_the_refresh_cost(client, mocker, clean_state):
     _patch(mocker, "cached_plan_usage", return_value={})
     _patch(mocker, "all_pane_ids", return_value=set())
 
-    r = client.get("/api/state").json()["refresh"]
+    r = client.get("/api/state").json()["build_stats"]
     assert set(r) == {"build_s", "build_max_s", "gap_s", "forks_per_min", "top_forks"}
     assert 0 <= r["build_s"] <= r["build_max_s"]
 
 
-def test_a_refresh_slower_than_the_ttls_forks_ps_and_list_panes_once(client, mocker, clean_state, monkeypatch):
+def test_a_poll_slower_than_the_ttls_forks_ps_and_list_panes_once(client, mocker, clean_state, monkeypatch):
     # THI-450 measured builds of 3–13 s: the fan-out's process readers and
-    # all_pane_ids after it must still read the snapshots the refresh took.
+    # all_pane_ids after it must still read the snapshots the poll took.
     from types import SimpleNamespace
 
     from periscope import agent_processes, tmux
@@ -497,7 +497,7 @@ def test_a_refresh_slower_than_the_ttls_forks_ps_and_list_panes_once(client, moc
     gc.assert_called_once_with({"%7"})
     assert (list_panes.call_count, ps.call_count) == (1, 1)
 
-    # Off the refresh, the snapshots are 3 s old: the TTL holds again.
+    # Off the poll, the snapshots are 3 s old: the TTL holds again.
     agent_processes.process_snapshot()
     tmux.panes_snapshot()
     assert (list_panes.call_count, ps.call_count) == (2, 2)

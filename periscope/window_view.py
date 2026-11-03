@@ -162,7 +162,7 @@ def _apply_codex_state(
 
 
 # One account scan per POLL, not per window. `pane_config_dirs` forks one `ps
-# eww` over every candidate claude (the process table is the refresh's shared
+# eww` over every candidate claude (the process table is the poll's shared
 # snapshot); build_window_view runs across ~20 windows on a 32-thread fan-out,
 # so per-window would be dozens of forks a poll. Same TTL-snapshot-plus-lock
 # shape as agent_processes.process_snapshot — without the lock the fan-out's

@@ -1,11 +1,13 @@
 """Every fork the server makes, counted by command over a rolling minute, and
-what each dashboard refresh costs (/api/state `refresh`).
+what each dashboard poll costs (/api/state `build_stats`).
 
 Counted by a Python audit hook on `subprocess.Popen` — the event
 `subprocess.run`, `check_output` and asyncio's subprocesses all raise — so no
 call site changes and background threads count too. It sees only the server's
 own forks: what a child spawns (gh's `security`, `gh send-telemetry`) needs a
-process-tree sample."""
+process-tree sample. `forks_per_min`/`top_forks` count every fork server-wide
+over the last 60 s (background git re-reads, gh fetches, spawns, …), not just
+one poll's; `build_s`/`build_max_s`/`gap_s` are per poll."""
 
 import contextlib
 import os
@@ -110,7 +112,7 @@ def record_build(seconds: float) -> None:
             _slow_logged_at = now
     if log_it:
         log.warning(
-            "slow refresh: build_state took %.1f s; top forks in the last minute: %s",
+            "slow poll: build_state took %.1f s; top forks in the last minute: %s",
             seconds,
             fork_counts().most_common(5),
         )
@@ -123,10 +125,10 @@ def record_gap(seconds: float) -> None:
     _last_gap = seconds
 
 
-def refresh_stats() -> dict:
-    """/api/state's `refresh` block: the last build, the slowest over the last
-    minute, the hub's last gap, and the minute's forks — total and the five
-    largest commands."""
+def build_stats() -> dict:
+    """/api/state's `build_stats` block: the last poll's build time, the
+    slowest over the last minute, the hub's last gap, and the minute's forks
+    server-wide — total and the five largest commands."""
     counts = fork_counts()
     now = time.monotonic()
     with _lock:

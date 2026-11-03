@@ -94,7 +94,7 @@ def test_codex_hook_health_reports_definition_observation_and_staleness(tmp_path
 
 
 def test_healthz_lists_the_last_minutes_forks(monkeypatch):
-    # The refresh block carries only the top five; measuring needs them all.
+    # The build_stats block carries only the top five; measuring needs them all.
     from collections import Counter
 
     monkeypatch.setattr(healthz, "_codex_hook_health", dict)

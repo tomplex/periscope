@@ -57,8 +57,8 @@ def _safe_build(w: dict, now_ts: int) -> tuple[dict, tuple[str, int, int, int] |
         )
 
 
-# Every reader in one refresh gets the list-panes rows its list_windows read
-# and the one ps table it took, however long it runs; a refresh running
+# Every reader in one poll gets the list-panes rows its list_windows read
+# and the one ps table it took, however long it runs; a poll running
 # alongside it (the hub and a REST poll) pins its own.
 @tmux.pinned_snapshot()
 @agent_processes.pinned_snapshot()
@@ -77,7 +77,7 @@ def build_state() -> dict:
     update_focus_from_windows(windows)
     _attach_git_then_resolve_pids(windows, full_roster=True)
     now_ts = int(time.time())
-    # The refresh's pinned table: the fan-out's process readers and measure
+    # The poll's pinned table: the fan-out's process readers and measure
     # below all read this one.
     snapshot = process_snapshot()
 
@@ -216,9 +216,9 @@ def build_state() -> dict:
         "resources": measured.totals if measured else None,
     }
     forks.record_build(time.monotonic() - started)
-    # What this refresh cost and how often the hub pushes one (forks.py) — the
+    # What this poll cost and how often the hub pushes one (forks.py) — the
     # resource popover's last line.
-    blob["refresh"] = forks.refresh_stats()
+    blob["build_stats"] = forks.build_stats()
     return blob
 
 

@@ -384,7 +384,7 @@ API_ERROR_RE = re.compile(r"^\s*[⎿⏺]\s+API Error:")
 
 
 def all_pane_ids() -> set[str]:
-    """Every live pane id across all sessions, from the refresh's list-panes
+    """Every live pane id across all sessions, from the poll's list-panes
     snapshot. `list_windows` keeps one pane per window (the active one), so a
     split window's background panes are invisible to it; channel-alert GC keys
     on pane id, so using the window set there would delete a background Claude
@@ -396,8 +396,8 @@ def list_windows() -> list[dict]:
     """One row per window, read off its active pane — the pane `pane_*`
     resolves against in `list-windows` — from a FRESH `list-panes -a`: callers
     that just created or stamped a window read it back at once, so this never
-    serves the snapshot. The call refreshes the snapshot that all_pane_ids and
-    session_status read for the rest of the refresh."""
+    serves the snapshot. The call replaces the snapshot that all_pane_ids and
+    session_status read for the rest of the poll."""
     rows = []
     for p in tmux.list_panes():
         # One row per window: its active pane. Hide periscope's internal

@@ -43,8 +43,8 @@ _PS_TTL_S = 1.0
 _PS_TIMEOUT_S = 2.0
 # A failed ps serves the last table while it is at most this old, instead of
 # blanking session state, the pane -> claude map, codex detection and resources
-# for a refresh. THI-450 measured refreshes of 3-13 s under load, so the last
-# table is up to ~14 s old when the next refresh's ps times out.
+# for a poll. THI-450 measured polls of 3-13 s under load, so the last
+# table is up to ~14 s old when the next poll's ps times out.
 _PS_KEEP_S = 15.0
 _PS_FAILURE_LOG_EVERY_S = 60.0
 _lock = threading.Lock()
@@ -109,7 +109,7 @@ def _take_snapshot() -> dict[int, ProcessInfo] | None:
 def pinned_snapshot():
     """Inside the block, and in copies of its context, process_snapshot()
     serves the table it took first, however long the block runs.
-    build_state's refresh is the block: a loaded one runs 3–13 s, and every
+    build_state's poll is the block: a loaded one runs 3–13 s, and every
     reader in it gets one table."""
     token = _pinned.set([])
     try:

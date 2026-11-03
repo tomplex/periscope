@@ -96,7 +96,7 @@ async def run() -> None:
 
 async def _run_loop(loop: asyncio.AbstractEventLoop, build_state: Callable[[], dict]) -> None:
     # When the last broadcast went out. Reset by an idle stretch: the gap
-    # across one is how long nobody watched, not a refresh interval.
+    # across one is how long nobody watched, not a slow tick.
     last_at: float | None = None
     while True:
         if not _subscribers:

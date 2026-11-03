@@ -1,14 +1,14 @@
 // "▣ 15.5G" pill: memory held by the periscope server, its webview and every
 // pane's process tree (resources.py). Click → each owner's memory and CPU,
 // panes heaviest first, then everything else on the machine, the machine's
-// load / swap / free memory, and what a dashboard refresh costs. Hidden when
+// load / swap / free memory, and what a dashboard poll costs. Hidden when
 // the server sent no measurement (its process snapshot failed that tick).
 import { useCallback, useRef, useState } from "preact/hooks";
 import { usePopoverDismiss } from "../hooks/usePopoverDismiss.js";
 import { selectPane } from "../split/alertFeed.js";
-import { refresh, resources, windows } from "../store.js";
+import { buildStats, resources, windows } from "../store.js";
 import { paneLabel } from "../util.js";
-import { fmtCpu, fmtMem, machineLine, ownedMb, paneLines, refreshLine, refreshTip } from "./resources.js";
+import { buildStatsLine, buildStatsTip, fmtCpu, fmtMem, machineLine, ownedMb, paneLines } from "./resources.js";
 
 const CPU_TIP = "share of the whole machine's CPU: 100% is every core busy";
 
@@ -45,7 +45,7 @@ function ResourcePopover({ r }) {
     if (hadFocus) btnRef.current?.focus();
   }, []);
   usePopoverDismiss(ref, open, close);
-  const rf = refresh.value;
+  const bs = buildStats.value;
 
   return (
     <div class="pill-dd" ref={ref}>
@@ -76,7 +76,7 @@ function ResourcePopover({ r }) {
         </div>
         <Line label="elsewhere" group={r.elsewhere} />
         <div class="res-machine">{machineLine(r.machine)}</div>
-        {rf && <div class="res-refresh" title={refreshTip(rf)}>{refreshLine(rf)}</div>}
+        {bs && <div class="res-poll" title={buildStatsTip(bs)}>{buildStatsLine(bs)}</div>}
       </div>
     </div>
   );

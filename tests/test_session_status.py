@@ -180,7 +180,7 @@ def test_ps_failure_reads_as_no_processes(monkeypatch):
     assert ss.command_lines() == {}
 
 
-def test_one_ps_serves_the_whole_refresh(monkeypatch, mocker):
+def test_one_ps_serves_the_whole_poll(monkeypatch, mocker):
     monkeypatch.setattr(agent_processes, "_snapshot_cache", None)
     take = mocker.patch.object(
         agent_processes, "_take_snapshot", return_value=agent_processes.parse_ps_snapshot(_PS_SNAPSHOT)

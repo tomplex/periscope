@@ -114,8 +114,8 @@ def list_panes() -> list[dict[str, str]]:
 def pinned_snapshot():
     """Inside the block, and in copies of its context, panes_snapshot() serves
     the rows the block's last list_panes() read, however long the block runs.
-    build_state's refresh is the block: its list_windows reads the rows, and
-    a loaded refresh runs 3–13 s."""
+    build_state's poll is the block: its list_windows reads the rows, and
+    a loaded poll runs 3–13 s."""
     token = _pinned_rows.set([])
     try:
         yield
