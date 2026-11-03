@@ -27,3 +27,11 @@ fixture seeds the cache so no plan-usage thread ever spawns, and
 `fresh_activity_db` teardown holds `activity._LOCK` before closing `_CONN`.
 Patching one call site (e.g. `periscope.app.cached_plan_usage`) is NOT enough —
 `routes.state` holds its own binding, so the fix lives at the cache layer.
+
+**No test forks real tmux, ps or gh for the per-refresh readers.** conftest
+seeds `tmux._panes_snapshot`, `agent_processes._snapshot_cache` and
+`gh._token_cache` with unexpiring empty entries, and clears git_pr's per-path
+caches (a stale entry would start a real `_bg` git refresh). A test of one of
+those paths resets the seed itself (`tests/test_gh.py` overrides
+`_no_gh_token` by name). The live-tmux oracle in `test_panes.py` and the
+live-`ps` test in `test_agent_processes.py` fork on purpose.
