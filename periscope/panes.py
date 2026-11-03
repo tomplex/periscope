@@ -400,9 +400,9 @@ def list_windows() -> list[dict]:
     session_status read for the rest of the refresh."""
     rows = []
     for p in tmux.list_panes():
-        # Hide periscope's internal session from every caller — the
-        # control-mode input client's session is scaffolding, not
-        # user-visible tmux state.
+        # One row per window: its active pane. Hide periscope's internal
+        # session from every caller — the control-mode input client's session
+        # is scaffolding, not user-visible tmux state.
         if p["pane_active"] != "1" or p["session_name"] == INPUT_CTL_SESSION:
             continue
         rows.append(

@@ -184,9 +184,13 @@ re-read on every call). `tmux._run` takes an `env`.
   background refresh runs); pid rebinding uses the same, possibly stale, branch.
 - argv[0] names the executable for claude and codex (they don't rewrite their process title). A process whose argv[0]
   is a path with a space reads only up to the space — none of the processes periscope classifies.
-- A newline in a window name or path still splits its pane's `list-panes` row; that row is skipped (logged once), so
+- A newline or `\x1f` in a window name given with `new-window -n`, a path or an `@`-option (tmux escapes renames and
+  session names) still breaks its pane's `list-panes` row; that row is skipped (logged once), so
   for as long as the name holds the newline the pane is missing from `all_pane_ids` (its alerts are GC'd) and its
-  window from the full roster (its `pane_tracks` row can be pruned, #19). tmux has no escape for it in `-F` output.
+  window from the full roster (its `pane_tracks` row can be pruned, #19). Before this change a tab or newline there
+  crashed the whole `list_windows`.
+- `all_pane_ids` and the pane-to-claude map read a list-panes snapshot up to 1 s old (the claude map, with its own
+  1 s cache, up to ~2 s): a pane created in that window reads as "no claude yet" and fails open (#14, #16).
 - `gh auth token` prints the token gh would use for github.com; a token revoked within the 10 minutes fails until the
   401 re-read (at most a minute).
 - The audit hook's per-event cost (a string compare) is negligible against periscope's file I/O.

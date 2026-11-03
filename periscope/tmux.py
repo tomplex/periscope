@@ -74,11 +74,12 @@ def list_panes() -> list[dict[str, str]]:
         if len(fields) == len(PANE_FIELDS):
             rows.append(dict(zip(PANE_FIELDS, fields, strict=True)))
         elif not _unparsed_logged:
-            # A newline in a window name or path splits its pane's row in two;
-            # the pane drops out of this snapshot. Said once per process.
+            # A newline or \x1f in a window name or path (only names given with
+            # `new-window -n`, paths and @-options reach the output raw) breaks
+            # its pane's row; the pane drops out of this snapshot. Said once.
             from periscope.log import log
 
-            log.warning("list-panes row skipped (a newline in a window name or path?): %r", line)
+            log.warning("list-panes row skipped (a newline or \\x1f in a window name or path?): %r", line)
             _unparsed_logged = True
     _panes_snapshot = (time.monotonic(), rows)
     return rows
