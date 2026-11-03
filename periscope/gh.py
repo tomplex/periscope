@@ -7,14 +7,17 @@ handed to each call; telemetry and the update check are off, each of which
 forks again per call. GH_TOKEN applies to github.com and any *.ghe.com host —
 a call in a repo on the OTHER one of those two 401s with it; `run` retries
 that case once without the token and remembers the cwd so later calls there
-skip it outright."""
+skip it outright. `AVAILABLE` is the one "is gh installed" check; `run`
+returns without forking when it's False."""
 
 import re
+import shutil
 import threading
 import time
 
 from periscope.tmux import _run
 
+AVAILABLE = shutil.which("gh") is not None
 _TOKEN_TTL_S = 600.0
 # A failed `gh auth token` is retried after this long, and a 401 with a token
 # re-reads the token no sooner than this after the last read (a revoked or
@@ -33,7 +36,7 @@ _lock = threading.Lock()
 _token_cache: tuple[float, float, str | None] | None = None
 # cwds whose GH_TOKEN 401'd and then succeeded once retried without it: a
 # *.ghe.com repo when the token is for github.com, or vice versa.
-_tokenless_cwds: set[str] = set()
+_tokenless_cwds: set[str | None] = set()
 
 
 def _token() -> str | None:
@@ -50,6 +53,8 @@ def _token() -> str | None:
 def run(*args: str, cwd: str | None = None, timeout: float = 3.0) -> tuple[int, str]:
     """`gh <args>` — (returncode, stdout, or stderr on failure), as tmux._run."""
     global _token_cache
+    if not AVAILABLE:
+        return 127, "gh not installed"
     token = None if cwd in _tokenless_cwds else _token()
     env_overrides = dict(_QUIET)
     if token:

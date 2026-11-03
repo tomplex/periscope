@@ -43,6 +43,13 @@ def _token_reads(calls):
     return sum(1 for cmd, _ in calls if cmd == ["gh", "auth", "token"])
 
 
+def test_run_forks_nothing_when_gh_is_not_available(monkeypatch):
+    calls = _fake(monkeypatch)
+    monkeypatch.setattr(gh, "AVAILABLE", False)
+    assert gh.run("pr", "list") == (127, "gh not installed")
+    assert calls == []
+
+
 def test_a_call_carries_the_token_and_runs_quiet(monkeypatch):
     calls = _fake(monkeypatch)
     assert gh.run("pr", "list", "--limit", "1", cwd="/r", timeout=8.0) == (0, "[]")

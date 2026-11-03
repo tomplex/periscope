@@ -666,7 +666,7 @@ def test_linked_pr_state_carries_base_and_checks(tmp_path, mocker):
         {"state": "OPEN", "baseRefName": "main", "statusCheckRollup": [{"name": "test", "conclusion": "FAILURE"}]}
     )
     mocker.patch("periscope.gh.run", return_value=(0, payload))
-    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
     out = linked_pr_state_for(str(tmp_path), 42)
     assert out["pr_base"] == "main"
     assert out["ci_checks"] == [{"name": "test", "state": "failure"}]
@@ -690,7 +690,7 @@ def test_pr_state_for_carries_base_and_checks(tmp_path, mocker):
         ]
     )
     mocker.patch("periscope.gh.run", return_value=(0, payload))
-    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
     out = pr_state_for(str(tmp_path), "feature")
     assert out["pr_base"] == "main"
     assert out["ci"] == "✗"
@@ -704,7 +704,7 @@ def _fake_gh(mocker, *, state, rollup=None):
     payload = _json.dumps({"state": state, "statusCheckRollup": rollup or []})
 
     mocker.patch("periscope.gh.run", return_value=(0, payload))
-    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
 
 
 def test_linked_pr_state_merged(tmp_path, mocker):
@@ -725,7 +725,7 @@ def test_linked_pr_state_closed(tmp_path, mocker):
 
 
 def test_linked_pr_state_none_without_number(tmp_path, mocker):
-    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
     assert linked_pr_state_for(str(tmp_path), 0) is None
     assert linked_pr_state_for("", 5) is None
 

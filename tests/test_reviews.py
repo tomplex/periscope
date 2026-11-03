@@ -205,7 +205,7 @@ REQUESTED = (
 
 
 def test_open_prs_merges_both_lists_and_assigns_roles(mocker):
-    mocker.patch("periscope.reviews._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
     mocker.patch("periscope.reviews.gitutil.github_slug", return_value="tom/fdy")
     run = mocker.patch("periscope.gh.run", side_effect=[(0, MINE), (0, REQUESTED)])
     got = reviews.open_prs("/dev/fdy")
@@ -219,7 +219,7 @@ def test_open_prs_merges_both_lists_and_assigns_roles(mocker):
 
 
 def test_open_prs_without_gh_is_empty(mocker):
-    mocker.patch("periscope.reviews._GH_AVAILABLE", False)
+    mocker.patch("periscope.gh.AVAILABLE", False)
     assert reviews.open_prs("/dev/fdy") == []
 
 
@@ -315,7 +315,7 @@ def test_pr_url_caches_a_found_slug_but_retries_after_none(mocker):
 
 
 def test_open_prs_skips_repos_without_github_and_returns_none_on_failure(mocker):
-    mocker.patch("periscope.reviews._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
     mocker.patch("periscope.reviews.gitutil.github_slug", return_value=None)
     assert reviews.open_prs("/dev/local-only") == []
     mocker.patch("periscope.reviews.gitutil.github_slug", return_value="tom/fdy")

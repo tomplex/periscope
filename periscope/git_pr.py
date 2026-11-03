@@ -19,7 +19,6 @@ import json
 import os
 import random
 import re
-import shutil
 import threading
 import time
 from collections.abc import Mapping
@@ -64,7 +63,6 @@ _pr_lock = threading.Lock()
 _LINKED_PR_TTL = 60.0
 _linked_pr_cache: dict[tuple[str, int], tuple[float, dict | None]] = {}
 _linked_pr_fetching: set[tuple[str, int]] = set()
-_GH_AVAILABLE = shutil.which("gh") is not None
 
 # GitHub check conclusions that mean "failed". Shared by the PR-rollup glyph
 # (pr_state_for) and the activity-timeline run state (_gh_run_state) so a new
@@ -314,7 +312,7 @@ def pr_state_for(path: str, branch: str) -> dict | None:
     """Return PR metadata + CI rollup for the PR open against `branch` in
     repo at `path`. Modal sidebar surfaces title/draft/+/−/reviewers; the
     grid card uses {pr, ci} as before."""
-    if not _GH_AVAILABLE or not path or not branch:
+    if not gh.AVAILABLE or not path or not branch:
         return None
     code, out = gh.run(
         "pr",
@@ -429,7 +427,7 @@ def shared_activity_for(path: str, branch: str) -> list[dict]:
                 ev["url"] = f"https://github.com/{slug}/commit/{sha}"
             events.append(ev)
 
-    if _GH_AVAILABLE and branch:
+    if gh.AVAILABLE and branch:
         code, out = gh.run(
             "run",
             "list",
@@ -570,7 +568,7 @@ def linked_pr_state_for(path: str, number: int) -> dict | None:
     Returns {pr_state: 'open'|'merged'|'closed', ci: glyph|None} or None if gh
     can't answer. Distinct from pr_state_for, which only sees OPEN PRs on the
     current branch."""
-    if not _GH_AVAILABLE or not path or not number:
+    if not gh.AVAILABLE or not path or not number:
         return None
     code, out = gh.run(
         "pr", "view", str(number), "--json", "state,statusCheckRollup,baseRefName", cwd=path, timeout=8.0
@@ -620,7 +618,7 @@ def prewarm_pr_cache() -> None:
     background gh PR queries for each unique (cwd, branch) pair. Runs once at
     startup so PR badges populate on the first /api/state poll instead of
     waiting for the second poll's stale-while-revalidate to fire them."""
-    if not _GH_AVAILABLE:
+    if not gh.AVAILABLE:
         return
     try:
         windows = list_windows()

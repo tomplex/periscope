@@ -333,7 +333,6 @@ def _orphan_pairs() -> list[tuple[str, str]]:
 
 # --- GitHub: the queue's primary source --------------------------------------
 
-_GH_AVAILABLE = shutil.which("gh") is not None
 _PR_FIELDS = "number,title,headRefName,isDraft,statusCheckRollup,author"
 
 
@@ -355,7 +354,7 @@ def open_prs(repo_root: str) -> list[dict] | None:
     """Open PRs that are mine plus open PRs where my review is requested, in
     that order, deduped by number. `[]` without gh or for a repo with no
     GitHub remote; None when gh failed."""
-    if not _GH_AVAILABLE or not gitutil.github_slug(repo_root):
+    if not gh.AVAILABLE or not gitutil.github_slug(repo_root):
         return []
     out: list[dict] = []
     seen: set[int] = set()
