@@ -158,7 +158,7 @@ def _unknown_account_error(arguments: dict) -> list | None:
 def _channel_gc(known_pane_ids: set[str], since: float) -> None:
     """Drop alert state for panes that no longer exist, except a pane whose
     newest alert landed at or after `since` — the poll's pane set can be as
-    old as the poll itself (its pinned list-panes rows, THI-450), so a pane
+    old as the poll itself (its pinned list-panes rows), so a pane
     spawned mid-poll must not look dead before its own first alert gets here.
     Session registry is GC'd by the connection handler on disconnect, not
     here."""

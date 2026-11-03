@@ -459,7 +459,7 @@ def test_state_reports_what_the_poll_cost(client, mocker, clean_state):
 
 
 def test_a_poll_slower_than_the_ttls_forks_ps_and_list_panes_once(client, mocker, clean_state, monkeypatch):
-    # THI-450 measured builds of 3–13 s: the fan-out's process readers and
+    # A loaded poll runs 3–13 s: the fan-out's process readers and
     # all_pane_ids after it must still read the snapshots the poll took.
     from types import SimpleNamespace
 

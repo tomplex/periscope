@@ -184,7 +184,7 @@ def git_identity(monkeypatch):
 
 
 def _seven_command_state(path):
-    """The pre-THI-450 seven-command read of branch + git, kept as the oracle."""
+    """The seven-command read of branch + git, kept as the oracle."""
 
     def run(*args):
         r = subprocess.run(["git", "-C", path, *args], capture_output=True, text=True)

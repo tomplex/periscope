@@ -43,8 +43,8 @@ _PS_TTL_S = 1.0
 _PS_TIMEOUT_S = 2.0
 # A failed ps serves the last table while it is at most this old, instead of
 # blanking session state, the pane -> claude map, codex detection and resources
-# for a poll. THI-450 measured polls of 3-13 s under load, so the last
-# table is up to ~14 s old when the next poll's ps times out.
+# for a poll. A loaded poll runs 3-13 s, so the last table is up to ~14 s old
+# when the next poll's ps times out.
 _PS_KEEP_S = 15.0
 _PS_FAILURE_LOG_EVERY_S = 60.0
 _lock = threading.Lock()
