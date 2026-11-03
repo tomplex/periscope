@@ -1,5 +1,7 @@
 """Lifespan startup + shutdown wiring + route registration."""
 
+import sys
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -40,7 +42,7 @@ def test_app_mounts_static_files():
     assert len(static_mounts) >= 1
 
 
-def test_lifespan_starts_and_shuts_down_cleanly(mocker):
+def test_lifespan_starts_and_shuts_down_cleanly(mocker, monkeypatch):
     """TestClient triggers lifespan startup on enter, shutdown on exit.
 
     Mock the heavyweight prewarms + async loops so the test is fast and
@@ -49,6 +51,11 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     with a coroutine factory rather than return_value=None (which would make
     _task crash on asyncio.create_task(None)).
     """
+    from periscope import forks
+
+    installed = []
+    monkeypatch.setattr(forks, "_installed", False)
+    monkeypatch.setattr(sys, "addaudithook", installed.append)
     mocker.patch("periscope.app.prewarm_pr_cache")
     mocker.patch("periscope.app.cached_plan_usage")
     # Lifespan runs a synchronous track seed before yield; mock seed_tracks so
@@ -91,6 +98,10 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker):
     with TestClient(app) as client:
         r = client.get("/api/state")
         assert r.status_code == 200
+    # Without forks.install() in the lifespan, /api/state's refresh block
+    # would report forks_per_min: 0 and an empty top_forks with every other
+    # assertion here still green.
+    assert installed == [forks._on_audit]
     # Regression for the intermittent 3.14 sqlite segfault + usage-bleed flake:
     # building /api/state must NOT kick off the real plan-usage refresh. That
     # background thread does httpx + record_usage_samples and, as a leaked
