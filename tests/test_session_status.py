@@ -327,7 +327,12 @@ def test_env_tail_survives_non_ascii_argv_under_a_utf8_locale(monkeypatch, tmp_p
 
     script = tmp_path / "sleepy.js"
     script.write_text("setTimeout(() => {}, 30000);\n")
+    # LC_ALL and LC_CTYPE override LANG, so without clearing/setting them too
+    # this test passes on a runner that exports either as C regardless of
+    # whether ps_env() is applied to the ps eww call below.
     monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
     agent_processes.clear_caches()
     proc = subprocess.Popen(
         ["/Users/tom/.local/bin/café/claude", str(script)],
