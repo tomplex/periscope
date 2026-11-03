@@ -34,3 +34,20 @@ export function paneLines(windows) {
 export function machineLine(m) {
   return `${fmtMem(m.ram_mb)} RAM · swap ${fmtMem(m.swap_used_mb)}/${fmtMem(m.swap_total_mb)} · ${m.mem_free_pct}% free · load ${m.load1}`;
 }
+
+// The popover's last line: what one dashboard refresh costs (/api/state
+// `refresh`, forks.py). gap_s is the server's interval between pushes, null
+// until it has pushed twice.
+export function refreshLine(r) {
+  const every = r.gap_s == null ? "" : ` · every ${r.gap_s.toFixed(1)} s`;
+  return `refresh ${r.build_s.toFixed(1)} s${every} · ${r.forks_per_min} forks/min`;
+}
+
+// Its tooltip: the slowest refresh in the last minute, then the commands that
+// forked most.
+export function refreshTip(r) {
+  return [
+    `slowest ${r.build_max_s.toFixed(1)} s in the last minute`,
+    ...r.top_forks.map(([cmd, n]) => `${cmd} ×${n}`),
+  ].join("\n");
+}
