@@ -86,7 +86,7 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
         return None
     # LC_ALL=C: the no-work-tree fatal below is matched by English text, which
     # a translated locale (fr_FR, …) doesn't produce.
-    env = {**os.environ, "LC_ALL": "C"}
+    env_overrides = {"LC_ALL": "C"}
     # --no-optional-locks: a dashboard read must not take the index lock from
     # under the user's own git commands. status takes no lock either way; a
     # plain `diff HEAD` rewrites the index on stat-dirty files regardless of
@@ -94,7 +94,7 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
     code, status = _run(
         ["git", "--no-optional-locks", "-C", path, "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
         timeout=timeout,
-        env=env,
+        env_overrides=env_overrides,
     )
     if code == 0:
         head = oid = ""
@@ -119,7 +119,7 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
         _, diff = _run(
             ["git", "--no-optional-locks", "-C", path, "diff-index", "-M", "--shortstat", "HEAD"],
             timeout=timeout,
-            env=env,
+            env_overrides=env_overrides,
         )
         adds_m = re.search(r"(\d+) insertion", diff)
         dels_m = re.search(r"(\d+) deletion", diff)
@@ -137,7 +137,9 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
         # A git dir with no work tree here — a bare-container layout (a dir
         # whose .git file says `gitdir: ./.bare`), a cwd inside .git, a bare
         # repo — still has a branch and a repo; there is nothing to diff.
-        code, head = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=timeout, env=env)
+        code, head = _run(
+            ["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=timeout, env_overrides=env_overrides
+        )
         if code != 0:
             return None
         branch = head if head != "HEAD" else "?"

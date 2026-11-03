@@ -28,8 +28,8 @@ def _fake(monkeypatch, *, token="tok-1", answers=None):
     calls = []
     answers = list(answers or [])
 
-    def run(cmd, cwd=None, timeout=3.0, env=None):
-        calls.append((cmd, env))
+    def run(cmd, cwd=None, timeout=3.0, env_overrides=None):
+        calls.append((cmd, {**os.environ, **(env_overrides or {})}))
         if cmd[1:3] == ["auth", "token"]:
             return (0, token) if token else (1, "You are not logged into any GitHub hosts.")
         return answers.pop(0) if answers else (0, "[]")

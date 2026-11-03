@@ -96,8 +96,12 @@ def recent_panes() -> list[dict[str, str]]:
 
 
 def _run(
-    cmd: list[str], cwd: str | None = None, timeout: float = 3.0, env: dict[str, str] | None = None
+    cmd: list[str], cwd: str | None = None, timeout: float = 3.0, env_overrides: dict[str, str] | None = None
 ) -> tuple[int, str]:
+    """Run `cmd`. `env_overrides`, if given, is merged over `os.environ` here
+    so a caller wanting e.g. `LC_ALL=C` doesn't rebuild the whole environment
+    (and can't accidentally run the child with PATH/HOME missing)."""
+    env = {**os.environ, **env_overrides} if env_overrides else None
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
         if r.returncode != 0:

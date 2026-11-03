@@ -121,13 +121,27 @@ def test_run_returns_minus_one_on_exception(mocker):
     assert out == ""
 
 
-def test_run_passes_env_through(mocker):
+def test_run_passes_no_env_through_when_no_overrides_are_given(mocker):
+    """Identical subprocess behavior for callers that pass nothing: env=None,
+    so the child inherits the process environment untouched."""
     run = mocker.patch(
         "subprocess.run",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n", stderr=""),
     )
-    assert _run(["gh", "pr", "list"], env={"GH_TOKEN": "t"}) == (0, "ok")
-    assert run.call_args.kwargs["env"] == {"GH_TOKEN": "t"}
+    assert _run(["gh", "pr", "list"]) == (0, "ok")
+    assert run.call_args.kwargs["env"] is None
+
+
+def test_run_merges_overrides_over_os_environ(mocker, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    run = mocker.patch(
+        "subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n", stderr=""),
+    )
+    assert _run(["gh", "pr", "list"], env_overrides={"GH_TOKEN": "t"}) == (0, "ok")
+    env = run.call_args.kwargs["env"]
+    assert env["GH_TOKEN"] == "t"
+    assert env["PATH"] == "/usr/bin"  # the rest of the environment rides along
 
 
 def test_capture_calls_tmux_capture_pane_with_lines(mocker):

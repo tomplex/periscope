@@ -6,7 +6,6 @@ with `gh auth token` every 10 minutes (so `gh auth switch` lands soon) and
 handed to each call; telemetry and the update check are off, each of which
 forks again per call."""
 
-import os
 import re
 import threading
 import time
@@ -34,7 +33,7 @@ def _token() -> str | None:
     with _lock:
         now = time.monotonic()
         if _token_cache is None or now >= _token_cache[1]:
-            code, out = _run(["gh", "auth", "token"], env={**os.environ, **_QUIET})
+            code, out = _run(["gh", "auth", "token"], env_overrides=_QUIET)
             token = out if code == 0 and out else None
             _token_cache = (now, now + (_TOKEN_TTL_S if token else _RETRY_S), token)
         return _token_cache[2]
@@ -44,10 +43,10 @@ def run(*args: str, cwd: str | None = None, timeout: float = 3.0) -> tuple[int, 
     """`gh <args>` — (returncode, stdout, or stderr on failure), as tmux._run."""
     global _token_cache
     token = _token()
-    env = {**os.environ, **_QUIET}
+    env_overrides = dict(_QUIET)
     if token:
-        env["GH_TOKEN"] = token
-    code, out = _run(["gh", *args], cwd=cwd, timeout=timeout, env=env)
+        env_overrides["GH_TOKEN"] = token
+    code, out = _run(["gh", *args], cwd=cwd, timeout=timeout, env_overrides=env_overrides)
     if code != 0 and token and _AUTH_FAILED_RE.search(out):
         # A revoked or rotated token: read it again once _RETRY_S has passed
         # since the last read.

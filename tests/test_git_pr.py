@@ -54,7 +54,7 @@ def _mock_git(mocker, *, status=_HEAD, diff="", code=0):
     """Patch _run so git_state_for sees one `status --porcelain=v2 --branch`
     answer and one `diff-index --shortstat` answer; repo identity falls back."""
 
-    def fake_run(cmd, cwd=None, timeout=3.0, env=None):
+    def fake_run(cmd, cwd=None, timeout=3.0, env_overrides=None):
         if "status" in cmd:
             return (code, status)
         if "diff-index" in cmd:
@@ -768,7 +768,7 @@ def test_git_state_includes_repo_key_and_label(tmp_path, mocker):
     common_dir = repo_dir / ".git"
     common_dir.mkdir()
 
-    def fake_run(args, cwd=None, timeout=None, env=None):
+    def fake_run(args, cwd=None, timeout=None, env_overrides=None):
         if "status" in args:
             return (0, _HEAD)
         if "--git-common-dir" in args:
