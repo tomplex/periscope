@@ -284,10 +284,28 @@ def test_a_tab_in_a_window_name_is_kept(monkeypatch):
     assert tmux_mod.list_panes()[0]["window_name"] == "tab\tname"
 
 
-def test_a_row_a_newline_split_is_skipped_and_logged_once(monkeypatch, caplog):
+def test_a_window_name_with_one_embedded_newline_is_reconstructed(monkeypatch):
     broken = _ROW.replace("shell", "new\nline")
-    monkeypatch.setattr(tmux_mod, "_unparsed_logged", False)
     monkeypatch.setattr(tmux_mod, "tmux", lambda *a: broken + "\n" + _ROW.replace("%5", "%6") + "\n")
+    rows = tmux_mod.list_panes()
+    assert [r["pane_id"] for r in rows] == ["%5", "%6"]  # the split row survives, the next row is intact
+    assert rows[0]["window_name"] == "new\nline"
+
+
+def test_a_window_name_with_two_embedded_newlines_is_reconstructed(monkeypatch):
+    broken = _ROW.replace("shell", "new\nmulti\nline")
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: broken + "\n" + _ROW.replace("%5", "%6") + "\n")
+    rows = tmux_mod.list_panes()
+    assert [r["pane_id"] for r in rows] == ["%5", "%6"]
+    assert rows[0]["window_name"] == "new\nmulti\nline"
+
+
+def test_an_overshooting_row_is_skipped_and_logged_once(monkeypatch, caplog):
+    """A \\x1f inside a value (not a newline) can't be reconstructed — skip it
+    and keep going, same as a malformed row."""
+    overshoot = _ROW + "\x1fextra"
+    monkeypatch.setattr(tmux_mod, "_unparsed_logged", False)
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: overshoot + "\n" + _ROW.replace("%5", "%6") + "\n")
     with caplog.at_level(logging.WARNING, logger="periscope"):
         assert [p["pane_id"] for p in tmux_mod.list_panes()] == ["%6"]
         tmux_mod.list_panes()

@@ -61,26 +61,43 @@ _panes_snapshot: tuple[float, list[dict[str, str]]] | None = None
 _unparsed_logged = False
 
 
+def _log_skipped_row(buf_lines: list[str]) -> None:
+    global _unparsed_logged
+    if not _unparsed_logged:
+        from periscope.log import log
+
+        log.warning("list-panes row skipped (a \\x1f in a window name or path, or a malformed row?): %r", buf_lines)
+        _unparsed_logged = True
+
+
 def list_panes() -> list[dict[str, str]]:
     """Every pane as {field: value} over PANE_FIELDS, from a fresh
     `list-panes -a` that becomes the snapshot recent_panes serves. [] when
     tmux has no server."""
-    global _panes_snapshot, _unparsed_logged
+    global _panes_snapshot
+    raw_lines = tmux("list-panes", "-a", "-F", _PANES_FMT).split("\n")
+    if raw_lines and raw_lines[-1] == "":
+        raw_lines.pop()  # the trailing newline tmux's output ends with
     rows = []
-    for line in tmux("list-panes", "-a", "-F", _PANES_FMT).split("\n"):
-        if not line:
+    buf_lines: list[str] = []
+    for line in raw_lines:
+        if not buf_lines and not line:
             continue
-        fields = line.split("\x1f")
+        buf_lines.append(line)
+        # A newline in a window name (only given with `new-window -n`; paths
+        # and @-options reach the output raw) splits its pane's row across
+        # raw lines — rejoin with "\n" until the field count is whole again.
+        fields = "\n".join(buf_lines).split("\x1f")
         if len(fields) == len(PANE_FIELDS):
             rows.append(dict(zip(PANE_FIELDS, fields, strict=True)))
-        elif not _unparsed_logged:
-            # A newline or \x1f in a window name or path (only names given with
-            # `new-window -n`, paths and @-options reach the output raw) breaks
-            # its pane's row; the pane drops out of this snapshot. Said once.
-            from periscope.log import log
-
-            log.warning("list-panes row skipped (a newline or \\x1f in a window name or path?): %r", line)
-            _unparsed_logged = True
+            buf_lines = []
+        elif len(fields) > len(PANE_FIELDS):
+            # Overshot: a \x1f inside a value. Not a newline — drop it and
+            # resume scanning from the next raw line.
+            _log_skipped_row(buf_lines)
+            buf_lines = []
+    if buf_lines:
+        _log_skipped_row(buf_lines)  # never reached the field count
     _panes_snapshot = (time.monotonic(), rows)
     return rows
 

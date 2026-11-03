@@ -192,11 +192,13 @@ re-read on every call). `tmux._run` takes an `env`.
   background refresh runs); pid rebinding uses the same, possibly stale, branch.
 - argv[0] names the executable for claude and codex (they don't rewrite their process title). A process whose argv[0]
   is a path with a space reads only up to the space — none of the processes periscope classifies.
-- A newline or `\x1f` in a window name given with `new-window -n`, a path or an `@`-option (tmux escapes renames and
-  session names) still breaks its pane's `list-panes` row; that row is skipped (logged once), so
-  for as long as the name holds the newline the pane is missing from `all_pane_ids` (its alerts are GC'd) and its
-  window from the full roster (its `pane_tracks` row can be pruned, #19). Before this change a tab or newline there
-  crashed the whole `list_windows`.
+- A newline in a window name given with `new-window -n` (a path or an `@`-option reach the output raw, tmux escapes
+  renames and session names) is reconstructed: `list_panes` rejoins the row's raw lines with "\n" until the field
+  count is whole again. Only a `\x1f` inside a value, or a row that never reaches the field count, is skipped (logged
+  once) — and for as long as that happens the pane is missing from `all_pane_ids` (its alerts are GC'd) and its
+  window from the full roster (its `pane_tracks` row can be pruned, #19; boot housekeeping also prunes its
+  `pane_sessions`/`pane_status`/`pane_workspaces` rows). Before this change a tab or newline there crashed the whole
+  `list_windows`.
 - `all_pane_ids` and the pane-to-claude map read a list-panes snapshot up to 1 s old (the claude map, with its own
   1 s cache, up to ~2 s): a pane created in that window reads as "no claude yet" and fails open (#14, #16). The
   channel-alert GC reads the same snapshot, so an alert recorded for a pane newer than it would be dropped; every
