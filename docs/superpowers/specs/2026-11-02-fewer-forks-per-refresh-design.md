@@ -59,7 +59,11 @@ top_forks}` (last build, max over 60 s, last gap or null, total and the five lar
 **D3 — One tmux call per refresh.** `tmux.list_panes()` runs one `tmux list-panes -a -F <window fields + pane fields
 + pane_active>` through `_tmux_argv` (so it honours `PERISCOPE_TMUX_SOCKET`), fields separated by `\x1f` (a tab in a
 window name or path no longer shifts fields), and stores its rows as a snapshot; `tmux.panes_snapshot()` serves that
-snapshot while it is under 1 s old, under a lock, else calls `list_panes`. The snapshot lives in `tmux.py` so
+snapshot while it is under 1 s old, under a lock, else calls `list_panes`. Inside a refresh it serves the rows the
+refresh's `list_windows` read, however long the refresh runs: `build_state` opens `tmux.pinned_snapshot()` (a context
+variable, copied into each fan-out worker), because THI-450 measured refreshes of 3–13 s under load, where a 1 s TTL
+has readers late in the refresh fork again and read different rows from the rest. A refresh running alongside another
+(the hub and a REST poll) pins its own rows, so neither reads the other's. The snapshot lives in `tmux.py` so
 `session_status` keeps importing only leaf modules.
 `list_windows` always calls `list_panes` — never the snapshot: `open_ops` reads a window it just created straight
 back, and `pids` stamps `@periscope_id` with a bare `tmux set-option`, so a cached answer would show a just-stamped
@@ -71,12 +75,20 @@ window unstamped and re-mint it (#11, #13). It keeps its exact row shape, built 
 caller still skips GC on an empty result.
 
 **D4 — One process table per refresh.** `agent_processes.process_snapshot()` (pid, ppid, start time, state, argv;
-locked, 1 s) becomes the only `ps` table. It runs `ps -axo pid=,ppid=,lstart=,state=,args=` with `LC_ALL=C`, and
+locked; pinned for a refresh by `agent_processes.pinned_snapshot()` as D3 pins the rows, else 1 s from when `ps`
+returns) becomes the only `ps` table. It runs `ps -axo pid=,ppid=,lstart=,state=,args=` with `LC_ALL=C`, and
 `ProcessInfo.exe` is argv[0] — the executable as launched — replacing the truncated `comm`, so every caller
-(`_is_codex_executable`, `_claude_procs`) sees a full path. `session_status.proc_table` and `_claude_procs` read it
-instead of forking their own (`ps -axo pid=,ppid=,command=` and `ps -axo pid=,etime=,comm=`); a process's age comes
-from its start time, and `parse_etime` goes. The 15 s `ps eww` environment scan stays: process environment has no
-other source. Both snapshots are locked, so the fan-out can no longer stampede them.
+(`_is_codex_executable`, `is_claude_executable`) sees a full path. `session_status.command_lines` (pid → argv) and
+`_claude_procs` read it instead of forking their own (`ps -axo pid=,ppid=,command=` and `ps -axo pid=,etime=,comm=`);
+a process's age comes from its start time, and `parse_etime` goes. `is_claude_executable` is the one claude test:
+`_claude_procs` and the pane → claude walk (`pane_claude_pids`, over `descendants`, nearest first) both use it, and
+the walk is rebuilt when the pane map or the table changes rather than on a clock of its own. The 15 s `ps eww`
+environment scan stays: process environment has no other source. Both snapshots are locked, so the fan-out can no
+longer stampede them.
+A `ps` that fails or runs past 2 s serves the last table while it is under 15 s old (a warning at most once a
+minute), else `None`. THI-450 measured `ps` at 0.5–1.7 s and refreshes of 3–13 s at load average 50–70: the 2 s
+timeout keeps a slow `ps` from stretching the refresh further, and 15 s covers the previous refresh's table when the
+next one's `ps` times out.
 
 **D5 — Git: two commands per refresh, refreshed in the background.** `git_state_for` runs
 `git --no-optional-locks status --porcelain=v2 --branch --untracked-files=normal` (branch, detached sha, ahead count
@@ -115,12 +127,16 @@ re-read on every call). `tmux._run` takes an `env`.
   D2).
 - `periscope/app.py`: installs the hook in the lifespan.
 - `periscope/routes/state.py`, `periscope/state_hub.py`: build duration, broadcast gap reset on idle, the `refresh`
-  block (D2). `periscope/routes/healthz.py`: the full `forks` map.
-- `periscope/tmux.py`: `list_panes` / `panes_snapshot` and the `\x1f`-separated format (D3); `_run(env=)` (D6).
+  block (D2); `build_state` pins both snapshots and runs its fan-out in copies of that context (D3, D4).
+  `periscope/routes/healthz.py`: the full `forks` map.
+- `periscope/tmux.py`: `list_panes` / `panes_snapshot` / `pinned_snapshot` and the `\x1f`-separated format (D3);
+  `_run(env=)` (D6).
 - `periscope/panes.py`: `list_windows` and `all_pane_ids` read them (D3).
-- `periscope/agent_processes.py`: `args`-only `ps` under `LC_ALL=C`; `ProcessInfo.exe` from argv[0] (D4).
-- `periscope/session_status.py`: `_tmux_pane_pids`, `proc_table`, `_claude_procs` read the shared snapshots;
-  `parse_etime` deleted (D3, D4). `periscope/window_view.py`: a comment.
+- `periscope/agent_processes.py`: `args`-only `ps` under `LC_ALL=C`; `ProcessInfo.exe` from argv[0];
+  `pinned_snapshot`, the stamp after the fork, the kept table on failure; `is_claude_executable`; `descendants` nearest
+  first (D4).
+- `periscope/session_status.py`: `_tmux_pane_pids`, `command_lines` (was `proc_table`), `_claude_procs` and the
+  pane → claude walk read the shared snapshots; `parse_etime` deleted (D3, D4). `periscope/window_view.py`: a comment.
 - `periscope/git_pr.py`: the two-command read, the work-tree-less fallback, the 10-minute identity cache, background
   refresh, jitter, lock, keep-on-failure (D5); `gh.run` at its call sites (D6).
 - `periscope/gh.py` (new): the `gh` environment and token (D6); `reviews.py`, `cleanup.py`, `projects.py` call it.
@@ -143,9 +159,14 @@ re-read on every call). `tmux._run` takes an `env`.
 - `tests/test_agent_processes.py`: fixtures rebuilt as real `ps … args=` rows; argv[0] as the executable (a codex by
   absolute path is found); `ps` runs with `LC_ALL=C`; a French `lstart` reads nothing; a live `ps` run on a process
   whose argv[0] is `/Users/tom/.local/bin/claude`, with `LC_ALL=fr_FR.UTF-8` in the environment, reads the full path.
-- `tests/test_session_status.py`: `proc_table` and `_claude_procs` built from a `process_snapshot` fixture match
-  today's outputs (age from start time; a `node …/.claude/plugins/…` process is not a claude); one `ps` serves the
-  refresh; `_tmux_pane_pids` reads the snapshot and honours the socket.
+- `tests/test_session_status.py`: `command_lines` and `_claude_procs` built from a `process_snapshot` fixture match
+  today's outputs (age from start time; a `node …/.claude/plugins/…` process is not a claude, in the pane walk too);
+  one `ps` serves the refresh; the walk takes the nearest claude and is rebuilt when either snapshot changes;
+  `_tmux_pane_pids` reads the snapshot and honours the socket.
+- `tests/test_agent_processes.py`, `tests/test_tmux.py`, `tests/routes/test_state.py`: a `ps` slower than the TTL is
+  still served after it; a pinned snapshot outlives the TTL for its block and its copied contexts only; overlapping
+  blocks keep their own; a failed `ps` serves a table under 15 s old, else `None`; a refresh whose fan-out runs 3 s
+  forks `ps` and `list-panes` once, and an off-refresh caller after it forks again.
 - `tests/test_tmux.py`, `tests/test_panes.py`: windows derived from a list-panes fixture match today's
   `list_windows` rows exactly; a live tmux server checked against today's `list-windows` parser; `all_pane_ids`
   includes background panes; an empty tmux answer; one `list-panes` per refresh; `list_windows` never serves the
@@ -199,13 +220,17 @@ re-read on every call). `tmux._run` takes an `env`.
   window from the full roster (its `pane_tracks` row can be pruned, #19; boot housekeeping also prunes its
   `pane_sessions`/`pane_status`/`pane_workspaces` rows). Before this change a tab or newline there crashed the whole
   `list_windows`.
-- `all_pane_ids` and the pane-to-claude map read a list-panes snapshot up to 1 s old (the claude map, with its own
-  1 s cache, up to ~2 s): a pane created in that window reads as "no claude yet" and fails open (#14, #16). The
-  channel-alert GC reads the same snapshot, so an alert recorded for a pane newer than it would be dropped; every
-  alert needs a running Claude in the pane, which takes longer than 1 s to start.
-- One `ps` snapshot (2 s timeout) feeds session state, the pane → claude map, codex detection and resources: a `ps`
-  slower than that blanks all four for one refresh, each falling back on its own (scraped state, no claude, none).
-  Measured at ~50 ms over ~640 processes.
+- Inside a refresh, `all_pane_ids` and the pane-to-claude map read the rows the refresh's `list_windows` read, as old
+  as the refresh (~0.15 s idle, 3–13 s under THI-450's load); elsewhere up to 1 s old. A pane created in that window
+  is missing from the refresh's windows too, and reads as "no claude yet" off it, failing open (#14, #16). The
+  channel-alert GC reads the same rows, so an alert recorded for a pane created during the refresh is dropped from
+  the in-memory feed (the activity record keeps it). An alert needs the pane's Claude to start and run a turn: longer
+  than an idle refresh, not certainly longer than a 13 s loaded one.
+- One `ps` table per refresh (2 s timeout) feeds session state, the pane → claude map, codex detection and
+  resources. `ps` takes ~50 ms over ~640 processes idle and 0.5–1.7 s at load average 50–70 (THI-450), so it can
+  time out under load; the last table, if under 15 s old, stands in, and a claude that exited or started since reads
+  as it did then. Past 15 s all four blank for one refresh, each falling back on its own (scraped state, no claude,
+  none).
 - `gh auth token` prints the token gh would use for github.com; a token revoked within the 10 minutes fails until the
   401 re-read (at most a minute).
 - The audit hook's per-event cost (a string compare) is negligible against periscope's file I/O.
