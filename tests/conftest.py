@@ -94,7 +94,7 @@ def _fresh_git_caches():
 
     git_pr._git_cache.clear()
     git_pr._repo_identity_cache.clear()
-    git_pr._git_refreshing.clear()
+    git_pr._git_fetching.clear()
 
 
 @pytest.fixture(autouse=True)

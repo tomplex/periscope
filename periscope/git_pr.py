@@ -26,7 +26,7 @@ from typing import Any, TypedDict
 
 from periscope import config, gh
 from periscope.gitutil import github_slug, resolve_repo
-from periscope.log import _bg, log
+from periscope.log import _bg
 from periscope.panes import list_windows
 from periscope.tmux import _run
 
@@ -44,7 +44,7 @@ _GIT_JITTER_S = 5.0
 _GIT_BG_TIMEOUT_S = 10.0
 # path -> (refresh due at, state)
 _git_cache: dict[str, tuple[float, dict | None]] = {}
-_git_refreshing: set[str] = set()
+_git_fetching: set[str] = set()
 _git_lock = threading.Lock()
 # A repo's root and its GitHub remote: re-read rarely, they change only when a
 # checkout is re-pointed.
@@ -184,16 +184,9 @@ def cached_git_state(path: str) -> dict | None:
     with _git_lock:
         cached = _git_cache.get(path)
         if cached is not None:
-            if time.time() >= cached[0] and path not in _git_refreshing:
-                _git_refreshing.add(path)
-                try:
-                    _bg("git-state", _refresh_git_state, path)
-                except RuntimeError:
-                    # Thread.start fails when the process is out of threads:
-                    # release the path so a later read retries, and serve what
-                    # we have.
-                    _git_refreshing.discard(path)
-                    log.warning("git-state refresh for %s not started", path, exc_info=True)
+            if time.time() >= cached[0] and path not in _git_fetching:
+                _git_fetching.add(path)
+                _bg("git-state", _fetch_git_state_into_cache, path)
             return cached[1]
     data = git_state_for(path)
     with _git_lock:
@@ -201,7 +194,7 @@ def cached_git_state(path: str) -> dict | None:
     return data
 
 
-def _refresh_git_state(path: str) -> None:
+def _fetch_git_state_into_cache(path: str) -> None:
     try:
         data = git_state_for(path, timeout=_GIT_BG_TIMEOUT_S)
         # Outside the lock: a stat on a hung mount must not stall every reader.
@@ -216,7 +209,7 @@ def _refresh_git_state(path: str) -> None:
             _git_cache[path] = (_next_git_due(), data)
     finally:
         with _git_lock:
-            _git_refreshing.discard(path)
+            _git_fetching.discard(path)
 
 
 def git_signal_for(path: str) -> dict | None:

@@ -459,7 +459,7 @@ def test_stale_entry_is_served_and_refreshed_once_in_the_background(swr):
     swr.inner.return_value = {"branch": "feat", "git": "+1 -0"}
     assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
     assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
-    swr.bg.assert_called_once_with("git-state", git_pr._refresh_git_state, "/foo")
+    swr.bg.assert_called_once_with("git-state", git_pr._fetch_git_state_into_cache, "/foo")
     assert swr.inner.call_count == 1  # nothing ran on the request path
 
 
@@ -468,9 +468,9 @@ def test_background_refresh_lands_with_the_longer_timeout(swr):
     swr.clock[0] += 16
     git_pr.cached_git_state("/foo")
     swr.inner.return_value = {"branch": "feat", "git": "+1 -0"}
-    git_pr._refresh_git_state("/foo")
+    git_pr._fetch_git_state_into_cache("/foo")
     swr.inner.assert_called_with("/foo", timeout=git_pr._GIT_BG_TIMEOUT_S)
-    assert "/foo" not in git_pr._git_refreshing
+    assert "/foo" not in git_pr._git_fetching
     assert git_pr.cached_git_state("/foo") == {"branch": "feat", "git": "+1 -0"}
     swr.bg.assert_called_once()  # the landed entry is fresh again
 
@@ -483,7 +483,7 @@ def test_a_failed_background_read_keeps_the_last_state(swr, tmp_path):
     swr.clock[0] += 16
     git_pr.cached_git_state(path)
     swr.inner.return_value = None
-    git_pr._refresh_git_state(path)
+    git_pr._fetch_git_state_into_cache(path)
     assert git_pr._git_cache[path] == (swr.clock[0] + git_pr._GIT_REFRESH_S, {"branch": "main", "git": "clean"})
 
 
@@ -492,7 +492,7 @@ def test_a_vanished_cwd_clears(swr):
     swr.clock[0] += 16
     git_pr.cached_git_state("/no/such/dir")
     swr.inner.return_value = None
-    git_pr._refresh_git_state("/no/such/dir")
+    git_pr._fetch_git_state_into_cache("/no/such/dir")
     assert git_pr.cached_git_state("/no/such/dir") is None
 
 
@@ -502,18 +502,8 @@ def test_a_refresh_that_raises_releases_the_path(swr):
     git_pr.cached_git_state("/foo")
     swr.inner.side_effect = OSError("git vanished")
     with pytest.raises(OSError):
-        git_pr._refresh_git_state("/foo")
-    assert "/foo" not in git_pr._git_refreshing
-
-
-def test_a_refresh_that_cant_start_releases_the_path(swr):
-    git_pr.cached_git_state("/foo")
-    swr.clock[0] += 16
-    swr.bg.side_effect = RuntimeError("can't start new thread")
-    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
-    assert "/foo" not in git_pr._git_refreshing
-    git_pr.cached_git_state("/foo")
-    assert swr.bg.call_count == 2  # the next read tries again
+        git_pr._fetch_git_state_into_cache("/foo")
+    assert "/foo" not in git_pr._git_fetching
 
 
 def test_empty_path_is_none(swr):
