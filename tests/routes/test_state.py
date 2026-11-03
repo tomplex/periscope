@@ -456,3 +456,48 @@ def test_state_reports_what_the_refresh_cost(client, mocker, clean_state):
     r = client.get("/api/state").json()["refresh"]
     assert set(r) == {"build_s", "build_max_s", "gap_s", "forks_per_min", "top_forks"}
     assert 0 <= r["build_s"] <= r["build_max_s"]
+
+
+def test_a_refresh_slower_than_the_ttls_forks_ps_and_list_panes_once(client, mocker, clean_state, monkeypatch):
+    # THI-450 measured builds of 3–13 s: the fan-out's process readers and
+    # all_pane_ids after it must still read the snapshots the refresh took.
+    from types import SimpleNamespace
+
+    from periscope import agent_processes, tmux
+
+    clock = SimpleNamespace(now=1000.0)
+    monotonic = SimpleNamespace(monotonic=lambda: clock.now)
+    monkeypatch.setattr(agent_processes, "time", monotonic)
+    monkeypatch.setattr(tmux, "time", monotonic)
+    monkeypatch.setattr(agent_processes, "_snapshot_cache", None)
+    monkeypatch.setattr(tmux, "_panes_snapshot", None)
+    fields = dict.fromkeys(tmux.PANE_FIELDS, "")
+    fields.update(session_name="slow-build", window_index="0", window_active="1", pane_active="1")
+    fields.update(pane_id="%7", window_id="@1", pane_pid="4242", window_activity="0")
+    row = "\x1f".join(fields.values()) + "\n"
+    list_panes = mocker.patch.object(tmux, "tmux", return_value=row)
+    ps = mocker.patch.object(agent_processes, "_take_snapshot", return_value={})
+    _patch(mocker, "process_snapshot", side_effect=agent_processes.process_snapshot)
+
+    def slow_capture(target):
+        clock.now += 3
+        return "$ ls\n"
+
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    capture = mocker.patch("periscope.window_view.capture", side_effect=slow_capture)
+    _patch(mocker, "cached_git_state", return_value={"branch": "main"})
+    _patch(mocker, "cached_pr_state", return_value={"pr": None})
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+    gc = _patch(mocker, "_channel_gc")
+
+    assert client.get("/api/state").status_code == 200
+    capture.assert_called_once()
+    gc.assert_called_once_with({"%7"})
+    assert (list_panes.call_count, ps.call_count) == (1, 1)
+
+    # Off the refresh, the snapshots are 3 s old: the TTL holds again.
+    agent_processes.process_snapshot()
+    tmux.panes_snapshot()
+    assert (list_panes.call_count, ps.call_count) == (2, 2)

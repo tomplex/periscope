@@ -7,11 +7,13 @@ that distinction.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -36,6 +38,9 @@ _PS_ROW_RE = re.compile(
 _PS_TTL_S = 1.0
 _lock = threading.Lock()
 _snapshot_cache: tuple[float, dict[int, ProcessInfo] | None] | None = None
+# Inside pinned_snapshot(): the table the block took, in a list its context
+# copies share.
+_pinned: ContextVar[list[dict[int, ProcessInfo] | None]] = ContextVar("pinned_process_snapshot")
 # pane_id -> (pane pid, pane start, agent pid, agent start)
 _pane_cache: dict[str, tuple[int, int, int, int]] = {}
 
@@ -86,19 +91,39 @@ def _take_snapshot() -> dict[int, ProcessInfo] | None:
     return parse_ps_snapshot(proc.stdout)
 
 
+@contextlib.contextmanager
+def pinned_snapshot():
+    """Inside the block, and in copies of its context, process_snapshot()
+    serves the table it took first, however long the block runs.
+    build_state's refresh is the block: a loaded one runs 3–13 s, and every
+    reader in it gets one table."""
+    token = _pinned.set([])
+    try:
+        yield
+    finally:
+        _pinned.reset(token)
+
+
 def process_snapshot() -> dict[int, ProcessInfo] | None:
-    """Return a briefly cached system process snapshot."""
+    """The system process table: the pinned one inside pinned_snapshot(),
+    else the last one while under _PS_TTL_S old, else a fresh `ps`."""
     global _snapshot_cache
+    pinned = _pinned.get(None)
+    if pinned:
+        return pinned[-1]
     now = time.monotonic()
     with _lock:
         if _snapshot_cache and now - _snapshot_cache[0] < _PS_TTL_S:
-            return _snapshot_cache[1]
-        snapshot = _take_snapshot()
-        # Stamped when ps returns, not when it started: a ps slower than the
-        # TTL would otherwise be expired on arrival. Callers queued on the lock
-        # read `now` before it, so they reuse this table.
-        _snapshot_cache = (time.monotonic(), snapshot)
-        return snapshot
+            snapshot = _snapshot_cache[1]
+        else:
+            snapshot = _take_snapshot()
+            # Stamped when ps returns, not when it started: a ps slower than the
+            # TTL would otherwise be expired on arrival. Callers queued on the lock
+            # read `now` before it, so they reuse this table.
+            _snapshot_cache = (time.monotonic(), snapshot)
+    if pinned is not None:
+        pinned.append(snapshot)
+    return snapshot
 
 
 def _is_codex_executable(proc: ProcessInfo) -> bool:

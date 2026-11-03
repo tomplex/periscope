@@ -9,12 +9,14 @@ and normal-size pastes) use a single `send-keys -H` subprocess; large
 inputs fall back to load-buffer + paste-buffer over stdin to dodge ARG_MAX.
 """
 
+import contextlib
 import os
 import re
 import subprocess
 import threading
 import time
 import uuid
+from contextvars import ContextVar
 
 from periscope import config
 
@@ -58,6 +60,9 @@ _PANES_TTL_S = 1.0
 _panes_lock = threading.Lock()
 # (monotonic time, rows) from the last list_panes().
 _panes_snapshot: tuple[float, list[dict[str, str]]] | None = None
+# Inside pinned_snapshot(): the rows the block read, latest last, in a list its
+# context copies share.
+_pinned_rows: ContextVar[list[list[dict[str, str]]]] = ContextVar("pinned_rows")
 _unparsed_logged = False
 
 
@@ -99,17 +104,39 @@ def list_panes() -> list[dict[str, str]]:
     if buf_lines:
         _log_skipped_row(buf_lines)  # never reached the field count
     _panes_snapshot = (time.monotonic(), rows)
+    pinned = _pinned_rows.get(None)
+    if pinned is not None:
+        pinned.append(rows)
     return rows
 
 
+@contextlib.contextmanager
+def pinned_snapshot():
+    """Inside the block, and in copies of its context, panes_snapshot() serves
+    the rows the block's last list_panes() read, however long the block runs.
+    build_state's refresh is the block: its list_windows reads the rows, and
+    a loaded refresh runs 3–13 s."""
+    token = _pinned_rows.set([])
+    try:
+        yield
+    finally:
+        _pinned_rows.reset(token)
+
+
 def panes_snapshot() -> list[dict[str, str]]:
-    """list_panes' rows if they are under _PANES_TTL_S old, else a fresh call.
-    Locked, so a refresh's fan-out threads wait for one fork instead of each
-    forking."""
+    """list_panes' rows: the pinned ones inside pinned_snapshot(), else the
+    last call's while under _PANES_TTL_S old, else a fresh call. Locked, so
+    concurrent callers wait for one fork instead of each forking."""
+    pinned = _pinned_rows.get(None)
+    if pinned:
+        return pinned[-1]
     with _panes_lock:
-        if _panes_snapshot and time.monotonic() - _panes_snapshot[0] < _PANES_TTL_S:
-            return _panes_snapshot[1]
-        return list_panes()
+        if not (_panes_snapshot and time.monotonic() - _panes_snapshot[0] < _PANES_TTL_S):
+            return list_panes()
+        rows = _panes_snapshot[1]
+    if pinned is not None:
+        pinned.append(rows)
+    return rows
 
 
 def _run(

@@ -6,6 +6,7 @@ the wrappers compose argv correctly and return what they claim to return.
 
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import periscope.tmux as tmux_mod
@@ -325,3 +326,24 @@ def test_panes_snapshot_reuses_a_snapshot_under_a_second_old(monkeypatch):
     clock[0] += 0.6
     tmux_mod.panes_snapshot()
     assert len(calls) == 2
+
+
+def test_pinned_rows_outlive_the_ttl_for_their_block_only(monkeypatch):
+    # build_state pins its list_windows' rows for the whole refresh; an
+    # off-refresh caller keeps the TTL.
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(tmux_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or _ROW + "\n")
+    with tmux_mod.pinned_snapshot():
+        rows = tmux_mod.list_panes()
+        clock[0] += 5
+        assert tmux_mod.panes_snapshot() is rows
+        assert len(calls) == 1
+        with ThreadPoolExecutor(1) as pool:
+            assert pool.submit(tmux_mod.panes_snapshot).result() is not rows
+        assert len(calls) == 2
+    clock[0] += 5
+    assert tmux_mod.panes_snapshot() is not rows
+    assert len(calls) == 3

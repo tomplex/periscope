@@ -7,13 +7,14 @@ Polled every 3s from the browser; everything underneath is cached on
 its own clock, so this handler is mostly orchestration.
 """
 
+import contextvars
 import dataclasses
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 
-from periscope import forks, resources, store, updater, usage
+from periscope import agent_processes, forks, resources, store, tmux, updater, usage
 from periscope.activity import pane_status_lines
 from periscope.agent_processes import process_snapshot
 from periscope.channels import _channel_gc
@@ -56,6 +57,11 @@ def _safe_build(w: dict, now_ts: int) -> tuple[dict, tuple[str, int, int, int] |
         )
 
 
+# Every reader in one refresh gets the list-panes rows its list_windows read
+# and the one ps table it took, however long it runs; a refresh running
+# alongside it (the hub and a REST poll) pins its own.
+@tmux.pinned_snapshot()
+@agent_processes.pinned_snapshot()
 def build_state() -> dict:
     """Assemble the full dashboard state blob.
 
@@ -71,8 +77,8 @@ def build_state() -> dict:
     update_focus_from_windows(windows)
     _attach_git_then_resolve_pids(windows, full_roster=True)
     now_ts = int(time.time())
-    # Taken before the fan-out, whose codex_process_for_pane calls share its
-    # 1 s cache: measure below reads the same snapshot without a second `ps`.
+    # The refresh's pinned table: the fan-out's process readers and measure
+    # below all read this one.
     snapshot = process_snapshot()
 
     # Parallel fan-out: capture()+parse per pane is the only per-poll
@@ -81,10 +87,12 @@ def build_state() -> dict:
     # is NOT thread-safe and stays before this pool; the stamp write below
     # stays single-threaded after the join. executor.map preserves input
     # order, so `result` matches `windows`. _safe_build isolates any per-pane
-    # exception (capture, git, affiliation) into an error view.
+    # exception (capture, git, affiliation) into an error view. Each worker
+    # runs in a copy of this context, which carries the pinned snapshots.
     if windows:
+        context = contextvars.copy_context()
         with ThreadPoolExecutor(max_workers=min(32, len(windows))) as pool:
-            built = list(pool.map(lambda w: _safe_build(w, now_ts), windows))
+            built = list(pool.map(lambda w: context.copy().run(_safe_build, w, now_ts), windows))
     else:
         built = []
 
