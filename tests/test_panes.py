@@ -738,15 +738,16 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
 # Claude Code renders rate-limit / transport failures as a normal `⎿` tool
 # result whose body starts with "API Error:". We flag panes whose MOST
 # RECENT tool result is an error so the dashboard can show a stuck-on-
-# retry pane at a glance. A subsequent successful tool result clears it.
+# retry pane at a glance. A subsequent successful tool result clears it,
+# and so does a `⏺` reply to a prompt sent after the error.
 
 API_ERROR_CASES: list[tuple[str, str, bool]] = [
     # The screenshot Tom hit: three consecutive rate-limit hits, the user
     # repeatedly typed `keep going`, and the bottom shows Claude resuming.
-    # The latest tool result above the resumed turn is still the API
-    # error → flag should be on so the card surfaces the stuck retry.
+    # The `⏺` under the last `keep going` is a reply → the errors belong to
+    # earlier turns, flag off (THI-455).
     (
-        "rate-limited-stuck",
+        "rate-limited-resumed",
         textwrap.dedent(f"""\
         Reshaping the query — payload columns are huge.
 
@@ -772,6 +773,22 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
           Called fdy (ctrl+o to expand)
 
         ⏺ Skipping reminder. One last lookup — there's a closest_store_by_address variant I haven't traced yet.
+        {STATUS_LINE}
+    """),
+        False,
+    ),
+    # The same pane before the reply lands: `keep going` alone doesn't clear it.
+    (
+        "rate-limited-nudged",
+        textwrap.dedent(f"""\
+        ❯ keep going
+          ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+        ✻ Brewed for 0s
+
+        ❯ keep going
+
+          Called fdy (ctrl+o to expand)
         {STATUS_LINE}
     """),
         True,
@@ -886,6 +903,37 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
 
         ❯
         {STATUS_LINE}
+    """),
+        False,
+    ),
+    # THI-455, from a live pane: collapsed tool calls leave no `⎿` to clear
+    # the flag, and a later prompt got a full reply → off.
+    (
+        "collapsed-calls-later-reply",
+        textwrap.dedent(f"""\
+        ❯ compare the clinic rankings from both sheets
+
+          Called faraday_internal 2 times (ctrl+o to expand)
+
+        ⏺ API Error: The response stopped arriving. The response above may be incomplete.
+
+          Called faraday_internal 2 times (ctrl+o to expand)
+
+        ⏺ Rankings by headroom count are nearly identical and track catchment size.
+
+        ❯ add the clinic names to these codes
+
+          Called faraday_internal (ctrl+o to expand)
+
+        ⏺ Here are the clinic codes from the comparison with their names.
+
+        ✻ Churned for 34s · done 8:33 AM
+
+        {RULE}
+        ❯ add this comparison to the handoff
+        {RULE}
+        {CUSTOM_STATUS_LINE}
+          ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents
     """),
         False,
     ),
