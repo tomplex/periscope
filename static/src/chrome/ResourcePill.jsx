@@ -8,7 +8,7 @@ import { usePopoverDismiss } from "../hooks/usePopoverDismiss.js";
 import { selectPane } from "../split/alertFeed.js";
 import { buildStats, resources, windows } from "../store.js";
 import { paneLabel } from "../util.js";
-import { buildStatsLine, buildStatsTip, fmtCpu, fmtMem, machineLine, ownedMb, paneLines } from "./resources.js";
+import { buildStatsLine, fmtCpu, fmtMem, machineLine, ownedMb, paneLines, slowestLine, topForksLine } from "./resources.js";
 
 const CPU_TIP = "share of the whole machine's CPU: 100% is every core busy";
 
@@ -76,7 +76,13 @@ function ResourcePopover({ r }) {
         </div>
         <Line label="elsewhere" group={r.elsewhere} />
         <div class="res-machine">{machineLine(r.machine)}</div>
-        {bs && <div class="res-poll" title={buildStatsTip(bs)}>{buildStatsLine(bs)}</div>}
+        {bs && (
+          <div class="res-poll">
+            <div class="res-poll-line">{buildStatsLine(bs)}</div>
+            {slowestLine(bs) && <div class="res-poll-line res-poll-detail">{slowestLine(bs)}</div>}
+            {topForksLine(bs) && <div class="res-poll-line res-poll-detail">{topForksLine(bs)}</div>}
+          </div>
+        )}
       </div>
     </div>
   );

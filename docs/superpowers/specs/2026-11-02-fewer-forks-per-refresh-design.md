@@ -52,10 +52,11 @@ broadcasts (what a dashboard actually sees) and forgets it when it goes idle, so
 doesn't report the idle stretch. `/api/state` carries `build_stats: {build_s, build_max_s, gap_s, forks_per_min,
 top_forks}` (last build, max over 60 s, last gap or null; `forks_per_min`/`top_forks` are server-wide over the last
 60 s — every fork the server makes, not just this poll's). `/api/healthz` carries the full per-command `forks` map.
-The resource popover (THI-448) shows one line: `poll 0.4 s · every 1.1 s · server 140 forks/min`, with the slowest
-build and the top commands in its tooltip — a `buildStats` signal in `store.js`, set by `poll.js`, read by
-`ResourcePill.jsx`, formatted by `resources.js`, styled in `static/styles.css`. A build slower than 3 s logs a
-warning naming its top forkers, at most once a minute.
+The resource popover (THI-448) shows this as its own block: `poll 0.4 s · every 1.1 s · server 140 forks/min`, with
+the slowest build and the top commands as their own rows below it (keyboard/touch/screen-reader reachable, unlike a
+hover-only tooltip) — a `buildStats` signal in `store.js`, set by `poll.js`, read by `ResourcePill.jsx`, formatted by
+`resources.js`, styled in `static/styles.css`. A build slower than 3 s logs a warning naming its top forkers, at
+most once a minute.
 
 **D3 — One tmux call per refresh.** `tmux.list_panes()` runs one `tmux list-panes -a -F <window fields + pane fields
 + pane_active>` through `_tmux_argv` (so it honours `PERISCOPE_TMUX_SOCKET`), fields separated by `\x1f` (a tab in a
@@ -142,7 +143,7 @@ re-read on every call). `tmux._run` takes an `env`.
   refresh, jitter, lock, keep-on-failure (D5); `gh.run` at its call sites (D6).
 - `periscope/gh.py` (new): the `gh` environment and token (D6); `reviews.py`, `cleanup.py`, `projects.py` call it.
 - `static/src/store.js`, `static/src/poll.js`, `static/src/chrome/resources.js`,
-  `static/src/chrome/ResourcePill.jsx`, `static/styles.css`, rebuilt `static/dist/`: the poll line (D2).
+  `static/src/chrome/ResourcePill.jsx`, `static/styles.css`, rebuilt `static/dist/`: the poll-cost block (D2).
 - `tests/conftest.py`: seeds `tmux._panes_snapshot`, `agent_processes._snapshot_cache` and `gh._token_cache` with
   unexpiring empty entries (replacing the `_tmux_pane_pids` stub) and clears git_pr's per-path caches, so no test
   forks real tmux, ps or gh or starts a git refresh thread; tests of those paths reset the seed.
@@ -181,7 +182,7 @@ re-read on every call). `tmux._run` takes an `env`.
 - `tests/test_gh.py`: the environment carries `GH_TOKEN`/`GH_TELEMETRY`/`GH_NO_UPDATE_NOTIFIER`; the token is reused
   for 10 minutes; a failed read is retried after 60 s; each 401 shape re-reads, at most once per 60 s; other failures
   keep the token; no token → calls still run; no `["gh", …]` argv outside `gh.py`.
-- vitest: the poll line's formatting and its render.
+- vitest: the poll-cost block's formatting and its render (the line, the slowest-build and top-commands rows).
 - Before/after: interleaved runs (before, after, before, after) of a dev server on :17375 against the same panes —
   `build_stats` and the full `forks` map from the server, plus a process-tree sampler for gh's children (`security`,
   `send-telemetry`), recorded in the PR. A dev server (`is_prod()` false) skips the narrator, the session poke and the

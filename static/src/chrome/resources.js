@@ -35,7 +35,7 @@ export function machineLine(m) {
   return `${fmtMem(m.ram_mb)} RAM · swap ${fmtMem(m.swap_used_mb)}/${fmtMem(m.swap_total_mb)} · ${m.mem_free_pct}% free · load ${m.load1}`;
 }
 
-// The popover's last line: what one dashboard poll costs (/api/state
+// The popover's poll-cost block: what one dashboard poll costs (/api/state
 // `build_stats`, forks.py). gap_s is the server's interval between pushes,
 // null until it has pushed twice. forks_per_min/top_forks count every fork
 // server-wide over the last minute, not just this poll's — hence "server".
@@ -44,11 +44,14 @@ export function buildStatsLine(r) {
   return `poll ${r.build_s.toFixed(1)} s${every} · server ${r.forks_per_min} forks/min`;
 }
 
-// Its tooltip: the slowest poll in the last minute, then the commands that
-// forked most server-wide.
-export function buildStatsTip(r) {
-  return [
-    `slowest ${r.build_max_s.toFixed(1)} s in the last minute`,
-    ...r.top_forks.map(([cmd, n]) => `${cmd} ×${n}`),
-  ].join("\n");
+// The slowest poll in the last minute, as its own row; absent when unknown.
+export function slowestLine(r) {
+  return r.build_max_s == null ? null : `slowest ${r.build_max_s.toFixed(1)} s`;
+}
+
+// The commands that forked most server-wide in the last minute, as their own
+// row; absent when there were none.
+export function topForksLine(r) {
+  if (!r.top_forks?.length) return null;
+  return r.top_forks.map(([cmd, n]) => `${cmd} ${n}`).join(" · ");
 }

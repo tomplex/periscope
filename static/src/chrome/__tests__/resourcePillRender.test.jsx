@@ -60,15 +60,16 @@ describe("<ResourcePill>", () => {
     expect(render(<ResourcePill />)).not.toContain(">webview<");
   });
 
-  it("closes with what a poll costs, server-wide, its top commands in the tooltip", () => {
+  it("closes with what a poll costs, its slowest build and top commands as their own rows", () => {
     resources.value = R;
     buildStats.value = { build_s: 0.4, build_max_s: 2.3, gap_s: 1.1, forks_per_min: 140, top_forks: [["git status", 40]] };
     const html = render(<ResourcePill />);
     expect(html).toContain("poll 0.4 s · every 1.1 s · server 140 forks/min");
-    expect(html).toContain("git status ×40");
+    expect(html).toContain("slowest 2.3 s");
+    expect(html).toContain("git status 40");
   });
 
-  it("has no poll line before the server reports one", () => {
+  it("has no poll block before the server reports one", () => {
     resources.value = R;
     expect(render(<ResourcePill />)).not.toContain("forks/min");
   });

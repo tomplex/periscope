@@ -1,7 +1,7 @@
 // resources.js — formatting and ordering behind <ResourcePill> and the
 // detail header's mem/cpu part.
 import { describe, expect, it } from "vitest";
-import { buildStatsLine, buildStatsTip, fmtCpu, fmtMem, machineLine, ownedMb, paneLines } from "../resources.js";
+import { buildStatsLine, fmtCpu, fmtMem, machineLine, ownedMb, paneLines, slowestLine, topForksLine } from "../resources.js";
 
 describe("fmtMem", () => {
   it("megabytes under a gigabyte, one decimal of gigabytes above", () => {
@@ -57,9 +57,20 @@ describe("buildStatsLine", () => {
   });
 });
 
-describe("buildStatsTip", () => {
-  it("the slowest build in the last minute, then the top commands", () => {
-    expect(buildStatsTip({ build_s: 0.4, build_max_s: 2.31, gap_s: 1, forks_per_min: 52, top_forks: [["git status", 40], ["ps", 12]] }))
-      .toBe("slowest 2.3 s in the last minute\ngit status ×40\nps ×12");
+describe("slowestLine", () => {
+  it("the slowest build in the last minute", () => {
+    expect(slowestLine({ build_max_s: 2.31 })).toBe("slowest 2.3 s");
+  });
+  it("is absent when unknown", () => {
+    expect(slowestLine({ build_max_s: null })).toBe(null);
+  });
+});
+
+describe("topForksLine", () => {
+  it("the top commands, by count", () => {
+    expect(topForksLine({ top_forks: [["git status", 40], ["ps", 12]] })).toBe("git status 40 · ps 12");
+  });
+  it("is absent when there were none", () => {
+    expect(topForksLine({ top_forks: [] })).toBe(null);
   });
 });
