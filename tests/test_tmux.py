@@ -121,6 +121,15 @@ def test_run_returns_minus_one_on_exception(mocker):
     assert out == ""
 
 
+def test_run_passes_env_through(mocker):
+    run = mocker.patch(
+        "subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n", stderr=""),
+    )
+    assert _run(["gh", "pr", "list"], env={"GH_TOKEN": "t"}) == (0, "ok")
+    assert run.call_args.kwargs["env"] == {"GH_TOKEN": "t"}
+
+
 def test_capture_calls_tmux_capture_pane_with_lines(mocker):
     mock_tmux = mocker.patch("periscope.tmux.tmux", return_value="pane body\n")
     out = capture("foo:0", lines=50)

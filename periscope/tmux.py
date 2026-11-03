@@ -95,9 +95,11 @@ def recent_panes() -> list[dict[str, str]]:
         return list_panes()
 
 
-def _run(cmd: list[str], cwd: str | None = None, timeout: float = 3.0) -> tuple[int, str]:
+def _run(
+    cmd: list[str], cwd: str | None = None, timeout: float = 3.0, env: dict[str, str] | None = None
+) -> tuple[int, str]:
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
         if r.returncode != 0:
             # git and gh explain failures on stderr, with stdout empty: every
             # "git worktree add failed: " the open surfaces raised ended blank,

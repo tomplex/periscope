@@ -626,7 +626,7 @@ def test_linked_pr_state_carries_base_and_checks(tmp_path, mocker):
     payload = _json.dumps(
         {"state": "OPEN", "baseRefName": "main", "statusCheckRollup": [{"name": "test", "conclusion": "FAILURE"}]}
     )
-    mocker.patch("periscope.git_pr._run", return_value=(0, payload))
+    mocker.patch("periscope.gh.run", return_value=(0, payload))
     mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
     out = linked_pr_state_for(str(tmp_path), 42)
     assert out["pr_base"] == "main"
@@ -650,7 +650,7 @@ def test_pr_state_for_carries_base_and_checks(tmp_path, mocker):
             }
         ]
     )
-    mocker.patch("periscope.git_pr._run", return_value=(0, payload))
+    mocker.patch("periscope.gh.run", return_value=(0, payload))
     mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
     out = pr_state_for(str(tmp_path), "feature")
     assert out["pr_base"] == "main"
@@ -659,15 +659,12 @@ def test_pr_state_for_carries_base_and_checks(tmp_path, mocker):
 
 
 def _fake_gh(mocker, *, state, rollup=None):
-    """Patch _run so linked_pr_state_for sees `gh pr view` returning one PR."""
+    """Patch gh.run so linked_pr_state_for sees `gh pr view` returning one PR."""
     import json as _json
 
     payload = _json.dumps({"state": state, "statusCheckRollup": rollup or []})
 
-    def fake_run(cmd, cwd=None, timeout=3.0):
-        return (0, payload)
-
-    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
+    mocker.patch("periscope.gh.run", return_value=(0, payload))
     mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
 
 

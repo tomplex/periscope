@@ -25,7 +25,7 @@ import time
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
-from periscope import config
+from periscope import config, gh
 from periscope.gitutil import github_slug, resolve_repo
 from periscope.log import _bg, log
 from periscope.panes import list_windows
@@ -300,20 +300,17 @@ def pr_state_for(path: str, branch: str) -> dict | None:
     grid card uses {pr, ci} as before."""
     if not _GH_AVAILABLE or not path or not branch:
         return None
-    code, out = _run(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--head",
-            branch,
-            "--state",
-            "open",
-            "--json",
-            "number,title,isDraft,additions,deletions,reviewRequests,statusCheckRollup,baseRefName",
-            "--limit",
-            "1",
-        ],
+    code, out = gh.run(
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,title,isDraft,additions,deletions,reviewRequests,statusCheckRollup,baseRefName",
+        "--limit",
+        "1",
         cwd=path,
         timeout=8.0,
     )
@@ -417,18 +414,15 @@ def shared_activity_for(path: str, branch: str) -> list[dict]:
             events.append(ev)
 
     if _GH_AVAILABLE and branch:
-        code, out = _run(
-            [
-                "gh",
-                "run",
-                "list",
-                "--branch",
-                branch,
-                "--limit",
-                "10",
-                "--json",
-                "conclusion,status,createdAt,displayTitle,name,url",
-            ],
+        code, out = gh.run(
+            "run",
+            "list",
+            "--branch",
+            branch,
+            "--limit",
+            "10",
+            "--json",
+            "conclusion,status,createdAt,displayTitle,name,url",
             cwd=path,
             timeout=5.0,
         )
@@ -562,10 +556,8 @@ def linked_pr_state_for(path: str, number: int) -> dict | None:
     current branch."""
     if not _GH_AVAILABLE or not path or not number:
         return None
-    code, out = _run(
-        ["gh", "pr", "view", str(number), "--json", "state,statusCheckRollup,baseRefName"],
-        cwd=path,
-        timeout=8.0,
+    code, out = gh.run(
+        "pr", "view", str(number), "--json", "state,statusCheckRollup,baseRefName", cwd=path, timeout=8.0
     )
     if code != 0 or not out:
         return None

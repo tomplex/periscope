@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import TypedDict
 
-from periscope import git_pr, gitutil, worktrees
+from periscope import gh, git_pr, gitutil, worktrees
 from periscope.log import _bg
 from periscope.tmux import _run
 
@@ -340,10 +340,8 @@ _PR_FIELDS = "number,title,headRefName,isDraft,statusCheckRollup,author"
 def _gh_list(repo_root: str, *extra: str) -> list[dict] | None:
     """None on any failure (offline, auth, bad JSON) so the caller can keep
     the previous cache entry instead of blanking the queue for 60 s."""
-    code, out = _run(
-        ["gh", "pr", "list", "--state", "open", "--json", _PR_FIELDS, "--limit", "50", *extra],
-        cwd=repo_root,
-        timeout=10.0,
+    code, out = gh.run(
+        "pr", "list", "--state", "open", "--json", _PR_FIELDS, "--limit", "50", *extra, cwd=repo_root, timeout=10.0
     )
     if code != 0:
         return None

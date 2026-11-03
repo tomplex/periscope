@@ -98,6 +98,16 @@ def _fresh_git_caches():
 
 
 @pytest.fixture(autouse=True)
+def _no_gh_token(monkeypatch):
+    """Keep gh.run from forking `gh auth token` against the developer's real
+    keychain: an unexpiring "no token" entry makes every call run on gh's own
+    credentials. tests/test_gh.py overrides this fixture by name."""
+    from periscope import gh
+
+    monkeypatch.setattr(gh, "_token_cache", (0.0, math.inf, None))
+
+
+@pytest.fixture(autouse=True)
 def _no_live_resources(monkeypatch):
     """Keep resources.measure off the real machine: no `ps` snapshot, no
     rusage reads, no sysctl. Every /api/state build takes a snapshot and
