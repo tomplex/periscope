@@ -3,6 +3,7 @@
 import os
 import re
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -51,12 +52,12 @@ _HEAD = "# branch.oid 0123456789abcdef0123456789abcdef01234567\n# branch.head ma
 
 def _mock_git(mocker, *, status=_HEAD, diff="", code=0):
     """Patch _run so git_state_for sees one `status --porcelain=v2 --branch`
-    answer and one `diff --shortstat` answer; repo identity falls back."""
+    answer and one `diff-index --shortstat` answer; repo identity falls back."""
 
     def fake_run(cmd, cwd=None, timeout=3.0, env=None):
         if "status" in cmd:
             return (code, status)
-        if "diff" in cmd:
+        if "diff-index" in cmd:
             return (0, diff)
         return (1, "")  # rev-parse --git-common-dir / remote get-url
 
@@ -105,14 +106,35 @@ def test_git_state_none_when_status_fails(tmp_path, mocker):
     assert git_state_for(str(tmp_path)) is None
 
 
-def test_git_reads_take_no_optional_locks(tmp_path, mocker):
-    # A dashboard refresh must not take the index lock from under the user's
-    # own git commands; `git diff` refreshes the index too.
-    _mock_git(mocker)
-    git_state_for(str(tmp_path))
-    git_cmds = [c.args[0] for c in git_pr._run.call_args_list]
-    assert [c[c.index("-C") + 2] for c in git_cmds] == ["status", "diff"]
-    assert all("--no-optional-locks" in c for c in git_cmds)
+def test_git_reads_never_write_the_index(tmp_path, git_identity):
+    # A dashboard refresh must not touch .git/index from under the user's own
+    # git commands. `git diff HEAD` rewrites it when files are stat-dirty
+    # (new mtime, same content) even with --no-optional-locks, which is why
+    # line counts come from diff-index instead.
+    repo = _committed(tmp_path)
+    (repo / "b.txt").write_text("b\n")
+    (repo / "c.txt").write_text("c\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "more files")
+    now = time.time()
+    for name in ("a.txt", "b.txt", "c.txt"):
+        os.utime(repo / name, (now, now + 86400))
+    (repo / "a.txt").write_text("one\nTWO\n")  # a real content change too
+    index = repo / ".git" / "index"
+    before = (index.stat().st_mtime_ns, index.read_bytes())
+    assert git_state_for(str(repo))["git"] == "+1 -1"
+    after = (index.stat().st_mtime_ns, index.read_bytes())
+    assert after == before
+
+
+def test_a_staged_rename_and_edit_counts_as_one_line_changed(tmp_path, git_identity):
+    # Without -M, diff-index would count a rename as a full delete+add
+    # (101 insertions/100 deletions here) instead of the +1/-1 the edit is.
+    repo = _committed(tmp_path)
+    _git(repo, "mv", "a.txt", "a2.txt")
+    (repo / "a2.txt").write_text("one\nTWO\n")
+    _git(repo, "add", "a2.txt")
+    assert git_state_for(str(repo))["git"] == "+1 -1"
 
 
 def test_git_state_passes_its_timeout_to_git(tmp_path, mocker):
@@ -319,6 +341,23 @@ def test_a_bare_container_reads_its_branch_and_repo(tmp_path, git_identity):
     }
 
 
+def test_a_bare_container_reads_its_branch_under_a_translated_locale(tmp_path, monkeypatch, git_identity):
+    # The no-work-tree fatal is matched against its English text; under a
+    # translated locale git prints it translated, so git_state_for must force
+    # LC_ALL=C rather than trust the caller's environment.
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+    src = _committed(tmp_path)
+    box = tmp_path / "box"
+    box.mkdir()
+    _git(tmp_path, "clone", "-q", "--bare", str(src), str(box / ".bare"))
+    _git(box / ".bare", "remote", "set-url", "origin", "git@github.com:tom/box.git")
+    (box / ".git").write_text("gitdir: ./.bare\n")
+    state = git_state_for(str(box))
+    assert state is not None
+    assert state["branch"] == "main"
+    assert state["repo_slug"] == "tom/box"
+
+
 def test_a_git_dir_without_a_work_tree_reads_its_branch(tmp_path, git_identity):
     # A cwd inside .git, and a plain bare repo: no work tree, still a branch.
     repo = _committed(tmp_path)
@@ -350,12 +389,12 @@ def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypa
         return out
 
     git_state_for(repo)
-    assert subcommands() == ["status", "diff", "rev-parse", "remote"]
+    assert subcommands() == ["status", "diff-index", "rev-parse", "remote"]
     git_state_for(repo)
-    assert subcommands() == ["status", "diff"]
+    assert subcommands() == ["status", "diff-index"]
     clock[0] += 601
     git_state_for(repo)
-    assert subcommands() == ["status", "diff", "rev-parse", "remote"]
+    assert subcommands() == ["status", "diff-index", "rev-parse", "remote"]
 
 
 @pytest.fixture
@@ -417,7 +456,7 @@ def test_a_failed_background_read_keeps_the_last_state(swr, tmp_path):
     git_pr.cached_git_state(path)
     swr.inner.return_value = None
     git_pr._refresh_git_state(path)
-    assert git_pr._git_cache[path] == (swr.clock[0] + git_pr._GIT_TTL, {"branch": "main", "git": "clean"})
+    assert git_pr._git_cache[path] == (swr.clock[0] + git_pr._GIT_REFRESH_S, {"branch": "main", "git": "clean"})
 
 
 def test_a_vanished_cwd_clears(swr):

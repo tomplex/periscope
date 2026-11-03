@@ -31,11 +31,11 @@ from periscope.log import _bg, log
 from periscope.panes import list_windows
 from periscope.tmux import _run
 
-_GIT_TTL = 15.0
+_GIT_REFRESH_S = 15.0
 _PR_TTL = 60.0
-# Shorter than _GIT_TTL: the whole point of the signal is catching a worker
-# transition (a commit landing, a dirty count moving), and a supervisor peeking
-# twice in quick succession should see the second change.
+# Shorter than _GIT_REFRESH_S: the whole point of the signal is catching a
+# worker transition (a commit landing, a dirty count moving), and a
+# supervisor peeking twice in quick succession should see the second change.
 _SIGNAL_TTL = 5.0
 # ± this much on each entry's next refresh, so cwds first read in one refresh
 # don't all expire in the same later one.
@@ -84,11 +84,17 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
     `timeout` bounds each git call (the background refresh allows longer)."""
     if not path or not os.path.isdir(path):
         return None
+    # LC_ALL=C: the no-work-tree fatal below is matched by English text, which
+    # a translated locale (fr_FR, …) doesn't produce.
+    env = {**os.environ, "LC_ALL": "C"}
     # --no-optional-locks: a dashboard read must not take the index lock from
-    # under the user's own git commands (status and diff both refresh the index).
+    # under the user's own git commands. status takes no lock either way; a
+    # plain `diff HEAD` rewrites the index on stat-dirty files regardless of
+    # the flag, which is why line counts come from diff-index below instead.
     code, status = _run(
         ["git", "--no-optional-locks", "-C", path, "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
         timeout=timeout,
+        env=env,
     )
     if code == 0:
         head = oid = ""
@@ -108,7 +114,13 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
                 new += 1
         branch = f"@{oid[:7]}" if head == "(detached)" else head
         # Compact diff stats vs HEAD (covers staged + unstaged together).
-        _, diff = _run(["git", "--no-optional-locks", "-C", path, "diff", "HEAD", "--shortstat"], timeout=timeout)
+        # diff-index, unlike `diff HEAD`, never writes the index; -M so a
+        # staged rename reads as a rename, not a full delete+add.
+        _, diff = _run(
+            ["git", "--no-optional-locks", "-C", path, "diff-index", "-M", "--shortstat", "HEAD"],
+            timeout=timeout,
+            env=env,
+        )
         adds_m = re.search(r"(\d+) insertion", diff)
         dels_m = re.search(r"(\d+) deletion", diff)
         adds = int(adds_m.group(1)) if adds_m else 0
@@ -125,7 +137,7 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
         # A git dir with no work tree here — a bare-container layout (a dir
         # whose .git file says `gitdir: ./.bare`), a cwd inside .git, a bare
         # repo — still has a branch and a repo; there is nothing to diff.
-        code, head = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=timeout)
+        code, head = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=timeout, env=env)
         if code != 0:
             return None
         branch = head if head != "HEAD" else "?"
@@ -153,7 +165,7 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
 
 
 def _next_git_due() -> float:
-    return time.time() + _GIT_TTL + random.uniform(-_GIT_JITTER_S, _GIT_JITTER_S)
+    return time.time() + _GIT_REFRESH_S + random.uniform(-_GIT_JITTER_S, _GIT_JITTER_S)
 
 
 def cached_git_state(path: str) -> dict | None:
@@ -187,12 +199,15 @@ def cached_git_state(path: str) -> dict | None:
 def _refresh_git_state(path: str) -> None:
     try:
         data = git_state_for(path, timeout=_GIT_BG_TIMEOUT_S)
+        # Stat path outside the lock — only needed on the miss path, not on
+        # every refresh.
+        still_a_dir = data is None and os.path.isdir(path)
         with _git_lock:
             previous = _git_cache.get(path)
             # Nothing back for a cwd that is still a directory is a status that
             # timed out or failed far more often than a repo that stopped being
             # one: keep the last state and retry at the next expiry.
-            if data is None and previous is not None and previous[1] is not None and os.path.isdir(path):
+            if data is None and previous is not None and previous[1] is not None and still_a_dir:
                 data = previous[1]
             _git_cache[path] = (_next_git_due(), data)
     finally:
@@ -204,9 +219,9 @@ def git_signal_for(path: str) -> dict | None:
     """Structured progress signal for a working tree: `{toplevel, head,
     head_subject, dirty}`. Returns None when `path` isn't in a git repo.
 
-    Deliberately NOT folded into `git_state_for`, which runs on the 3s
-    dashboard poll for every window — these are two extra subprocesses per
-    path serving on-demand MCP callers only.
+    Deliberately NOT folded into `git_state_for`, whose cache refreshes in the
+    background roughly every 15s per cwd — these are two extra subprocesses
+    per path serving on-demand MCP callers only.
 
     `toplevel` is the WORKTREE root, not `resolve_repo`'s repo root: two
     linked worktrees of one repo share a repo root but have separate build
