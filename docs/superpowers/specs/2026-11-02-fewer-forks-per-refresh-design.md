@@ -80,9 +80,10 @@ other source. Both snapshots are locked, so the fan-out can no longer stampede t
 
 **D5 — Git: two commands per refresh, refreshed in the background.** `git_state_for` runs
 `git --no-optional-locks status --porcelain=v2 --branch --untracked-files=normal` (branch, detached sha, ahead count
-from `# branch.ab`, untracked entries) and `git --no-optional-locks diff HEAD --shortstat` (line counts) instead of
-seven commands. `--no-optional-locks` keeps both from taking the index lock under the user's own git commands (both
-refresh the index). The status exit code is the repo check — `rev-parse --git-dir` goes. When status says the cwd has
+from `# branch.ab`, untracked entries) and `git --no-optional-locks diff-index -M --shortstat HEAD` (line counts)
+instead of seven commands. `status` takes no lock under `--no-optional-locks`; the line counts come from
+`diff-index`, which never writes the index (plain `diff HEAD` does, flag or not) — `-M` so a staged rename reads as
+one, not a full delete+add. The status exit code is the repo check — `rev-parse --git-dir` goes. When status says the cwd has
 no work tree (a bare-container layout whose `.git` file says `gitdir: ./.bare`, a cwd inside `.git`, a bare repo),
 one `git rev-parse --abbrev-ref HEAD` gives the branch and the state reads `clean`. A repo with no commits reads its
 branch from `# branch.head` (today's read returned `rev-parse`'s error text as the branch). The common dir
@@ -172,10 +173,16 @@ re-read on every call). `tmux._run` takes an `env`.
 - From a repo subdirectory, the old `ls-files -o` counted only that subdirectory's untracked entries; `status` counts
   the whole repo's (`?2` → `?3`, and a deeper cwd `clean` → `?3`). Kept: `diff HEAD`'s line counts were already
   whole-repo, so the chip now describes one thing.
-- The short sha for a detached HEAD is the first 7 characters of `# branch.oid` (today: `rev-parse --short`, which
-  can be longer when 7 is ambiguous).
+- The short sha for a detached HEAD is the first 7 characters of `# branch.oid` (today: `rev-parse --short`, whose
+  default abbreviation grows with the object count — this repo, ~17k objects, gets 8 — so a detached pane's
+  `@<sha>` branch changes once on deploy).
 - With `--no-optional-locks` on both commands nothing writes a refreshed index back, so racily-clean files are
-  re-hashed on each refresh until the user's own git command rewrites the index. Accepted.
+  re-hashed on each refresh until the user's own git command rewrites the index. Accepted; in a repo with a clean
+  filter (e.g. git-crypt) that's one filter process per stat-dirty file per refresh, until then.
+- A failed identity read (`resolve_repo` falls back to the cwd, `github_slug` to `None`, e.g. on its 3 s timeout) is
+  cached for the full 10-minute identity TTL, so in that rare case an untagged pane sits in a cwd-keyed repo track
+  and PR links lack a slug for up to 10 minutes; the identity reads don't take the background refresh's longer
+  timeout.
 - A cwd with no work tree reads `clean` with the HEAD branch (`?` when detached); a plain bare repo now reads that way
   too (today's read gave its branch and a garbage `?1` from `ls-files`' error text).
 - A background read that returns nothing for a cwd that is still a directory keeps the last state, so a checkout
