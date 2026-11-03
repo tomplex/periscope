@@ -777,7 +777,8 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
     """),
         False,
     ),
-    # The same pane before the reply lands: `keep going` alone doesn't clear it.
+    # The same pane before anything answers the nudge: `keep going` alone
+    # doesn't clear it.
     (
         "rate-limited-nudged",
         textwrap.dedent(f"""\
@@ -788,7 +789,41 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
 
         ❯ keep going
 
+        ✻ Crunching…
+        {STATUS_LINE}
+    """),
+        True,
+    ),
+    # The nudged turn has so far printed only a collapsed tool group: the
+    # API answered → off.
+    (
+        "rate-limited-resuming-calls",
+        textwrap.dedent(f"""\
+        ❯ keep going
+          ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+        ✻ Brewed for 0s
+
+        ❯ keep going
+
+          Called fdy 6 times (ctrl+o to expand)
+
+        ✻ Crunching…
+        {STATUS_LINE}
+    """),
+        False,
+    ),
+    # A long error's `… +N lines` row is part of the error, not output after it.
+    (
+        "error-truncated-result",
+        textwrap.dedent(f"""\
           Called fdy (ctrl+o to expand)
+          ⎿  API Error: 500 {{"type":"error","error":{{"type":"api_error","message":"Internal server error"}}}}
+             … +3 lines (ctrl+o to expand)
+
+        ✻ Brewed for 2s
+
+        ❯
         {STATUS_LINE}
     """),
         True,
@@ -835,8 +870,7 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
     """),
         False,
     ),
-    # API error mid-buffer with no later `⎿` tool results — Claude is
-    # presumably retrying / waiting. Flag on.
+    # API error, then a `⏺` reply in the same turn: the API answered → off.
     (
         "error-then-only-text",
         textwrap.dedent(f"""\
@@ -849,7 +883,7 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
         ❯
         {STATUS_LINE}
     """),
-        True,
+        False,
     ),
     # THI-436: a stream cut mid-response renders as an assistant `⏺` line,
     # not a `⎿` tool result — and a successful tool result sits above it,
@@ -934,6 +968,30 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
         {RULE}
         {CUSTOM_STATUS_LINE}
           ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents
+    """),
+        False,
+    ),
+    # The same pane when that turn ended: Claude Code carried on after the
+    # stream cut with no prompt in between → off.
+    (
+        "stream-cut-recovered-in-turn",
+        textwrap.dedent(f"""\
+        ❯ compare the clinic rankings from both sheets
+
+          Called faraday_internal 2 times (ctrl+o to expand)
+
+        ⏺ API Error: The response stopped arriving. The response above may be incomplete.
+
+          Called faraday_internal 2 times (ctrl+o to expand)
+
+        ⏺ Rankings by headroom count are nearly identical and track catchment size.
+
+        ✻ Brewed for 2m 10s · done 8:07 AM
+
+        {RULE}
+        ❯
+        {RULE}
+        {CUSTOM_STATUS_LINE}
     """),
         False,
     ),

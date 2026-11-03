@@ -368,20 +368,13 @@ PROMPT_LINE_RE = re.compile(r"^❯\s*(?P<input>.*)$")
 # active-op / prose by the no-space-before-`(` pattern.
 TOOL_CALL_RE = re.compile(r"^[^\x00-\x7f]\s+\w+\(")
 
-# Tool-result lines start with `⎿`. Claude Code renders rate-limit and
-# transport failures as a normal tool result whose body begins with
-# "API Error:" and then STOPS — it does not auto-retry; the turn just
-# ends with the error sitting there until the user types something
-# (`keep going`, etc.) to restart. When the most recent `⎿` line is an
-# API Error the pane is silently blocked waiting on a human nudge. A
-# later non-error `⎿` means a subsequent turn succeeded and the flag
-# should clear; so does a `⏺` reply to a later prompt, since collapsed
-# calls (`Called … (ctrl+o to expand)`) print no `⎿` (THI-455). A
-# stream cut mid-response ("The response stopped arriving") renders as
-# an assistant `⏺` line instead (THI-436), so both glyphs count as the
-# error.
+# A tool result (`⎿ …`). An API error is a tool result (rate limit) or an
+# assistant `⏺` line (stream cut, THI-436). A collapsed tool group
+# (`  Called fdy 6 times (ctrl+o to expand)`) prints no `⎿` (THI-455); its
+# capital excludes a result's `… +3 lines` row and `› Message from @…`.
 TOOL_RESULT_RE = re.compile(r"^\s*⎿\s+")
 API_ERROR_RE = re.compile(r"^\s*[⎿⏺]\s+API Error:")
+COLLAPSED_TOOL_GROUP_RE = re.compile(r"^\s+[A-Z]\w* .*\(ctrl\+o to expand\)\s*$")
 
 
 def all_pane_ids() -> set[str]:
@@ -1048,31 +1041,21 @@ def _detect_asked_question(lines: list[str]) -> bool:
 
 
 def _detect_api_error(lines: list[str]) -> bool:
-    """True when an API Error line sits below the most recent `⎿` tool
-    result and no prompt sent after it has a `⏺` reply.
+    """True when Claude has written nothing since the newest API Error
+    line: no `⎿` tool result, `⏺` line or collapsed tool group below it.
 
-    Claude Code renders rate-limit / transport failures as a normal tool
-    result whose body begins "API Error:" (or, for a stream cut, as an
-    assistant `⏺ API Error:` line) and then STOPS — no auto-retry;
-    the turn just ends until the user nudges it (`keep going`, etc.). The
-    flag tracks "pane is silently blocked". A later non-error `⎿`, or a
-    `⏺` under a later `❯` prompt, means a later turn went through and the
-    flag clears.
+    A rate-limit error ends the turn until the user nudges it (`keep
+    going`); after a stream cut Claude Code may carry on by itself. Either
+    way, output below the error means the API answered and the pane isn't
+    blocked.
 
     Caller invokes this only for Claude panes — prose mentioning "API
     Error" in a shell pane (logs, grep output) must not trip it.
     """
-    replied = False
     for line in reversed(lines):
         if API_ERROR_RE.match(line):
             return True
-        if TOOL_RESULT_RE.match(line):
-            return False
-        s = line.strip()
-        if s.startswith("⏺"):
-            replied = True
-        # Above a reply, `❯` is a sent prompt: the composer sits below every reply.
-        elif replied and s.startswith("❯"):
+        if TOOL_RESULT_RE.match(line) or COLLAPSED_TOOL_GROUP_RE.match(line) or line.lstrip().startswith("⏺"):
             return False
     return False
 
