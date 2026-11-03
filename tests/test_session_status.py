@@ -281,6 +281,25 @@ def test_pane_claude_pids_empty_without_tmux(monkeypatch):
     assert ss.pane_claude_pids() == {}
 
 
+def test_pane_claude_pids_is_rebuilt_when_either_snapshot_changes(monkeypatch):
+    # No clock of its own: the map is never older than the snapshots it walks.
+    panes = {"%1": 10}
+    snapshots = [{}]
+    walks = []
+    monkeypatch.setattr(ss, "_tmux_pane_pids", lambda: dict(panes))
+    monkeypatch.setattr(agent_processes, "process_snapshot", lambda: snapshots[-1])
+    monkeypatch.setattr(ss, "proc_table", lambda: walks.append(1) or ({10: [11]}, {11: "claude"}))
+    assert ss.pane_claude_pids() == {"%1": 11}
+    ss.pane_claude_pids()
+    assert len(walks) == 1
+    snapshots.append({})  # a new ps table
+    ss.pane_claude_pids()
+    assert len(walks) == 2
+    panes["%2"] = 20  # a new pane
+    ss.pane_claude_pids()
+    assert len(walks) == 3
+
+
 # ── pane -> CLAUDE_CONFIG_DIR scan (moved from resurrect) ────────────────
 
 

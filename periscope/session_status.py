@@ -45,16 +45,16 @@ _STATE_MAP = {"busy": "working", "waiting": "needs-input", "idle": "idle"}
 
 # Per-poll caches. build_window_view calls session_state_for once per pane every
 # refresh; scanning ~30 tiny files per pane would be wasteful, so the session
-# index and the pane -> claude walk are built once and reused for the brief
-# window a single refresh spans. Processes come from the refresh's one `ps`
-# (agent_processes.process_snapshot).
+# index is built once and reused for the brief window a single refresh spans.
+# Processes come from the refresh's one `ps` (agent_processes.process_snapshot).
 _CACHE_TTL_S = 1.0
 # (built_at, {sid: file}, {pid: [files newest-first]}) — one scan of every live
 # account's sessions dir answers both directions (sessionId -> state,
 # pid -> current sessionId). by_pid holds a LIST because the same OS pid can
 # have a file in more than one account's dir (recycled pid, account swap).
 _index_cache: tuple[float, dict, dict[int, list[dict]]] | None = None
-_pane_pids_cache: tuple[float, dict[str, int]] | None = None
+# (pane -> root pid, process snapshot, pane -> claude pid): the walk's inputs and answer.
+_pane_pids_cache: tuple[dict[str, int], dict | None, dict[str, int]] | None = None
 
 _CONFIG_DIR_RE = re.compile(r"\bCLAUDE_CONFIG_DIR=(\S+)")
 _PROFILE_RE = re.compile(rf"\b{config.PROFILE_ENV_VAR}=(\S+)")
@@ -178,21 +178,17 @@ def pane_claude_pids() -> dict[str, int]:
     claude: that is the pane's own session. Anything claude-ish below it is a
     subagent or tool child.
 
-    Cached for _CACHE_TTL_S — the same per-poll window the rest of this module
-    uses. Deliberately NOT the 15s of window_view's account scan: that scan
-    reads process env, which is immutable for a process's lifetime, whereas
-    this map feeds a pane's CURRENT session id — which rotates mid-process —
-    and a pid can be recycled by an unrelated claude. The pane and process
-    tables it walks are the refresh's shared tmux and ps snapshots; a longer
-    window buys nothing but staleness.
+    Rebuilt only when the pane map or the process snapshot changes, so it is
+    never older than the two snapshots it walks (pinned for a refresh, else
+    1 s): it feeds a pane's CURRENT session id, which rotates mid-process.
     """
     global _pane_pids_cache
-    now = time.time()
-    if _pane_pids_cache and now - _pane_pids_cache[0] < _CACHE_TTL_S:
-        return _pane_pids_cache[1]
     panes = _tmux_pane_pids()
     if not panes:
-        return {}  # no tmux — don't fork ps, and don't cache the empty answer
+        return {}  # no tmux — don't fork ps
+    snapshot = agent_processes.process_snapshot()
+    if _pane_pids_cache and _pane_pids_cache[0] == panes and _pane_pids_cache[1] is snapshot:
+        return _pane_pids_cache[2]
     kids, cmds = proc_table()
     found: dict[str, int] = {}
     for pane_id, root in panes.items():
@@ -207,7 +203,7 @@ def pane_claude_pids() -> dict[str, int]:
                 found[pane_id] = pid
                 break
             queue.extend(kids.get(pid, ()))
-    _pane_pids_cache = (now, found)
+    _pane_pids_cache = (panes, snapshot, found)
     return found
 
 
