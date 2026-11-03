@@ -66,17 +66,8 @@ def parse_ps_snapshot(output: str) -> dict[int, ProcessInfo]:
 
 
 def ps_env() -> dict[str, str]:
-    """The environment every `ps` fork in this process runs under.
-
-    LC_ALL=C so lstart parses (it otherwise prints in the locale, e.g. `mer.
-    30 sept.` under fr_FR) and so non-ASCII argv bytes vis-encode the same way
-    across every ps call this process makes — session_status's `ps eww`
-    included. A drift there broke `_env_tail`'s prefix match on a claude
-    whose argv held non-ASCII bytes: this module's snapshot encoded them in C,
-    `ps eww` printed them raw in the server's own locale, and the two
-    strings stopped sharing a prefix. TZ=UTC so lstart isn't ambiguous across
-    a DST fall-back's repeated hour.
-    """
+    """LC_ALL=C so lstart parses and argv bytes encode the same in both ps
+    calls `_env_tail` compares; TZ=UTC so lstart is unambiguous across DST."""
     return {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
 
 

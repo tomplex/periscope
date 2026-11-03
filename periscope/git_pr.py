@@ -85,10 +85,9 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
     # LC_ALL=C: the no-work-tree fatal below is matched by English text, which
     # a translated locale (fr_FR, …) doesn't produce.
     env_overrides = {"LC_ALL": "C"}
-    # --no-optional-locks: a dashboard read must not take the index lock from
-    # under the user's own git commands. status takes no lock either way; a
-    # plain `diff HEAD` rewrites the index on stat-dirty files regardless of
-    # the flag, which is why line counts come from diff-index below instead.
+    # --no-optional-locks: status would otherwise take index.lock to write
+    # back refreshed stat info; a plain `diff HEAD` rewrites the index
+    # regardless, hence diff-index below.
     code, status = _run(
         ["git", "--no-optional-locks", "-C", path, "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
         timeout=timeout,
