@@ -14,7 +14,7 @@ periscope.store mutates ~/.config/periscope/state.json (creates it if
 missing, runs migrations).
 
 First-load is NOT cheap: on a fresh or v1 state file the v1→v2 migration
-shells out to `tmux list-windows` plus per-session `git rev-parse`
+shells out to `tmux list-panes` plus per-session `git rev-parse`
 subprocesses and blocks until they return. Import of this module is only
 pure/fast once state.json is already at v2 (the migration's idempotency
 check then bails before spawning anything).
@@ -227,7 +227,7 @@ def _migrate_v1_to_v2(data: dict) -> tuple[dict, bool]:
     auto-adopts each as a project pinned to its first window's git
     toplevel.
 
-    Runs live subprocesses, one batch per session: a `tmux list-windows`
+    Runs live subprocesses, one batch per session: a `tmux list-panes`
     up front, then `git rev-parse` invocations per session to resolve the
     pinned dir, repo, and base branch. On a fresh/v1 file this happens at
     module import time and blocks — see the module docstring.

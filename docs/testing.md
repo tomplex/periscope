@@ -28,10 +28,13 @@ fixture seeds the cache so no plan-usage thread ever spawns, and
 Patching one call site (e.g. `periscope.app.cached_plan_usage`) is NOT enough —
 `routes.state` holds its own binding, so the fix lives at the cache layer.
 
-**No test forks real tmux, ps or gh for the per-refresh readers.** conftest
+**The shared snapshots are seeded, so their readers don't fork.** conftest
 seeds `tmux._panes_snapshot`, `agent_processes._snapshot_cache` and
 `gh._token_cache` with unexpiring empty entries, and clears git_pr's per-path
-caches (a stale entry would start a real `_bg` git refresh). A test of one of
-those paths resets the seed itself (`tests/test_gh.py` overrides
-`_no_gh_token` by name). The live-tmux oracle in `test_panes.py` and the
-live-`ps` test in `test_agent_processes.py` fork on purpose.
+caches (a stale entry would start a real `_bg` git refresh). So no test runs
+`gh auth token`, and `all_pane_ids`, session_status and the process readers
+fork no `list-panes` or `ps` — a test that calls the real `list_windows`
+still forks one `list-panes`. A test of one of those paths resets the seed
+itself (`tests/test_gh.py` overrides `_no_gh_token` by name). The live-tmux
+oracle in `test_panes.py` and the live-`ps` tests in
+`test_agent_processes.py` and `test_session_status.py` fork on purpose.

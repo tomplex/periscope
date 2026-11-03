@@ -125,8 +125,8 @@ def test_missing_sessions_dir_returns_none(tmp_path, monkeypatch):
 
 # ── live claudes and the process table come off process_snapshot ─────────
 
-# The processes the old `ps -axo pid=,etime=,comm=` sample listed (etimes
-# 01-02:08:58, 22:09:53, 05:33, 91-10:00:00) plus a plugin server whose argv
+# Processes aged 01-02:08:58, 22:09:53, 05:33 and 91-10:00:00 (as etime
+# would print them) plus a plugin server whose argv
 # mentions .claude, as process_snapshot's real `… lstart= state= args=` rows
 # read at _PS_NOW. lstart prints in UTC (agent_processes.ps_env's TZ=UTC), so
 # both this snapshot's times and _PS_NOW are expressed in UTC — mixing a

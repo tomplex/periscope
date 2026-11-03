@@ -1178,7 +1178,7 @@ def test_one_list_panes_serves_the_whole_refresh(monkeypatch):
     assert len(calls) == 1
 
 
-# Today's list-windows read, kept as the oracle the list-panes read reproduces.
+# The list-windows read, kept as the oracle the list-panes read reproduces.
 _LIST_WINDOWS_FMT = (
     "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t"
     "#{@periscope_id}\t#{pane_id}\t#{window_activity}\t#{window_id}\t#{pane_pid}\t"

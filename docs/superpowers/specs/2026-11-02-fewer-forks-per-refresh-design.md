@@ -197,7 +197,12 @@ re-read on every call). `tmux._run` takes an `env`.
   window from the full roster (its `pane_tracks` row can be pruned, #19). Before this change a tab or newline there
   crashed the whole `list_windows`.
 - `all_pane_ids` and the pane-to-claude map read a list-panes snapshot up to 1 s old (the claude map, with its own
-  1 s cache, up to ~2 s): a pane created in that window reads as "no claude yet" and fails open (#14, #16).
+  1 s cache, up to ~2 s): a pane created in that window reads as "no claude yet" and fails open (#14, #16). The
+  channel-alert GC reads the same snapshot, so an alert recorded for a pane newer than it would be dropped; every
+  alert needs a running Claude in the pane, which takes longer than 1 s to start.
+- One `ps` snapshot (2 s timeout) feeds session state, the pane → claude map, codex detection and resources: a `ps`
+  slower than that blanks all four for one refresh, each falling back on its own (scraped state, no claude, none).
+  Measured at ~50 ms over ~640 processes.
 - `gh auth token` prints the token gh would use for github.com; a token revoked within the 10 minutes fails until the
   401 re-read (at most a minute).
 - The audit hook's per-event cost (a string compare) is negligible against periscope's file I/O.

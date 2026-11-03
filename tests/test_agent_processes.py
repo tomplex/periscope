@@ -54,7 +54,8 @@ def test_snapshot_runs_ps_with_the_shared_env(mocker):
 
 
 def test_snapshot_reads_a_full_path_executable_from_live_ps(monkeypatch):
-    # comm= read this process as "/Users/tom/.loca"; a French locale emptied the table.
+    # A 16-character comm would read this process as "/Users/tom/.loca"; a French
+    # locale would empty the table.
     monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
     ap.clear_caches()
     proc = subprocess.Popen(["/Users/tom/.local/bin/claude", "30"], executable="/bin/sleep")
