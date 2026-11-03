@@ -14,6 +14,7 @@ import re
 import subprocess
 import threading
 import time
+from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -157,15 +158,23 @@ def _is_codex_executable(proc: ProcessInfo) -> bool:
     return os.path.basename(proc.exe).lower() in {"codex", "codex.exe"}
 
 
+def is_claude_executable(proc: ProcessInfo) -> bool:
+    # The launcher (`claude`, `.../bin/claude`) and the versioned binary
+    # (`.../share/claude/versions/<v>`) both say so; a `node` whose arguments
+    # merely mention ~/.claude doesn't.
+    return "claude" in proc.exe.lower()
+
+
 def descendants(root_pid: int, snapshot: dict[int, ProcessInfo]):
-    """`root_pid`'s process (when in the snapshot) and every process below it."""
+    """`root_pid`'s process (when in the snapshot) and every process below it,
+    nearest first."""
     children: dict[int, list[ProcessInfo]] = {}
     for proc in snapshot.values():
         children.setdefault(proc.ppid, []).append(proc)
-    pending = [root_pid]
+    pending = deque([root_pid])
     seen: set[int] = set()
     while pending:
-        parent = pending.pop()
+        parent = pending.popleft()
         if parent in seen:
             continue
         seen.add(parent)

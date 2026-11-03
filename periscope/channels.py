@@ -1146,8 +1146,7 @@ def pane_channel_ready(pane_id: str) -> bool | None:
     pid = session_status.pane_claude_pids().get(pane_id)
     if pid is None:
         return None
-    _kids, cmds = session_status.proc_table()
-    cmd = cmds.get(pid)
+    cmd = session_status.command_lines().get(pid)
     if cmd is None:
         return None
     return config.CHANNEL_FLAG in cmd

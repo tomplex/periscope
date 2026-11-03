@@ -162,13 +162,10 @@ def test_claude_procs_age_from_start_time(monkeypatch):
     }
 
 
-def test_proc_table_matches_the_command_table(monkeypatch):
-    # What `ps -axo pid=,ppid=,command=` gave: children by parent in ps order,
-    # and each pid's full command line.
+def test_command_lines_match_the_command_table(monkeypatch):
+    # What `ps -axo pid=,command=` gave: each pid's full command line.
     _snapshot(monkeypatch)
-    kids, cmds = ss.proc_table()
-    assert kids == {1: [9448, 11023, 329], 9448: [9876], 0: [1]}
-    assert cmds == {
+    assert ss.command_lines() == {
         9448: "/Users/tom/.local/bin/claude --resume 0b6f2a1e-1111-2222-3333-444455556666",
         9876: "/Users/tom/.local/share/claude/versions/2.1.161",
         11023: "node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js --port 9900",
@@ -180,7 +177,7 @@ def test_proc_table_matches_the_command_table(monkeypatch):
 def test_ps_failure_reads_as_no_processes(monkeypatch):
     monkeypatch.setattr(agent_processes, "process_snapshot", lambda: None)
     assert ss._claude_procs() == {}
-    assert ss.proc_table() == ({}, {})
+    assert ss.command_lines() == {}
 
 
 def test_one_ps_serves_the_whole_refresh(monkeypatch, mocker):
@@ -189,7 +186,7 @@ def test_one_ps_serves_the_whole_refresh(monkeypatch, mocker):
         agent_processes, "_take_snapshot", return_value=agent_processes.parse_ps_snapshot(_PS_SNAPSHOT)
     )
     mocker.patch("subprocess.run", side_effect=AssertionError("session_status forked its own ps"))
-    ss.proc_table()
+    ss.command_lines()
     ss._claude_procs()
     agent_processes.process_snapshot()
     take.assert_called_once()
@@ -233,9 +230,15 @@ def test_claude_proc_for_unmapped_none(tmp_path, monkeypatch):
 # ── pane -> claude pid walk ──────────────────────────────────────────────
 
 
-def _seed_walk(monkeypatch, panes, kids, cmds):
+def _process(pid, ppid, argv):
+    return agent_processes.ProcessInfo(pid=pid, ppid=ppid, started_at=0, exe=argv.split()[0], argv=argv, state="S")
+
+
+def _seed_walk(monkeypatch, panes, procs):
+    """`procs`: {pid: (ppid, argv)}."""
+    snapshot = {pid: _process(pid, ppid, argv) for pid, (ppid, argv) in procs.items()}
     monkeypatch.setattr(ss, "_tmux_pane_pids", lambda: panes)
-    monkeypatch.setattr(ss, "proc_table", lambda: (kids, cmds))
+    monkeypatch.setattr(agent_processes, "process_snapshot", lambda: snapshot)
 
 
 def test_pane_claude_pids_finds_first_claude_descendant(monkeypatch):
@@ -243,13 +246,12 @@ def test_pane_claude_pids_finds_first_claude_descendant(monkeypatch):
     _seed_walk(
         monkeypatch,
         {"%1": 10, "%2": 20},
-        {10: [11], 20: [21], 21: [22]},
         {
-            10: "-zsh",
-            11: "/Users/tom/.local/bin/claude",
-            20: "-zsh",
-            21: "node script.js",
-            22: "/Users/tom/.local/bin/claude",
+            10: (1, "-zsh"),
+            11: (10, "/Users/tom/.local/bin/claude"),
+            20: (1, "-zsh"),
+            21: (20, "node script.js"),
+            22: (21, "/Users/tom/.local/bin/claude"),
         },
     )
     assert ss.pane_claude_pids() == {"%1": 11, "%2": 22}
@@ -260,44 +262,63 @@ def test_pane_claude_pids_stops_at_first_claude(monkeypatch):
     _seed_walk(
         monkeypatch,
         {"%1": 10},
-        {10: [11], 11: [12]},
-        {10: "-zsh", 11: "claude", 12: "claude --subagent"},
+        {10: (1, "-zsh"), 11: (10, "claude"), 12: (11, "claude --subagent")},
+    )
+    assert ss.pane_claude_pids() == {"%1": 11}
+
+
+def test_pane_claude_pids_takes_the_nearest_claude(monkeypatch):
+    # The shell's own claude child wins over a claude deeper under its sibling.
+    _seed_walk(
+        monkeypatch,
+        {"%1": 10},
+        {10: (1, "-zsh"), 11: (10, "claude"), 12: (10, "make"), 13: (12, "claude --print")},
     )
     assert ss.pane_claude_pids() == {"%1": 11}
 
 
 def test_pane_claude_pids_skips_shell_only_panes(monkeypatch):
-    _seed_walk(monkeypatch, {"%1": 10}, {10: [11]}, {10: "-zsh", 11: "vim"})
+    _seed_walk(monkeypatch, {"%1": 10}, {10: (1, "-zsh"), 11: (10, "vim")})
+    assert ss.pane_claude_pids() == {}
+
+
+def test_pane_claude_pids_ignores_an_argv_that_mentions_claude(monkeypatch):
+    # The same test _claude_procs applies: the executable, not an argument.
+    _seed_walk(
+        monkeypatch,
+        {"%1": 10},
+        {10: (1, "-zsh"), 11: (10, "node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js")},
+    )
     assert ss.pane_claude_pids() == {}
 
 
 def test_pane_claude_pids_empty_without_tmux(monkeypatch):
     monkeypatch.setattr(ss, "_tmux_pane_pids", dict)
     monkeypatch.setattr(
-        ss,
-        "proc_table",
-        lambda: (_ for _ in ()).throw(AssertionError("proc_table must not fork when there are no panes")),
+        agent_processes,
+        "process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("must not fork ps when there are no panes")),
     )
     assert ss.pane_claude_pids() == {}
 
 
-def test_pane_claude_pids_is_rebuilt_when_either_snapshot_changes(monkeypatch):
+def test_pane_claude_pids_is_rebuilt_when_either_snapshot_changes(monkeypatch, mocker):
     # No clock of its own: the map is never older than the snapshots it walks.
     panes = {"%1": 10}
-    snapshots = [{}]
-    walks = []
+    procs = {10: (1, "-zsh"), 11: (10, "claude"), 20: (1, "-zsh")}
+    snapshots = [{pid: _process(pid, ppid, argv) for pid, (ppid, argv) in procs.items()}]
     monkeypatch.setattr(ss, "_tmux_pane_pids", lambda: dict(panes))
     monkeypatch.setattr(agent_processes, "process_snapshot", lambda: snapshots[-1])
-    monkeypatch.setattr(ss, "proc_table", lambda: walks.append(1) or ({10: [11]}, {11: "claude"}))
+    walks = mocker.spy(agent_processes, "descendants")
     assert ss.pane_claude_pids() == {"%1": 11}
     ss.pane_claude_pids()
-    assert len(walks) == 1
-    snapshots.append({})  # a new ps table
+    assert walks.call_count == 1
+    snapshots.append(dict(snapshots[0]))  # a new ps table
     ss.pane_claude_pids()
-    assert len(walks) == 2
+    assert walks.call_count == 2
     panes["%2"] = 20  # a new pane
     ss.pane_claude_pids()
-    assert len(walks) == 3
+    assert walks.call_count == 4  # one walk per pane
 
 
 # ── pane -> CLAUDE_CONFIG_DIR scan (moved from resurrect) ────────────────
@@ -308,7 +329,7 @@ def test_pane_config_dirs_cached_at_15s(mocker):
     process lifetime, so a 1s TTL would add a fork/s for nothing."""
     ss._config_dirs_cache = None
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude"}))
+    mocker.patch.object(ss, "command_lines", return_value={111: "claude"})
     envs = mocker.patch.object(
         ss, "_env_by_pid", return_value={111: "claude CLAUDE_CONFIG_DIR=/Users/t/.claude-b PATH=/x"}
     )
@@ -374,7 +395,7 @@ def test_pane_profiles_reads_the_wrapper_profile_from_env(mocker):
     reaches argv."""
     ss._config_dirs_cache = None
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111, "%2": 222})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude", 222: "claude"}))
+    mocker.patch.object(ss, "command_lines", return_value={111: "claude", 222: "claude"})
     mocker.patch.object(
         ss,
         "_env_by_pid",
@@ -390,7 +411,7 @@ def test_pane_profiles_reads_the_wrapper_profile_from_env(mocker):
 def test_pane_models_reads_the_spawn_model_from_env(mocker):
     ss._config_dirs_cache = None
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111, "%2": 222})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude", 222: "claude"}))
+    mocker.patch.object(ss, "command_lines", return_value={111: "claude", 222: "claude"})
     mocker.patch.object(
         ss,
         "_env_by_pid",
@@ -408,7 +429,7 @@ def test_pane_profiles_and_config_dirs_share_one_ps_fork(mocker):
     poll, on the /api/state hot path."""
     ss._config_dirs_cache = None
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude"}))
+    mocker.patch.object(ss, "command_lines", return_value={111: "claude"})
     envs = mocker.patch.object(
         ss, "_env_by_pid", return_value={111: "claude CLAUDE_CONFIG_DIR=/Users/t/.claude-b CLAUDE_WRAPPER_PROFILE=full"}
     )
@@ -422,7 +443,7 @@ def test_pane_profiles_ignores_a_command_that_merely_mentions_the_var(mocker):
     ss._config_dirs_cache = None
     cmd = "rg CLAUDE_WRAPPER_PROFILE=full"
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: cmd}))
+    mocker.patch.object(ss, "command_lines", return_value={111: cmd})
     mocker.patch.object(ss, "_env_by_pid", return_value={111: f"{cmd} PATH=/x"})
     assert ss.pane_profiles() == {}
 
@@ -579,14 +600,11 @@ def test_pane_resume_ids_reads_resume_uuid_from_argv(mocker):
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%3": 500, "%4": 501})
     mocker.patch.object(
         ss,
-        "proc_table",
-        return_value=(
-            {},
-            {
-                500: "claude --resume 828e314f-76fe-42af-a750-e48d1f0a5316",
-                501: "claude --system-prompt xyz",
-            },
-        ),
+        "command_lines",
+        return_value={
+            500: "claude --resume 828e314f-76fe-42af-a750-e48d1f0a5316",
+            501: "claude --system-prompt xyz",
+        },
     )
     assert ss.pane_resume_ids() == {"%3": "828e314f-76fe-42af-a750-e48d1f0a5316"}
 
@@ -595,15 +613,12 @@ def test_pane_efforts_reads_the_launch_effort_from_argv(mocker):
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111, "%2": 222, "%3": 333})
     mocker.patch.object(
         ss,
-        "proc_table",
-        return_value=(
-            {},
-            {
-                111: "claude --dangerously-load-development-channels server:periscope --effort xhigh",
-                222: "claude --dangerously-load-development-channels server:periscope",
-                333: "claude --effort=low",
-            },
-        ),
+        "command_lines",
+        return_value={
+            111: "claude --dangerously-load-development-channels server:periscope --effort xhigh",
+            222: "claude --dangerously-load-development-channels server:periscope",
+            333: "claude --effort=low",
+        },
     )
     assert ss.pane_efforts() == {"%1": "xhigh", "%3": "low"}
 

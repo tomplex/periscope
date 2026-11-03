@@ -32,7 +32,6 @@ import json
 import re
 import subprocess
 import time
-from collections import deque
 from pathlib import Path
 
 from periscope import agent_processes, config, resources, tmux
@@ -128,15 +127,12 @@ def _claude_procs() -> dict[int, int]:
     """{pid: age_s} of running `claude` processes, from the refresh's process
     snapshot. The key set guards against honoring a session file whose
     process has exited or whose pid was recycled; age (now minus start) feeds
-    the cycle-hint. A claude is a process whose executable (argv[0]) says so:
-    the launcher (`claude`, `.../bin/claude`) and the versioned binary
-    (`.../share/claude/versions/<v>`) both do; a `node` whose arguments merely
-    mention ~/.claude doesn't."""
+    the cycle-hint."""
     now = time.time()
     return {
         p.pid: int(now - p.started_at)
         for p in (agent_processes.process_snapshot() or {}).values()
-        if "claude" in p.exe.lower()
+        if agent_processes.is_claude_executable(p)
     }
 
 
@@ -144,15 +140,10 @@ def _live_claude_pids() -> set[int]:
     return set(_claude_procs())
 
 
-def proc_table() -> tuple[dict[int, list[int]], dict[int, str]]:
-    """(ppid -> child pids, pid -> command line) for every process, from the
-    refresh's process snapshot. Empty when ps failed."""
-    kids: dict[int, list[int]] = {}
-    cmds: dict[int, str] = {}
-    for p in (agent_processes.process_snapshot() or {}).values():
-        kids.setdefault(p.ppid, []).append(p.pid)
-        cmds[p.pid] = p.argv
-    return kids, cmds
+def command_lines() -> dict[int, str]:
+    """pid -> command line for every process, from the refresh's process
+    snapshot. Empty when ps failed."""
+    return {p.pid: p.argv for p in (agent_processes.process_snapshot() or {}).values()}
 
 
 def _tmux_pane_pids() -> dict[str, int]:
@@ -174,7 +165,7 @@ def pane_claude_pids() -> dict[str, int]:
     """tmux pane id -> the pid of the claude running in it. Panes with no
     claude have no entry.
 
-    Breadth-first through each pane's process subtree, stopping at the FIRST
+    Nearest first through each pane's process subtree, stopping at the FIRST
     claude: that is the pane's own session. Anything claude-ish below it is a
     subagent or tool child.
 
@@ -189,20 +180,12 @@ def pane_claude_pids() -> dict[str, int]:
     snapshot = agent_processes.process_snapshot()
     if _pane_pids_cache and _pane_pids_cache[0] == panes and _pane_pids_cache[1] is snapshot:
         return _pane_pids_cache[2]
-    kids, cmds = proc_table()
     found: dict[str, int] = {}
     for pane_id, root in panes.items():
-        seen: set[int] = set()
-        queue = deque([root])
-        while queue:
-            pid = queue.popleft()
-            if pid in seen:
-                continue
-            seen.add(pid)
-            if pid != root and "claude" in cmds.get(pid, ""):
-                found[pane_id] = pid
+        for proc in agent_processes.descendants(root, snapshot or {}):
+            if proc.pid != root and agent_processes.is_claude_executable(proc):
+                found[pane_id] = proc.pid
                 break
-            queue.extend(kids.get(pid, ()))
     _pane_pids_cache = (panes, snapshot, found)
     return found
 
@@ -221,7 +204,7 @@ def pane_resume_ids() -> dict[str, str]:
     if not pane_pids:
         return {}  # no tmux/claudes — don't fork ps for nothing
     out: dict[str, str] = {}
-    _, cmds = proc_table()
+    cmds = command_lines()
     for pane_id, pid in pane_pids.items():
         m = RESUME_RE.search(cmds.get(pid) or "")
         if m:
@@ -294,7 +277,7 @@ def _pane_claude_envs() -> dict[str, str]:
     pane_pids = pane_claude_pids()
     if not pane_pids:
         return {}  # no tmux/claudes — don't cache the empty answer
-    _, cmds = proc_table()
+    cmds = command_lines()
     envs = _env_by_pid(list(pane_pids.values()))
     tails: dict[str, str] = {}
     for pane_id, pid in pane_pids.items():
@@ -373,7 +356,7 @@ def pane_efforts() -> dict[str, str]:
     leaves argv alone. window_view uses it as the per-pane effort control's
     starting value until periscope sets one.
     """
-    _, cmds = proc_table()
+    cmds = command_lines()
     out = {}
     for pane_id, pid in pane_claude_pids().items():
         m = _EFFORT_ARG_RE.search(cmds.get(pid, ""))

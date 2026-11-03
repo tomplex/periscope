@@ -69,7 +69,7 @@ def _no_live_session_scan(monkeypatch):
     real tmux server and read their real ~/.claude/sessions. An unexpiring
     empty list-panes snapshot makes pane_claude_pids() return {} by its own
     no-panes path (a test's own list_windows() replaces it, as a refresh
-    would), and an unexpiring empty process snapshot answers proc_table() /
+    would), and an unexpiring empty process snapshot answers command_lines() /
     _claude_procs() without forking `ps`; every test falls back to the
     pane_sessions row unless it opts in. Tests of the live path patch these
     same seams themselves, which overrides this."""
