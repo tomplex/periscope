@@ -199,8 +199,7 @@ def cached_git_state(path: str) -> dict | None:
 def _refresh_git_state(path: str) -> None:
     try:
         data = git_state_for(path, timeout=_GIT_BG_TIMEOUT_S)
-        # Stat path outside the lock — only needed on the miss path, not on
-        # every refresh.
+        # Outside the lock: a stat on a hung mount must not stall every reader.
         still_a_dir = data is None and os.path.isdir(path)
         with _git_lock:
             previous = _git_cache.get(path)
