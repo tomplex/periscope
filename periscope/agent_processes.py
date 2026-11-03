@@ -1,13 +1,14 @@
 """Process-tree evidence for interactive coding agents.
 
-This module is deliberately stdlib-only.  A failed ``ps`` invocation means
-"no opinion" rather than "the agent exited"; callers use ``None`` to preserve
-that distinction.
+This module is deliberately stdlib-only.  A failed ``ps`` invocation serves
+the last table while it is recent, then means "no opinion" rather than "the
+agent exited"; callers use ``None`` to preserve that distinction.
 """
 
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
 import subprocess
@@ -16,6 +17,8 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -36,8 +39,18 @@ _PS_ROW_RE = re.compile(
     r"(\S+)(?:\s+(.*))?$"
 )
 _PS_TTL_S = 1.0
+_PS_TIMEOUT_S = 2.0
+# A failed ps serves the last table while it is at most this old, instead of
+# blanking session state, the pane -> claude map, codex detection and resources
+# for a refresh. THI-450 measured refreshes of 3-13 s under load, so the last
+# table is up to ~14 s old when the next refresh's ps times out.
+_PS_KEEP_S = 15.0
+_PS_FAILURE_LOG_EVERY_S = 60.0
 _lock = threading.Lock()
 _snapshot_cache: tuple[float, dict[int, ProcessInfo] | None] | None = None
+# (monotonic time, table) from the last ps that succeeded.
+_last_table: tuple[float, dict[int, ProcessInfo]] | None = None
+_failure_logged_at: float | None = None
 # Inside pinned_snapshot(): the table the block took, in a list its context
 # copies share.
 _pinned: ContextVar[list[dict[int, ProcessInfo] | None]] = ContextVar("pinned_process_snapshot")
@@ -83,7 +96,7 @@ def _take_snapshot() -> dict[int, ProcessInfo] | None:
             check=True,
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=_PS_TIMEOUT_S,
             env=ps_env(),
         )
     except (OSError, subprocess.SubprocessError):
@@ -107,7 +120,7 @@ def pinned_snapshot():
 def process_snapshot() -> dict[int, ProcessInfo] | None:
     """The system process table: the pinned one inside pinned_snapshot(),
     else the last one while under _PS_TTL_S old, else a fresh `ps`."""
-    global _snapshot_cache
+    global _snapshot_cache, _last_table, _failure_logged_at
     pinned = _pinned.get(None)
     if pinned:
         return pinned[-1]
@@ -120,7 +133,20 @@ def process_snapshot() -> dict[int, ProcessInfo] | None:
             # Stamped when ps returns, not when it started: a ps slower than the
             # TTL would otherwise be expired on arrival. Callers queued on the lock
             # read `now` before it, so they reuse this table.
-            _snapshot_cache = (time.monotonic(), snapshot)
+            returned_at = time.monotonic()
+            if snapshot is not None:
+                _last_table = (returned_at, snapshot)
+            else:
+                kept = _last_table if _last_table and returned_at - _last_table[0] <= _PS_KEEP_S else None
+                snapshot = kept[1] if kept else None
+                if _failure_logged_at is None or returned_at - _failure_logged_at >= _PS_FAILURE_LOG_EVERY_S:
+                    _failure_logged_at = returned_at
+                    log.warning(
+                        "ps failed or ran past %.0f s; %s",
+                        _PS_TIMEOUT_S,
+                        f"serving the table from {returned_at - kept[0]:.1f} s ago" if kept else "no process table",
+                    )
+            _snapshot_cache = (returned_at, snapshot)
     if pinned is not None:
         pinned.append(snapshot)
     return snapshot
@@ -196,7 +222,9 @@ def codex_process_for_pane(pane_id: str, pane_pid: int | str | None) -> bool | N
 
 def clear_caches() -> None:
     """Test/support hook; runtime callers normally rely on TTL/invalidation."""
-    global _snapshot_cache
+    global _snapshot_cache, _last_table, _failure_logged_at
     with _lock:
         _snapshot_cache = None
+        _last_table = None
+        _failure_logged_at = None
         _pane_cache.clear()

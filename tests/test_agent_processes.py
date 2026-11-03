@@ -1,4 +1,5 @@
 import contextvars
+import logging
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -143,6 +144,34 @@ def test_overlapping_pinned_blocks_each_keep_their_own_snapshot(monkeypatch, moc
     assert a_first is a_last
     assert b_first is b_last
     assert a_first is not b_first
+
+
+def test_a_failed_ps_serves_the_last_table_while_it_is_recent(monkeypatch, mocker, caplog):
+    clock = _Clock(monkeypatch)
+    good = ap.parse_ps_snapshot(PS)
+    take = mocker.patch.object(ap, "_take_snapshot", side_effect=[good, None, None])
+    assert ap.process_snapshot() is good
+    clock.now += ap._PS_KEEP_S - 1
+    with caplog.at_level(logging.WARNING, logger="periscope"):
+        assert ap.process_snapshot() is good
+        assert ap.process_snapshot() is good  # the kept table is cached like a fresh one
+        clock.now += ap._PS_TTL_S
+        assert ap.process_snapshot() is good
+    assert take.call_count == 3
+    assert len(caplog.records) == 1  # rate-limited
+
+
+def test_a_failed_ps_with_no_recent_table_is_no_opinion(monkeypatch, mocker):
+    clock = _Clock(monkeypatch)
+    mocker.patch.object(ap, "_take_snapshot", side_effect=[ap.parse_ps_snapshot(PS), None])
+    ap.process_snapshot()
+    clock.now += ap._PS_KEEP_S + 1
+    assert ap.process_snapshot() is None
+
+
+def test_a_failed_first_ps_is_no_opinion(mocker):
+    mocker.patch.object(ap, "_take_snapshot", return_value=None)
+    assert ap.process_snapshot() is None
 
 
 def test_codex_launched_by_absolute_path(mocker):
