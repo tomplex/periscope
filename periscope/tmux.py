@@ -60,8 +60,8 @@ _PANES_TTL_S = 1.0
 _panes_lock = threading.Lock()
 # (monotonic time, rows) from the last list_panes().
 _panes_snapshot: tuple[float, list[dict[str, str]]] | None = None
-# Inside pinned_snapshot(): the rows the block read, latest last, in a list its
-# context copies share.
+# Inside pinned_snapshot(): a one-slot box for the block's rows, replaced on
+# each read, shared by its context copies.
 _pinned_rows: ContextVar[list[list[dict[str, str]]]] = ContextVar("pinned_rows")
 _unparsed_logged = False
 
@@ -106,7 +106,7 @@ def list_panes() -> list[dict[str, str]]:
     _panes_snapshot = (time.monotonic(), rows)
     pinned = _pinned_rows.get(None)
     if pinned is not None:
-        pinned.append(rows)
+        pinned[:] = [rows]
     return rows
 
 
@@ -135,7 +135,7 @@ def panes_snapshot() -> list[dict[str, str]]:
             return list_panes()
         rows = _panes_snapshot[1]
     if pinned is not None:
-        pinned.append(rows)
+        pinned[:] = [rows]
     return rows
 
 
