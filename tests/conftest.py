@@ -88,11 +88,13 @@ def _no_live_session_scan(monkeypatch):
 @pytest.fixture(autouse=True)
 def _fresh_git_caches():
     """git_pr's per-path caches are module globals: an entry one test left
-    behind would answer the next test's read of the same path."""
+    behind would answer the next test's read of the same path, and a stale
+    one would start a real `_bg` git refresh thread."""
     from periscope import git_pr
 
     git_pr._git_cache.clear()
     git_pr._repo_identity_cache.clear()
+    git_pr._git_refreshing.clear()
 
 
 @pytest.fixture(autouse=True)

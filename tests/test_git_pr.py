@@ -9,14 +9,12 @@ import pytest
 
 from periscope import git_pr, gitutil
 from periscope.git_pr import (
-    _GIT_TTL,
     _ci_checks,
     _ci_glyph,
     _gh_run_state,
     _linked_pr_cache,
     _pr_cache,
     _signal_cache,
-    cached_git_state,
     git_signal_for,
     git_state_for,
     linear_ticket_fields,
@@ -360,32 +358,111 @@ def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypa
     assert subcommands() == ["status", "diff", "rev-parse", "remote"]
 
 
-def test_cached_git_state_uses_ttl(mocker):
-    """First call hits git_state_for; second call within TTL serves the cache."""
-    mock_inner = mocker.patch(
-        "periscope.git_pr.git_state_for",
-        return_value={"branch": "main", "git": "clean"},
-    )
-    cached_git_state("/foo")
-    cached_git_state("/foo")
-    assert mock_inner.call_count == 1
+@pytest.fixture
+def swr(monkeypatch, mocker):
+    """A fixed clock, no jitter, a fake git read, and no real refresh thread
+    (docs/testing.md): _bg is recorded, and a test runs the refresh itself."""
+    clock = [1000.0]
+    monkeypatch.setattr(git_pr, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(git_pr, "random", SimpleNamespace(uniform=lambda a, b: 0.0))
+    inner = mocker.patch("periscope.git_pr.git_state_for", return_value={"branch": "main", "git": "clean"})
+    bg = mocker.patch("periscope.git_pr._bg")
+    return SimpleNamespace(clock=clock, inner=inner, bg=bg)
 
 
-def test_cached_git_state_returns_none_for_empty_path():
-    assert cached_git_state("") is None
+def test_first_sight_reads_synchronously(swr):
+    # The pid resolver matches panes on (branch, cwd) after a tmux restart, so
+    # a cwd's first read can't come back without its branch.
+    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
+    swr.inner.assert_called_once_with("/foo")
+    swr.bg.assert_not_called()
 
 
-def test_cached_git_state_refetches_after_ttl(mocker):
-    """Two calls separated by more than _GIT_TTL hit git_state_for twice."""
-    mock_inner = mocker.patch(
-        "periscope.git_pr.git_state_for",
-        return_value={"branch": "main", "git": "clean"},
-    )
-    times = [1000.0, 1000.0 + _GIT_TTL + 1.0]
-    mocker.patch("periscope.git_pr.time.time", side_effect=times)
-    cached_git_state("/foo")
-    cached_git_state("/foo")
-    assert mock_inner.call_count == 2
+def test_fresh_entry_is_served_without_git(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 14
+    git_pr.cached_git_state("/foo")
+    assert swr.inner.call_count == 1
+    swr.bg.assert_not_called()
+
+
+def test_stale_entry_is_served_and_refreshed_once_in_the_background(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    swr.inner.return_value = {"branch": "feat", "git": "+1 -0"}
+    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
+    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
+    swr.bg.assert_called_once_with("git-state", git_pr._refresh_git_state, "/foo")
+    assert swr.inner.call_count == 1  # nothing ran on the request path
+
+
+def test_background_refresh_lands_with_the_longer_timeout(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    git_pr.cached_git_state("/foo")
+    swr.inner.return_value = {"branch": "feat", "git": "+1 -0"}
+    git_pr._refresh_git_state("/foo")
+    swr.inner.assert_called_with("/foo", timeout=git_pr._GIT_BG_TIMEOUT_S)
+    assert "/foo" not in git_pr._git_refreshing
+    assert git_pr.cached_git_state("/foo") == {"branch": "feat", "git": "+1 -0"}
+    swr.bg.assert_called_once()  # the landed entry is fresh again
+
+
+def test_a_failed_background_read_keeps_the_last_state(swr, tmp_path):
+    # A status that timed out says nothing new: keep what we had, retry at the
+    # next expiry.
+    path = str(tmp_path)
+    git_pr.cached_git_state(path)
+    swr.clock[0] += 16
+    git_pr.cached_git_state(path)
+    swr.inner.return_value = None
+    git_pr._refresh_git_state(path)
+    assert git_pr._git_cache[path] == (swr.clock[0] + git_pr._GIT_TTL, {"branch": "main", "git": "clean"})
+
+
+def test_a_vanished_cwd_clears(swr):
+    git_pr.cached_git_state("/no/such/dir")
+    swr.clock[0] += 16
+    git_pr.cached_git_state("/no/such/dir")
+    swr.inner.return_value = None
+    git_pr._refresh_git_state("/no/such/dir")
+    assert git_pr.cached_git_state("/no/such/dir") is None
+
+
+def test_a_refresh_that_raises_releases_the_path(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    git_pr.cached_git_state("/foo")
+    swr.inner.side_effect = OSError("git vanished")
+    with pytest.raises(OSError):
+        git_pr._refresh_git_state("/foo")
+    assert "/foo" not in git_pr._git_refreshing
+
+
+def test_a_refresh_that_cant_start_releases_the_path(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    swr.bg.side_effect = RuntimeError("can't start new thread")
+    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
+    assert "/foo" not in git_pr._git_refreshing
+    git_pr.cached_git_state("/foo")
+    assert swr.bg.call_count == 2  # the next read tries again
+
+
+def test_empty_path_is_none(swr):
+    assert git_pr.cached_git_state("") is None
+    swr.inner.assert_not_called()
+
+
+def test_expiry_is_jittered(monkeypatch, mocker):
+    # cwds first seen in one refresh must not all expire in the same later one.
+    monkeypatch.setattr(git_pr, "time", SimpleNamespace(time=lambda: 1000.0))
+    mocker.patch("periscope.git_pr.git_state_for", return_value=None)
+    for n in range(50):
+        git_pr.cached_git_state(f"/p{n}")
+    dues = [due for due, _ in git_pr._git_cache.values()]
+    assert all(1000.0 + 10 <= d <= 1000.0 + 20 for d in dues)
+    assert len(set(dues)) > 1
 
 
 def test_gh_run_state_maps_success_to_passed():

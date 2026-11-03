@@ -17,6 +17,7 @@ upward dependency that's acknowledged in the Stage B split spec.
 
 import json
 import os
+import random
 import re
 import shutil
 import threading
@@ -26,7 +27,7 @@ from typing import Any, TypedDict
 
 from periscope import config
 from periscope.gitutil import github_slug, resolve_repo
-from periscope.log import _bg
+from periscope.log import _bg, log
 from periscope.panes import list_windows
 from periscope.tmux import _run
 
@@ -36,7 +37,16 @@ _PR_TTL = 60.0
 # transition (a commit landing, a dirty count moving), and a supervisor peeking
 # twice in quick succession should see the second change.
 _SIGNAL_TTL = 5.0
+# ± this much on each entry's next refresh, so cwds first read in one refresh
+# don't all expire in the same later one.
+_GIT_JITTER_S = 5.0
+# The background read is off the request path, so it may wait longer on a
+# slow repo than the first-sight read does.
+_GIT_BG_TIMEOUT_S = 10.0
+# path -> (refresh due at, state)
 _git_cache: dict[str, tuple[float, dict | None]] = {}
+_git_refreshing: set[str] = set()
+_git_lock = threading.Lock()
 # A repo's root and its GitHub remote: re-read rarely, they change only when a
 # checkout is re-pointed.
 _REPO_IDENTITY_TTL_S = 600.0
@@ -142,16 +152,52 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
     }
 
 
+def _next_git_due() -> float:
+    return time.time() + _GIT_TTL + random.uniform(-_GIT_JITTER_S, _GIT_JITTER_S)
+
+
 def cached_git_state(path: str) -> dict | None:
+    """Stale-while-revalidate: the cached state at once, refreshed in the
+    background once due. A path seen for the first time is read synchronously:
+    the pid resolver matches panes on (branch, cwd) after a tmux restart
+    (pids._attach_git_then_resolve_pids), so a first-sight branch can't be
+    missing."""
     if not path:
         return None
-    now = time.time()
-    cached = _git_cache.get(path)
-    if cached and now - cached[0] < _GIT_TTL:
-        return cached[1]
+    with _git_lock:
+        cached = _git_cache.get(path)
+        if cached is not None:
+            if time.time() >= cached[0] and path not in _git_refreshing:
+                _git_refreshing.add(path)
+                try:
+                    _bg("git-state", _refresh_git_state, path)
+                except RuntimeError:
+                    # Thread.start fails when the process is out of threads:
+                    # release the path so a later read retries, and serve what
+                    # we have.
+                    _git_refreshing.discard(path)
+                    log.warning("git-state refresh for %s not started", path, exc_info=True)
+            return cached[1]
     data = git_state_for(path)
-    _git_cache[path] = (now, data)
+    with _git_lock:
+        _git_cache[path] = (_next_git_due(), data)
     return data
+
+
+def _refresh_git_state(path: str) -> None:
+    try:
+        data = git_state_for(path, timeout=_GIT_BG_TIMEOUT_S)
+        with _git_lock:
+            previous = _git_cache.get(path)
+            # Nothing back for a cwd that is still a directory is a status that
+            # timed out or failed far more often than a repo that stopped being
+            # one: keep the last state and retry at the next expiry.
+            if data is None and previous is not None and previous[1] is not None and os.path.isdir(path):
+                data = previous[1]
+            _git_cache[path] = (_next_git_due(), data)
+    finally:
+        with _git_lock:
+            _git_refreshing.discard(path)
 
 
 def git_signal_for(path: str) -> dict | None:
