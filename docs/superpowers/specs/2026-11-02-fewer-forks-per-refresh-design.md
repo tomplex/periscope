@@ -58,13 +58,13 @@ top_forks}` (last build, max over 60 s, last gap or null, total and the five lar
 
 **D3 — One tmux call per refresh.** `tmux.list_panes()` runs one `tmux list-panes -a -F <window fields + pane fields
 + pane_active>` through `_tmux_argv` (so it honours `PERISCOPE_TMUX_SOCKET`), fields separated by `\x1f` (a tab in a
-window name or path no longer shifts fields), and stores its rows as a snapshot; `tmux.recent_panes()` serves that
+window name or path no longer shifts fields), and stores its rows as a snapshot; `tmux.panes_snapshot()` serves that
 snapshot while it is under 1 s old, under a lock, else calls `list_panes`. The snapshot lives in `tmux.py` so
 `session_status` keeps importing only leaf modules.
 `list_windows` always calls `list_panes` — never the snapshot: `open_ops` reads a window it just created straight
 back, and `pids` stamps `@periscope_id` with a bare `tmux set-option`, so a cached answer would show a just-stamped
 window unstamped and re-mint it (#11, #13). It keeps its exact row shape, built from each window's active pane.
-`all_pane_ids` and `session_status._tmux_pane_pids` read `recent_panes`, so a refresh forks tmux once, at its
+`all_pane_ids` and `session_status._tmux_pane_pids` read `panes_snapshot`, so a refresh forks tmux once, at its
 `list_windows`. Invariants kept: focus from `#{window_active}`, never `#{window_activity}` (#1); `#{window_id}` and
 `#{@periscope_id}` carried for stamping by window id (#11); the full window roster reaches
 `_attach_git_then_resolve_pids` (#13, #19); `all_pane_ids` still includes a split window's background panes, and its
@@ -116,7 +116,7 @@ re-read on every call). `tmux._run` takes an `env`.
 - `periscope/app.py`: installs the hook in the lifespan.
 - `periscope/routes/state.py`, `periscope/state_hub.py`: build duration, broadcast gap reset on idle, the `refresh`
   block (D2). `periscope/routes/healthz.py`: the full `forks` map.
-- `periscope/tmux.py`: `list_panes` / `recent_panes` and the `\x1f`-separated format (D3); `_run(env=)` (D6).
+- `periscope/tmux.py`: `list_panes` / `panes_snapshot` and the `\x1f`-separated format (D3); `_run(env=)` (D6).
 - `periscope/panes.py`: `list_windows` and `all_pane_ids` read them (D3).
 - `periscope/agent_processes.py`: `args`-only `ps` under `LC_ALL=C`; `ProcessInfo.exe` from argv[0] (D4).
 - `periscope/session_status.py`: `_tmux_pane_pids`, `proc_table`, `_claude_procs` read the shared snapshots;

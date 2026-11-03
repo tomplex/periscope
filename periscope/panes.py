@@ -389,7 +389,7 @@ def all_pane_ids() -> set[str]:
     split window's background panes are invisible to it; channel-alert GC keys
     on pane id, so using the window set there would delete a background Claude
     pane's alerts every poll. This is the full set."""
-    return {p["pane_id"] for p in tmux.recent_panes()}
+    return {p["pane_id"] for p in tmux.panes_snapshot()}
 
 
 def list_windows() -> list[dict]:

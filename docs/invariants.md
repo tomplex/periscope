@@ -198,7 +198,7 @@ These are the non-obvious behaviors worth preserving:
     window id. `list_windows` always forks a fresh `list-panes` — a stamp or
     a new window must read back at once — and only `all_pane_ids` and
     session_status's pane → pid map read the shared 1 s snapshot
-    (`tmux.recent_panes`).
+    (`tmux.panes_snapshot`).
 
 12. **Rebind eligibility (`_REBIND_TTL_S`, 15 min) is NOT GC retention
     (`_PID_TTL_S`, 30 days).** Rebind exists so persisted state reattaches

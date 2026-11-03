@@ -312,7 +312,7 @@ def test_an_overshooting_row_is_skipped_and_logged_once(monkeypatch, caplog):
     assert len(caplog.records) == 1
 
 
-def test_recent_panes_reuses_a_snapshot_under_a_second_old(monkeypatch):
+def test_panes_snapshot_reuses_a_snapshot_under_a_second_old(monkeypatch):
     clock = [100.0]
     calls = []
     monkeypatch.setattr(tmux_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]))
@@ -320,8 +320,8 @@ def test_recent_panes_reuses_a_snapshot_under_a_second_old(monkeypatch):
     monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or _ROW + "\n")
     tmux_mod.list_panes()
     clock[0] += 0.5
-    assert [p["pane_id"] for p in tmux_mod.recent_panes()] == ["%5"]
+    assert [p["pane_id"] for p in tmux_mod.panes_snapshot()] == ["%5"]
     assert len(calls) == 1
     clock[0] += 0.6
-    tmux_mod.recent_panes()
+    tmux_mod.panes_snapshot()
     assert len(calls) == 2

@@ -72,8 +72,8 @@ def _log_skipped_row(buf_lines: list[str]) -> None:
 
 def list_panes() -> list[dict[str, str]]:
     """Every pane as {field: value} over PANE_FIELDS, from a fresh
-    `list-panes -a` that becomes the snapshot recent_panes serves. [] when
-    tmux has no server."""
+    `list-panes -a` that becomes the snapshot `panes_snapshot()` serves. []
+    when tmux has no server."""
     global _panes_snapshot
     raw_lines = tmux("list-panes", "-a", "-F", _PANES_FMT).split("\n")
     if raw_lines and raw_lines[-1] == "":
@@ -102,7 +102,7 @@ def list_panes() -> list[dict[str, str]]:
     return rows
 
 
-def recent_panes() -> list[dict[str, str]]:
+def panes_snapshot() -> list[dict[str, str]]:
     """list_panes' rows if they are under _PANES_TTL_S old, else a fresh call.
     Locked, so a refresh's fan-out threads wait for one fork instead of each
     forking."""

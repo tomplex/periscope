@@ -160,7 +160,7 @@ def _tmux_pane_pids() -> dict[str, int]:
     from the refresh's list-panes snapshot. Empty on any tmux failure (no
     server, tmux not installed)."""
     try:
-        rows = tmux.recent_panes()
+        rows = tmux.panes_snapshot()
     except (OSError, subprocess.SubprocessError):
         return {}
     panes: dict[str, int] = {}
