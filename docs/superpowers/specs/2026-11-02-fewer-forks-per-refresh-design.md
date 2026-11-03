@@ -239,9 +239,6 @@ re-read on every call). `tmux._run` takes an `env`.
   401 re-read (at most a minute).
 - A token every host rejects (the keyring's own token revoked) makes each `gh` call fork twice — the call, then its
   tokenless retry, both 401ing — until the user logs in again.
-- A `\x1f` in a window name or path still drops that pane's list-panes row, and the full-roster passes then read the
-  window as gone (its `pane_tracks` row pruned, #19; `pane_sessions`/`pane_status` pruned at boot); newlines are
-  rejoined.
 - The kept `ps` table (≤15 s old, on a failed `ps`) can show a just-exited claude as still live and a just-started one
   as absent for that long; session ids still come from `session_status`'s own 1 s index, not the `ps` table.
 - `descendants` rebuilds its ppid → children map from the whole snapshot on every call — about panes × processes
