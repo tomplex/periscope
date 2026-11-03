@@ -66,17 +66,18 @@ def _no_live_session_scan(monkeypatch):
     It resolves a pane to its running claude by walking the process tree
     (`tmux list-panes` + `ps`), and it runs on every /api/state poll — so any
     test that builds a window view would otherwise fork against the developer's
-    real tmux server and read their real ~/.claude/sessions. Stubbing the tmux
-    seam makes pane_claude_pids() return {} by its own no-panes path, and an
-    unexpiring empty process snapshot answers proc_table() / _claude_procs()
-    without forking `ps`; every test falls back to the pane_sessions row unless
-    it opts in. Tests of the live path patch these same seams themselves, which
-    overrides this."""
+    real tmux server and read their real ~/.claude/sessions. An unexpiring
+    empty list-panes snapshot makes pane_claude_pids() return {} by its own
+    no-panes path (a test's own list_windows() replaces it, as a refresh
+    would), and an unexpiring empty process snapshot answers proc_table() /
+    _claude_procs() without forking `ps`; every test falls back to the
+    pane_sessions row unless it opts in. Tests of the live path patch these
+    same seams themselves, which overrides this."""
     try:
-        from periscope import agent_processes, session_status
+        from periscope import agent_processes, session_status, tmux
     except ImportError:
         return
-    monkeypatch.setattr(session_status, "_tmux_pane_pids", dict, raising=False)
+    monkeypatch.setattr(tmux, "_panes_snapshot", (math.inf, []), raising=False)
     monkeypatch.setattr(session_status, "_pane_pids_cache", None, raising=False)
     monkeypatch.setattr(agent_processes, "_snapshot_cache", (math.inf, {}), raising=False)
     # pane_config_dirs' 15s TTL outlives a test — a populated cache would bleed

@@ -17,8 +17,9 @@ import re
 import time
 from itertools import dropwhile
 
+from periscope import tmux
 from periscope.config import INPUT_CTL_SESSION
-from periscope.tmux import _ANSI_SGR_RE, tmux
+from periscope.tmux import _ANSI_SGR_RE
 
 # Server-tracked "last user-focused" per target.
 # Tmux's window_activity bumps on any output (Claude streaming, build logs, dev
@@ -383,68 +384,54 @@ API_ERROR_RE = re.compile(r"^\s*[⎿⏺]\s+API Error:")
 
 
 def all_pane_ids() -> set[str]:
-    """Every live pane id across all sessions. `list_windows` reports one pane
-    per window (the active one — `list-windows -F #{pane_id}` resolves against
-    the active pane), so a split window's background panes are invisible to it.
-    Channel-alert GC keys on pane id, so using the window set there would delete
-    a background Claude pane's alerts every poll. This is the full set."""
-    out = tmux("list-panes", "-a", "-F", "#{pane_id}")
-    return {line.strip() for line in out.split("\n") if line.strip()}
+    """Every live pane id across all sessions, from the refresh's list-panes
+    snapshot. `list_windows` keeps one pane per window (the active one), so a
+    split window's background panes are invisible to it; channel-alert GC keys
+    on pane id, so using the window set there would delete a background Claude
+    pane's alerts every poll. This is the full set."""
+    return {p["pane_id"] for p in tmux.recent_panes()}
 
 
 def list_windows() -> list[dict]:
-    out = tmux(
-        "list-windows",
-        "-a",
-        "-F",
-        "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{@periscope_id}\t#{pane_id}\t#{window_activity}\t#{window_id}\t#{pane_pid}\t#{pane_current_command}\t#{@periscope_opened}",
-    )
+    """One row per window, read off its active pane — the pane `pane_*`
+    resolves against in `list-windows` — from a FRESH `list-panes -a`: callers
+    that just created or stamped a window read it back at once, so this never
+    serves the snapshot. The call refreshes the snapshot that all_pane_ids and
+    session_status read for the rest of the refresh."""
     rows = []
-    for line in out.strip().split("\n"):
-        if not line:
-            continue
-        parts = line.split("\t")
-        # pane_current_path is the active pane's cwd; safe even when missing.
-        # @periscope_id is empty for unmanaged windows — `resolve_pids` mints
-        # one on first sighting and stamps it onto the window.
-        s, idx, name, active = parts[:4]
+    for p in tmux.list_panes():
         # Hide periscope's internal session from every caller — the
         # control-mode input client's session is scaffolding, not
         # user-visible tmux state.
-        if s == INPUT_CTL_SESSION:
+        if p["pane_active"] != "1" or p["session_name"] == INPUT_CTL_SESSION:
             continue
-        cwd = parts[4] if len(parts) > 4 else ""
-        pid_raw = parts[5] if len(parts) > 5 else ""
-        # pane_id (%N) is tmux's stable handle for the active pane within the
-        # current server lifetime — the addressing key for channel pushes.
-        pane_id = parts[6] if len(parts) > 6 else ""
-        # window_activity is tmux's last-output timestamp. Used ONLY as a
-        # skip-recapture hint in window_view; it must NEVER feed focus
-        # (invariant #1 — focus is keyed on window_active above).
-        activity = int(parts[7]) if len(parts) > 7 and parts[7] else 0
-        # window_id (@N) is tmux's stable handle for the WINDOW. Unlike
-        # session:index it survives move-window/renumbering, so it is the only
-        # safe target for writing @periscope_id back (see pids._resolve_one).
-        window_id = parts[8] if len(parts) > 8 else ""
-        pane_pid = parts[9] if len(parts) > 9 else ""
-        current_command = parts[10] if len(parts) > 10 else ""
-        # "<epoch> <dir>" on windows an open created (pids.stamp_new_window);
-        # open_ops trusts it over the live cwd while the pane is fresh.
-        opened = parts[11] if len(parts) > 11 else ""
         rows.append(
             {
-                "session": s,
-                "index": int(idx),
-                "name": name,
-                "active": active == "1",
-                "cwd": cwd,
-                "pid_raw": pid_raw,
-                "pane_id": pane_id,
-                "activity": activity,
-                "window_id": window_id,
-                "pane_pid": pane_pid,
-                "current_command": current_command,
-                "opened": opened,
+                "session": p["session_name"],
+                "index": int(p["window_index"]),
+                "name": p["window_name"],
+                "active": p["window_active"] == "1",
+                # The active pane's cwd.
+                "cwd": p["pane_current_path"],
+                # Empty for unmanaged windows — `resolve_pids` mints one on
+                # first sighting and stamps it onto the window.
+                "pid_raw": p["@periscope_id"],
+                # pane_id (%N) is tmux's stable handle for the active pane within
+                # the current server lifetime — the addressing key for channel pushes.
+                "pane_id": p["pane_id"],
+                # window_activity is tmux's last-output timestamp. Used ONLY as a
+                # skip-recapture hint in window_view; it must NEVER feed focus
+                # (invariant #1 — focus is keyed on window_active above).
+                "activity": int(p["window_activity"] or 0),
+                # window_id (@N) is tmux's stable handle for the WINDOW. Unlike
+                # session:index it survives move-window/renumbering, so it is the
+                # only safe target for writing @periscope_id back (see pids._resolve_one).
+                "window_id": p["window_id"],
+                "pane_pid": p["pane_pid"],
+                "current_command": p["pane_current_command"],
+                # "<epoch> <dir>" on windows an open created (pids.stamp_new_window);
+                # open_ops trusts it over the live cwd while the pane is fresh.
+                "opened": p["@periscope_opened"],
             }
         )
     return rows

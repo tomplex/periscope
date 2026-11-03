@@ -3,6 +3,7 @@
 working/needs-input/idle signal."""
 
 import json
+import subprocess
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import periscope.session_status as ss
+import periscope.tmux as tmux_mod
 from periscope import agent_processes
 
 
@@ -546,3 +548,30 @@ def test_pane_efforts_reads_the_launch_effort_from_argv(mocker):
         ),
     )
     assert ss.pane_efforts() == {"%1": "xhigh", "%3": "low"}
+
+
+# ── pane -> root pid comes off the list-panes snapshot ───────────────────
+
+
+def test_tmux_pane_pids_read_the_snapshot(monkeypatch):
+    rows = [{"pane_id": "%5", "pane_pid": "4241"}, {"pane_id": "%6", "pane_pid": "4242"}]
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", (time.monotonic(), rows))
+    assert ss._tmux_pane_pids() == {"%5": 4241, "%6": 4242}
+
+
+def test_tmux_pane_pids_empty_without_tmux(monkeypatch):
+    def no_tmux(*args):
+        raise FileNotFoundError("tmux")
+
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    monkeypatch.setattr(tmux_mod, "tmux", no_tmux)
+    assert ss._tmux_pane_pids() == {}
+
+
+def test_tmux_pane_pids_use_the_configured_socket(monkeypatch, mocker):
+    # The old bare `tmux list-panes` ignored PERISCOPE_TMUX_SOCKET.
+    monkeypatch.setenv("PERISCOPE_TMUX_SOCKET", "periscope-x")
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    run = mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+    ss._tmux_pane_pids()
+    assert run.call_args.args[0][:3] == ["tmux", "-L", "periscope-x"]

@@ -12,6 +12,8 @@ inputs fall back to load-buffer + paste-buffer over stdin to dodge ARG_MAX.
 import os
 import re
 import subprocess
+import threading
+import time
 import uuid
 
 from periscope import config
@@ -28,6 +30,68 @@ def _tmux_argv(*args: str) -> list[str]:
 def tmux(*args: str) -> str:
     r = subprocess.run(_tmux_argv(*args), capture_output=True, text=True, timeout=5)
     return r.stdout
+
+
+# Fields of every `list-panes -a` row. window_* and the @periscope_* window
+# options resolve against the pane's window, so one call answers both the
+# per-window questions (panes.list_windows reads each window's active pane) and
+# the per-pane ones (panes.all_pane_ids, session_status's pane -> pid map).
+PANE_FIELDS = (
+    "session_name",
+    "window_index",
+    "window_name",
+    "window_active",
+    "pane_current_path",
+    "@periscope_id",
+    "pane_id",
+    "window_activity",
+    "window_id",
+    "pane_pid",
+    "pane_current_command",
+    "@periscope_opened",
+    "pane_active",
+)
+# \x1f (unit separator) between fields: tmux prints a tab inside a window name
+# or path verbatim, which a tab separator would split out of shape.
+_PANES_FMT = "\x1f".join(f"#{{{f}}}" for f in PANE_FIELDS)
+_PANES_TTL_S = 1.0
+_panes_lock = threading.Lock()
+# (monotonic time, rows) from the last list_panes().
+_panes_snapshot: tuple[float, list[dict[str, str]]] | None = None
+_unparsed_logged = False
+
+
+def list_panes() -> list[dict[str, str]]:
+    """Every pane as {field: value} over PANE_FIELDS, from a fresh
+    `list-panes -a` that becomes the snapshot recent_panes serves. [] when
+    tmux has no server."""
+    global _panes_snapshot, _unparsed_logged
+    rows = []
+    for line in tmux("list-panes", "-a", "-F", _PANES_FMT).split("\n"):
+        if not line:
+            continue
+        fields = line.split("\x1f")
+        if len(fields) == len(PANE_FIELDS):
+            rows.append(dict(zip(PANE_FIELDS, fields, strict=True)))
+        elif not _unparsed_logged:
+            # A newline in a window name or path splits its pane's row in two;
+            # the pane drops out of this snapshot. Said once per process.
+            from periscope.log import log
+
+            log.warning("list-panes row skipped (a newline in a window name or path?): %r", line)
+            _unparsed_logged = True
+    _panes_snapshot = (time.monotonic(), rows)
+    return rows
+
+
+def recent_panes() -> list[dict[str, str]]:
+    """list_panes' rows if they are under _PANES_TTL_S old, else a fresh call.
+    Locked, so a refresh's fan-out threads wait for one fork instead of each
+    forking."""
+    with _panes_lock:
+        if _panes_snapshot and time.monotonic() - _panes_snapshot[0] < _PANES_TTL_S:
+            return _panes_snapshot[1]
+        return list_panes()
 
 
 def _run(cmd: list[str], cwd: str | None = None, timeout: float = 3.0) -> tuple[int, str]:

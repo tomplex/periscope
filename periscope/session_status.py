@@ -24,8 +24,8 @@ the caller falls back to scraping. The schema is undocumented Claude Code
 internals (version-tagged), so every read degrades to None on a shape change.
 
 Imports only stdlib and periscope's leaf modules (config, resources,
-agent_processes), never the resolver layer, so turns.py / window_view.py can
-depend on it freely."""
+agent_processes, tmux), never the resolver layer, so turns.py / window_view.py
+can depend on it freely."""
 
 import contextlib
 import json
@@ -35,7 +35,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from periscope import agent_processes, config, resources
+from periscope import agent_processes, config, resources, tmux
 
 _SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
@@ -156,24 +156,17 @@ def proc_table() -> tuple[dict[int, list[int]], dict[int, str]]:
 
 
 def _tmux_pane_pids() -> dict[str, int]:
-    """tmux pane id -> the pid of the pane's root process (usually its shell).
-    Empty on any tmux failure (no server, tmux not installed)."""
+    """tmux pane id -> the pid of the pane's root process (usually its shell),
+    from the refresh's list-panes snapshot. Empty on any tmux failure (no
+    server, tmux not installed)."""
     try:
-        out = subprocess.run(
-            ["tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
+        rows = tmux.recent_panes()
     except (OSError, subprocess.SubprocessError):
         return {}
     panes: dict[str, int] = {}
-    for line in out.splitlines():
-        pane_id, tab, pid_raw = line.partition("\t")
-        if not tab:
-            continue
+    for p in rows:
         with contextlib.suppress(ValueError):
-            panes[pane_id] = int(pid_raw)
+            panes[p["pane_id"]] = int(p["pane_pid"])
     return panes
 
 
@@ -189,9 +182,9 @@ def pane_claude_pids() -> dict[str, int]:
     uses. Deliberately NOT the 15s of window_view's account scan: that scan
     reads process env, which is immutable for a process's lifetime, whereas
     this map feeds a pane's CURRENT session id — which rotates mid-process —
-    and a pid can be recycled by an unrelated claude. One /api/state poll
-    resolves ~20 panes, so a one-second window already collapses the cost to
-    two forks per poll; a longer one buys nothing but staleness.
+    and a pid can be recycled by an unrelated claude. The pane and process
+    tables it walks are the refresh's shared tmux and ps snapshots; a longer
+    window buys nothing but staleness.
     """
     global _pane_pids_cache
     now = time.time()

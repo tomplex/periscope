@@ -4,8 +4,11 @@ Tests don't require a live tmux. We monkeypatch subprocess.run to assert
 the wrappers compose argv correctly and return what they claim to return.
 """
 
+import logging
 import subprocess
+from types import SimpleNamespace
 
+import periscope.tmux as tmux_mod
 from periscope import config
 from periscope.tmux import (
     _ANSI_SGR_RE,
@@ -235,3 +238,49 @@ def test_window_identity_empty_on_unstamped(mocker):
 
     mocker.patch.object(tmux_mod, "tmux", return_value="\t%7\t@9\n")
     assert tmux_mod.window_identity("s:1") == ("", "%7", "@9")
+
+
+_FIELDS = ["main", "0", "shell", "1", "/home/tom", "", "%5", "1717250000", "@1", "4242", "zsh", "", "1"]
+_ROW = "\x1f".join(_FIELDS)
+
+
+def test_list_panes_asks_for_every_field_in_one_call(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or "")
+    tmux_mod.list_panes()
+    assert calls == [("list-panes", "-a", "-F", "\x1f".join(f"#{{{f}}}" for f in tmux_mod.PANE_FIELDS))]
+
+
+def test_list_panes_reads_every_field(monkeypatch):
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: _ROW + "\n")
+    assert tmux_mod.list_panes() == [dict(zip(tmux_mod.PANE_FIELDS, _FIELDS, strict=True))]
+
+
+def test_a_tab_in_a_window_name_is_kept(monkeypatch):
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: _ROW.replace("shell", "tab\tname") + "\n")
+    assert tmux_mod.list_panes()[0]["window_name"] == "tab\tname"
+
+
+def test_a_row_a_newline_split_is_skipped_and_logged_once(monkeypatch, caplog):
+    broken = _ROW.replace("shell", "new\nline")
+    monkeypatch.setattr(tmux_mod, "_unparsed_logged", False)
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: broken + "\n" + _ROW.replace("%5", "%6") + "\n")
+    with caplog.at_level(logging.WARNING, logger="periscope"):
+        assert [p["pane_id"] for p in tmux_mod.list_panes()] == ["%6"]
+        tmux_mod.list_panes()
+    assert len(caplog.records) == 1
+
+
+def test_recent_panes_reuses_a_snapshot_under_a_second_old(monkeypatch):
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(tmux_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or _ROW + "\n")
+    tmux_mod.list_panes()
+    clock[0] += 0.5
+    assert [p["pane_id"] for p in tmux_mod.recent_panes()] == ["%5"]
+    assert len(calls) == 1
+    clock[0] += 0.6
+    tmux_mod.recent_panes()
+    assert len(calls) == 2
