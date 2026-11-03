@@ -58,26 +58,26 @@ hover-only tooltip) — a `buildStats` signal in `store.js`, set by `poll.js`, r
 `resources.js`, styled in `static/styles.css`. A build slower than 3 s logs a warning naming its top forkers, at
 most once a minute.
 
-**D3 — One tmux call per refresh.** `tmux.list_panes()` runs one `tmux list-panes -a -F <window fields + pane fields
+**D3 — One tmux call per poll.** `tmux.list_panes()` runs one `tmux list-panes -a -F <window fields + pane fields
 + pane_active>` through `_tmux_argv` (so it honours `PERISCOPE_TMUX_SOCKET`), fields separated by `\x1f` (a tab in a
 window name or path no longer shifts fields), and stores its rows as a snapshot; `tmux.panes_snapshot()` serves that
-snapshot while it is under 1 s old, under a lock, else calls `list_panes`. Inside a refresh it serves the rows the
-refresh's `list_windows` read, however long the refresh runs: `build_state` opens `tmux.pinned_snapshot()` (a context
-variable, copied into each fan-out worker), because THI-450 measured refreshes of 3–13 s under load, where a 1 s TTL
-has readers late in the refresh fork again and read different rows from the rest. A refresh running alongside another
+snapshot while it is under 1 s old, under a lock, else calls `list_panes`. Inside a poll it serves the rows that
+poll's `list_windows` read, however long the poll runs: `build_state` opens `tmux.pinned_snapshot()` (a context
+variable, copied into each fan-out worker), because THI-450 measured polls of 3–13 s under load, where a 1 s TTL
+has readers late in the poll fork again and read different rows from the rest. A poll running alongside another
 (the hub and a REST poll) pins its own rows, so neither reads the other's. The snapshot lives in `tmux.py` so
 `session_status` keeps importing only leaf modules.
 `list_windows` always calls `list_panes` — never the snapshot: `open_ops` reads a window it just created straight
 back, and `pids` stamps `@periscope_id` with a bare `tmux set-option`, so a cached answer would show a just-stamped
 window unstamped and re-mint it (#11, #13). It keeps its exact row shape, built from each window's active pane.
-`all_pane_ids` and `session_status._tmux_pane_pids` read `panes_snapshot`, so a refresh forks tmux once, at its
+`all_pane_ids` and `session_status._tmux_pane_pids` read `panes_snapshot`, so a poll forks tmux once, at its
 `list_windows`. Invariants kept: focus from `#{window_active}`, never `#{window_activity}` (#1); `#{window_id}` and
 `#{@periscope_id}` carried for stamping by window id (#11); the full window roster reaches
 `_attach_git_then_resolve_pids` (#13, #19); `all_pane_ids` still includes a split window's background panes, and its
 caller still skips GC on an empty result.
 
-**D4 — One process table per refresh.** `agent_processes.process_snapshot()` (pid, ppid, start time, state, argv;
-locked; pinned for a refresh by `agent_processes.pinned_snapshot()` as D3 pins the rows, else 1 s from when `ps`
+**D4 — One process table per poll.** `agent_processes.process_snapshot()` (pid, ppid, start time, state, argv;
+locked; pinned for a poll by `agent_processes.pinned_snapshot()` as D3 pins the rows, else 1 s from when `ps`
 returns) becomes the only `ps` table. It runs `ps -axo pid=,ppid=,lstart=,state=,args=` with `LC_ALL=C`, and
 `ProcessInfo.exe` is argv[0] — the executable as launched — replacing the truncated `comm`, so every caller
 (`_is_codex_executable`, `is_claude_executable`) sees a full path. `session_status.command_lines` (pid → argv) and
@@ -88,11 +88,11 @@ the walk is rebuilt when the pane map or the table changes rather than on a cloc
 environment scan stays: process environment has no other source. Both snapshots are locked, so the fan-out can no
 longer stampede them.
 A `ps` that fails or runs past 2 s serves the last table while it is under 15 s old (a warning at most once a
-minute), else `None`. THI-450 measured `ps` at 0.5–1.7 s and refreshes of 3–13 s at load average 50–70: the 2 s
-timeout keeps a slow `ps` from stretching the refresh further, and 15 s covers the previous refresh's table when the
+minute), else `None`. THI-450 measured `ps` at 0.5–1.7 s and polls of 3–13 s at load average 50–70: the 2 s
+timeout keeps a slow `ps` from stretching the poll further, and 15 s covers the previous poll's table when the
 next one's `ps` times out.
 
-**D5 — Git: two commands per refresh, refreshed in the background.** `git_state_for` runs
+**D5 — Git: two commands per poll, refreshed in the background.** `git_state_for` runs
 `git --no-optional-locks status --porcelain=v2 --branch --untracked-files=normal` (branch, detached sha, ahead count
 from `# branch.ab`, untracked entries) and `git --no-optional-locks diff-index -M --shortstat HEAD` (line counts)
 instead of seven commands. `status` takes no lock under `--no-optional-locks`; the line counts come from
@@ -109,8 +109,8 @@ unchanged.
 deduplicated background refresh through `_bg`; each entry's next refresh is 15 s ± 5 s (jittered, so cwds warmed
 together don't expire together). The background read gets a 10 s git timeout (it is off the request path; the
 synchronous read keeps 3 s). A background read that comes back empty for a cwd that is still a directory keeps the
-previous entry and retries at the next expiry — a timed-out status says nothing new. A path whose refresh can't start
-or crashes is released, never left marked in flight. A cwd seen for the first time is still filled synchronously:
+previous entry and retries at the next expiry — a timed-out status says nothing new. A background refresh that raises
+releases its path, never left marked in flight. A cwd seen for the first time is still filled synchronously:
 the pid resolver matches panes on `(branch, cwd)` after a tmux restart (`_attach_git_then_resolve_pids`), so `branch`
 must not be missing on first sight. The cache gets a lock.
 
@@ -178,7 +178,7 @@ re-read on every call). `tmux._run` takes an `env`.
   on purpose); unborn; bare container, cwd inside `.git`, plain bare repo; `--no-optional-locks` on both; two forks
   once identity is cached; stale-while-revalidate (stale returns cached and refreshes once; first sight fills
   synchronously; jittered expiry; longer background timeout; a failed background read keeps the entry; a vanished cwd
-  clears; a refresh that can't start or raises releases the path).
+  clears; a background refresh that raises releases the path).
 - `tests/test_gh.py`: the environment carries `GH_TOKEN`/`GH_TELEMETRY`/`GH_NO_UPDATE_NOTIFIER`; the token is reused
   for 10 minutes; a failed read is retried after 60 s; each 401 shape re-reads, at most once per 60 s; other failures
   keep the token; no token → calls still run; no `["gh", …]` argv outside `gh.py`.
@@ -230,11 +230,20 @@ re-read on every call). `tmux._run` takes an `env`.
   in-memory feed (the activity record keeps it regardless); an alert older than the poll's start is dropped as
   before. An alert needs the pane's Claude to start and run a turn: longer than an idle poll, not certainly longer
   than a 13 s loaded one — the spared window covers the case where it is.
-- One `ps` table per refresh (2 s timeout) feeds session state, the pane → claude map, codex detection and
+- One `ps` table per poll (2 s timeout) feeds session state, the pane → claude map, codex detection and
   resources. `ps` takes ~50 ms over ~640 processes idle and 0.5–1.7 s at load average 50–70 (THI-450), so it can
   time out under load; the last table, if under 15 s old, stands in, and a claude that exited or started since reads
-  as it did then. Past 15 s all four blank for one refresh, each falling back on its own (scraped state, no claude,
+  as it did then. Past 15 s all four blank for one poll, each falling back on its own (scraped state, no claude,
   none).
 - `gh auth token` prints the token gh would use for github.com; a token revoked within the 10 minutes fails until the
   401 re-read (at most a minute).
+- A token every host rejects (the keyring's own token revoked) makes each `gh` call fork twice — the call, then its
+  tokenless retry, both 401ing — until the user logs in again.
+- A `\x1f` in a window name or path still drops that pane's list-panes row, and the full-roster passes then read the
+  window as gone (its `pane_tracks` row pruned, #19; `pane_sessions`/`pane_status` pruned at boot); newlines are
+  rejoined.
+- The kept `ps` table (≤15 s old, on a failed `ps`) can show a just-exited claude as still live and a just-started one
+  as absent for that long; session ids still come from `session_status`'s own 1 s index, not the `ps` table.
+- `descendants` rebuilds its ppid → children map from the whole snapshot on every call — about panes × processes
+  appends per poll — measured cheap.
 - The audit hook's per-event cost (a string compare) is negligible against periscope's file I/O.
