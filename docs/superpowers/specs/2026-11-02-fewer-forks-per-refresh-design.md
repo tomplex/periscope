@@ -179,9 +179,10 @@ re-read on every call). `tmux._run` takes an `env`.
 - With `--no-optional-locks` on both commands nothing writes a refreshed index back, so racily-clean files are
   re-hashed on each refresh until the user's own git command rewrites the index. Accepted; in a repo with a clean
   filter (e.g. git-crypt) that's one filter process per stat-dirty file per refresh, until then.
-- A failed identity read (`resolve_repo` falls back to the cwd, `github_slug` to `None`, e.g. on its 3 s timeout) is
-  cached for the full 10-minute identity TTL, so in that rare case an untagged pane sits in a cwd-keyed repo track
-  and PR links lack a slug for up to 10 minutes; the identity reads don't take the background refresh's longer
+- The identity cache stores an entry only once `github_slug` finds one, the same rule `reviews._GH_SLUG` already
+  applies to this value. A repo with no GitHub remote re-reads its identity on each git refresh — two forks per
+  ~15 s, as before this change — and a failed read (e.g. a 3 s git timeout) is retried next refresh instead of
+  carrying the gap for the full 10-minute TTL; the identity reads don't take the background refresh's longer
   timeout.
 - A cwd with no work tree reads `clean` with the HEAD branch (`?` when detached); a plain bare repo now reads that way
   too (today's read gave its branch and a garbage `?1` from `ls-files`' error text).

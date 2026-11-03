@@ -151,10 +151,15 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
     # basename for human-readable display in the rail.
     now = time.time()
     identity = _repo_identity_cache.get(path)
-    if identity is None or now - identity[0] >= _REPO_IDENTITY_TTL_S:
-        identity = (now, resolve_repo(path), github_slug(path))
-        _repo_identity_cache[path] = identity
-    _, repo_key, repo_slug = identity
+    if identity is not None and now - identity[0] < _REPO_IDENTITY_TTL_S:
+        _, repo_key, repo_slug = identity
+    else:
+        repo_key, repo_slug = resolve_repo(path), github_slug(path)
+        # Only a found slug is cached: a None can be a 3 s git timeout on a
+        # slow read, and would otherwise strip every PR link from the repo
+        # for the full TTL instead of just this refresh.
+        if repo_slug is not None:
+            _repo_identity_cache[path] = (now, repo_key, repo_slug)
     return {
         "branch": branch,
         "git": state,

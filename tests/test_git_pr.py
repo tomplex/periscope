@@ -106,6 +106,29 @@ def test_git_state_none_when_status_fails(tmp_path, mocker):
     assert git_state_for(str(tmp_path)) is None
 
 
+def test_identity_with_no_slug_is_not_cached(tmp_path, mocker):
+    """github_slug returning None (no GitHub remote, or a failed/timed-out
+    read) is not cached — the rule reviews._GH_SLUG already applies to the
+    same value. Re-read on the next git refresh instead of for the full
+    10-minute identity TTL."""
+    _mock_git(mocker)
+    slug = mocker.patch("periscope.git_pr.github_slug", return_value=None)
+    mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
+    git_state_for(str(tmp_path))
+    git_state_for(str(tmp_path))
+    assert slug.call_count == 2
+
+
+def test_identity_with_a_found_slug_is_cached_for_the_ttl(tmp_path, mocker):
+    _mock_git(mocker)
+    slug = mocker.patch("periscope.git_pr.github_slug", return_value="owner/repo")
+    mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
+    out1 = git_state_for(str(tmp_path))
+    out2 = git_state_for(str(tmp_path))
+    assert slug.call_count == 1
+    assert out1["repo_slug"] == out2["repo_slug"] == "owner/repo"
+
+
 def test_git_reads_never_write_the_index(tmp_path, git_identity):
     # A dashboard refresh must not touch .git/index from under the user's own
     # git commands. `git diff HEAD` rewrites it when files are stat-dirty
@@ -370,7 +393,12 @@ def test_a_git_dir_without_a_work_tree_reads_its_branch(tmp_path, git_identity):
 
 
 def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypatch, git_identity):
-    repo = str(_committed(tmp_path))
+    """Identity caches only once a slug is found — a GitHub remote here, so
+    the second read skips rev-parse/remote; see test_identity_with_no_slug_is_not_cached
+    for a repo with none."""
+    repo_path = _committed(tmp_path)
+    _git(repo_path, "remote", "add", "origin", "https://github.com/faradayio/periscope.git")
+    repo = str(repo_path)
     clock = [1000.0]
     monkeypatch.setattr(git_pr, "time", SimpleNamespace(time=lambda: clock[0]))
     real = git_pr._run
