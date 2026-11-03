@@ -15,6 +15,7 @@ from periscope import gh
 def _no_gh_token(monkeypatch):
     """Overrides conftest's seeded "no token" entry: these tests read it."""
     monkeypatch.setattr(gh, "_token_cache", None)
+    monkeypatch.setattr(gh, "_tokenless_cwds", set())
 
 
 @pytest.fixture
@@ -86,7 +87,10 @@ def test_a_failed_token_read_is_retried_after_a_minute(monkeypatch, clock):
     ],
 )
 def test_a_401_rereads_the_token_at_most_once_a_minute(monkeypatch, clock, answer):
-    calls = _fake(monkeypatch, answers=[(1, answer), (1, answer), (1, answer)])
+    # Two _run calls per gh.run() now (the call, then its tokenless retry);
+    # both 401 here so the cwd (None) is never remembered and every call
+    # still hits the token path first.
+    calls = _fake(monkeypatch, answers=[(1, answer)] * 6)
     gh.run("pr", "list")  # read 1, then 401
     clock[0] += 30
     gh.run("pr", "list")  # inside the minute: the same token, still 401
@@ -94,6 +98,49 @@ def test_a_401_rereads_the_token_at_most_once_a_minute(monkeypatch, clock, answe
     clock[0] += 31
     gh.run("pr", "list")
     assert _token_reads(calls) == 2
+
+
+def test_a_401_then_tokenless_retry_success_is_remembered_for_that_cwd(monkeypatch, clock):
+    """A *.ghe.com repo whose token is for github.com (or vice versa): the
+    token 401s, the tokenless retry succeeds on gh's own credentials, and
+    that result — not the 401 — is what gh.run returns."""
+    calls = _fake(
+        monkeypatch,
+        answers=[(1, "HTTP 401: Bad credentials"), (0, "ok-1"), (0, "ok-2")],
+    )
+    assert gh.run("pr", "list", cwd="/ghe/repo") == (0, "ok-1")
+    pr_calls = [env for cmd, env in calls if cmd[:2] == ["gh", "pr"]]
+    assert len(pr_calls) == 2
+    assert "GH_TOKEN" in pr_calls[0]
+    assert "GH_TOKEN" not in pr_calls[1]
+
+    # The next call from the same cwd skips the token outright: one _run
+    # call, no 401 first.
+    assert gh.run("pr", "list", cwd="/ghe/repo") == (0, "ok-2")
+    pr_calls = [env for cmd, env in calls if cmd[:2] == ["gh", "pr"]]
+    assert len(pr_calls) == 3
+    assert "GH_TOKEN" not in pr_calls[-1]
+
+
+def test_a_401_whose_tokenless_retry_also_fails_returns_the_401_result(monkeypatch, clock):
+    answer = "HTTP 401: Bad credentials"
+    calls = _fake(monkeypatch, answers=[(1, answer)] * 4)
+    assert gh.run("pr", "list", cwd="/r") == (1, answer)
+    # Not remembered: the next call from the same cwd carries the token
+    # again and 401s first, same as before.
+    assert gh.run("pr", "list", cwd="/r") == (1, answer)
+    pr_calls = [env for cmd, env in calls if cmd[:2] == ["gh", "pr"]]
+    assert len(pr_calls) == 4
+    assert all("GH_TOKEN" in env for env in pr_calls[::2])  # the first try of each call
+
+
+def test_a_remembered_cwd_doesnt_affect_other_cwds(monkeypatch, clock):
+    calls = _fake(monkeypatch, answers=[(1, "HTTP 401: Bad credentials"), (0, "ok")])
+    gh.run("pr", "list", cwd="/ghe/repo")
+    calls.clear()
+    assert gh.run("pr", "list", cwd="/other/repo") == (0, "[]")
+    cmd, env = calls[-1]
+    assert "GH_TOKEN" in env
 
 
 @pytest.mark.parametrize(

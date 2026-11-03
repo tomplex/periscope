@@ -4,7 +4,10 @@ gh's macOS keyring execs `/usr/bin/security` on every call to read its stored
 token. GH_TOKEN takes precedence over stored credentials, so the token is read
 with `gh auth token` every 10 minutes (so `gh auth switch` lands soon) and
 handed to each call; telemetry and the update check are off, each of which
-forks again per call."""
+forks again per call. GH_TOKEN applies to github.com and any *.ghe.com host —
+a call in a repo on the OTHER one of those two 401s with it; `run` retries
+that case once without the token and remembers the cwd so later calls there
+skip it outright."""
 
 import re
 import threading
@@ -13,9 +16,11 @@ import time
 from periscope.tmux import _run
 
 _TOKEN_TTL_S = 600.0
-# A failed `gh auth token` is retried after this long, and a 401 re-reads the
-# token no sooner than this after the last read: a remote GH_TOKEN can't
-# authenticate to (a *.ghe.com host) answers 401 on every call.
+# A failed `gh auth token` is retried after this long, and a 401 with a token
+# re-reads the token no sooner than this after the last read (a revoked or
+# rotated token). A *.ghe.com host whose GH_TOKEN doesn't apply there 401s on
+# every call regardless of the re-read; `run`'s tokenless retry below is what
+# recovers that case.
 _RETRY_S = 60.0
 _QUIET = {"GH_TELEMETRY": "false", "GH_NO_UPDATE_NOTIFIER": "1"}
 # gh's 401s: `HTTP 401: Bad credentials (…)`, `failed to get runs: HTTP 401: …`,
@@ -26,6 +31,9 @@ _lock = threading.Lock()
 # (read at, good until, token); token None when `gh auth token` failed — calls
 # then run on gh's own credentials, as before.
 _token_cache: tuple[float, float, str | None] | None = None
+# cwds whose GH_TOKEN 401'd and then succeeded once retried without it: a
+# *.ghe.com repo when the token is for github.com, or vice versa.
+_tokenless_cwds: set[str] = set()
 
 
 def _token() -> str | None:
@@ -42,7 +50,7 @@ def _token() -> str | None:
 def run(*args: str, cwd: str | None = None, timeout: float = 3.0) -> tuple[int, str]:
     """`gh <args>` — (returncode, stdout, or stderr on failure), as tmux._run."""
     global _token_cache
-    token = _token()
+    token = None if cwd in _tokenless_cwds else _token()
     env_overrides = dict(_QUIET)
     if token:
         env_overrides["GH_TOKEN"] = token
@@ -54,4 +62,13 @@ def run(*args: str, cwd: str | None = None, timeout: float = 3.0) -> tuple[int, 
             if _token_cache is not None:
                 read_at, good_until, cached = _token_cache
                 _token_cache = (read_at, min(good_until, read_at + _RETRY_S), cached)
+        # GH_TOKEN applies to github.com AND any *.ghe.com host, ahead of
+        # stored credentials — a token for the other one 401s on every call
+        # here. Retry once without it; on success, skip the token for this
+        # cwd from now on instead of 401ing first every time.
+        retry_code, retry_out = _run(["gh", *args], cwd=cwd, timeout=timeout, env_overrides=_QUIET)
+        if retry_code == 0:
+            with _lock:
+                _tokenless_cwds.add(cwd)
+        return retry_code, retry_out
     return code, out
