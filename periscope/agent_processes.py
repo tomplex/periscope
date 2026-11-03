@@ -94,7 +94,10 @@ def process_snapshot() -> dict[int, ProcessInfo] | None:
         if _snapshot_cache and now - _snapshot_cache[0] < _PS_TTL_S:
             return _snapshot_cache[1]
         snapshot = _take_snapshot()
-        _snapshot_cache = (now, snapshot)
+        # Stamped when ps returns, not when it started: a ps slower than the
+        # TTL would otherwise be expired on arrival. Callers queued on the lock
+        # read `now` before it, so they reuse this table.
+        _snapshot_cache = (time.monotonic(), snapshot)
         return snapshot
 
 

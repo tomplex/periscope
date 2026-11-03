@@ -1,5 +1,6 @@
 import subprocess
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from periscope import agent_processes as ap
 
@@ -66,6 +67,27 @@ def test_snapshot_reads_a_full_path_executable_from_live_ps(monkeypatch):
         proc.wait()
     assert info.exe == "/Users/tom/.local/bin/claude"
     assert info.argv == "/Users/tom/.local/bin/claude 30"
+
+
+class _Clock:
+    """A monotonic clock the test advances; ap.time reads it."""
+
+    def __init__(self, monkeypatch):
+        self.now = 1000.0
+        monkeypatch.setattr(ap, "time", SimpleNamespace(monotonic=lambda: self.now))
+
+
+def test_a_ps_slower_than_the_ttl_is_still_served_after_it(monkeypatch, mocker):
+    clock = _Clock(monkeypatch)
+
+    def slow_ps():
+        clock.now += ap._PS_TTL_S + 0.5
+        return ap.parse_ps_snapshot(PS)
+
+    take = mocker.patch.object(ap, "_take_snapshot", side_effect=slow_ps)
+    first = ap.process_snapshot()
+    assert ap.process_snapshot() is first
+    take.assert_called_once()
 
 
 def test_codex_launched_by_absolute_path(mocker):
