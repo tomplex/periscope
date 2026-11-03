@@ -1,4 +1,5 @@
 import subprocess
+from datetime import UTC, datetime
 
 from periscope import agent_processes as ap
 
@@ -28,14 +29,28 @@ def test_a_french_lstart_reads_nothing():
     assert ap.parse_ps_snapshot("  100     1 mer. 29 juil. 10:00:00 2026     Ss   -zsh\n") == {}
 
 
-def test_snapshot_runs_ps_in_the_c_locale(mocker):
+def test_parse_reads_lstart_as_utc():
+    # ps_env's TZ=UTC makes lstart print in UTC; parsing it as naive local
+    # time would read a different instant per host, and the wrong one across
+    # a DST fall-back's repeated hour.
+    snapshot = ap.parse_ps_snapshot("  100     1 Wed Jul 29 10:00:00 2026     Ss   -zsh\n")
+    assert snapshot[100].started_at == int(datetime(2026, 7, 29, 10, 0, 0, tzinfo=UTC).timestamp())
+
+
+def test_ps_env_pins_locale_and_timezone():
+    env = ap.ps_env()
+    assert env["LC_ALL"] == "C"
+    assert env["TZ"] == "UTC"
+
+
+def test_snapshot_runs_ps_with_the_shared_env(mocker):
     ap.clear_caches()
     run = mocker.patch(
         "subprocess.run", return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=PS, stderr="")
     )
     assert sorted(ap.process_snapshot()) == [100, 101, 102]
     assert run.call_args.args[0] == ["ps", "-axo", "pid=,ppid=,lstart=,state=,args="]
-    assert run.call_args.kwargs["env"]["LC_ALL"] == "C"
+    assert run.call_args.kwargs["env"] == ap.ps_env()
 
 
 def test_snapshot_reads_a_full_path_executable_from_live_ps(monkeypatch):

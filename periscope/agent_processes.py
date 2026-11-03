@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ def parse_ps_snapshot(output: str) -> dict[int, ProcessInfo]:
             continue
         pid, ppid, started, state, argv = match.groups()
         try:
-            started_at = int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").timestamp())
+            started_at = int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").replace(tzinfo=UTC).timestamp())
         except ValueError:
             continue
         argv = (argv or "").strip()
@@ -65,6 +65,21 @@ def parse_ps_snapshot(output: str) -> dict[int, ProcessInfo]:
     return result
 
 
+def ps_env() -> dict[str, str]:
+    """The environment every `ps` fork in this process runs under.
+
+    LC_ALL=C so lstart parses (it otherwise prints in the locale, e.g. `mer.
+    30 sept.` under fr_FR) and so non-ASCII argv bytes vis-encode the same way
+    across every ps call this process makes — session_status's `ps eww`
+    included. A drift there broke `_env_tail`'s prefix match on a claude
+    whose argv held non-ASCII bytes: this module's snapshot encoded them in C,
+    `ps eww` printed them raw in the server's own locale, and the two
+    strings stopped sharing a prefix. TZ=UTC so lstart isn't ambiguous across
+    a DST fall-back's repeated hour.
+    """
+    return {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
+
+
 def _take_snapshot() -> dict[int, ProcessInfo] | None:
     try:
         proc = subprocess.run(
@@ -73,9 +88,7 @@ def _take_snapshot() -> dict[int, ProcessInfo] | None:
             capture_output=True,
             text=True,
             timeout=2,
-            # lstart prints in the locale (`mer. 30 sept.` under fr_FR), which
-            # the row regex can't read.
-            env={**os.environ, "LC_ALL": "C"},
+            env=ps_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return None

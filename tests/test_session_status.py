@@ -3,9 +3,10 @@
 working/needs-input/idle signal."""
 
 import json
+import shutil
 import subprocess
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -127,7 +128,10 @@ def test_missing_sessions_dir_returns_none(tmp_path, monkeypatch):
 # The processes the old `ps -axo pid=,etime=,comm=` sample listed (etimes
 # 01-02:08:58, 22:09:53, 05:33, 91-10:00:00) plus a plugin server whose argv
 # mentions .claude, as process_snapshot's real `… lstart= state= args=` rows
-# read at _PS_NOW.
+# read at _PS_NOW. lstart prints in UTC (agent_processes.ps_env's TZ=UTC), so
+# both this snapshot's times and _PS_NOW are expressed in UTC — mixing a
+# naive-local _PS_NOW with a UTC-parsed lstart would read ages off by the
+# host's UTC offset, and wrong by an extra hour across a DST fall-back.
 _PS_SNAPSHOT = (
     " 9448     1 Thu Jul 30 10:00:00 2026     S+   /Users/tom/.local/bin/claude --resume 0b6f2a1e-1111-2222-3333-444455556666\n"
     " 9876  9448 Thu Jul 30 13:59:05 2026     S    /Users/tom/.local/share/claude/versions/2.1.161\n"
@@ -135,7 +139,7 @@ _PS_SNAPSHOT = (
     "  329     1 Fri Jul 31 12:03:25 2026     Ss   /usr/libexec/logd\n"
     "    1     0 Fri May  1 02:08:58 2026     Ss   /sbin/launchd\n"
 )
-_PS_NOW = datetime(2026, 7, 31, 12, 8, 58).timestamp()
+_PS_NOW = datetime(2026, 7, 31, 12, 8, 58, tzinfo=UTC).timestamp()
 
 
 def _snapshot(monkeypatch, text=_PS_SNAPSHOT):
@@ -308,6 +312,36 @@ def test_env_tail_strips_the_command():
     assert ss._CONFIG_DIR_RE.search(tail or "").group(1) == alt
     # command prefix mismatch (ps raced / truncated) yields nothing rather than a guess
     assert ss._env_tail("claude", f"something-else CLAUDE_CONFIG_DIR={alt}") is None
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node not installed")
+def test_env_tail_survives_non_ascii_argv_under_a_utf8_locale(monkeypatch, tmp_path):
+    """agent_processes.process_snapshot's ps and _env_by_pid's ps must share
+    one locale (agent_processes.ps_env): under en_US.UTF-8 a C-locale ps
+    vis-encodes non-ASCII argv bytes (`café` -> `cafM-CM-)`), so a snapshot
+    taken in C and an env lookup taken in the server's own locale disagree on
+    the command prefix and _env_tail drops the pane. node stands in for a
+    long-lived claude here; /bin/sleep won't do — ps can't read a
+    SIP-sealed binary's environment at all, locale aside."""
+    import os
+
+    script = tmp_path / "sleepy.js"
+    script.write_text("setTimeout(() => {}, 30000);\n")
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    agent_processes.clear_caches()
+    proc = subprocess.Popen(
+        ["/Users/tom/.local/bin/café/claude", str(script)],
+        executable=shutil.which("node"),
+        env={**os.environ, "LANG": "en_US.UTF-8", "CLAUDE_CONFIG_DIR": "/tmp/x"},
+    )
+    try:
+        cmd = agent_processes.process_snapshot()[proc.pid].argv
+        tail = ss._env_tail(cmd, ss._env_by_pid([proc.pid])[proc.pid])
+    finally:
+        proc.kill()
+        proc.wait()
+    assert tail is not None
+    assert "CLAUDE_CONFIG_DIR=/tmp/x" in tail
 
 
 def test_pane_profiles_reads_the_wrapper_profile_from_env(mocker):

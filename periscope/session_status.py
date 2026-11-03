@@ -249,6 +249,11 @@ def _env_by_pid(pids: list[int]) -> dict[int, str]:
             capture_output=True,
             text=True,
             check=False,
+            # Same locale as agent_processes.process_snapshot's ps — otherwise
+            # a claude whose argv holds non-ASCII bytes gets vis-encoded here
+            # but not there (or vice versa), and _env_tail's prefix match
+            # against proc_table's command never succeeds.
+            env=agent_processes.ps_env(),
         ).stdout
     except OSError:
         return {}
