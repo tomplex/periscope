@@ -46,6 +46,8 @@ function ResourcePopover({ r }) {
   }, []);
   usePopoverDismiss(ref, open, close);
   const bs = buildStats.value;
+  const slowest = bs && slowestLine(bs);
+  const topForks = bs && topForksLine(bs);
 
   return (
     <div class="pill-dd" ref={ref}>
@@ -79,8 +81,8 @@ function ResourcePopover({ r }) {
         {bs && (
           <div class="res-poll">
             <div class="res-poll-line">{buildStatsLine(bs)}</div>
-            {slowestLine(bs) && <div class="res-poll-line res-poll-detail">{slowestLine(bs)}</div>}
-            {topForksLine(bs) && <div class="res-poll-line res-poll-detail">{topForksLine(bs)}</div>}
+            {slowest && <div class="res-poll-line res-poll-detail">{slowest}</div>}
+            {topForks && <div class="res-poll-line res-poll-detail">{topForks}</div>}
           </div>
         )}
       </div>
