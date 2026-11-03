@@ -129,6 +129,24 @@ def test_a_401_then_tokenless_retry_success_is_remembered_for_that_cwd(monkeypat
     assert "GH_TOKEN" not in pr_calls[-1]
 
 
+def test_a_remembered_cwd_carries_the_token_again_once_it_is_reread(monkeypatch, clock):
+    """A revoked-then-replaced token, or a stray 401: the old token's
+    tokenless fallback must not stick to the cwd forever."""
+    calls = _fake(
+        monkeypatch,
+        token="tok-1",
+        answers=[(1, "HTTP 401: Bad credentials"), (0, "ok-1"), (0, "ok-2")],
+    )
+    assert gh.run("pr", "list", cwd="/ghe/repo") == (0, "ok-1")
+
+    clock[0] += gh._TOKEN_TTL_S + 1
+    assert gh.run("pr", "list", cwd="/ghe/repo") == (0, "ok-2")
+    pr_calls = [env for cmd, env in calls if cmd[:2] == ["gh", "pr"]]
+    assert len(pr_calls) == 3  # 2 from the first gh.run (401, then tokenless retry) + 1 here
+    assert pr_calls[-1]["GH_TOKEN"] == "tok-1"
+    assert _token_reads(calls) == 2  # the initial read, then the TTL re-read
+
+
 def test_a_401_whose_tokenless_retry_also_fails_returns_the_401_result(monkeypatch, clock):
     answer = "HTTP 401: Bad credentials"
     calls = _fake(monkeypatch, answers=[(1, answer)] * 4)

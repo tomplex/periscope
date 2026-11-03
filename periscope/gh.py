@@ -47,6 +47,11 @@ def _token() -> str | None:
             code, out = _run(["gh", "auth", "token"], env_overrides=_QUIET)
             token = out if code == 0 and out else None
             _token_cache = (now, now + (_TOKEN_TTL_S if token else _RETRY_S), token)
+            # A re-read token may be a fresh replacement for a revoked one, or
+            # the 401 that forced this re-read may have been a fluke — either
+            # way, cwds that fell back to tokenless under the old token get
+            # another chance with the new one.
+            _tokenless_cwds.clear()
         return _token_cache[2]
 
 
@@ -55,7 +60,11 @@ def run(*args: str, cwd: str | None = None, timeout: float = 3.0) -> tuple[int, 
     global _token_cache
     if not AVAILABLE:
         return 127, "gh not installed"
-    token = None if cwd in _tokenless_cwds else _token()
+    # Always read through the cache, even for a remembered cwd, so a stale
+    # token still gets re-read on its own schedule and can un-remember it.
+    token = _token()
+    if cwd in _tokenless_cwds:
+        token = None
     env_overrides = dict(_QUIET)
     if token:
         env_overrides["GH_TOKEN"] = token
