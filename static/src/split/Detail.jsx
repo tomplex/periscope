@@ -264,7 +264,7 @@ export function PaneHeader({ w }) {
     parts.push(<><span class="hsep">·</span><span class={`header-mem ${mh.cls}`} title={mh.title}>↻ {mh.label}</span></>);
   }
   if (w.api_error) {
-    parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);
+    parts.push(<><span class="hsep">·</span><span class="header-api-error" title="Claude hit an API error and has written nothing since">⚠ API error</span></>);
   }
   // After ↻ and API-error: its fixed width (styles.css .header-res) can't
   // shift either chip.
