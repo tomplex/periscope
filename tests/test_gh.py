@@ -96,8 +96,15 @@ def test_a_401_rereads_the_token_at_most_once_a_minute(monkeypatch, clock, answe
     assert _token_reads(calls) == 2
 
 
-def test_other_failures_keep_the_token(monkeypatch, clock):
-    calls = _fake(monkeypatch, answers=[(1, 'no pull requests found for branch "x"')])
+@pytest.mark.parametrize(
+    "answer",
+    [
+        'no pull requests found for branch "x"',
+        "GraphQL: Could not resolve to a PullRequest with the number of 401. (repository.pullRequest)",
+    ],
+)
+def test_other_failures_keep_the_token(monkeypatch, clock, answer):
+    calls = _fake(monkeypatch, answers=[(1, answer)])
     gh.run("pr", "view", "9")
     clock[0] += 61
     gh.run("pr", "list")

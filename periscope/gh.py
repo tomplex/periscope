@@ -21,7 +21,8 @@ _RETRY_S = 60.0
 _QUIET = {"GH_TELEMETRY": "false", "GH_NO_UPDATE_NOTIFIER": "1"}
 # gh's 401s: `HTTP 401: Bad credentials (…)`, `failed to get runs: HTTP 401: …`,
 # and the search API's `non-200 OK status code: 401 Unauthorized body: …`.
-_AUTH_FAILED_RE = re.compile(r"\b401\b|Bad credentials")
+# A bare 401 would match `gh pr view 401` on a missing PR.
+_AUTH_FAILED_RE = re.compile(r"HTTP 401\b|\b401 Unauthorized|Bad credentials")
 _lock = threading.Lock()
 # (read at, good until, token); token None when `gh auth token` failed — calls
 # then run on gh's own credentials, as before.
