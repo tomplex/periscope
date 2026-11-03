@@ -225,9 +225,11 @@ re-read on every call). `tmux._run` takes an `env`.
 - Inside a poll, `all_pane_ids` and the pane-to-claude map read the rows the poll's `list_windows` read, as old
   as the poll (~0.15 s idle, 3–13 s under THI-450's load); elsewhere up to 1 s old. A pane created in that window
   is missing from the poll's windows too, and reads as "no claude yet" off it, failing open (#14, #16). The
-  channel-alert GC reads the same rows, so an alert recorded for a pane created during the poll is dropped from
-  the in-memory feed (the activity record keeps it). An alert needs the pane's Claude to start and run a turn: longer
-  than an idle poll, not certainly longer than a 13 s loaded one.
+  channel-alert GC (`_channel_gc`) reads the same rows, so it also takes the poll's start time: a pane absent from
+  that set whose newest alert landed at or after the poll's start survives one GC instead of being dropped from the
+  in-memory feed (the activity record keeps it regardless); an alert older than the poll's start is dropped as
+  before. An alert needs the pane's Claude to start and run a turn: longer than an idle poll, not certainly longer
+  than a 13 s loaded one — the spared window covers the case where it is.
 - One `ps` table per refresh (2 s timeout) feeds session state, the pane → claude map, codex detection and
   resources. `ps` takes ~50 ms over ~640 processes idle and 0.5–1.7 s at load average 50–70 (THI-450), so it can
   time out under load; the last table, if under 15 s old, stands in, and a claude that exited or started since reads

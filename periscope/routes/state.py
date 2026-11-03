@@ -73,6 +73,9 @@ def build_state() -> dict:
     once today — so the hub running it alongside a REST poll adds no new race.
     """
     started = time.monotonic()
+    # Wall-clock start, for _channel_gc below: a pane created after this but
+    # before the poll's pinned pane rows are read must not look older than it is.
+    poll_started_at = int(time.time())
     windows = list_windows()
     update_focus_from_windows(windows)
     _attach_git_then_resolve_pids(windows, full_roster=True)
@@ -125,10 +128,12 @@ def build_state() -> dict:
     # GC against ALL live panes, not the active-pane-per-window set `windows`
     # carries — otherwise a split window's background Claude pane has its alerts
     # dropped every poll. Skip entirely on an empty result (a tmux hiccup must
-    # not wipe every pane's alerts).
+    # not wipe every pane's alerts). live_panes is as old as the poll (its
+    # pinned pane rows); poll_started_at lets the GC spare a pane created
+    # after that but before this point.
     live_panes = all_pane_ids()
     if live_panes:
-        _channel_gc(live_panes)
+        _channel_gc(live_panes, poll_started_at)
 
     # Batched stamp persistence: single lock + single write across every
     # pane in this poll. set_window_fields_bulk skips the write when no

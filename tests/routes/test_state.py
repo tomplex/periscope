@@ -54,7 +54,7 @@ def test_state_with_window(client, mocker, clean_state):
     assert r.status_code == 200
     # GC keys on the FULL live-pane set (which includes a split window's
     # background %8), not just the active-pane-per-window %7.
-    gc.assert_called_once_with({"%7", "%8"})
+    gc.assert_called_once_with({"%7", "%8"}, mocker.ANY)
     body = r.json()
     assert len(body["windows"]) == 1
     w = body["windows"][0]
@@ -494,7 +494,7 @@ def test_a_poll_slower_than_the_ttls_forks_ps_and_list_panes_once(client, mocker
 
     assert client.get("/api/state").status_code == 200
     capture.assert_called_once()
-    gc.assert_called_once_with({"%7"})
+    gc.assert_called_once_with({"%7"}, mocker.ANY)
     assert (list_panes.call_count, ps.call_count) == (1, 1)
 
     # Off the poll, the snapshots are 3 s old: the TTL holds again.
