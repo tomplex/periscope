@@ -25,7 +25,7 @@ from collections.abc import Mapping
 from typing import Any, TypedDict
 
 from periscope import config
-from periscope.gitutil import github_slug
+from periscope.gitutil import github_slug, resolve_repo
 from periscope.log import _bg
 from periscope.panes import list_windows
 from periscope.tmux import _run
@@ -37,6 +37,11 @@ _PR_TTL = 60.0
 # twice in quick succession should see the second change.
 _SIGNAL_TTL = 5.0
 _git_cache: dict[str, tuple[float, dict | None]] = {}
+# A repo's root and its GitHub remote: re-read rarely, they change only when a
+# checkout is re-pointed.
+_REPO_IDENTITY_TTL_S = 600.0
+# path -> (read at, repo_key, repo_slug)
+_repo_identity_cache: dict[str, tuple[float, str, str | None]] = {}
 _signal_cache: dict[str, tuple[float, dict | None]] = {}
 _pr_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 _pr_fetching: set[tuple[str, str]] = set()
@@ -62,57 +67,78 @@ _CI_PENDING_STATES = frozenset({"PENDING", "QUEUED", "IN_PROGRESS", "WAITING"})
 _CI_PASSED_STATES = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 
 
-def git_state_for(path: str) -> dict | None:
-    """Return {branch, git} for the git repo at `path`, or None."""
+def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
+    """Return {branch, git, repo_slug, repo_key, repo_label} for the git repo at
+    `path`, or None. Two forks: one status for branch, ahead and untracked, one
+    diff for line counts; repo_key and repo_slug come from a per-path cache.
+    `timeout` bounds each git call (the background refresh allows longer)."""
     if not path or not os.path.isdir(path):
         return None
-    code, _ = _run(["git", "-C", path, "rev-parse", "--git-dir"])
-    if code != 0:
-        return None
-    _, branch = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
-    if not branch or branch == "HEAD":
-        _, sha = _run(["git", "-C", path, "rev-parse", "--short", "HEAD"])
-        branch = f"@{sha}" if sha else "?"
-    # Compact diff stats vs HEAD (covers staged + unstaged together).
-    _, diff = _run(["git", "-C", path, "diff", "HEAD", "--shortstat"])
-    adds_m = re.search(r"(\d+) insertion", diff)
-    dels_m = re.search(r"(\d+) deletion", diff)
-    adds = int(adds_m.group(1)) if adds_m else 0
-    dels = int(dels_m.group(1)) if dels_m else 0
-    # Untracked files. `git diff HEAD` ignores them entirely, so a worktree
-    # whose only change is brand-new files reported "clean" — and isDirty()
-    # then suppressed the chip, so nothing surfaced at all. --directory
-    # collapses a wholly-untracked dir to one entry instead of walking it.
-    _, untracked = _run(
-        ["git", "-C", path, "ls-files", "-o", "--exclude-standard", "--directory", "--no-empty-directory"]
+    # --no-optional-locks: a dashboard read must not take the index lock from
+    # under the user's own git commands (status and diff both refresh the index).
+    code, status = _run(
+        ["git", "--no-optional-locks", "-C", path, "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+        timeout=timeout,
     )
-    new = sum(1 for line in untracked.splitlines() if line.strip())
-    # Unpushed commits ahead of upstream.
-    code, ahead_s = _run(["git", "-C", path, "rev-list", "--count", "@{u}..HEAD"])
-    ahead = int(ahead_s) if code == 0 and ahead_s.isdigit() else 0
-    bits = []
-    if adds or dels:
-        bits.append(f"+{adds} -{dels}")
-    if new:
-        bits.append(f"?{new}")
-    state = " ".join(bits) if bits else "clean"
-    if ahead > 0:
-        state += " *"
+    if code == 0:
+        head = oid = ""
+        ahead = new = 0
+        for line in status.splitlines():
+            if line.startswith("# branch.head "):
+                head = line.removeprefix("# branch.head ")
+            elif line.startswith("# branch.oid "):
+                oid = line.removeprefix("# branch.oid ")
+            elif line.startswith("# branch.ab "):
+                # Present only when the upstream exists: "+<ahead> -<behind>".
+                ahead = int(line.split()[2].lstrip("+"))
+            elif line.startswith("? "):
+                # Untracked; `git diff HEAD` ignores these, so a worktree whose
+                # only change is brand-new files would read "clean". A
+                # wholly-untracked directory is one entry.
+                new += 1
+        branch = f"@{oid[:7]}" if head == "(detached)" else head
+        # Compact diff stats vs HEAD (covers staged + unstaged together).
+        _, diff = _run(["git", "--no-optional-locks", "-C", path, "diff", "HEAD", "--shortstat"], timeout=timeout)
+        adds_m = re.search(r"(\d+) insertion", diff)
+        dels_m = re.search(r"(\d+) deletion", diff)
+        adds = int(adds_m.group(1)) if adds_m else 0
+        dels = int(dels_m.group(1)) if dels_m else 0
+        bits = []
+        if adds or dels:
+            bits.append(f"+{adds} -{dels}")
+        if new:
+            bits.append(f"?{new}")
+        state = " ".join(bits) if bits else "clean"
+        if ahead > 0:
+            state += " *"
+    elif "must be run in a work tree" in status:
+        # A git dir with no work tree here — a bare-container layout (a dir
+        # whose .git file says `gitdir: ./.bare`), a cwd inside .git, a bare
+        # repo — still has a branch and a repo; there is nothing to diff.
+        code, head = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=timeout)
+        if code != 0:
+            return None
+        branch = head if head != "HEAD" else "?"
+        state = "clean"
+    else:
+        return None
     # `repo_slug` (owner/repo) lets the frontend build PR URLs without
     # hardcoding a repo — periscope watches panes across many repos.
     # repo_key is the full repo path (handles both sibling and inline
     # worktree layouts via gitutil.resolve_repo). repo_label is the
     # basename for human-readable display in the rail.
-    from periscope.gitutil import resolve_repo
-
-    repo_key = resolve_repo(path)
-    repo_label = os.path.basename(repo_key.rstrip("/")) if repo_key else ""
+    now = time.time()
+    identity = _repo_identity_cache.get(path)
+    if identity is None or now - identity[0] >= _REPO_IDENTITY_TTL_S:
+        identity = (now, resolve_repo(path), github_slug(path))
+        _repo_identity_cache[path] = identity
+    _, repo_key, repo_slug = identity
     return {
         "branch": branch,
         "git": state,
-        "repo_slug": github_slug(path),
+        "repo_slug": repo_slug,
         "repo_key": repo_key,
-        "repo_label": repo_label,
+        "repo_label": os.path.basename(repo_key.rstrip("/")) if repo_key else "",
     }
 
 
