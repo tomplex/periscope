@@ -96,7 +96,9 @@ export function payloadFor(ev, ctx = {}) {
         // The linked PR only: an auto-detected one is just the branch's, often
         // days old, and would ride every finished turn.
         subtitle: w.pr && w.pr_linked ? `${w.session} · PR #${w.pr}` : where(w),
-        body: firstSentence(w.recap || w.last_line) || "Finished.",
+        // The reply from the transcript first: recap and last_line are read off
+        // the screen, where the footer's statusline passed for the reply (THI-416).
+        body: firstSentence(w.last_reply || w.recap || w.last_line) || "Finished.",
         category: "done_seen", data: { open: "pane", pid: w.pid, session: w.session },
       };
     case "ci_failed": {

@@ -93,7 +93,8 @@ def _is_codex_executable(proc: ProcessInfo) -> bool:
     return os.path.basename(proc.comm).lower() in {"codex", "codex.exe"}
 
 
-def _descendants(root_pid: int, snapshot: dict[int, ProcessInfo]):
+def descendants(root_pid: int, snapshot: dict[int, ProcessInfo]):
+    """`root_pid`'s process (when in the snapshot) and every process below it."""
     children: dict[int, list[ProcessInfo]] = {}
     for proc in snapshot.values():
         children.setdefault(proc.ppid, []).append(proc)
@@ -143,7 +144,7 @@ def codex_process_for_pane(pane_id: str, pane_pid: int | str | None) -> bool | N
             return True
         _pane_cache.pop(pane_id, None)
 
-    for proc in _descendants(root_pid, snapshot):
+    for proc in descendants(root_pid, snapshot):
         if not proc.state.upper().startswith("Z") and _is_codex_executable(proc):
             _pane_cache[pane_id] = (
                 root_pid,

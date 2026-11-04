@@ -105,6 +105,10 @@ CUSTOM_STATUS_LINE = (
 )
 # The full-width rules Claude draws above and below its composer.
 RULE = "─" * 60
+# A named session's top rule carries the name at its right end (2.1.x, -e).
+NAMED_RULE = f"\x1b[38;5;244m{'─' * 50}\x1b[39m \x1b[38;5;244mthi-416-banner\x1b[39m \x1b[38;5;244m─"
+# An OSC 8 hyperlink, how a reply's or statusline's link reaches capture -e.
+OSC_LINK = "\x1b]8;id=1;https://linear.app/t/issue/THI-416\x1b\\THI-416\x1b]8;;\x1b\\"
 
 PARSE_CASES: list[tuple[str, str, str, str | None]] = [
     # The screenshot Tom hit: multi-word phrase + trailing `…` + ↓-arrow
@@ -570,8 +574,10 @@ GHOST_CASES: list[tuple[str, str, str | None]] = [
 
 
 # ── last_line filter cases ─────────────────────────────────────────────
-# Each row: (tag, content, expected_last_line). These verify the card
-# snippet doesn't surface TUI chrome (auto-mode footer, title bar, etc.).
+# Each row: (tag, content, expected_last_line). last_line is what a done
+# banner falls back to when the transcript can't say (THI-416), so it must be
+# the reply: no TUI chrome (footer, title bar) and none of the turn's own (its
+# `✻ … for 31s` line, `⎿` results and tips, right-aligned hints).
 
 LAST_LINE_CASES: list[tuple[str, str, str]] = [
     # Auto-mode footer at the bottom — must be filtered. Falls through to
@@ -586,7 +592,7 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
         {STATUS_LINE}
         ⏵⏵ auto mode on (shift+tab to cycle)
     """),
-        "✻ Brewed for 31s",
+        "Some recent response text from the assistant.",
     ),
     # Auto-mode footer with the "← for agents" suffix — same filter.
     (
@@ -598,7 +604,7 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
         {STATUS_LINE}
         ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
     """),
-        "✻ Cooked for 1m 15s",
+        "Some recent response text.",
     ),
     # Title bar at top + auto-mode at bottom — both filtered.
     (
@@ -611,7 +617,7 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
         {STATUS_LINE}
         ⏵⏵ auto mode on (shift+tab to cycle)
     """),
-        "✻ Brewed for 5s",
+        "Assistant said something useful here.",
     ),
     # Active spinner line shouldn't surface as snippet (duplicate of state
     # label). Falls through to whatever's below the spinner.
@@ -627,6 +633,103 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
     """),
         "◻ Task 2.4: another subtask",
     ),
+    # THI-416, shapes from live 2.1.x panes. A named session's composer:
+    # Claude prints the name in the top rule, which used to hide the composer
+    # and hand the footer (statusline, ⧉ row) to last_line. The reply's
+    # linkified ticket is an OSC 8 hyperlink in the -e capture.
+    (
+        "named-session-footer",
+        "⏺ I fixed the banner.\n"
+        f"  It now reads the reply for {OSC_LINK}, not the footer.\n\n"
+        "✻ Brewed for 37s · done 2:19 PM\n\n"
+        f"{NAMED_RULE}\n\x1b[39m❯\xa0\x1b[2mmerge it\x1b[0m\n{RULE}\n"
+        f"{CUSTOM_STATUS_LINE} {OSC_LINK}\n"
+        "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents\n"
+        "  ⧉  dashboard-latest · client-health-preview\n",
+        "I fixed the banner. It now reads the reply for THI-416, not the footer.",
+    ),
+    # The start of the reply, not its last row: a banner read "that use it
+    # would fail.", the tail of a wrapped sentence. The first paragraph, its
+    # wrapped rows joined, holds the first sentence.
+    (
+        "reply-start-not-its-last-row",
+        textwrap.dedent(f"""\
+        ⏺ Bash(gh pr create --draft)
+          ⎿  https://github.com/o/r/pull/12
+
+        ⏺ I opened draft PR #12 with the keep-open label. CI is running in the
+          background; this is the first time the tests run anywhere.
+
+          - What it does: the banner now reads the reply.
+          - Not yet verified: a real macOS banner.
+
+          I'll report the CI result when the checks finish. Otherwise the scopes
+          that use it would fail.
+
+        ✻ Brewed for 2m 3s · done 12:28 PM
+        {RULE}
+        ❯
+        {RULE}
+        {CUSTOM_STATUS_LINE}
+    """),
+        "I opened draft PR #12 with the keep-open label. CI is running in the background; "
+        "this is the first time the tests run anywhere.",
+    ),
+    # A turn that ended in a tool call said nothing after it: no words beat a
+    # tool header or its output (the banner then says "Finished.").
+    (
+        "turn-ended-in-a-tool-call",
+        textwrap.dedent(f"""\
+        ⏺ Pushing now.
+
+        ⏺ Bash(git push origin main)
+          ⎿  To github.com:o/r.git
+             a1b2c3d..e4f5a6b  main -> main
+
+        ✻ Brewed for 9s · done 12:28 PM
+        {RULE}
+        ❯
+        {RULE}
+    """),
+        "",
+    ),
+    (
+        "turn-ended-in-an-mcp-call",
+        textwrap.dedent(f"""\
+        ⏺ Done.
+
+        ⏺ periscope - notify (MCP)(kind: "done", message: "Pushed")
+          ⎿  {{"ok": true}}
+        {RULE}
+        ❯
+        {RULE}
+    """),
+        "",
+    ),
+    # A tool result or tip under the reply, and the turn's waiting line.
+    (
+        "tool-result-and-tip",
+        textwrap.dedent(f"""\
+        ⏺ Pushed the branch.
+          ⎿  Allowed by auto mode classifier
+          ⎿  Tip: You can control how big a workflow is just by prompting.
+        ✻ Waiting for 1 background agent to finish
+        {RULE}
+        ❯
+        {RULE}
+        {CUSTOM_STATUS_LINE}
+    """),
+        "Pushed the branch.",
+    ),
+    # The right-aligned hint Claude draws just above the composer.
+    (
+        "clear-hint-above-composer",
+        "⏺ Which option do you want?\n\n"
+        "✻ Cogitated for 5m 33s · done 3:22 PM\n"
+        f"{' ' * 62}new task? /clear to save 433.4k tokens\n"
+        f"{RULE}\n❯\n{RULE}\n{CUSTOM_STATUS_LINE}\n",
+        "Which option do you want?",
+    ),
 ]
 
 
@@ -635,15 +738,16 @@ LAST_LINE_CASES: list[tuple[str, str, str]] = [
 # Claude Code renders rate-limit / transport failures as a normal `⎿` tool
 # result whose body starts with "API Error:". We flag panes whose MOST
 # RECENT tool result is an error so the dashboard can show a stuck-on-
-# retry pane at a glance. A subsequent successful tool result clears it.
+# retry pane at a glance. A subsequent successful tool result clears it,
+# and so does a `⏺` reply to a prompt sent after the error.
 
 API_ERROR_CASES: list[tuple[str, str, bool]] = [
     # The screenshot Tom hit: three consecutive rate-limit hits, the user
     # repeatedly typed `keep going`, and the bottom shows Claude resuming.
-    # The latest tool result above the resumed turn is still the API
-    # error → flag should be on so the card surfaces the stuck retry.
+    # The `⏺` under the last `keep going` is a reply → the errors belong to
+    # earlier turns, flag off (THI-455).
     (
-        "rate-limited-stuck",
+        "rate-limited-resumed",
         textwrap.dedent(f"""\
         Reshaping the query — payload columns are huge.
 
@@ -669,6 +773,57 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
           Called fdy (ctrl+o to expand)
 
         ⏺ Skipping reminder. One last lookup — there's a closest_store_by_address variant I haven't traced yet.
+        {STATUS_LINE}
+    """),
+        False,
+    ),
+    # The same pane before anything answers the nudge: `keep going` alone
+    # doesn't clear it.
+    (
+        "rate-limited-nudged",
+        textwrap.dedent(f"""\
+        ❯ keep going
+          ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+        ✻ Brewed for 0s
+
+        ❯ keep going
+
+        ✻ Crunching…
+        {STATUS_LINE}
+    """),
+        True,
+    ),
+    # The nudged turn has so far printed only a collapsed tool group: the
+    # API answered → off.
+    (
+        "rate-limited-resuming-calls",
+        textwrap.dedent(f"""\
+        ❯ keep going
+          ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+        ✻ Brewed for 0s
+
+        ❯ keep going
+
+          Called fdy 6 times (ctrl+o to expand)
+
+        ✻ Crunching…
+        {STATUS_LINE}
+    """),
+        False,
+    ),
+    # A long error's `… +N lines` row is part of the error, not output after it.
+    (
+        "error-truncated-result",
+        textwrap.dedent(f"""\
+          Called fdy (ctrl+o to expand)
+          ⎿  API Error: 500 {{"type":"error","error":{{"type":"api_error","message":"Internal server error"}}}}
+             … +3 lines (ctrl+o to expand)
+
+        ✻ Brewed for 2s
+
+        ❯
         {STATUS_LINE}
     """),
         True,
@@ -715,8 +870,7 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
     """),
         False,
     ),
-    # API error mid-buffer with no later `⎿` tool results — Claude is
-    # presumably retrying / waiting. Flag on.
+    # API error, then a `⏺` reply in the same turn: the API answered → off.
     (
         "error-then-only-text",
         textwrap.dedent(f"""\
@@ -729,7 +883,7 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
         ❯
         {STATUS_LINE}
     """),
-        True,
+        False,
     ),
     # THI-436: a stream cut mid-response renders as an assistant `⏺` line,
     # not a `⎿` tool result — and a successful tool result sits above it,
@@ -783,6 +937,61 @@ API_ERROR_CASES: list[tuple[str, str, bool]] = [
 
         ❯
         {STATUS_LINE}
+    """),
+        False,
+    ),
+    # THI-455, from a live pane: collapsed tool calls leave no `⎿` to clear
+    # the flag, and a later prompt got a full reply → off.
+    (
+        "collapsed-calls-later-reply",
+        textwrap.dedent(f"""\
+        ❯ compare the clinic rankings from both sheets
+
+          Called faraday_internal 2 times (ctrl+o to expand)
+
+        ⏺ API Error: The response stopped arriving. The response above may be incomplete.
+
+          Called faraday_internal 2 times (ctrl+o to expand)
+
+        ⏺ Rankings by headroom count are nearly identical and track catchment size.
+
+        ❯ add the clinic names to these codes
+
+          Called faraday_internal (ctrl+o to expand)
+
+        ⏺ Here are the clinic codes from the comparison with their names.
+
+        ✻ Churned for 34s · done 8:33 AM
+
+        {RULE}
+        ❯ add this comparison to the handoff
+        {RULE}
+        {CUSTOM_STATUS_LINE}
+          ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents
+    """),
+        False,
+    ),
+    # The same pane when that turn ended: Claude Code carried on after the
+    # stream cut with no prompt in between → off.
+    (
+        "stream-cut-recovered-in-turn",
+        textwrap.dedent(f"""\
+        ❯ compare the clinic rankings from both sheets
+
+          Called faraday_internal 2 times (ctrl+o to expand)
+
+        ⏺ API Error: The response stopped arriving. The response above may be incomplete.
+
+          Called faraday_internal 2 times (ctrl+o to expand)
+
+        ⏺ Rankings by headroom count are nearly identical and track catchment size.
+
+        ✻ Brewed for 2m 10s · done 8:07 AM
+
+        {RULE}
+        ❯
+        {RULE}
+        {CUSTOM_STATUS_LINE}
     """),
         False,
     ),
@@ -1155,12 +1364,19 @@ def _bash_key(command: str, description: str = "") -> str:
     return _sha(re.sub(r"\s+", "", command) + re.sub(r"\s+", "", description))
 
 
+# The request bash_requires_approval.txt shows (its command as Claude passed it).
+_PY_COMMAND = 'python3 -c "open(\\"py.txt\\",\\"w\\").close()"'
+_PY_DESCRIPTION = "Create empty py.txt file with Python"
+
 # Each capture with the key of the request it shows.
 _FIXTURE_KEYS = [
     ("bash.txt", "Bash", _sha("touchprobe.txtCreateemptyprobe.txtfile")),
     # The same request in a 70-column pane, its Tip wrapped onto a second row.
     ("bash_narrow.txt", "Bash", _sha("touchprobe.txtCreateemptyprobe.txtfile")),
     ("bash_multiline.txt", "Bash", _sha("toucha.txttouchb.txtCreatetwofiles")),
+    # `python3 -c …` gets a "This command requires approval" row under its
+    # description, which is chrome, not part of the request.
+    ("bash_requires_approval.txt", "Bash", _bash_key(_PY_COMMAND, _PY_DESCRIPTION)),
     ("write.txt", "Write", "/tmp/probe/notes.md"),
     ("edit.txt", "Edit", "/tmp/probe/notes.md"),
 ]
@@ -1187,6 +1403,13 @@ _FIXTURE_KEYS = [
             "bash_multiline.txt",
             "Bash command",
             [_TIP, "   │ touch a.txt", "   │ touch b.txt", "   Create two files"],
+            "Do you want to proceed?",
+            None,
+        ),
+        (
+            "bash_requires_approval.txt",
+            "Bash command",
+            [_TIP, "   " + _PY_COMMAND, "   " + _PY_DESCRIPTION, " This command requires approval"],
             "Do you want to proceed?",
             None,
         ),
@@ -1300,6 +1523,31 @@ def test_unknown_chrome_above_the_command_fails_closed():
     assert not dialog_matches(warned, "Bash", key)
     for name in ("bash.txt", "bash_narrow.txt"):
         assert dialog_matches(parse_permission_dialog(_dialog(name)), "Bash", key)
+
+
+def test_only_known_chrome_below_the_command_is_skipped():
+    # "This command requires approval" under the description is skipped (the
+    # real capture matches its own key, above). Any other shallow row there
+    # stays in the block and fails closed, and so does the known text above the
+    # description or at the command's indent: it's part of the request then.
+    key = _bash_key(_PY_COMMAND, _PY_DESCRIPTION)
+    capture = _dialog("bash_requires_approval.txt")
+    unknown = parse_permission_dialog(capture.replace(" This command requires approval", " ⚠ Sandbox disabled"))
+    assert unknown is not None
+    assert not dialog_matches(unknown, "Bash", key)
+    above = parse_permission_dialog(
+        capture.replace(
+            f"   {_PY_DESCRIPTION}\n\n This command requires approval",
+            f" This command requires approval\n   {_PY_DESCRIPTION}",
+        )
+    )
+    assert above is not None and above["body"][-1] == f"   {_PY_DESCRIPTION}"
+    assert not dialog_matches(above, "Bash", key)
+    deep = parse_permission_dialog(
+        capture.replace(" This command requires approval", "   This command requires approval")
+    )
+    assert not dialog_matches(deep, "Bash", key)
+    assert dialog_matches(deep, "Bash", _bash_key(_PY_COMMAND, _PY_DESCRIPTION + "This command requires approval"))
 
 
 def test_a_bash_dialog_matches_across_a_wrap_and_a_bare_gutter():
@@ -1491,6 +1739,7 @@ def test_hidden_controls_agree_with_the_hook():
         ("bash.txt", "Bash", {"command": "touch probe.txt", "description": "Create empty probe.txt file"}),
         ("bash_narrow.txt", "Bash", {"command": "touch probe.txt", "description": "Create empty probe.txt file"}),
         ("bash_multiline.txt", "Bash", {"command": "touch a.txt\ntouch b.txt", "description": "Create two files"}),
+        ("bash_requires_approval.txt", "Bash", {"command": _PY_COMMAND, "description": _PY_DESCRIPTION}),
         ("write.txt", "Write", {"file_path": "/tmp/probe/notes.md", "content": "hello\n"}),
         ("edit.txt", "Edit", {"file_path": "/tmp/probe/notes.md", "old_string": "hello", "new_string": "goodbye"}),
     ],
@@ -1508,7 +1757,9 @@ def test_a_hidden_control_in_a_command_does_not_break_the_match():
     assert dialog_matches(parse_permission_dialog(screen), "Bash", key)
 
 
-@pytest.mark.parametrize("name", ["bash.txt", "bash_multiline.txt", "bash_narrow.txt", "edit.txt", "write.txt"])
+@pytest.mark.parametrize(
+    "name", ["bash.txt", "bash_multiline.txt", "bash_narrow.txt", "bash_requires_approval.txt", "edit.txt", "write.txt"]
+)
 def test_parse_pane_reads_a_permission_dialog_as_needs_input(name):
     # THI-435: its footer, "Esc to cancel · Tab to amend", is outside
     # NEEDS_INPUT_FOOTER_RE, and the dialog hides the composer and status
@@ -1613,6 +1864,26 @@ def test_a_claude_with_no_status_line_parses_as_claude():
     assert parsed["agent"] == "claude"
     assert parsed["state"] == "idle"
     assert parsed["context_pct"] is None
+
+
+def _named(screen: str) -> str:
+    # The capture's top rule as a named session draws it: the name at its
+    # right end (live 2.1.x pane, escapes kept).
+    lines = screen.split("\n")
+    assert lines[5].startswith("\x1b[38;2;136;136;136m─")
+    grey = "\x1b[38;2;136;136;136m"
+    lines[5] = f"{grey}{'─' * 100}\x1b[39m {grey}thi-416-banner\x1b[39m {grey}─\x1b[39m"
+    return "\n".join(lines)
+
+
+def test_a_named_sessions_composer_is_still_the_composer():
+    # THI-416: the name hid the composer, so with no session file to say
+    # otherwise the pane read as a shell, its footer as the reply, and a reply
+    # got a 409. The draft check still applies under a named rule.
+    screen = _named(_composer_capture("idle.txt"))
+    assert parse_pane(screen)["agent"] == "claude"
+    assert composer_ready(screen)
+    assert not composer_ready(_named(_with_composer_row("\x1b[39m❯\xa0half a thought")))
 
 
 def test_a_footer_of_a_few_rows_still_reads_as_ready():

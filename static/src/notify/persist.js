@@ -1,9 +1,10 @@
 // The notify feed's dedupe state across reloads and webview recycles.
-// recycle.rs rebuilds the webview once you've been idle a while, which is
-// exactly when banners matter; a fresh sentinel would swallow whatever arrived
-// across the rebuild. So the state is saved after every pass and resumed when
-// young enough. Older than RESUME_MS (a reload after a long absence), it's
-// dropped and the feed reseeds, so old news never replays.
+// recycle.rs rebuilds the webview once you've left periscope or been idle a
+// while, which is exactly when banners matter; a fresh sentinel would
+// swallow whatever arrived across the rebuild. So the state is saved after
+// every pass and resumed when young enough. Older than RESUME_MS (a reload
+// after a long absence), it's dropped and the feed reseeds, so old news
+// never replays.
 
 export const STORAGE_KEY = "periscope.notify.v1";
 export const RESUME_MS = 15 * 60 * 1000;

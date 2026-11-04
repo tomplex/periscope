@@ -162,6 +162,27 @@ def test_view_done_refinement_promotes_idle_to_done_after_busy(mocker, clean_sta
     assert stamp == (pid, 5000, 0, 0)
 
 
+def test_view_publishes_a_done_panes_reply_from_its_transcript(mocker, clean_state):
+    # THI-416: the done banner's body. Read only for a done pane, the one
+    # state that notifies, so a working pane's growing file isn't re-read.
+    from periscope import panes
+    from periscope.window_view import build_window_view
+
+    mocker.patch("periscope.window_view.parse_pane", return_value={"agent": "claude", "state": "idle", "spinner": None})
+    _stub_subsystems(mocker, pane_content="x")
+    mocker.patch("periscope.window_view.session_id_for_pane", return_value="sid-1")
+    reply = mocker.patch("periscope.window_view.last_reply_for_session", return_value="Fixed it.")
+
+    view, _ = build_window_view(_window(), now_ts=4000)
+    assert (view["state"], view["last_reply"]) == ("idle", None)
+    reply.assert_not_called()
+
+    panes._prev_state["abc12345"] = "working"
+    view, _ = build_window_view(_window(activity=1), now_ts=5000)
+    assert (view["state"], view["last_reply"]) == ("done", "Fixed it.")
+    reply.assert_called_once_with("sid-1")
+
+
 def test_view_stamps_when_a_pane_started_waiting(mocker, clean_state):
     """needs_since holds the needs-input edge across polls and clears when the
     pane stops waiting, so a question's age doesn't reset on a reload."""
@@ -785,30 +806,29 @@ def test_mem_signal_none_when_healthy():
     from periscope.window_view import mem_signal
 
     assert mem_signal(None) is None
-    assert mem_signal({"pid": 1, "rss_kb": 600_000, "age_s": 3600}) is None
+    assert mem_signal({"pid": 1, "mem_mb": 600, "age_s": 3600}) is None
 
 
-def test_mem_signal_warn_on_rss():
+def test_mem_signal_warn_on_footprint():
     from periscope.window_view import mem_signal
 
-    out = mem_signal({"pid": 1, "rss_kb": 2 * 1024 * 1024, "age_s": 60})
-    assert out == {"tier": "warn", "rss_gb": 2.0, "age_s": 60}
+    out = mem_signal({"pid": 1, "mem_mb": 2048, "age_s": 60})
+    assert out == {"tier": "warn", "trigger": "mem", "gb": 2.0, "age_s": 60}
 
 
 def test_mem_signal_warn_on_age_alone():
     from periscope.window_view import mem_signal
 
-    out = mem_signal({"pid": 1, "rss_kb": 500_000, "age_s": 3 * 86400})
-    assert out["tier"] == "warn"
-    assert out["rss_gb"] == 0.5
+    out = mem_signal({"pid": 1, "mem_mb": 500, "age_s": 3 * 86400})
+    assert out == {"tier": "warn", "trigger": "age", "gb": 0.5, "age_s": 3 * 86400}
 
 
 def test_mem_signal_bad_overrides_warn():
     from periscope.window_view import mem_signal
 
-    out = mem_signal({"pid": 1, "rss_kb": 4_400_000, "age_s": 60})
+    out = mem_signal({"pid": 1, "mem_mb": 4300, "age_s": 60})
     assert out["tier"] == "bad"
-    assert out["rss_gb"] == 4.2
+    assert out["gb"] == 4.2
 
 
 def test_view_surfaces_spawned_by_lineage(mocker, clean_state):
