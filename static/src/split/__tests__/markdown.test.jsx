@@ -185,3 +185,33 @@ describe("mermaid fence", () => {
     expect(html(doc, { mermaid: true })).toContain('class="md-mermaid"');
   });
 });
+
+describe("zoom", () => {
+  const img = "![chart](https://example.com/a.png)";
+  const diagram = "```mermaid\nflowchart LR\n  a --> b\n```";
+  it("leaves images and diagrams plain without zoom", () => {
+    const out = html(img);
+    expect(out).toContain('<img class="md-img" src="https://example.com/a.png" alt="chart"/>');
+    expect(out).not.toContain("md-img-zoom");
+    expect(html(diagram, { mermaid: true })).not.toContain("md-mermaid-zoom");
+  });
+  it("wraps an image in a button that opens it full size", () => {
+    expect(html(img, { zoom: true })).toContain(
+      '<button type="button" class="md-img-zoom" aria-label="open image full size: chart"><img class="md-img is-zoomable" src="https://example.com/a.png" alt="chart"/></button>',
+    );
+  });
+  it("gives a diagram a click target and a real full-size button", () => {
+    const out = html(diagram, { mermaid: true, zoom: true });
+    expect(out).toContain('class="md-mermaid-svg is-zoomable"');
+    expect(out).not.toContain('role="button"');
+    // render-to-string runs no effects, so `ready` is still false here.
+    expect(out).toMatch(
+      /<button type="button" class="md-mermaid-zoom" disabled(="")? aria-label="open diagram full size" title="open full size">⤢<\/button>/,
+    );
+  });
+  it("leaves a linked image a plain image, so a click follows the link only", () => {
+    const out = html("[![badge](https://x.test/b.svg)](https://x.test/)", { zoom: true });
+    expect(out).toContain('<a class="md-link" href="https://x.test/"');
+    expect(out).not.toContain("md-img-zoom");
+  });
+});
