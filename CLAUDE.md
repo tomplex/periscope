@@ -33,7 +33,7 @@ applies. Read the relevant doc before editing, not after the tests go red.
 | `channels.py`, `channel_shim.py`, `turns.py`, `pane_session_hook.py`, `codex_pane_session_hook.py`, `pane_permission_hook.py` | `docs/channels.md` — MCP tools, shim reconnect protocol, pane→session mapping (live sid first, `pane_sessions` fallback), the `PermissionRequest` recorder behind a banner's Allow / Deny (its match key; prints nothing, fails open) |
 | `narrator.py`, `rename_ai.py`, `/api/rename`, `/api/name-pin` | `docs/narrator.md` — regeneration rules, humans win renames, name pinning |
 | `launch_policy.py`, `usage.py` (`choose_launch`), `poke.py`, the spawn/resume paths in `routes/sessions.py` (incl. move-account), `open_ops.py`, `channels.py`, the `spawn_model` / `spawn_account` settings, header pin pickers, `UsagePill` / `usageSummary.js` | `docs/account-routing.md` — earliest-reset routing, walls vs. session pressure, what `auto`/`default` mean, the session poke, the move-anyway override, the 💤 waste marker |
-| `reviews.py`, `routes/reviews.py`, `static/src/review/*`, `skills/walkthrough/SKILL.md` (symlinked into each account's `skills/` by `bin/periscope install-skill`) | `docs/superpowers/specs/2026-10-26-review-walkthrough-design.md` — D1 periscope never mutates git/GitHub, D2 files under `~/.claude/reviews` with one writer per file, D6 queue sourced from `gh` with panes joined on |
+| `reviews.py`, `routes/reviews.py`, `static/src/review/*`, `skills/walkthrough/SKILL.md` (symlinked into each account's `skills/` by `bin/periscope install-skill`) | `docs/superpowers/specs/2026-10-26-review-walkthrough-design.md` — D1 periscope never mutates git/GitHub, D2 files under `~/.claude/reviews` with one writer per file, D6 queue sourced from `gh` with panes joined on; the walkthrough view's layout and `reviewed.json`: `docs/superpowers/specs/2026-10-29-walkthrough-two-column-design.md` |
 | `src-tauri/` | `docs/tauri-shell.md` — build via `.app` not `cargo tauri dev`, webview recycling |
 | `static/src/notify/`, `notifications.rs`, `tauri.js` `notify` / `onNotificationOpened` / `onNotificationAction`, `NotifySettings` | `docs/superpowers/specs/2026-10-21-native-notifications-design.md` (its revision sections first) — one pass per applied state (`stateSeq`), grace counted in passes, keys that survive a restart, webview/shell version skew; buttons: `2026-10-26-native-notifications-2b-design.md` (its "Revised in implementation (PR 2)" section first) — categories are data the webview registers, one per variant whose buttons all apply; Allow / Deny / Reply / Ask agent to fix POST to `routes/pane_actions.py`, which re-checks the pane when pressed |
 | `bin/periscope update`, `updater.py`, `bin/release`, `CHANGELOG.md`, the launchd plist | `docs/updating.md` — updates target the newest release tag (never `main`'s tip), why pull+restart is not `update`, the bootout guards |
@@ -124,6 +124,7 @@ would double-load every global.
 | `worktrees.py` / `worktree_spawn.py` / `repo_locks.py` / `gitutil.py` | Worktree cache + affiliation / spawn + two-window layout / per-repo git lock + per-dir open lock / shared git helpers |
 | `pids.py` | `@periscope_id` mint / stamp / rebind / resolve — pane identity |
 | `session_status.py` | Authoritative Claude-session state from `<config_dir>/sessions/<pid>.json` |
+| `resources.py` | Memory footprint + CPU per owner (each pane, server, webview, elsewhere) through libproc on the tick's process snapshot; `measure()` feeds `/api/state` |
 | `turns.py` | Pane transcript view (`GET /api/pane/turns`) |
 | `bg_commander.py` | Background command jobs + status sync |
 | `poke.py` | Daily session poke: one Haiku message per account at 08:00 so the 5h window resets ~13:00; verified, logged, prod-only |
@@ -143,7 +144,7 @@ commit `static/dist/` whenever `static/src/` changes** — boot has no build ste
 | Area | Modules |
 |---|---|
 | entry / state | `main.jsx`, `store.js` (transient signals), `prefs.js` (server-prefs cache — the persistence boundary), `poll.js` (the single `/api/state` loop) |
-| chrome | `chrome/{Header,FilterBar,UsagePill}.jsx` |
+| chrome | `chrome/{Header,FilterBar,UsagePill,ResourcePill}.jsx` (`chrome/resources.js`: the resource pill's pure formatting) |
 | split view | `split/{Split,Rail,RailRows,Detail,…}.jsx` + `split/railTree.js` — the only view. Rail is TRACK-anchored: Track → (derived Branch) → Pane; branch rows are derived from live `w.branch`, not entities |
 | review | `review/{Walkthrough,ReviewsQueue}.jsx` + `walkthrough.js` (the PR walkthrough view, the cross-track reviews queue, their pure helpers) |
 | terminal | `terminal/{Terminal,TerminalSearch}.jsx` + `terminalCore.js` (imperative xterm + `/ws/pane`) |

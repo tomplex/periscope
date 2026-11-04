@@ -15,6 +15,7 @@ the resume orchestration).
 import hashlib
 import re
 import time
+from itertools import dropwhile
 
 from periscope.config import INPUT_CTL_SESSION
 from periscope.tmux import _ANSI_SGR_RE, tmux
@@ -339,6 +340,13 @@ _FILE_HEADERS = {"Write": ("Create file", "Overwrite file"), "Edit": ("Edit file
 # second shallow row that no `Tip:` test would catch. Without a leading Tip,
 # a shallow row above the command is unknown chrome and stays in the block.
 _COMMAND_INDENT = 3
+# Rows Claude draws below a Bash dialog's description, shallower than the
+# command: "This command requires approval" sits there for `python3 -c …`
+# (tests/fixtures/permission_dialogs/bash_requires_approval.txt), and counted
+# into the block it made every such Allow a 409. Only these exact rows, only
+# at the block's end, are skipped; any other shallow row there stays in the
+# block, so unknown chrome still fails closed.
+_TRAILING_CHROME = frozenset({"This command requires approval"})
 # A multi-line command's `│ ` gutter; a blank command line leaves a bare `│`.
 _GUTTER_RE = re.compile(r"^│(?=\s|$)")
 # Mirrors pane_permission_hook._HIDDEN_RE (a test pins the two): the hook
@@ -360,18 +368,13 @@ PROMPT_LINE_RE = re.compile(r"^❯\s*(?P<input>.*)$")
 # active-op / prose by the no-space-before-`(` pattern.
 TOOL_CALL_RE = re.compile(r"^[^\x00-\x7f]\s+\w+\(")
 
-# Tool-result lines start with `⎿`. Claude Code renders rate-limit and
-# transport failures as a normal tool result whose body begins with
-# "API Error:" and then STOPS — it does not auto-retry; the turn just
-# ends with the error sitting there until the user types something
-# (`keep going`, etc.) to restart. When the most recent `⎿` line is an
-# API Error the pane is silently blocked waiting on a human nudge. A
-# later non-error `⎿` means a subsequent turn succeeded and the flag
-# should clear. A stream cut mid-response ("The response stopped
-# arriving") renders as an assistant `⏺` line instead (THI-436), so both
-# glyphs count as the error.
+# A tool result (`⎿ …`). An API error is a tool result (rate limit) or an
+# assistant `⏺` line (stream cut, THI-436). A collapsed tool group
+# (`  Called fdy 6 times (ctrl+o to expand)`) prints no `⎿` (THI-455); its
+# capital excludes a result's `… +3 lines` row and `› Message from @…`.
 TOOL_RESULT_RE = re.compile(r"^\s*⎿\s+")
 API_ERROR_RE = re.compile(r"^\s*[⎿⏺]\s+API Error:")
+COLLAPSED_TOOL_GROUP_RE = re.compile(r"^\s+[A-Z]\w* .*\(ctrl\+o to expand\)\s*$")
 
 
 def all_pane_ids() -> set[str]:
@@ -452,13 +455,14 @@ def list_windows() -> list[dict]:
 def _split_buffers(content: str) -> tuple[list[str], list[str], list[str]]:
     """Split capture() output into (raw_rows, plain_rows, lines).
 
-    `content` includes SGR escape sequences (capture -e). `raw_rows` keeps
+    `content` includes escape sequences (capture -e). `raw_rows` keeps
     them — the prompt-line ghost-text check needs the fg-color info to tell
     real input from Claude's greyed-out suggestion. `plain_rows` strips
-    them; `lines` is the non-empty plain rows.
+    them, OSC 8 hyperlinks included (a linkified ticket reached the done
+    banner as `\\x1b]8;id=…`, THI-416); `lines` is the non-empty plain rows.
     """
     raw_rows = content.rstrip("\n").split("\n")
-    plain_rows = [_ANSI_SGR_RE.sub("", row) for row in raw_rows]
+    plain_rows = [_strip_escapes(row) for row in raw_rows]
     lines = [p for p in plain_rows if p.strip() != ""]
     return raw_rows, plain_rows, lines
 
@@ -551,6 +555,11 @@ def _bash_key(squashed: str) -> str:
     return "sha256:" + hashlib.sha256(squashed.encode()).hexdigest()
 
 
+def _is_shallow(row: str) -> bool:
+    """Indented less than a Bash dialog's command and description."""
+    return len(row) - len(row.lstrip()) < _COMMAND_INDENT
+
+
 def parse_permission_dialog(content: str) -> dict | None:
     """The permission dialog ending a capture, or None. Returns its `text`
     (header row to footer row), `header` ("Bash command", "Create file", …),
@@ -616,11 +625,13 @@ def dialog_matches(parsed: dict | None, tool: str, match_key: str | None) -> boo
     and no other. No key, or a tool whose dialog isn't verified (NotebookEdit,
     WebFetch, MCP tools, …), never matches.
 
-    Bash: the digest of the whole command + description block (after a
-    leading Tip and its wrap, up to the first row indented 3+), gutter and
-    whitespace squashed, EQUALS the key. Never a prefix or a substring: `git
-    push origin main` vouched for `… --force`, two `cd <repo> && …` share
-    their first 40 characters, and every `python3 - <<'EOF'` its first line.
+    Bash: the digest of the command + description block, gutter and
+    whitespace squashed, EQUALS the key. The block starts after a leading Tip
+    and its wrap, at the first row that isn't shallow, and ends before any
+    shallow `_TRAILING_CHROME` rows at its foot. Never a prefix or a
+    substring: `git push origin main` vouched for `… --force`, two `cd <repo>
+    && …` share their first 40 characters, and every `python3 - <<'EOF'` its
+    first line.
     Accepted limit: squashing loses whitespace-only differences and the
     command/description boundary (`rm -rf / tmp/x` squashes as `rm -rf
     /tmp/x`), which the wrapped screen can't recover; the single-row rule and
@@ -640,11 +651,12 @@ def dialog_matches(parsed: dict | None, tool: str, match_key: str | None) -> boo
     if tool == "Bash":
         if parsed["header"] != "Bash command":
             return False
-        body = parsed["body"]
-        start = 0
-        if body and body[0].lstrip().startswith("Tip:"):
-            start = next((i for i, r in enumerate(body) if len(r) - len(r.lstrip()) >= _COMMAND_INDENT), len(body))
-        block = "".join(_GUTTER_RE.sub("", row.lstrip()) for row in body[start:])
+        rows = parsed["body"]
+        if rows and rows[0].lstrip().startswith("Tip:"):
+            rows = list(dropwhile(_is_shallow, rows))
+        while rows and _is_shallow(rows[-1]) and rows[-1].strip() in _TRAILING_CHROME:
+            rows = rows[:-1]
+        block = "".join(_GUTTER_RE.sub("", row.lstrip()) for row in rows)
         return _bash_key(_squash(block)) == match_key
     shown = parsed["shown_path"]
     return parsed["header"] in _FILE_HEADERS[tool] and bool(shown) and ("/" + match_key).endswith("/" + shown)
@@ -814,6 +826,12 @@ def _dialog_above(rows: list[str]) -> bool:
     return False
 
 
+# The composer's top rule: plain, or a named session's with the name at its
+# right end (`──── thi-416-banner ─`), which hid the composer and handed the
+# footer to last_line (THI-416). The lower rule and a dialog's stay plain.
+_COMPOSER_TOP_RE = re.compile(r"^─{20,}(?: [^─]+ ─+)?\s*$")
+
+
 def _composer_rows(content: str, footer_reach: int = _FOOTER_REACH) -> list[tuple[str, str]] | None:
     """(raw, plain) of the non-empty rows between the LAST two full-width
     rules, where Claude draws its composer, or None when there is no such
@@ -822,14 +840,18 @@ def _composer_rows(content: str, footer_reach: int = _FOOTER_REACH) -> list[tupl
     raw_rows = content.rstrip("\n").split("\n")
     plain_rows = [_strip_escapes(row).rstrip() for row in raw_rows]
     rules = [i for i, row in enumerate(plain_rows) if DIALOG_RULE_RE.match(row)]
-    if len(rules) < 2:
+    if not rules:
         return None
-    footer = [row for row in plain_rows[rules[-1] + 1 :] if row.strip()]
+    bottom = rules[-1]
+    top = next((i for i in reversed(range(bottom)) if _COMPOSER_TOP_RE.match(plain_rows[i])), None)
+    if top is None:
+        return None
+    footer = [row for row in plain_rows[bottom + 1 :] if row.strip()]
     if len(footer) > footer_reach or any(_EXITED_RE.match(row) for row in footer):
         return None
-    if _dialog_above(plain_rows[: rules[-2]]):
+    if _dialog_above(plain_rows[:top]):
         return None
-    return [(raw_rows[i], plain_rows[i]) for i in range(rules[-2] + 1, rules[-1]) if plain_rows[i].strip()]
+    return [(raw_rows[i], plain_rows[i]) for i in range(top + 1, bottom) if plain_rows[i].strip()]
 
 
 def _detect_composer(content: str) -> bool:
@@ -914,18 +936,54 @@ def _extract_recap(lines: list[str]) -> str | None:
     return re.sub(r"\s+", " ", recap)[:400]
 
 
-def _last_meaningful_line(lines: list[str]) -> str:
-    """The closest "real" content line from the bottom — recent prose, a
-    subtask line, or a past-tense indicator — skipping TUI chrome. Used for
-    shell panes and the card snippet fallback. "" if nothing real.
+# Claude draws hints like `new task? /clear to save 433.4k tokens` flush right,
+# just above the composer. A reply's prose is indented 2 under its ⏺, a list a
+# few more.
+_RIGHT_ALIGNED_INDENT = 20
+
+
+def _is_turn_chrome(line: str) -> bool:
+    """True for the turn's own lines that aren't the reply: its `✻ Brewed for
+    42s · done 1:27 PM` or `✻ Waiting for 1 background agent` line, a `⎿` tool
+    result or tip, a right-aligned hint. Not in _is_chrome_line: the asked-
+    question check reads the line above the `✻` indicator through it."""
+    s = line.strip()
+    if s.startswith(("✻", "⎿")) or IDLE_INDICATOR_RE.match(line):
+        return True
+    return len(line) - len(line.lstrip()) >= _RIGHT_ALIGNED_INDENT
+
+
+# A collapsed tool group (`⏺ Read 3 files (ctrl+o to expand)`) or an MCP call
+# (`⏺ periscope - notify (MCP)(kind: …)`): tool headers TOOL_CALL_RE misses.
+_TOOL_HEADER_MARKS = ("(ctrl+o to expand)", "(MCP)(")
+
+
+def _last_meaningful_line(rows: list[str]) -> str:
+    """What a done banner says when the transcript can't (THI-416): the newest
+    reply on screen from its start, its first paragraph's wrapped rows joined.
+    Its last row was the banner once, half a sentence ("that use it would
+    fail."). "" when the newest ⏺ is a tool call: the turn ended without words.
+    With no ⏺ on screen, the closest line from the bottom that isn't chrome or
+    the turn's own (_is_turn_chrome). `rows` keeps blank rows: they end the
+    paragraph.
     """
-    for line in reversed(lines):
-        s = line.strip()
-        if not s:
+    for i in range(len(rows) - 1, -1, -1):
+        s = rows[i].strip()
+        if not s.startswith("⏺"):
             continue
-        if _is_chrome_line(line):
-            continue
-        return s[:200]
+        if TOOL_CALL_RE.match(s) or any(mark in s for mark in _TOOL_HEADER_MARKS):
+            return ""
+        # Claude wraps a reply itself, each continuation row indented under ⏺.
+        para = [s.removeprefix("⏺").strip()]
+        for row in rows[i + 1 :]:
+            if not row.startswith("  ") or not row.strip() or _is_chrome_line(row) or _is_turn_chrome(row):
+                break
+            para.append(row.strip())
+        return " ".join(para)[:300]
+    for row in reversed(rows):
+        s = row.strip()
+        if s and not _is_chrome_line(row) and not _is_turn_chrome(row):
+            return s[:200]
     return ""
 
 
@@ -983,15 +1041,13 @@ def _detect_asked_question(lines: list[str]) -> bool:
 
 
 def _detect_api_error(lines: list[str]) -> bool:
-    """True when the most recent `⎿` tool-result line is an API Error,
-    or a `⏺ API Error:` line sits below it.
+    """True when Claude has written nothing since the newest API Error
+    line: no `⎿` tool result, `⏺` line or collapsed tool group below it.
 
-    Claude Code renders rate-limit / transport failures as a normal tool
-    result whose body begins "API Error:" (or, for a stream cut, as an
-    assistant `⏺ API Error:` line) and then STOPS — no auto-retry;
-    the turn just ends until the user nudges it (`keep going`, etc.). The
-    flag tracks "pane is silently blocked". A later non-error `⎿` means a
-    subsequent turn succeeded and the flag clears.
+    A rate-limit error ends the turn until the user nudges it (`keep
+    going`); after a stream cut Claude Code may carry on by itself. Either
+    way, output below the error means the API answered and the pane isn't
+    blocked.
 
     Caller invokes this only for Claude panes — prose mentioning "API
     Error" in a shell pane (logs, grep output) must not trip it.
@@ -999,7 +1055,7 @@ def _detect_api_error(lines: list[str]) -> bool:
     for line in reversed(lines):
         if API_ERROR_RE.match(line):
             return True
-        if TOOL_RESULT_RE.match(line):
+        if TOOL_RESULT_RE.match(line) or COLLAPSED_TOOL_GROUP_RE.match(line) or line.lstrip().startswith("⏺"):
             return False
     return False
 
@@ -1057,7 +1113,8 @@ def parse_pane(content: str) -> dict:
     pending_input = None if needs_input else _detect_pending_input(raw_rows, plain_rows)
 
     recap = _extract_recap(lines)
-    last_line = _last_meaningful_line(body)
+    # The same cut over every row: blank rows end the reply's first paragraph.
+    last_line = _last_meaningful_line(plain_rows[: _last_rule_index(plain_rows) + 1] if composer else plain_rows)
 
     asked_question = _detect_asked_question(body) if agent == "claude" and not needs_input else False
     api_error = _detect_api_error(body) if agent == "claude" else False

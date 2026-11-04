@@ -8,8 +8,8 @@
 // dropdown's open/close + outside-click + Escape mechanics mirror app.js's
 // openDropdown/closeDropdown, but Escape goes through the LIFO useEscape hook
 // instead of the old pushEscape/popEscape registry.
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { useEscape } from "../hooks/useEscape.js";
+import { useCallback, useRef, useState } from "preact/hooks";
+import { usePopoverDismiss } from "../hooks/usePopoverDismiss.js";
 import { currentFilter } from "../store.js";
 import { track } from "../track.js";
 
@@ -31,19 +31,7 @@ export function FilterBar() {
   const activeLabel = (FILTERS.find((f) => f.key === active) || FILTERS[0]).label;
 
   const close = useCallback(() => setOpen(false), []);
-  useEscape(close, open);
-
-  // Outside-click closes the menu. Deferred-attach isn't needed here because
-  // the toggle's onClick stops propagation, so the opening click never
-  // reaches this document listener.
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e) {
-      if (ddRef.current && !ddRef.current.contains(e.target)) setOpen(false);
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, [open]);
+  usePopoverDismiss(ddRef, open, close);
 
   function pick(key) {
     currentFilter.value = key;

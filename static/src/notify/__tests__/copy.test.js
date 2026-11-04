@@ -54,6 +54,18 @@ describe("payloadFor", () => {
     expect(payloadFor({ kind: "done", w: w() }).body).toBe("Finished.");
   });
 
+  it("says a done pane's reply from its transcript over anything read off its screen (THI-416)", () => {
+    // last_line is a screen scrape: the turn's `✻ … for 42s` line, a footer
+    // statusline when the composer goes unrecognised.
+    const status = "📁 periscope 🌿 main ✎6  |  🧠███░░░░░░░ 39% 📨 2 📤 403 | session: 387.5k in / 403 out 💰 $121.06 🤖 opus";
+    const body = (over) => payloadFor({ kind: "done", w: w(over) }).body;
+    expect(body({ last_reply: "I updated FDY-8473. It now covers the call.", recap: "An older recap.", last_line: status }))
+      .toBe("I updated FDY-8473.");
+    expect(body({ recap: "Opened the PR. Tests pass.", last_line: status })).toBe("Opened the PR.");
+    expect(body({ last_line: "Merged it. Prod restarted." })).toBe("Merged it.");
+    expect(body({ last_reply: "", recap: null, last_line: "" })).toBe("Finished.");
+  });
+
   it("lists the failing checks first and links the PR", () => {
     const p = payloadFor({
       kind: "ci_failed",

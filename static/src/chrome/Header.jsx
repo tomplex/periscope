@@ -14,13 +14,14 @@
 // those surfaces while only chrome is Preact-mounted.
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { multiAccount } from "../accounts.js";
-import { useEscape } from "../hooks/useEscape.js";
+import { usePopoverDismiss } from "../hooks/usePopoverDismiss.js";
 import { unresolvedTotal } from "../review/walkthrough.js";
 import { selectReviewsQueue } from "../split/alertFeed.js";
 import { reviews, windows } from "../store.js";
 import { track } from "../track.js";
 import { FilterBar } from "./FilterBar.jsx";
 import { PanelToggles } from "./PanelToggles.jsx";
+import { ResourcePill } from "./ResourcePill.jsx";
 import { SpawnAccountPicker } from "./SpawnAccountPicker.jsx";
 import { SpawnEffortPicker } from "./SpawnEffortPicker.jsx";
 import { SpawnModelPicker } from "./SpawnModelPicker.jsx";
@@ -34,15 +35,7 @@ function Dropdown({ id, toggleClass, toggleLabel, title, children }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const close = useCallback(() => setOpen(false), []);
-  useEscape(close, open);
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    }
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, [open]);
+  usePopoverDismiss(ref, open, close);
   return (
     <div class="tb-dd" ref={ref}>
       <button
@@ -136,10 +129,10 @@ export function Header() {
           periscope<i class="brand-cursor"></i>
         </span>
         <UsagePill />
+        <ResourcePill />
         {/* The spawn pins stack as one block to the right of the usage
-            meters (.usage flexes, so this block sits at the meters' far edge):
-            account, model, effort, labels aligned so the chips read as a
-            3-row table. */}
+            meters and the resource pill: account, model, effort, labels
+            aligned so the chips read as a 3-row table. */}
         <div class="spawn-pins">
           <SpawnAccountPicker />
           <SpawnModelPicker />

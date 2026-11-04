@@ -17,6 +17,7 @@ import {
   launchDefault,
   moveTargets,
   projects,
+  resources,
   reviews,
   spawnAccount,
   spawnEffort,
@@ -65,6 +66,7 @@ function applyState(data) {
     // UsagePill reads { plan, fallback, poke }.
     usage.value = { plan: data.usage_plan, fallback: data.usage, poke: data.poke || {} };
     updateInfo.value = data.update || null;
+    resources.value = data.resources || null;
     accounts.value = data.accounts || [];
     moveTargets.value = data.move_targets || {};
     spawnAccount.value = data.spawn_account || null;

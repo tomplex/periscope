@@ -35,6 +35,13 @@ _REQUEST = "a1b2c3d4e5f60718"
 # The keys the hook stores for each fixture's request (pane_permission_hook.match_key).
 _BASH_KEY = hook.match_key("Bash", {"command": "touch probe.txt", "description": "Create empty probe.txt file"})
 _MULTILINE_KEY = hook.match_key("Bash", {"command": "touch a.txt\ntouch b.txt", "description": "Create two files"})
+_PY_KEY = hook.match_key(
+    "Bash",
+    {
+        "command": 'python3 -c "open(\\"py.txt\\",\\"w\\").close()"',
+        "description": "Create empty py.txt file with Python",
+    },
+)
 _NOTES = "/tmp/probe/notes.md"
 
 
@@ -109,6 +116,8 @@ def test_permission_sends_the_choices_key(client, pane, fresh_activity_db, choic
         ("bash.txt", "Bash", _BASH_KEY),
         ("bash_narrow.txt", "Bash", _BASH_KEY),
         ("bash_multiline.txt", "Bash", _MULTILINE_KEY),
+        # "This command requires approval" under the description is chrome.
+        ("bash_requires_approval.txt", "Bash", _PY_KEY),
         # The dialog names notes.md; the hook stored the absolute path.
         ("write.txt", "Write", _NOTES),
         ("edit.txt", "Edit", _NOTES),

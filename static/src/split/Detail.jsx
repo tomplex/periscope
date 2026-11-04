@@ -17,6 +17,7 @@
 // hsep, header-pr/-linear/-ci/-git/-api-error, side-section/-label/-pending/
 // -prompt/-mono. No class renamed.
 import { useEffect, useRef, useState } from "preact/hooks";
+import { fmtCpu, fmtMem } from "../chrome/resources.js";
 import { ChangesTab } from "../diff/ChangesTab.jsx";
 import { Inspector } from "../inspector/Inspector.jsx";
 import { getDetailMode, setDetailMode, setLastSelected } from "../prefs.js";
@@ -263,7 +264,19 @@ export function PaneHeader({ w }) {
     parts.push(<><span class="hsep">·</span><span class={`header-mem ${mh.cls}`} title={mh.title}>↻ {mh.label}</span></>);
   }
   if (w.api_error) {
-    parts.push(<><span class="hsep">·</span><span class="header-api-error" title="last tool result was an API error">⚠ API error</span></>);
+    parts.push(<><span class="hsep">·</span><span class="header-api-error" title="Claude hit an API error and has written nothing since">⚠ API error</span></>);
+  }
+  // After ↻ and API-error: its fixed width (styles.css .header-res) can't
+  // shift either chip.
+  if (w.res) {
+    parts.push(
+      <>
+        <span class="hsep">·</span>
+        <span class="header-res" title="this pane's whole process tree: memory footprint, and its share of the machine's CPU (100% = every core busy)">
+          {`${fmtMem(w.res.mem_mb)} mem · ${fmtCpu(w.res.cpu_pct)} cpu`}
+        </span>
+      </>
+    );
   }
   return (
     <header id="detail-pane-header" class="detail-pane-header" data-agent={w.agent || undefined}>
