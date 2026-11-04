@@ -223,24 +223,12 @@ receive: their Update button targets the newest tag, never `main`'s tip
 (`docs/updating.md`). Merging to `main` + `bin/periscope restart` updates this
 machine alone.
 
-Cut one when asked — `bin/release` pushes a public tag that every install
-offers within the hour:
-
-1. Draft the `## vX.Y.Z — YYYY-MM-DD` section at the top of
-   `~/dev/periscope/CHANGELOG.md` — the one prod-tree file this workflow
-   edits, and the one dirty file `bin/release` accepts. Prose for someone
-   running periscope: what's new and what behaves differently, grouped by
-   feature. Raw material is `git log <last-tag>..HEAD`.
-2. Show the draft and wait for the requester's OK — the notes are the
-   release's whole public face (popover and GitHub Release body).
-3. `bin/release X.Y.Z` in `~/dev/periscope`. It refuses without the section,
-   off `main`, behind `origin/main`, or with no commits since the last tag;
-   then bumps `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
-   `pyproject.toml`, re-syncs `Cargo.lock` and `uv.lock`, commits
-   `release: vX.Y.Z` with the changelog, tags, and pushes. The tag runs `.github/workflows/release.yml`
-   (unsigned universal `.dmg`, the section as the release body).
-
-Done when `git ls-remote --tags origin vX.Y.Z` prints the tag.
+Cut one when asked with the `release` skill (`skills/release/SKILL.md`,
+linked into each account by `bin/periscope install-skill`): it drafts the
+`## vX.Y.Z — YYYY-MM-DD` section at the top of `CHANGELOG.md`, waits for the
+requester's OK on the notes, then runs `bin/release X.Y.Z`, which bumps the
+versions, commits, tags and pushes. Done when `git ls-remote --tags origin
+vX.Y.Z` prints the tag.
 
 Feature merges leave `CHANGELOG.md` alone: it holds released sections only,
 written at release time — `bin/release-notes` requires the version being cut
