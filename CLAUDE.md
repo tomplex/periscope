@@ -33,7 +33,7 @@ applies. Read the relevant doc before editing, not after the tests go red.
 | `channels.py`, `channel_shim.py`, `turns.py`, `pane_session_hook.py`, `codex_pane_session_hook.py`, `pane_permission_hook.py` | `docs/channels.md` — MCP tools, shim reconnect protocol, pane→session mapping (live sid first, `pane_sessions` fallback), the `PermissionRequest` recorder behind a banner's Allow / Deny (its match key; prints nothing, fails open) |
 | `narrator.py`, `rename_ai.py`, `/api/rename`, `/api/name-pin` | `docs/narrator.md` — regeneration rules, humans win renames, name pinning |
 | `launch_policy.py`, `usage.py` (`choose_launch`), `poke.py`, the spawn/resume paths in `routes/sessions.py` (incl. move-account), `open_ops.py`, `channels.py`, the `spawn_model` / `spawn_account` settings, header pin pickers, `UsagePill` / `usageSummary.js` | `docs/account-routing.md` — earliest-reset routing, walls vs. session pressure, what `auto`/`default` mean, the session poke, the move-anyway override, the 💤 waste marker |
-| `reviews.py`, `routes/reviews.py`, `static/src/review/*`, `skills/walkthrough/SKILL.md` (symlinked into each account's `skills/` by `bin/periscope install-skill`) | `docs/superpowers/specs/2026-10-26-review-walkthrough-design.md` — D1 periscope never mutates git/GitHub, D2 files under `~/.claude/reviews` with one writer per file, D6 queue sourced from `gh` with panes joined on |
+| `reviews.py`, `routes/reviews.py`, `static/src/review/*`, `skills/walkthrough/SKILL.md` (symlinked into each account's `skills/` by `bin/periscope install-skill`) | `docs/superpowers/specs/2026-10-26-review-walkthrough-design.md` — D1 periscope never mutates git/GitHub, D2 files under `~/.claude/reviews` with one writer per file, D6 queue sourced from `gh` with panes joined on; the walkthrough view's layout and `reviewed.json`: `docs/superpowers/specs/2026-10-29-walkthrough-two-column-design.md` |
 | `src-tauri/` | `docs/tauri-shell.md` — build via `.app` not `cargo tauri dev`, webview recycling |
 | `static/src/notify/`, `notifications.rs`, `tauri.js` `notify` / `onNotificationOpened` / `onNotificationAction`, `NotifySettings` | `docs/superpowers/specs/2026-10-21-native-notifications-design.md` (its revision sections first) — one pass per applied state (`stateSeq`), grace counted in passes, keys that survive a restart, webview/shell version skew; buttons: `2026-10-26-native-notifications-2b-design.md` (its "Revised in implementation (PR 2)" section first) — categories are data the webview registers, one per variant whose buttons all apply; Allow / Deny / Reply / Ask agent to fix POST to `routes/pane_actions.py`, which re-checks the pane when pressed |
 | `bin/periscope update`, `updater.py`, `bin/release`, `CHANGELOG.md`, the launchd plist | `docs/updating.md` — updates target the newest release tag (never `main`'s tip), why pull+restart is not `update`, the bootout guards |
@@ -226,24 +226,12 @@ receive: their Update button targets the newest tag, never `main`'s tip
 (`docs/updating.md`). Merging to `main` + `bin/periscope restart` updates this
 machine alone.
 
-Cut one when asked — `bin/release` pushes a public tag that every install
-offers within the hour:
-
-1. Draft the `## vX.Y.Z — YYYY-MM-DD` section at the top of
-   `~/dev/periscope/CHANGELOG.md` — the one prod-tree file this workflow
-   edits, and the one dirty file `bin/release` accepts. Prose for someone
-   running periscope: what's new and what behaves differently, grouped by
-   feature. Raw material is `git log <last-tag>..HEAD`.
-2. Show the draft and wait for the requester's OK — the notes are the
-   release's whole public face (popover and GitHub Release body).
-3. `bin/release X.Y.Z` in `~/dev/periscope`. It refuses without the section,
-   off `main`, behind `origin/main`, or with no commits since the last tag;
-   then bumps `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
-   `pyproject.toml`, re-syncs `Cargo.lock` and `uv.lock`, commits
-   `release: vX.Y.Z` with the changelog, tags, and pushes. The tag runs `.github/workflows/release.yml`
-   (unsigned universal `.dmg`, the section as the release body).
-
-Done when `git ls-remote --tags origin vX.Y.Z` prints the tag.
+Cut one when asked with the `release` skill (`skills/release/SKILL.md`,
+linked into each account by `bin/periscope install-skill`): it drafts the
+`## vX.Y.Z — YYYY-MM-DD` section at the top of `CHANGELOG.md`, waits for the
+requester's OK on the notes, then runs `bin/release X.Y.Z`, which bumps the
+versions, commits, tags and pushes. Done when `git ls-remote --tags origin
+vX.Y.Z` prints the tag.
 
 Feature merges leave `CHANGELOG.md` alone: it holds released sections only,
 written at release time — `bin/release-notes` requires the version being cut

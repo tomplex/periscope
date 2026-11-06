@@ -117,7 +117,8 @@ it by convention.
 One writer per file: the pane writes `walkthrough.md`; periscope only ever
 appends to `comments.md`; the pane edits `comments.md` only to add a reply
 paragraph inside an entry and flip its `resolved`. Periscope removes the
-whole dir only on the row's **clear**.
+whole dir only on the row's **clear**. Periscope is also the only writer of
+`reviewed.json` (per-stop reviewed marks, THI-443).
 
 ### D3. Markdown with three conventions, each degrading to plain markdown
 
@@ -192,6 +193,12 @@ target) — and a comment box per stop. A staleness chip when the worktree's
 HEAD differs from the header's `head`. Hunks come from the branch's worktree
 path, not a pane, so a branch with no live pane but a worktree on disk still
 shows them.
+
+> **Layout superseded by `2026-10-29-walkthrough-two-column-design.md`
+> (THI-443):** the hunks now sit expanded in a column beside each stop's
+> prose, diagrams render in a full-width row above it, the comment box is
+> collapsed until used, and per-stop reviewed marks live in `reviewed.json`
+> (`POST /api/reviews/reviewed`).
 
 ### D6. The Reviews queue is a detail-area selection, one row per (repo, branch), sourced from GitHub
 
