@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from periscope import config
+from periscope import config, forks
 from periscope.codex_hook_config import EVENTS, codex_home, command_for
 from periscope.tmux_persist import status as resurrect_status
 
@@ -124,4 +124,7 @@ def healthz():
         "version": _VERSION,
         "codex_hook": _codex_hook_health(),
         "resurrect": resurrect_status(config.REPO_ROOT),
+        # The last minute's forks by command (forks.py); /api/state's
+        # `build_stats` carries only the top five.
+        "forks": dict(forks.fork_counts()),
     }

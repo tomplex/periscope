@@ -8,6 +8,10 @@ These are the non-obvious behaviors worth preserving:
    active window in its session, or when the user acts on it via the
    dashboard (focus/send). See `update_focus_from_windows`.
 
+   The window rows come from one `list-panes -a` (`tmux.list_panes`), one
+   row per window off its active pane (`#{pane_active}`); `active` still
+   reads `#{window_active}`.
+
 2. **Claude detection is anchored to the bottom of the pane.** A pane is
    Claude when its composer (`❯` between two full-width rules) has no more
    than a footer under it, or the status line is in the last 4 non-empty
@@ -188,6 +192,14 @@ These are the non-obvious behaviors worth preserving:
     arbitration — invariant 18) while `re-minting` (WARNING) covers
     cross-poll residue; `grep "re-minting\|duplicate @periscope_id"`
     catches both.
+
+    `list_panes` carries `#{window_id}` and the window option
+    `#{@periscope_id}` on every pane row, so a stamp still targets the
+    window id. `list_windows` always forks a fresh `list-panes` — a stamp or
+    a new window must read back at once — and only `all_pane_ids` and
+    session_status's pane → pid map read the shared snapshot
+    (`tmux.panes_snapshot`: the poll's own rows inside `build_state`,
+    else under 1 s old).
 
 12. **Rebind eligibility (`_REBIND_TTL_S`, 15 min) is NOT GC retention
     (`_PID_TTL_S`, 30 days).** Rebind exists so persisted state reattaches

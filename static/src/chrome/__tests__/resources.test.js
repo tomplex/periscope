@@ -1,7 +1,7 @@
 // resources.js — formatting and ordering behind <ResourcePill> and the
 // detail header's mem/cpu part.
 import { describe, expect, it } from "vitest";
-import { fmtCpu, fmtMem, machineLine, ownedMb, paneLines } from "../resources.js";
+import { buildStatsLine, fmtCpu, fmtMem, machineLine, ownedMb, paneLines, slowestLine, topForksLine } from "../resources.js";
 
 describe("fmtMem", () => {
   it("megabytes under a gigabyte, one decimal of gigabytes above", () => {
@@ -43,5 +43,34 @@ describe("machineLine", () => {
   it("RAM first, so owners adding up past it read as overcommitment", () => {
     expect(machineLine({ load1: 52.3, ram_mb: 16384, swap_used_mb: 16896, swap_total_mb: 17818, mem_free_pct: 27 }))
       .toBe("16.0G RAM · swap 16.5G/17.4G · 27% free · load 52.3");
+  });
+});
+
+describe("buildStatsLine", () => {
+  it("build time, the push interval and forks per minute, server-wide", () => {
+    expect(buildStatsLine({ build_s: 0.43, build_max_s: 1.2, gap_s: 1.07, forks_per_min: 140, top_forks: [] }))
+      .toBe("poll 0.4 s · every 1.1 s · server 140 forks/min");
+  });
+  it("leaves the interval out until the server has pushed twice", () => {
+    expect(buildStatsLine({ build_s: 0.4, build_max_s: 0.4, gap_s: null, forks_per_min: 9, top_forks: [] }))
+      .toBe("poll 0.4 s · server 9 forks/min");
+  });
+});
+
+describe("slowestLine", () => {
+  it("the slowest build in the last minute", () => {
+    expect(slowestLine({ build_max_s: 2.31 })).toBe("slowest 2.3 s");
+  });
+  it("is absent when unknown", () => {
+    expect(slowestLine({ build_max_s: null })).toBe(null);
+  });
+});
+
+describe("topForksLine", () => {
+  it("the top commands, by count", () => {
+    expect(topForksLine({ top_forks: [["git status", 40], ["ps", 12]] })).toBe("git status 40 · ps 12");
+  });
+  it("is absent when there were none", () => {
+    expect(topForksLine({ top_forks: [] })).toBe(null);
   });
 });

@@ -7,13 +7,14 @@ Polled every 3s from the browser; everything underneath is cached on
 its own clock, so this handler is mostly orchestration.
 """
 
+import contextvars
 import dataclasses
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 
-from periscope import resources, store, updater, usage
+from periscope import agent_processes, forks, resources, store, tmux, updater, usage
 from periscope.activity import pane_status_lines
 from periscope.agent_processes import process_snapshot
 from periscope.channels import _channel_gc
@@ -56,6 +57,11 @@ def _safe_build(w: dict, now_ts: int) -> tuple[dict, tuple[str, int, int, int] |
         )
 
 
+# Every reader in one poll gets the list-panes rows its list_windows read
+# and the one ps table it took, however long it runs; a poll running
+# alongside it (the hub and a REST poll) pins its own.
+@tmux.pinned_snapshot()
+@agent_processes.pinned_snapshot()
 def build_state() -> dict:
     """Assemble the full dashboard state blob.
 
@@ -66,12 +72,16 @@ def build_state() -> dict:
     execution is already tolerated — multiple browser tabs hit /api/state at
     once today — so the hub running it alongside a REST poll adds no new race.
     """
+    started = time.monotonic()
+    # Wall-clock start, for _channel_gc below: a pane created after this but
+    # before the poll's pinned pane rows are read must not look older than it is.
+    poll_started_at = int(time.time())
     windows = list_windows()
     update_focus_from_windows(windows)
     _attach_git_then_resolve_pids(windows, full_roster=True)
     now_ts = int(time.time())
-    # Taken before the fan-out, whose codex_process_for_pane calls share its
-    # 1 s cache: measure below reads the same snapshot without a second `ps`.
+    # The poll's pinned table: the fan-out's process readers and measure
+    # below all read this one.
     snapshot = process_snapshot()
 
     # Parallel fan-out: capture()+parse per pane is the only per-poll
@@ -80,10 +90,12 @@ def build_state() -> dict:
     # is NOT thread-safe and stays before this pool; the stamp write below
     # stays single-threaded after the join. executor.map preserves input
     # order, so `result` matches `windows`. _safe_build isolates any per-pane
-    # exception (capture, git, affiliation) into an error view.
+    # exception (capture, git, affiliation) into an error view. Each worker
+    # runs in a copy of this context, which carries the pinned snapshots.
     if windows:
+        context = contextvars.copy_context()
         with ThreadPoolExecutor(max_workers=min(32, len(windows))) as pool:
-            built = list(pool.map(lambda w: _safe_build(w, now_ts), windows))
+            built = list(pool.map(lambda w: context.copy().run(_safe_build, w, now_ts), windows))
     else:
         built = []
 
@@ -116,10 +128,12 @@ def build_state() -> dict:
     # GC against ALL live panes, not the active-pane-per-window set `windows`
     # carries — otherwise a split window's background Claude pane has its alerts
     # dropped every poll. Skip entirely on an empty result (a tmux hiccup must
-    # not wipe every pane's alerts).
+    # not wipe every pane's alerts). live_panes is as old as the poll (its
+    # pinned pane rows); poll_started_at lets the GC spare a pane created
+    # after that but before this point.
     live_panes = all_pane_ids()
     if live_panes:
-        _channel_gc(live_panes)
+        _channel_gc(live_panes, poll_started_at)
 
     # Batched stamp persistence: single lock + single write across every
     # pane in this poll. set_window_fields_bulk skips the write when no
@@ -165,7 +179,7 @@ def build_state() -> dict:
     from periscope.channels import recent_alerts
 
     walls = usage.walls()
-    return {
+    blob = {
         "windows": result,
         "projects": projects_view,
         "workspaces": workspaces_view,
@@ -206,6 +220,11 @@ def build_state() -> dict:
         # the header pill and its popover.
         "resources": measured.totals if measured else None,
     }
+    forks.record_build(time.monotonic() - started)
+    # What this poll cost and how often the hub pushes one (forks.py) — the
+    # resource popover's last line.
+    blob["build_stats"] = forks.build_stats()
+    return blob
 
 
 @router.get("/api/state")

@@ -24,7 +24,7 @@ import threading
 import time
 from typing import TypedDict
 
-from periscope import worktrees
+from periscope import gh, worktrees
 from periscope.gitutil import detect_default_branch, worktree_root
 from periscope.log import log
 from periscope.projects import MAIN_KEY, Project, all_projects
@@ -70,11 +70,7 @@ def _pr_state(repo: str, pr_number: int) -> str | None:
         cached = _pr_state_cache.get(key)
         if cached and _now() - cached[0] < _PR_STATE_TTL:
             return cached[1]
-    code, out = _run(
-        ["gh", "pr", "view", str(pr_number), "--json", "state"],
-        cwd=repo,
-        timeout=10.0,
-    )
+    code, out = gh.run("pr", "view", str(pr_number), "--json", "state", cwd=repo, timeout=10.0)
     state: str | None = None
     if code == 0 and out:
         try:

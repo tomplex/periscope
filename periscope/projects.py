@@ -17,6 +17,7 @@ from typing import TypedDict, cast
 
 from fastapi import HTTPException
 
+from periscope import gh
 from periscope import store as _store
 from periscope.log import log
 from periscope.repo_locks import repo_lock
@@ -158,15 +159,12 @@ def _resolve_pr_metadata(repo: str, pr: int) -> dict:
     Raises HTTPException: 404 if the PR doesn't exist, 400 if the gh call
     fails for any other reason, 500 if gh returns unparseable JSON.
     """
-    code, out = _run(
-        [
-            "gh",
-            "pr",
-            "view",
-            str(pr),
-            "--json",
-            "headRefName,isCrossRepository,headRepository,baseRefName,state",
-        ],
+    code, out = gh.run(
+        "pr",
+        "view",
+        str(pr),
+        "--json",
+        "headRefName,isCrossRepository,headRepository,baseRefName,state",
         cwd=repo,
         timeout=15.0,
     )

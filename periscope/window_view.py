@@ -161,18 +161,18 @@ def _apply_codex_state(
     return False
 
 
-# One account scan per POLL, not per window. `pane_config_dirs` forks `ps`
-# once for the process table plus once more per candidate claude;
-# build_window_view runs across ~20 windows on a 32-thread fan-out every 3s, so
-# per-window would be hundreds of forks a poll. Same TTL-snapshot shape as
-# session_status._claude_procs, plus a lock — without one the fan-out's cold
-# start stampedes 32 concurrent scans instead of 31 waiting on the first.
-# The scan costs ~100ms — two `ps` forks, and the cost is the forks themselves,
-# not the number of processes probed. That lands on the /api/state hot path,
-# where up to 32 fan-out threads block on it. A long TTL is safe because the
-# data is immutable: a process's environment cannot change after exec, so a
-# pane's account is fixed for the life of its Claude. Only a NEW process changes
-# the mapping, and a new pane waiting one interval for its chip is harmless.
+# One account scan per POLL, not per window. `pane_config_dirs` forks one `ps
+# eww` over every candidate claude (the process table is the poll's shared
+# snapshot); build_window_view runs across ~20 windows on a 32-thread fan-out,
+# so per-window would be dozens of forks a poll. Same TTL-snapshot-plus-lock
+# shape as agent_processes.process_snapshot — without the lock the fan-out's
+# cold start stampedes 32 concurrent scans instead of 31 waiting on the
+# first. The cost is the fork itself, not the number of processes probed,
+# and that lands on the /api/state hot path, where up to 32 fan-out threads
+# block on it. A long TTL is safe because the data is immutable: a process's
+# environment cannot change after exec, so a pane's account is fixed for the
+# life of its Claude. Only a NEW process changes the mapping, and a new pane
+# waiting one interval for its chip is harmless.
 _ACCOUNTS_TTL_S = 15.0
 _pane_accounts_lock = threading.Lock()
 _pane_accounts_cache: tuple[float, dict[str, str], dict[str, str], dict[str, str]] | None = None

@@ -64,8 +64,8 @@ from periscope.agent_processes import ProcessInfo
 SERVER = os.getpid()
 
 
-def _proc(pid, ppid, comm="/bin/zsh", argv=None):
-    return ProcessInfo(pid=pid, ppid=ppid, started_at=0, comm=comm, argv=argv if argv is not None else comm, state="S")
+def _proc(pid, ppid, exe="/bin/zsh", argv=None):
+    return ProcessInfo(pid=pid, ppid=ppid, started_at=0, exe=exe, argv=argv if argv is not None else exe, state="S")
 
 
 def _snapshot():
@@ -75,13 +75,7 @@ def _snapshot():
             _proc(1, 0, "/sbin/launchd"),
             _proc(SERVER, 1, "/usr/bin/python3"),
             _proc(900, SERVER, "/opt/homebrew/bin/tmux"),  # control-mode client
-            # ps truncates comm= to 16 chars when it isn't the last column.
-            _proc(
-                500,
-                1,
-                comm="/Applications/Pe",
-                argv="/Applications/Periscope.app/Contents/MacOS/periscope-app",
-            ),
+            _proc(500, 1, "/Applications/Periscope.app/Contents/MacOS/periscope-app"),
             _proc(600, 1, "/System/Library/.../com.apple.WebKit.WebContent"),
             _proc(100, 1, "/bin/zsh"),  # pane %1's root
             _proc(101, 100, "/opt/homebrew/bin/claude"),

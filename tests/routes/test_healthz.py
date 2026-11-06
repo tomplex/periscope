@@ -91,3 +91,13 @@ def test_codex_hook_health_reports_definition_observation_and_staleness(tmp_path
     assert data["observed"]["SessionStart"]["stale"] is True
     assert data["observed"]["SessionStart"]["cli_version"] == "0.146.0"
     assert "secret" not in json.dumps(data)
+
+
+def test_healthz_lists_the_last_minutes_forks(monkeypatch):
+    # The build_stats block carries only the top five; measuring needs them all.
+    from collections import Counter
+
+    monkeypatch.setattr(healthz, "_codex_hook_health", dict)
+    monkeypatch.setattr(healthz, "resurrect_status", lambda root: {})
+    monkeypatch.setattr(healthz.forks, "fork_counts", lambda: Counter({"git status": 2, "ps": 1}))
+    assert TestClient(app).get("/api/healthz").json()["forks"] == {"git status": 2, "ps": 1}

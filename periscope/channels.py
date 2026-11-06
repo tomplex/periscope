@@ -155,13 +155,21 @@ def _unknown_account_error(arguments: dict) -> list | None:
     return _tool_result({"ok": False, "error": f"unknown account {account!r}; registered: {', '.join(ids)}"})
 
 
-def _channel_gc(known_pane_ids: set[str]) -> None:
-    """Drop alert state for panes that no longer exist. Session registry is
-    GC'd by the connection handler on disconnect, not here."""
+def _channel_gc(known_pane_ids: set[str], since: float) -> None:
+    """Drop alert state for panes that no longer exist, except a pane whose
+    newest alert landed at or after `since` — the poll's pane set can be as
+    old as the poll itself (its pinned list-panes rows), so a pane
+    spawned mid-poll must not look dead before its own first alert gets here.
+    Session registry is GC'd by the connection handler on disconnect, not
+    here."""
     with _CHANNELS_LOCK:
-        for d in (_CHANNEL_ALERTS, _CHANNEL_UNREAD):
-            for stale in [k for k in d if k not in known_pane_ids]:
-                d.pop(stale, None)
+        stale = {k for k in (*_CHANNEL_ALERTS, *_CHANNEL_UNREAD) if k not in known_pane_ids}
+        for pane_id in stale:
+            newest = max((a.get("ts") or 0 for a in _CHANNEL_ALERTS.get(pane_id, [])), default=0)
+            if newest >= since:
+                continue
+            _CHANNEL_ALERTS.pop(pane_id, None)
+            _CHANNEL_UNREAD.pop(pane_id, None)
 
 
 def _record_alert(pane: str, message: str, kind: str = "info", severity: str = "info") -> dict:
@@ -1146,8 +1154,7 @@ def pane_channel_ready(pane_id: str) -> bool | None:
     pid = session_status.pane_claude_pids().get(pane_id)
     if pid is None:
         return None
-    _kids, cmds = session_status.proc_table()
-    cmd = cmds.get(pid)
+    cmd = session_status.command_lines().get(pid)
     if cmd is None:
         return None
     return config.CHANNEL_FLAG in cmd

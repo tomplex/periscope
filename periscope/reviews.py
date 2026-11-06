@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import TypedDict
 
-from periscope import git_pr, gitutil, worktrees
+from periscope import gh, git_pr, gitutil, worktrees
 from periscope.log import _bg
 from periscope.tmux import _run
 
@@ -401,17 +401,14 @@ def _orphan_pairs() -> list[tuple[str, str]]:
 
 # --- GitHub: the queue's primary source --------------------------------------
 
-_GH_AVAILABLE = shutil.which("gh") is not None
 _PR_FIELDS = "number,title,headRefName,isDraft,statusCheckRollup,author"
 
 
 def _gh_list(repo_root: str, *extra: str) -> list[dict] | None:
     """None on any failure (offline, auth, bad JSON) so the caller can keep
     the previous cache entry instead of blanking the queue for 60 s."""
-    code, out = _run(
-        ["gh", "pr", "list", "--state", "open", "--json", _PR_FIELDS, "--limit", "50", *extra],
-        cwd=repo_root,
-        timeout=10.0,
+    code, out = gh.run(
+        "pr", "list", "--state", "open", "--json", _PR_FIELDS, "--limit", "50", *extra, cwd=repo_root, timeout=10.0
     )
     if code != 0:
         return None
@@ -425,7 +422,7 @@ def open_prs(repo_root: str) -> list[dict] | None:
     """Open PRs that are mine plus open PRs where my review is requested, in
     that order, deduped by number. `[]` without gh or for a repo with no
     GitHub remote; None when gh failed."""
-    if not _GH_AVAILABLE or not gitutil.github_slug(repo_root):
+    if not gh.AVAILABLE or not gitutil.github_slug(repo_root):
         return []
     out: list[dict] = []
     seen: set[int] = set()

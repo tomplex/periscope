@@ -1,14 +1,14 @@
 // "▣ 15.5G" pill: memory held by the periscope server, its webview and every
 // pane's process tree (resources.py). Click → each owner's memory and CPU,
-// panes heaviest first, then everything else on the machine and the machine's
-// load / swap / free memory. Hidden when the server sent no measurement (its
-// process snapshot failed that tick).
+// panes heaviest first, then everything else on the machine, the machine's
+// load / swap / free memory, and what a dashboard poll costs. Hidden when
+// the server sent no measurement (its process snapshot failed that tick).
 import { useCallback, useRef, useState } from "preact/hooks";
 import { usePopoverDismiss } from "../hooks/usePopoverDismiss.js";
 import { selectPane } from "../split/alertFeed.js";
-import { resources, windows } from "../store.js";
+import { buildStats, resources, windows } from "../store.js";
 import { paneLabel } from "../util.js";
-import { fmtCpu, fmtMem, machineLine, ownedMb, paneLines } from "./resources.js";
+import { buildStatsLine, fmtCpu, fmtMem, machineLine, ownedMb, paneLines, slowestLine, topForksLine } from "./resources.js";
 
 const CPU_TIP = "share of the whole machine's CPU: 100% is every core busy";
 
@@ -45,6 +45,9 @@ function ResourcePopover({ r }) {
     if (hadFocus) btnRef.current?.focus();
   }, []);
   usePopoverDismiss(ref, open, close);
+  const bs = buildStats.value;
+  const slowest = bs && slowestLine(bs);
+  const topForks = bs && topForksLine(bs);
 
   return (
     <div class="pill-dd" ref={ref}>
@@ -75,6 +78,13 @@ function ResourcePopover({ r }) {
         </div>
         <Line label="elsewhere" group={r.elsewhere} />
         <div class="res-machine">{machineLine(r.machine)}</div>
+        {bs && (
+          <div class="res-poll">
+            <div class="res-poll-line">{buildStatsLine(bs)}</div>
+            {slowest && <div class="res-poll-line res-poll-detail">{slowest}</div>}
+            {topForks && <div class="res-poll-line res-poll-detail">{topForks}</div>}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -17,26 +17,40 @@ upward dependency that's acknowledged in the Stage B split spec.
 
 import json
 import os
+import random
 import re
-import shutil
 import threading
 import time
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
-from periscope import config
-from periscope.gitutil import github_slug
+from periscope import config, gh
+from periscope.gitutil import github_slug, resolve_repo
 from periscope.log import _bg
 from periscope.panes import list_windows
 from periscope.tmux import _run
 
-_GIT_TTL = 15.0
+_GIT_REFRESH_S = 15.0
 _PR_TTL = 60.0
-# Shorter than _GIT_TTL: the whole point of the signal is catching a worker
-# transition (a commit landing, a dirty count moving), and a supervisor peeking
-# twice in quick succession should see the second change.
+# Shorter than _GIT_REFRESH_S: the whole point of the signal is catching a
+# worker transition (a commit landing, a dirty count moving), and a
+# supervisor peeking twice in quick succession should see the second change.
 _SIGNAL_TTL = 5.0
+# ± this much on each entry's next refresh, so cwds first read in one refresh
+# don't all expire in the same later one.
+_GIT_JITTER_S = 5.0
+# The background read is off the request path, so it may wait longer on a
+# slow repo than the first-sight read does.
+_GIT_BG_TIMEOUT_S = 10.0
+# path -> (refresh due at, state)
 _git_cache: dict[str, tuple[float, dict | None]] = {}
+_git_fetching: set[str] = set()
+_git_lock = threading.Lock()
+# A repo's root and its GitHub remote: re-read rarely, they change only when a
+# checkout is re-pointed.
+_REPO_IDENTITY_TTL_S = 600.0
+# path -> (read at, repo_key, repo_slug)
+_repo_identity_cache: dict[str, tuple[float, str, str | None]] = {}
 _signal_cache: dict[str, tuple[float, dict | None]] = {}
 _pr_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 _pr_fetching: set[tuple[str, str]] = set()
@@ -49,7 +63,6 @@ _pr_lock = threading.Lock()
 _LINKED_PR_TTL = 60.0
 _linked_pr_cache: dict[tuple[str, int], tuple[float, dict | None]] = {}
 _linked_pr_fetching: set[tuple[str, int]] = set()
-_GH_AVAILABLE = shutil.which("gh") is not None
 
 # GitHub check conclusions that mean "failed". Shared by the PR-rollup glyph
 # (pr_state_for) and the activity-timeline run state (_gh_run_state) so a new
@@ -62,79 +75,149 @@ _CI_PENDING_STATES = frozenset({"PENDING", "QUEUED", "IN_PROGRESS", "WAITING"})
 _CI_PASSED_STATES = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 
 
-def git_state_for(path: str) -> dict | None:
-    """Return {branch, git} for the git repo at `path`, or None."""
+def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
+    """Return {branch, git, repo_slug, repo_key, repo_label} for the git repo at
+    `path`, or None. Two forks: one status for branch, ahead and untracked, one
+    diff for line counts; repo_key and repo_slug come from a per-path cache.
+    `timeout` bounds each git call (the background refresh allows longer)."""
     if not path or not os.path.isdir(path):
         return None
-    code, _ = _run(["git", "-C", path, "rev-parse", "--git-dir"])
-    if code != 0:
-        return None
-    _, branch = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
-    if not branch or branch == "HEAD":
-        _, sha = _run(["git", "-C", path, "rev-parse", "--short", "HEAD"])
-        branch = f"@{sha}" if sha else "?"
-    # Compact diff stats vs HEAD (covers staged + unstaged together).
-    _, diff = _run(["git", "-C", path, "diff", "HEAD", "--shortstat"])
-    adds_m = re.search(r"(\d+) insertion", diff)
-    dels_m = re.search(r"(\d+) deletion", diff)
-    adds = int(adds_m.group(1)) if adds_m else 0
-    dels = int(dels_m.group(1)) if dels_m else 0
-    # Untracked files. `git diff HEAD` ignores them entirely, so a worktree
-    # whose only change is brand-new files reported "clean" — and isDirty()
-    # then suppressed the chip, so nothing surfaced at all. --directory
-    # collapses a wholly-untracked dir to one entry instead of walking it.
-    _, untracked = _run(
-        ["git", "-C", path, "ls-files", "-o", "--exclude-standard", "--directory", "--no-empty-directory"]
+    # LC_ALL=C: the no-work-tree fatal below is matched by English text, which
+    # a translated locale (fr_FR, …) doesn't produce.
+    env_overrides = {"LC_ALL": "C"}
+    # --no-optional-locks: status would otherwise take index.lock to write
+    # back refreshed stat info; a plain `diff HEAD` rewrites the index
+    # regardless, hence diff-index below.
+    code, status = _run(
+        ["git", "--no-optional-locks", "-C", path, "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+        timeout=timeout,
+        env_overrides=env_overrides,
     )
-    new = sum(1 for line in untracked.splitlines() if line.strip())
-    # Unpushed commits ahead of upstream.
-    code, ahead_s = _run(["git", "-C", path, "rev-list", "--count", "@{u}..HEAD"])
-    ahead = int(ahead_s) if code == 0 and ahead_s.isdigit() else 0
-    bits = []
-    if adds or dels:
-        bits.append(f"+{adds} -{dels}")
-    if new:
-        bits.append(f"?{new}")
-    state = " ".join(bits) if bits else "clean"
-    if ahead > 0:
-        state += " *"
+    if code == 0:
+        head = oid = ""
+        ahead = new = 0
+        for line in status.splitlines():
+            if line.startswith("# branch.head "):
+                head = line.removeprefix("# branch.head ")
+            elif line.startswith("# branch.oid "):
+                oid = line.removeprefix("# branch.oid ")
+            elif line.startswith("# branch.ab "):
+                # Present only when the upstream exists: "+<ahead> -<behind>".
+                ahead = int(line.split()[2].lstrip("+"))
+            elif line.startswith("? "):
+                # Untracked; `git diff HEAD` ignores these, so a worktree whose
+                # only change is brand-new files would read "clean". A
+                # wholly-untracked directory is one entry.
+                new += 1
+        branch = f"@{oid[:7]}" if head == "(detached)" else head
+        # Compact diff stats vs HEAD (covers staged + unstaged together).
+        # diff-index, unlike `diff HEAD`, never writes the index; -M so a
+        # staged rename reads as a rename, not a full delete+add.
+        _, diff = _run(
+            ["git", "--no-optional-locks", "-C", path, "diff-index", "-M", "--shortstat", "HEAD"],
+            timeout=timeout,
+            env_overrides=env_overrides,
+        )
+        adds_m = re.search(r"(\d+) insertion", diff)
+        dels_m = re.search(r"(\d+) deletion", diff)
+        adds = int(adds_m.group(1)) if adds_m else 0
+        dels = int(dels_m.group(1)) if dels_m else 0
+        bits = []
+        if adds or dels:
+            bits.append(f"+{adds} -{dels}")
+        if new:
+            bits.append(f"?{new}")
+        state = " ".join(bits) if bits else "clean"
+        if ahead > 0:
+            state += " *"
+    elif "must be run in a work tree" in status:
+        # A git dir with no work tree here — a bare-container layout (a dir
+        # whose .git file says `gitdir: ./.bare`), a cwd inside .git, a bare
+        # repo — still has a branch and a repo; there is nothing to diff.
+        code, head = _run(
+            ["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=timeout, env_overrides=env_overrides
+        )
+        if code != 0:
+            return None
+        branch = head if head != "HEAD" else "?"
+        state = "clean"
+    else:
+        return None
     # `repo_slug` (owner/repo) lets the frontend build PR URLs without
     # hardcoding a repo — periscope watches panes across many repos.
     # repo_key is the full repo path (handles both sibling and inline
     # worktree layouts via gitutil.resolve_repo). repo_label is the
     # basename for human-readable display in the rail.
-    from periscope.gitutil import resolve_repo
-
-    repo_key = resolve_repo(path)
-    repo_label = os.path.basename(repo_key.rstrip("/")) if repo_key else ""
+    now = time.time()
+    identity = _repo_identity_cache.get(path)
+    if identity is not None and now - identity[0] < _REPO_IDENTITY_TTL_S:
+        _, repo_key, repo_slug = identity
+    else:
+        repo_key, repo_slug = resolve_repo(path), github_slug(path)
+        # Only a found slug is cached: a None can be a 3 s git timeout on a
+        # slow read, and would otherwise strip every PR link from the repo
+        # for the full TTL instead of just this refresh.
+        if repo_slug is not None:
+            _repo_identity_cache[path] = (now, repo_key, repo_slug)
     return {
         "branch": branch,
         "git": state,
-        "repo_slug": github_slug(path),
+        "repo_slug": repo_slug,
         "repo_key": repo_key,
-        "repo_label": repo_label,
+        "repo_label": os.path.basename(repo_key.rstrip("/")) if repo_key else "",
     }
 
 
+def _next_git_due() -> float:
+    return time.time() + _GIT_REFRESH_S + random.uniform(-_GIT_JITTER_S, _GIT_JITTER_S)
+
+
 def cached_git_state(path: str) -> dict | None:
+    """Stale-while-revalidate: the cached state at once, refreshed in the
+    background once due. A path seen for the first time is read synchronously:
+    the pid resolver matches panes on (branch, cwd) after a tmux restart
+    (pids._attach_git_then_resolve_pids), so a first-sight branch can't be
+    missing."""
     if not path:
         return None
-    now = time.time()
-    cached = _git_cache.get(path)
-    if cached and now - cached[0] < _GIT_TTL:
-        return cached[1]
+    with _git_lock:
+        cached = _git_cache.get(path)
+        if cached is not None:
+            if time.time() >= cached[0] and path not in _git_fetching:
+                _git_fetching.add(path)
+                _bg("git-state", _fetch_git_state_into_cache, path)
+            return cached[1]
     data = git_state_for(path)
-    _git_cache[path] = (now, data)
+    with _git_lock:
+        _git_cache[path] = (_next_git_due(), data)
     return data
+
+
+def _fetch_git_state_into_cache(path: str) -> None:
+    try:
+        data = git_state_for(path, timeout=_GIT_BG_TIMEOUT_S)
+        # Outside the lock: a stat on a hung mount must not stall every reader.
+        still_a_dir = data is None and os.path.isdir(path)
+        with _git_lock:
+            previous = _git_cache.get(path)
+            # Nothing back for a cwd that is still a directory is a status that
+            # timed out or failed far more often than a repo that stopped being
+            # one: keep the last state and retry at the next expiry.
+            if data is None and previous is not None and previous[1] is not None and still_a_dir:
+                data = previous[1]
+            _git_cache[path] = (_next_git_due(), data)
+    finally:
+        with _git_lock:
+            _git_fetching.discard(path)
 
 
 def git_signal_for(path: str) -> dict | None:
     """Structured progress signal for a working tree: `{toplevel, head,
     head_subject, dirty}`. Returns None when `path` isn't in a git repo.
 
-    Deliberately NOT folded into `git_state_for`, which runs on the 3s
-    dashboard poll for every window — these are two extra subprocesses per
-    path serving on-demand MCP callers only.
+    Deliberately NOT folded into `git_state_for`, whose cache refreshes in the
+    background roughly every 15s per cwd — these are two extra subprocesses
+    per path serving on-demand MCP callers only.
 
     `toplevel` is the WORKTREE root, not `resolve_repo`'s repo root: two
     linked worktrees of one repo share a repo root but have separate build
@@ -226,22 +309,19 @@ def pr_state_for(path: str, branch: str) -> dict | None:
     """Return PR metadata + CI rollup for the PR open against `branch` in
     repo at `path`. Modal sidebar surfaces title/draft/+/−/reviewers; the
     grid card uses {pr, ci} as before."""
-    if not _GH_AVAILABLE or not path or not branch:
+    if not gh.AVAILABLE or not path or not branch:
         return None
-    code, out = _run(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--head",
-            branch,
-            "--state",
-            "open",
-            "--json",
-            "number,title,isDraft,additions,deletions,reviewRequests,statusCheckRollup,baseRefName",
-            "--limit",
-            "1",
-        ],
+    code, out = gh.run(
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,title,isDraft,additions,deletions,reviewRequests,statusCheckRollup,baseRefName",
+        "--limit",
+        "1",
         cwd=path,
         timeout=8.0,
     )
@@ -344,19 +424,16 @@ def shared_activity_for(path: str, branch: str) -> list[dict]:
                 ev["url"] = f"https://github.com/{slug}/commit/{sha}"
             events.append(ev)
 
-    if _GH_AVAILABLE and branch:
-        code, out = _run(
-            [
-                "gh",
-                "run",
-                "list",
-                "--branch",
-                branch,
-                "--limit",
-                "10",
-                "--json",
-                "conclusion,status,createdAt,displayTitle,name,url",
-            ],
+    if gh.AVAILABLE and branch:
+        code, out = gh.run(
+            "run",
+            "list",
+            "--branch",
+            branch,
+            "--limit",
+            "10",
+            "--json",
+            "conclusion,status,createdAt,displayTitle,name,url",
             cwd=path,
             timeout=5.0,
         )
@@ -488,12 +565,10 @@ def linked_pr_state_for(path: str, number: int) -> dict | None:
     Returns {pr_state: 'open'|'merged'|'closed', ci: glyph|None} or None if gh
     can't answer. Distinct from pr_state_for, which only sees OPEN PRs on the
     current branch."""
-    if not _GH_AVAILABLE or not path or not number:
+    if not gh.AVAILABLE or not path or not number:
         return None
-    code, out = _run(
-        ["gh", "pr", "view", str(number), "--json", "state,statusCheckRollup,baseRefName"],
-        cwd=path,
-        timeout=8.0,
+    code, out = gh.run(
+        "pr", "view", str(number), "--json", "state,statusCheckRollup,baseRefName", cwd=path, timeout=8.0
     )
     if code != 0 or not out:
         return None
@@ -540,7 +615,7 @@ def prewarm_pr_cache() -> None:
     background gh PR queries for each unique (cwd, branch) pair. Runs once at
     startup so PR badges populate on the first /api/state poll instead of
     waiting for the second poll's stale-while-revalidate to fire them."""
-    if not _GH_AVAILABLE:
+    if not gh.AVAILABLE:
         return
     try:
         windows = list_windows()

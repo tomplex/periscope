@@ -207,21 +207,21 @@ REQUESTED = (
 
 
 def test_open_prs_merges_both_lists_and_assigns_roles(mocker):
-    mocker.patch("periscope.reviews._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
     mocker.patch("periscope.reviews.gitutil.github_slug", return_value="tom/fdy")
-    run = mocker.patch("periscope.reviews._run", side_effect=[(0, MINE), (0, REQUESTED)])
+    run = mocker.patch("periscope.gh.run", side_effect=[(0, MINE), (0, REQUESTED)])
     got = reviews.open_prs("/dev/fdy")
     assert [(p["number"], p["role"], p["branch"], p["author"], p["draft"]) for p in got] == [
         (1234, "mine", "feat/x", "tom", False),
         (99, "review-requested", "feat/theirs", "sam", True),
     ]
     first, second = run.call_args_list
-    assert "--author" in first.args[0] and "@me" in first.args[0] and first.kwargs["cwd"] == "/dev/fdy"
-    assert "--search" in second.args[0] and "review-requested:@me" in second.args[0]
+    assert "--author" in first.args and "@me" in first.args and first.kwargs["cwd"] == "/dev/fdy"
+    assert "--search" in second.args and "review-requested:@me" in second.args
 
 
 def test_open_prs_without_gh_is_empty(mocker):
-    mocker.patch("periscope.reviews._GH_AVAILABLE", False)
+    mocker.patch("periscope.gh.AVAILABLE", False)
     assert reviews.open_prs("/dev/fdy") == []
 
 
@@ -317,11 +317,11 @@ def test_pr_url_caches_a_found_slug_but_retries_after_none(mocker):
 
 
 def test_open_prs_skips_repos_without_github_and_returns_none_on_failure(mocker):
-    mocker.patch("periscope.reviews._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
     mocker.patch("periscope.reviews.gitutil.github_slug", return_value=None)
     assert reviews.open_prs("/dev/local-only") == []
     mocker.patch("periscope.reviews.gitutil.github_slug", return_value="tom/fdy")
-    mocker.patch("periscope.reviews._run", return_value=(1, "auth error"))
+    mocker.patch("periscope.gh.run", return_value=(1, "auth error"))
     assert reviews.open_prs("/dev/fdy") is None
 
 

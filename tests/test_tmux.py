@@ -4,8 +4,12 @@ Tests don't require a live tmux. We monkeypatch subprocess.run to assert
 the wrappers compose argv correctly and return what they claim to return.
 """
 
+import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
+import periscope.tmux as tmux_mod
 from periscope import config
 from periscope.tmux import (
     _ANSI_SGR_RE,
@@ -116,6 +120,29 @@ def test_run_returns_minus_one_on_exception(mocker):
     code, out = _run(["nonexistent"])
     assert code == -1
     assert out == ""
+
+
+def test_run_passes_no_env_through_when_no_overrides_are_given(mocker):
+    """Identical subprocess behavior for callers that pass nothing: env=None,
+    so the child inherits the process environment untouched."""
+    run = mocker.patch(
+        "subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n", stderr=""),
+    )
+    assert _run(["gh", "pr", "list"]) == (0, "ok")
+    assert run.call_args.kwargs["env"] is None
+
+
+def test_run_merges_overrides_over_os_environ(mocker, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    run = mocker.patch(
+        "subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n", stderr=""),
+    )
+    assert _run(["gh", "pr", "list"], env_overrides={"GH_TOKEN": "t"}) == (0, "ok")
+    env = run.call_args.kwargs["env"]
+    assert env["GH_TOKEN"] == "t"
+    assert env["PATH"] == "/usr/bin"  # the rest of the environment rides along
 
 
 def test_capture_calls_tmux_capture_pane_with_lines(mocker):
@@ -235,3 +262,88 @@ def test_window_identity_empty_on_unstamped(mocker):
 
     mocker.patch.object(tmux_mod, "tmux", return_value="\t%7\t@9\n")
     assert tmux_mod.window_identity("s:1") == ("", "%7", "@9")
+
+
+_FIELDS = ["main", "0", "shell", "1", "/home/tom", "", "%5", "1717250000", "@1", "4242", "zsh", "", "1"]
+_ROW = "\x1f".join(_FIELDS)
+
+
+def test_list_panes_asks_for_every_field_in_one_call(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or "")
+    tmux_mod.list_panes()
+    assert calls == [("list-panes", "-a", "-F", "\x1f".join(f"#{{{f}}}" for f in tmux_mod.PANE_FIELDS))]
+
+
+def test_list_panes_reads_every_field(monkeypatch):
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: _ROW + "\n")
+    assert tmux_mod.list_panes() == [dict(zip(tmux_mod.PANE_FIELDS, _FIELDS, strict=True))]
+
+
+def test_a_tab_in_a_window_name_is_kept(monkeypatch):
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: _ROW.replace("shell", "tab\tname") + "\n")
+    assert tmux_mod.list_panes()[0]["window_name"] == "tab\tname"
+
+
+def test_a_window_name_with_one_embedded_newline_is_reconstructed(monkeypatch):
+    broken = _ROW.replace("shell", "new\nline")
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: broken + "\n" + _ROW.replace("%5", "%6") + "\n")
+    rows = tmux_mod.list_panes()
+    assert [r["pane_id"] for r in rows] == ["%5", "%6"]  # the split row survives, the next row is intact
+    assert rows[0]["window_name"] == "new\nline"
+
+
+def test_a_window_name_with_two_embedded_newlines_is_reconstructed(monkeypatch):
+    broken = _ROW.replace("shell", "new\nmulti\nline")
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: broken + "\n" + _ROW.replace("%5", "%6") + "\n")
+    rows = tmux_mod.list_panes()
+    assert [r["pane_id"] for r in rows] == ["%5", "%6"]
+    assert rows[0]["window_name"] == "new\nmulti\nline"
+
+
+def test_an_overshooting_row_is_skipped_and_logged_once(monkeypatch, caplog):
+    """A \\x1f inside a value (not a newline) can't be reconstructed — skip it
+    and keep going, same as a malformed row."""
+    overshoot = _ROW + "\x1fextra"
+    monkeypatch.setattr(tmux_mod, "_unparsed_logged", False)
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: overshoot + "\n" + _ROW.replace("%5", "%6") + "\n")
+    with caplog.at_level(logging.WARNING, logger="periscope"):
+        assert [p["pane_id"] for p in tmux_mod.list_panes()] == ["%6"]
+        tmux_mod.list_panes()
+    assert len(caplog.records) == 1
+
+
+def test_panes_snapshot_reuses_a_snapshot_under_a_second_old(monkeypatch):
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(tmux_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or _ROW + "\n")
+    tmux_mod.list_panes()
+    clock[0] += 0.5
+    assert [p["pane_id"] for p in tmux_mod.panes_snapshot()] == ["%5"]
+    assert len(calls) == 1
+    clock[0] += 0.6
+    tmux_mod.panes_snapshot()
+    assert len(calls) == 2
+
+
+def test_pinned_rows_outlive_the_ttl_for_their_block_only(monkeypatch):
+    # build_state pins its list_windows' rows for the whole poll; an
+    # off-poll caller keeps the TTL.
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(tmux_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or _ROW + "\n")
+    with tmux_mod.pinned_snapshot():
+        rows = tmux_mod.list_panes()
+        clock[0] += 5
+        assert tmux_mod.panes_snapshot() is rows
+        assert len(calls) == 1
+        with ThreadPoolExecutor(1) as pool:
+            assert pool.submit(tmux_mod.panes_snapshot).result() is not rows
+        assert len(calls) == 2
+    clock[0] += 5
+    assert tmux_mod.panes_snapshot() is not rows
+    assert len(calls) == 3

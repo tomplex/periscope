@@ -95,12 +95,34 @@ def test_channel_gc_drops_unknown_panes():
     _CHANNEL_ALERTS["%99"] = [{"message": "y", "kind": "info", "ts": 0}]
     _CHANNEL_UNREAD["%99"] = 1
 
-    _channel_gc({"%5"})
+    _channel_gc({"%5"}, since=1)
 
     assert "%5" in _CHANNEL_ALERTS
     assert "%5" in _CHANNEL_UNREAD
     assert "%99" not in _CHANNEL_ALERTS
     assert "%99" not in _CHANNEL_UNREAD
+
+
+def test_channel_gc_spares_a_pane_whose_newest_alert_is_at_or_after_the_poll_start():
+    """A pane spawned mid-poll is absent from the poll's pinned pane set, but
+    its alert must not be dropped before it ever has a chance to be seen."""
+    _CHANNEL_ALERTS["%7"] = [{"message": "new pane", "kind": "info", "ts": 100}]
+    _CHANNEL_UNREAD["%7"] = 1
+
+    _channel_gc(set(), since=100)
+
+    assert "%7" in _CHANNEL_ALERTS
+    assert "%7" in _CHANNEL_UNREAD
+
+
+def test_channel_gc_drops_a_pane_whose_newest_alert_predates_the_poll_start():
+    _CHANNEL_ALERTS["%7"] = [{"message": "old pane", "kind": "info", "ts": 99}]
+    _CHANNEL_UNREAD["%7"] = 1
+
+    _channel_gc(set(), since=100)
+
+    assert "%7" not in _CHANNEL_ALERTS
+    assert "%7" not in _CHANNEL_UNREAD
 
 
 def test_rehydrate_alerts_from_events(fresh_activity_db):

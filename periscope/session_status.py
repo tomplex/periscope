@@ -23,18 +23,18 @@ Only busy/waiting/idle are mapped; `shell` and any unknown status return None so
 the caller falls back to scraping. The schema is undocumented Claude Code
 internals (version-tagged), so every read degrades to None on a shape change.
 
-Imports only stdlib and periscope's leaf modules (config, resources), never
-the resolver layer, so turns.py / window_view.py can depend on it freely."""
+Imports only stdlib and periscope's leaf modules (config, resources,
+agent_processes, tmux), never the resolver layer, so turns.py / window_view.py
+can depend on it freely."""
 
 import contextlib
 import json
 import re
 import subprocess
 import time
-from collections import deque
 from pathlib import Path
 
-from periscope import config, resources
+from periscope import agent_processes, config, resources, tmux
 
 _SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
@@ -43,19 +43,17 @@ _SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 _STATE_MAP = {"busy": "working", "waiting": "needs-input", "idle": "idle"}
 
 # Per-poll caches. build_window_view calls session_state_for once per pane every
-# ~3s poll; scanning ~30 tiny files and one `ps` per pane would be wasteful, so
-# both are built once and reused for the brief window a single poll spans.
+# poll; scanning ~30 tiny files per pane would be wasteful, so the session
+# index is built once and reused for the brief window a single poll spans.
+# Processes come from the poll's one `ps` (agent_processes.process_snapshot).
 _CACHE_TTL_S = 1.0
 # (built_at, {sid: file}, {pid: [files newest-first]}) — one scan of every live
 # account's sessions dir answers both directions (sessionId -> state,
 # pid -> current sessionId). by_pid holds a LIST because the same OS pid can
 # have a file in more than one account's dir (recycled pid, account swap).
 _index_cache: tuple[float, dict, dict[int, list[dict]]] | None = None
-# (built_at, {pid: age_s}) — one ps snapshot serves both pid liveness (the
-# key set) and the uptime cycle-hint.
-_claude_procs_cache: tuple[float, dict[int, int]] | None = None
-_proc_table_cache: tuple[float, tuple[dict[int, list[int]], dict[int, str]]] | None = None
-_pane_pids_cache: tuple[float, dict[str, int]] | None = None
+# (pane -> root pid, process snapshot, pane -> claude pid): the walk's inputs and answer.
+_pane_pids_cache: tuple[dict[str, int], dict | None, dict[str, int]] | None = None
 
 _CONFIG_DIR_RE = re.compile(r"\bCLAUDE_CONFIG_DIR=(\S+)")
 _PROFILE_RE = re.compile(rf"\b{config.PROFILE_ENV_VAR}=(\S+)")
@@ -125,118 +123,41 @@ def _index() -> dict:
     return _indexes()[0]
 
 
-def parse_etime(s: str) -> int:
-    """ps `etime` ([[dd-]hh:]mm:ss) → seconds; 0 on any malformed input."""
-    s = s.strip()
-    days = 0
-    if "-" in s:
-        d, _, s = s.partition("-")
-        try:
-            days = int(d)
-        except ValueError:
-            return 0
-    parts = s.split(":")
-    if not 2 <= len(parts) <= 3:
-        return 0
-    try:
-        nums = [int(p) for p in parts]
-    except ValueError:
-        return 0
-    while len(nums) < 3:
-        nums.insert(0, 0)
-    h, m, sec = nums
-    return ((days * 24 + h) * 60 + m) * 60 + sec
-
-
 def _claude_procs() -> dict[int, int]:
-    """{pid: age_s} of running `claude` processes, snapshotted once per poll.
-    The key set guards against honoring a session file whose process has
-    exited or whose pid was recycled; age feeds the cycle-hint. `comm` is the
-    full executable path; claude's launcher (`.../bin/claude`) and versioned
-    binary (`.../share/claude/versions/<v>`) both contain "claude". comm may
-    itself contain spaces, hence maxsplit=2."""
-    global _claude_procs_cache
+    """{pid: age_s} of running `claude` processes, from the poll's process
+    snapshot. The key set guards against honoring a session file whose
+    process has exited or whose pid was recycled; age (now minus start) feeds
+    the cycle-hint."""
     now = time.time()
-    if _claude_procs_cache and now - _claude_procs_cache[0] < _CACHE_TTL_S:
-        return _claude_procs_cache[1]
-    procs: dict[int, int] = {}
-    try:
-        out = subprocess.run(
-            ["ps", "-axo", "pid=,etime=,comm="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-        for line in out.splitlines():
-            parts = line.split(None, 2)
-            if len(parts) != 3:
-                continue
-            pid_s, etime, comm = parts
-            if "claude" in comm.lower():
-                with contextlib.suppress(ValueError):
-                    procs[int(pid_s)] = parse_etime(etime)
-    except (OSError, subprocess.SubprocessError):
-        pass
-    _claude_procs_cache = (now, procs)
-    return procs
+    return {
+        p.pid: int(now - p.started_at)
+        for p in (agent_processes.process_snapshot() or {}).values()
+        if agent_processes.is_claude_executable(p)
+    }
 
 
 def _live_claude_pids() -> set[int]:
     return set(_claude_procs())
 
 
-def proc_table() -> tuple[dict[int, list[int]], dict[int, str]]:
-    """(ppid -> child pids, pid -> command) for every process. Empty on any ps
-    failure. Snapshotted for _CACHE_TTL_S so one poll's worth of subtree walks
-    costs a single fork."""
-    global _proc_table_cache
-    now = time.time()
-    if _proc_table_cache and now - _proc_table_cache[0] < _CACHE_TTL_S:
-        return _proc_table_cache[1]
-    kids: dict[int, list[int]] = {}
-    cmds: dict[int, str] = {}
-    try:
-        out = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,command="],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return kids, cmds  # not cached: a transient ps failure shouldn't stick
-    for line in out.splitlines():
-        bits = line.split(maxsplit=2)
-        if len(bits) < 3:
-            continue
-        try:
-            pid, ppid = int(bits[0]), int(bits[1])
-        except ValueError:
-            continue
-        kids.setdefault(ppid, []).append(pid)
-        cmds[pid] = bits[2]
-    _proc_table_cache = (now, (kids, cmds))
-    return kids, cmds
+def command_lines() -> dict[int, str]:
+    """pid -> command line for every process, from the poll's process
+    snapshot. Empty when ps failed."""
+    return {p.pid: p.argv for p in (agent_processes.process_snapshot() or {}).values()}
 
 
 def _tmux_pane_pids() -> dict[str, int]:
-    """tmux pane id -> the pid of the pane's root process (usually its shell).
-    Empty on any tmux failure (no server, tmux not installed)."""
+    """tmux pane id -> the pid of the pane's root process (usually its shell),
+    from the poll's list-panes snapshot. Empty on any tmux failure (no
+    server, tmux not installed)."""
     try:
-        out = subprocess.run(
-            ["tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
+        rows = tmux.panes_snapshot()
     except (OSError, subprocess.SubprocessError):
         return {}
     panes: dict[str, int] = {}
-    for line in out.splitlines():
-        pane_id, tab, pid_raw = line.partition("\t")
-        if not tab:
-            continue
+    for p in rows:
         with contextlib.suppress(ValueError):
-            panes[pane_id] = int(pid_raw)
+            panes[p["pane_id"]] = int(p["pane_pid"])
     return panes
 
 
@@ -244,40 +165,28 @@ def pane_claude_pids() -> dict[str, int]:
     """tmux pane id -> the pid of the claude running in it. Panes with no
     claude have no entry.
 
-    Breadth-first through each pane's process subtree, stopping at the FIRST
+    Nearest first through each pane's process subtree, stopping at the FIRST
     claude: that is the pane's own session. Anything claude-ish below it is a
     subagent or tool child.
 
-    Cached for _CACHE_TTL_S — the same per-poll window the rest of this module
-    uses. Deliberately NOT the 15s of window_view's account scan: that scan
-    reads process env, which is immutable for a process's lifetime, whereas
-    this map feeds a pane's CURRENT session id — which rotates mid-process —
-    and a pid can be recycled by an unrelated claude. One /api/state poll
-    resolves ~20 panes, so a one-second window already collapses the cost to
-    two forks per poll; a longer one buys nothing but staleness.
+    Rebuilt only when the pane map or the process snapshot changes, so it is
+    never older than the two snapshots it walks (pinned for a poll, else
+    1 s): it feeds a pane's CURRENT session id, which rotates mid-process.
     """
     global _pane_pids_cache
-    now = time.time()
-    if _pane_pids_cache and now - _pane_pids_cache[0] < _CACHE_TTL_S:
-        return _pane_pids_cache[1]
     panes = _tmux_pane_pids()
     if not panes:
-        return {}  # no tmux — don't fork ps, and don't cache the empty answer
-    kids, cmds = proc_table()
+        return {}  # no tmux — don't fork ps
+    snapshot = agent_processes.process_snapshot()
+    if _pane_pids_cache and _pane_pids_cache[0] == panes and _pane_pids_cache[1] is snapshot:
+        return _pane_pids_cache[2]
     found: dict[str, int] = {}
     for pane_id, root in panes.items():
-        seen: set[int] = set()
-        queue = deque([root])
-        while queue:
-            pid = queue.popleft()
-            if pid in seen:
-                continue
-            seen.add(pid)
-            if pid != root and "claude" in cmds.get(pid, ""):
-                found[pane_id] = pid
+        for proc in agent_processes.descendants(root, snapshot or {}):
+            if proc.pid != root and agent_processes.is_claude_executable(proc):
+                found[pane_id] = proc.pid
                 break
-            queue.extend(kids.get(pid, ()))
-    _pane_pids_cache = (now, found)
+    _pane_pids_cache = (panes, snapshot, found)
     return found
 
 
@@ -295,7 +204,7 @@ def pane_resume_ids() -> dict[str, str]:
     if not pane_pids:
         return {}  # no tmux/claudes — don't fork ps for nothing
     out: dict[str, str] = {}
-    _, cmds = proc_table()
+    cmds = command_lines()
     for pane_id, pid in pane_pids.items():
         m = RESUME_RE.search(cmds.get(pid) or "")
         if m:
@@ -319,6 +228,8 @@ def _env_by_pid(pids: list[int]) -> dict[int, str]:
             capture_output=True,
             text=True,
             check=False,
+            # Same environment as the snapshot: see agent_processes.ps_env.
+            env=agent_processes.ps_env(),
         ).stdout
     except OSError:
         return {}
@@ -366,7 +277,7 @@ def _pane_claude_envs() -> dict[str, str]:
     pane_pids = pane_claude_pids()
     if not pane_pids:
         return {}  # no tmux/claudes — don't cache the empty answer
-    _, cmds = proc_table()
+    cmds = command_lines()
     envs = _env_by_pid(list(pane_pids.values()))
     tails: dict[str, str] = {}
     for pane_id, pid in pane_pids.items():
@@ -445,7 +356,7 @@ def pane_efforts() -> dict[str, str]:
     leaves argv alone. window_view uses it as the per-pane effort control's
     starting value until periscope sets one.
     """
-    _, cmds = proc_table()
+    cmds = command_lines()
     out = {}
     for pane_id, pid in pane_claude_pids().items():
         m = _EFFORT_ARG_RE.search(cmds.get(pid, ""))

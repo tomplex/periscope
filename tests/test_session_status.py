@@ -3,11 +3,17 @@
 working/needs-input/idle signal."""
 
 import json
+import shutil
+import subprocess
 import time
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
 import periscope.session_status as ss
+import periscope.tmux as tmux_mod
+from periscope import agent_processes
 
 
 @pytest.fixture(autouse=True)
@@ -17,8 +23,6 @@ def _reset_caches(monkeypatch):
     # empty rather than cleared: _build_index consults pane_config_dirs(), and
     # an empty cache miss would fork real tmux/ps inside every index test.
     monkeypatch.setattr(ss, "_index_cache", None)
-    monkeypatch.setattr(ss, "_claude_procs_cache", None)
-    monkeypatch.setattr(ss, "_proc_table_cache", None)
     monkeypatch.setattr(ss, "_pane_pids_cache", None)
     monkeypatch.setattr(ss, "_config_dirs_cache", (time.time(), {}), raising=False)
 
@@ -119,54 +123,73 @@ def test_missing_sessions_dir_returns_none(tmp_path, monkeypatch):
     assert ss.session_state_for("sid-any") is None
 
 
-# ── live-claude pid detection parses ps output ───────────────────────────
+# ── live claudes and the process table come off process_snapshot ─────────
 
-_PS_SAMPLE = (
-    " 9448     01-02:08:58 /Users/tom/.local/bin/claude\n"
-    " 9876        22:09:53 /Users/tom/.local/share/claude/versions/2.1.161\n"
-    "  329        05:33 /usr/libexec/logd\n"
-    "    1     91-10:00:00 /sbin/launchd\n"
+# Processes aged 01-02:08:58, 22:09:53, 05:33 and 91-10:00:00 (as etime
+# would print them) plus a plugin server whose argv
+# mentions .claude, as process_snapshot's real `… lstart= state= args=` rows
+# read at _PS_NOW. lstart prints in UTC (agent_processes.ps_env's TZ=UTC), so
+# both this snapshot's times and _PS_NOW are expressed in UTC — mixing a
+# naive-local _PS_NOW with a UTC-parsed lstart would read ages off by the
+# host's UTC offset, and wrong by an extra hour across a DST fall-back.
+_PS_SNAPSHOT = (
+    " 9448     1 Thu Jul 30 10:00:00 2026     S+   /Users/tom/.local/bin/claude --resume 0b6f2a1e-1111-2222-3333-444455556666\n"
+    " 9876  9448 Thu Jul 30 13:59:05 2026     S    /Users/tom/.local/share/claude/versions/2.1.161\n"
+    "11023     1 Thu Jul 30 14:19:27 2026     S    node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js --port 9900\n"
+    "  329     1 Fri Jul 31 12:03:25 2026     Ss   /usr/libexec/logd\n"
+    "    1     0 Fri May  1 02:08:58 2026     Ss   /sbin/launchd\n"
 )
+_PS_NOW = datetime(2026, 7, 31, 12, 8, 58, tzinfo=UTC).timestamp()
+
+
+def _snapshot(monkeypatch, text=_PS_SNAPSHOT):
+    monkeypatch.setattr(agent_processes, "process_snapshot", lambda: agent_processes.parse_ps_snapshot(text))
+    monkeypatch.setattr(ss, "time", SimpleNamespace(time=lambda: _PS_NOW))
 
 
 def test_live_claude_pids_matches_claude_paths(monkeypatch):
-    class _R:
-        stdout = _PS_SAMPLE
-
-    monkeypatch.setattr(ss, "_claude_procs_cache", None)
-    monkeypatch.setattr(ss.subprocess, "run", lambda *a, **k: _R())
+    # Full-path launcher and versioned binary both count; `node …/.claude/…` doesn't.
+    _snapshot(monkeypatch)
     assert ss._live_claude_pids() == {9448, 9876}
 
 
-def test_claude_procs_carry_age(monkeypatch):
-    class _R:
-        stdout = _PS_SAMPLE
-
-    monkeypatch.setattr(ss, "_claude_procs_cache", None)
-    monkeypatch.setattr(ss.subprocess, "run", lambda *a, **k: _R())
+def test_claude_procs_age_from_start_time(monkeypatch):
+    # The same ages `ps etime` reported: now minus each process's start.
+    _snapshot(monkeypatch)
     assert ss._claude_procs() == {
         9448: 26 * 3600 + 8 * 60 + 58,
         9876: 22 * 3600 + 9 * 60 + 53,
     }
 
 
-# ── etime parsing ([[dd-]hh:]mm:ss) ──────────────────────────────────────
+def test_command_lines_match_the_command_table(monkeypatch):
+    # What `ps -axo pid=,command=` gave: each pid's full command line.
+    _snapshot(monkeypatch)
+    assert ss.command_lines() == {
+        9448: "/Users/tom/.local/bin/claude --resume 0b6f2a1e-1111-2222-3333-444455556666",
+        9876: "/Users/tom/.local/share/claude/versions/2.1.161",
+        11023: "node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js --port 9900",
+        329: "/usr/libexec/logd",
+        1: "/sbin/launchd",
+    }
 
 
-@pytest.mark.parametrize(
-    "s,secs",
-    [
-        ("05:33", 5 * 60 + 33),
-        ("22:09:53", 22 * 3600 + 9 * 60 + 53),
-        ("01-02:08:58", 86400 + 2 * 3600 + 8 * 60 + 58),
-        ("3-00:00:01", 3 * 86400 + 1),
-        ("", 0),
-        ("garbage", 0),
-        ("1:2:3:4", 0),
-    ],
-)
-def test_parse_etime(s, secs):
-    assert ss.parse_etime(s) == secs
+def test_ps_failure_reads_as_no_processes(monkeypatch):
+    monkeypatch.setattr(agent_processes, "process_snapshot", lambda: None)
+    assert ss._claude_procs() == {}
+    assert ss.command_lines() == {}
+
+
+def test_one_ps_serves_the_whole_poll(monkeypatch, mocker):
+    monkeypatch.setattr(agent_processes, "_snapshot_cache", None)
+    take = mocker.patch.object(
+        agent_processes, "_take_snapshot", return_value=agent_processes.parse_ps_snapshot(_PS_SNAPSHOT)
+    )
+    mocker.patch("subprocess.run", side_effect=AssertionError("session_status forked its own ps"))
+    ss.command_lines()
+    ss._claude_procs()
+    agent_processes.process_snapshot()
+    take.assert_called_once()
 
 
 # ── claude_proc_for: measurement independent of status trust ─────────────
@@ -207,9 +230,15 @@ def test_claude_proc_for_unmapped_none(tmp_path, monkeypatch):
 # ── pane -> claude pid walk ──────────────────────────────────────────────
 
 
-def _seed_walk(monkeypatch, panes, kids, cmds):
+def _process(pid, ppid, argv):
+    return agent_processes.ProcessInfo(pid=pid, ppid=ppid, started_at=0, exe=argv.split()[0], argv=argv, state="S")
+
+
+def _seed_walk(monkeypatch, panes, procs):
+    """`procs`: {pid: (ppid, argv)}."""
+    snapshot = {pid: _process(pid, ppid, argv) for pid, (ppid, argv) in procs.items()}
     monkeypatch.setattr(ss, "_tmux_pane_pids", lambda: panes)
-    monkeypatch.setattr(ss, "proc_table", lambda: (kids, cmds))
+    monkeypatch.setattr(agent_processes, "process_snapshot", lambda: snapshot)
 
 
 def test_pane_claude_pids_finds_first_claude_descendant(monkeypatch):
@@ -217,13 +246,12 @@ def test_pane_claude_pids_finds_first_claude_descendant(monkeypatch):
     _seed_walk(
         monkeypatch,
         {"%1": 10, "%2": 20},
-        {10: [11], 20: [21], 21: [22]},
         {
-            10: "-zsh",
-            11: "/Users/tom/.local/bin/claude",
-            20: "-zsh",
-            21: "node script.js",
-            22: "/Users/tom/.local/bin/claude",
+            10: (1, "-zsh"),
+            11: (10, "/Users/tom/.local/bin/claude"),
+            20: (1, "-zsh"),
+            21: (20, "node script.js"),
+            22: (21, "/Users/tom/.local/bin/claude"),
         },
     )
     assert ss.pane_claude_pids() == {"%1": 11, "%2": 22}
@@ -234,25 +262,63 @@ def test_pane_claude_pids_stops_at_first_claude(monkeypatch):
     _seed_walk(
         monkeypatch,
         {"%1": 10},
-        {10: [11], 11: [12]},
-        {10: "-zsh", 11: "claude", 12: "claude --subagent"},
+        {10: (1, "-zsh"), 11: (10, "claude"), 12: (11, "claude --subagent")},
+    )
+    assert ss.pane_claude_pids() == {"%1": 11}
+
+
+def test_pane_claude_pids_takes_the_nearest_claude(monkeypatch):
+    # The shell's own claude child wins over a claude deeper under its sibling.
+    _seed_walk(
+        monkeypatch,
+        {"%1": 10},
+        {10: (1, "-zsh"), 11: (10, "claude"), 12: (10, "make"), 13: (12, "claude --print")},
     )
     assert ss.pane_claude_pids() == {"%1": 11}
 
 
 def test_pane_claude_pids_skips_shell_only_panes(monkeypatch):
-    _seed_walk(monkeypatch, {"%1": 10}, {10: [11]}, {10: "-zsh", 11: "vim"})
+    _seed_walk(monkeypatch, {"%1": 10}, {10: (1, "-zsh"), 11: (10, "vim")})
+    assert ss.pane_claude_pids() == {}
+
+
+def test_pane_claude_pids_ignores_an_argv_that_mentions_claude(monkeypatch):
+    # The same test _claude_procs applies: the executable, not an argument.
+    _seed_walk(
+        monkeypatch,
+        {"%1": 10},
+        {10: (1, "-zsh"), 11: (10, "node /Users/tom/.claude/plugins/cache/lgtm/dist/server/server.js")},
+    )
     assert ss.pane_claude_pids() == {}
 
 
 def test_pane_claude_pids_empty_without_tmux(monkeypatch):
     monkeypatch.setattr(ss, "_tmux_pane_pids", dict)
     monkeypatch.setattr(
-        ss,
-        "proc_table",
-        lambda: (_ for _ in ()).throw(AssertionError("proc_table must not fork when there are no panes")),
+        agent_processes,
+        "process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("must not fork ps when there are no panes")),
     )
     assert ss.pane_claude_pids() == {}
+
+
+def test_pane_claude_pids_is_rebuilt_when_either_snapshot_changes(monkeypatch, mocker):
+    # No clock of its own: the map is never older than the snapshots it walks.
+    panes = {"%1": 10}
+    procs = {10: (1, "-zsh"), 11: (10, "claude"), 20: (1, "-zsh")}
+    snapshots = [{pid: _process(pid, ppid, argv) for pid, (ppid, argv) in procs.items()}]
+    monkeypatch.setattr(ss, "_tmux_pane_pids", lambda: dict(panes))
+    monkeypatch.setattr(agent_processes, "process_snapshot", lambda: snapshots[-1])
+    walks = mocker.spy(agent_processes, "descendants")
+    assert ss.pane_claude_pids() == {"%1": 11}
+    ss.pane_claude_pids()
+    assert walks.call_count == 1
+    snapshots.append(dict(snapshots[0]))  # a new ps table
+    ss.pane_claude_pids()
+    assert walks.call_count == 2
+    panes["%2"] = 20  # a new pane
+    ss.pane_claude_pids()
+    assert walks.call_count == 4  # one walk per pane
 
 
 # ── pane -> CLAUDE_CONFIG_DIR scan (moved from resurrect) ────────────────
@@ -263,7 +329,7 @@ def test_pane_config_dirs_cached_at_15s(mocker):
     process lifetime, so a 1s TTL would add a fork/s for nothing."""
     ss._config_dirs_cache = None
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude"}))
+    mocker.patch.object(ss, "command_lines", return_value={111: "claude"})
     envs = mocker.patch.object(
         ss, "_env_by_pid", return_value={111: "claude CLAUDE_CONFIG_DIR=/Users/t/.claude-b PATH=/x"}
     )
@@ -288,13 +354,48 @@ def test_env_tail_strips_the_command():
     assert ss._env_tail("claude", f"something-else CLAUDE_CONFIG_DIR={alt}") is None
 
 
+@pytest.mark.skipif(not shutil.which("node"), reason="node not installed")
+def test_env_tail_survives_non_ascii_argv_under_a_utf8_locale(monkeypatch, tmp_path):
+    """agent_processes.process_snapshot's ps and _env_by_pid's ps must share
+    one locale (agent_processes.ps_env): under en_US.UTF-8 a C-locale ps
+    vis-encodes non-ASCII argv bytes (`café` -> `cafM-CM-)`), so a snapshot
+    taken in C and an env lookup taken in the server's own locale disagree on
+    the command prefix and _env_tail drops the pane. node stands in for a
+    long-lived claude here; /bin/sleep won't do — ps can't read a
+    SIP-sealed binary's environment at all, locale aside."""
+    import os
+
+    script = tmp_path / "sleepy.js"
+    script.write_text("setTimeout(() => {}, 30000);\n")
+    # LC_ALL and LC_CTYPE override LANG, so without clearing/setting them too
+    # this test passes on a runner that exports either as C regardless of
+    # whether ps_env() is applied to the ps eww call below.
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    agent_processes.clear_caches()
+    proc = subprocess.Popen(
+        ["/Users/tom/.local/bin/café/claude", str(script)],
+        executable=shutil.which("node"),
+        env={**os.environ, "LANG": "en_US.UTF-8", "CLAUDE_CONFIG_DIR": "/tmp/x"},
+    )
+    try:
+        cmd = agent_processes.process_snapshot()[proc.pid].argv
+        tail = ss._env_tail(cmd, ss._env_by_pid([proc.pid])[proc.pid])
+    finally:
+        proc.kill()
+        proc.wait()
+    assert tail is not None
+    assert "CLAUDE_CONFIG_DIR=/tmp/x" in tail
+
+
 def test_pane_profiles_reads_the_wrapper_profile_from_env(mocker):
     """The profile is observable ONLY in env: the wrapper consumes the typed
     `claude full` word and execs `command claude --settings ...`, so it never
     reaches argv."""
     ss._config_dirs_cache = None
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111, "%2": 222})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude", 222: "claude"}))
+    mocker.patch.object(ss, "command_lines", return_value={111: "claude", 222: "claude"})
     mocker.patch.object(
         ss,
         "_env_by_pid",
@@ -310,7 +411,7 @@ def test_pane_profiles_reads_the_wrapper_profile_from_env(mocker):
 def test_pane_models_reads_the_spawn_model_from_env(mocker):
     ss._config_dirs_cache = None
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111, "%2": 222})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude", 222: "claude"}))
+    mocker.patch.object(ss, "command_lines", return_value={111: "claude", 222: "claude"})
     mocker.patch.object(
         ss,
         "_env_by_pid",
@@ -328,7 +429,7 @@ def test_pane_profiles_and_config_dirs_share_one_ps_fork(mocker):
     poll, on the /api/state hot path."""
     ss._config_dirs_cache = None
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: "claude"}))
+    mocker.patch.object(ss, "command_lines", return_value={111: "claude"})
     envs = mocker.patch.object(
         ss, "_env_by_pid", return_value={111: "claude CLAUDE_CONFIG_DIR=/Users/t/.claude-b CLAUDE_WRAPPER_PROFILE=full"}
     )
@@ -342,7 +443,7 @@ def test_pane_profiles_ignores_a_command_that_merely_mentions_the_var(mocker):
     ss._config_dirs_cache = None
     cmd = "rg CLAUDE_WRAPPER_PROFILE=full"
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111})
-    mocker.patch.object(ss, "proc_table", return_value=({}, {111: cmd}))
+    mocker.patch.object(ss, "command_lines", return_value={111: cmd})
     mocker.patch.object(ss, "_env_by_pid", return_value={111: f"{cmd} PATH=/x"})
     assert ss.pane_profiles() == {}
 
@@ -499,14 +600,11 @@ def test_pane_resume_ids_reads_resume_uuid_from_argv(mocker):
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%3": 500, "%4": 501})
     mocker.patch.object(
         ss,
-        "proc_table",
-        return_value=(
-            {},
-            {
-                500: "claude --resume 828e314f-76fe-42af-a750-e48d1f0a5316",
-                501: "claude --system-prompt xyz",
-            },
-        ),
+        "command_lines",
+        return_value={
+            500: "claude --resume 828e314f-76fe-42af-a750-e48d1f0a5316",
+            501: "claude --system-prompt xyz",
+        },
     )
     assert ss.pane_resume_ids() == {"%3": "828e314f-76fe-42af-a750-e48d1f0a5316"}
 
@@ -515,14 +613,38 @@ def test_pane_efforts_reads_the_launch_effort_from_argv(mocker):
     mocker.patch.object(ss, "pane_claude_pids", return_value={"%1": 111, "%2": 222, "%3": 333})
     mocker.patch.object(
         ss,
-        "proc_table",
-        return_value=(
-            {},
-            {
-                111: "claude --dangerously-load-development-channels server:periscope --effort xhigh",
-                222: "claude --dangerously-load-development-channels server:periscope",
-                333: "claude --effort=low",
-            },
-        ),
+        "command_lines",
+        return_value={
+            111: "claude --dangerously-load-development-channels server:periscope --effort xhigh",
+            222: "claude --dangerously-load-development-channels server:periscope",
+            333: "claude --effort=low",
+        },
     )
     assert ss.pane_efforts() == {"%1": "xhigh", "%3": "low"}
+
+
+# ── pane -> root pid comes off the list-panes snapshot ───────────────────
+
+
+def test_tmux_pane_pids_read_the_snapshot(monkeypatch):
+    rows = [{"pane_id": "%5", "pane_pid": "4241"}, {"pane_id": "%6", "pane_pid": "4242"}]
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", (time.monotonic(), rows))
+    assert ss._tmux_pane_pids() == {"%5": 4241, "%6": 4242}
+
+
+def test_tmux_pane_pids_empty_without_tmux(monkeypatch):
+    def no_tmux(*args):
+        raise FileNotFoundError("tmux")
+
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    monkeypatch.setattr(tmux_mod, "tmux", no_tmux)
+    assert ss._tmux_pane_pids() == {}
+
+
+def test_tmux_pane_pids_use_the_configured_socket(monkeypatch, mocker):
+    # The old bare `tmux list-panes` ignored PERISCOPE_TMUX_SOCKET.
+    monkeypatch.setenv("PERISCOPE_TMUX_SOCKET", "periscope-x")
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    run = mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+    ss._tmux_pane_pids()
+    assert run.call_args.args[0][:3] == ["tmux", "-L", "periscope-x"]

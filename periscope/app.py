@@ -52,8 +52,9 @@ from periscope.usage import cached_plan_usage
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    from periscope import config
+    from periscope import config, forks
 
+    forks.install()
     log.info("periscope starting (pid=%d, port=%d)", os.getpid(), config.PORT)
     from periscope import store
 

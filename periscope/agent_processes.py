@@ -1,19 +1,25 @@
 """Process-tree evidence for interactive coding agents.
 
-This module is deliberately stdlib-only.  A failed ``ps`` invocation means
-"no opinion" rather than "the agent exited"; callers use ``None`` to preserve
-that distinction.
+This module is deliberately stdlib-only.  A failed ``ps`` invocation serves
+the last table while it is recent, then means "no opinion" rather than "the
+agent exited"; callers use ``None`` to preserve that distinction.
 """
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import os
 import re
 import subprocess
 import threading
 import time
+from collections import deque
+from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -21,7 +27,9 @@ class ProcessInfo:
     pid: int
     ppid: int
     started_at: int
-    comm: str
+    # argv[0]: the executable as launched. Not ps's comm, which macOS cuts to
+    # 16 characters unless it is the last column (`/Users/tom/.loca`).
+    exe: str
     argv: str
     state: str
 
@@ -29,79 +37,144 @@ class ProcessInfo:
 _PS_ROW_RE = re.compile(
     r"^\s*(\d+)\s+(\d+)\s+"
     r"(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+"
-    r"(\S+)\s+(\S+)(?:\s+(.*))?$"
+    r"(\S+)(?:\s+(.*))?$"
 )
 _PS_TTL_S = 1.0
+_PS_TIMEOUT_S = 2.0
+# A failed ps serves the last table while it is at most this old, instead of
+# blanking session state, the pane -> claude map, codex detection and resources
+# for a poll. A loaded poll runs 3-13 s, so the last table is up to ~14 s old
+# when the next poll's ps times out.
+_PS_KEEP_S = 15.0
+_PS_FAILURE_LOG_EVERY_S = 60.0
 _lock = threading.Lock()
 _snapshot_cache: tuple[float, dict[int, ProcessInfo] | None] | None = None
+# (monotonic time, table) from the last ps that succeeded.
+_last_table: tuple[float, dict[int, ProcessInfo]] | None = None
+_failure_logged_at: float | None = None
+# Inside pinned_snapshot(): the table the block took, in a list its context
+# copies share.
+_pinned: ContextVar[list[dict[int, ProcessInfo] | None]] = ContextVar("pinned_process_snapshot")
 # pane_id -> (pane pid, pane start, agent pid, agent start)
 _pane_cache: dict[str, tuple[int, int, int, int]] = {}
 
 
 def parse_ps_snapshot(output: str) -> dict[int, ProcessInfo]:
-    """Parse macOS ``ps`` output emitted by :func:`_take_snapshot`."""
+    """Parse the `pid ppid lstart state args` rows :func:`_take_snapshot` reads."""
     result: dict[int, ProcessInfo] = {}
     for line in output.splitlines():
         match = _PS_ROW_RE.match(line)
         if not match:
             continue
-        pid, ppid, started, state, comm, argv = match.groups()
+        pid, ppid, started, state, argv = match.groups()
         try:
-            started_at = int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").timestamp())
+            started_at = int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").replace(tzinfo=UTC).timestamp())
         except ValueError:
             continue
+        argv = (argv or "").strip()
         info = ProcessInfo(
             pid=int(pid),
             ppid=int(ppid),
             started_at=started_at,
-            comm=comm,
-            argv=argv or comm,
+            exe=argv.split(maxsplit=1)[0] if argv else "",
+            argv=argv,
             state=state,
         )
         result[info.pid] = info
     return result
 
 
+def ps_env() -> dict[str, str]:
+    """LC_ALL=C so lstart parses and argv bytes encode the same in both ps
+    calls `_env_tail` compares; TZ=UTC so lstart is unambiguous across DST."""
+    return {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
+
+
 def _take_snapshot() -> dict[int, ProcessInfo] | None:
     try:
         proc = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,lstart=,state=,comm=,args="],
+            ["ps", "-axo", "pid=,ppid=,lstart=,state=,args="],
             check=True,
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=_PS_TIMEOUT_S,
+            env=ps_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
     return parse_ps_snapshot(proc.stdout)
 
 
+@contextlib.contextmanager
+def pinned_snapshot():
+    """Inside the block, and in copies of its context, process_snapshot()
+    serves the table it took first, however long the block runs.
+    build_state's poll is the block: a loaded one runs 3–13 s, and every
+    reader in it gets one table."""
+    token = _pinned.set([])
+    try:
+        yield
+    finally:
+        _pinned.reset(token)
+
+
 def process_snapshot() -> dict[int, ProcessInfo] | None:
-    """Return a briefly cached system process snapshot."""
-    global _snapshot_cache
+    """The system process table: the pinned one inside pinned_snapshot(),
+    else the last one while under _PS_TTL_S old, else a fresh `ps`."""
+    global _snapshot_cache, _last_table, _failure_logged_at
+    pinned = _pinned.get(None)
+    if pinned:
+        return pinned[-1]
     now = time.monotonic()
     with _lock:
         if _snapshot_cache and now - _snapshot_cache[0] < _PS_TTL_S:
-            return _snapshot_cache[1]
-        snapshot = _take_snapshot()
-        _snapshot_cache = (now, snapshot)
-        return snapshot
+            snapshot = _snapshot_cache[1]
+        else:
+            snapshot = _take_snapshot()
+            # Stamped when ps returns, not when it started: a ps slower than the
+            # TTL would otherwise be expired on arrival. Callers queued on the lock
+            # read `now` before it, so they reuse this table.
+            returned_at = time.monotonic()
+            if snapshot is not None:
+                _last_table = (returned_at, snapshot)
+            else:
+                kept = _last_table if _last_table and returned_at - _last_table[0] <= _PS_KEEP_S else None
+                snapshot = kept[1] if kept else None
+                if _failure_logged_at is None or returned_at - _failure_logged_at >= _PS_FAILURE_LOG_EVERY_S:
+                    _failure_logged_at = returned_at
+                    log.warning(
+                        "ps failed or ran past %.0f s; %s",
+                        _PS_TIMEOUT_S,
+                        f"serving the table from {returned_at - kept[0]:.1f} s ago" if kept else "no process table",
+                    )
+            _snapshot_cache = (returned_at, snapshot)
+    if pinned is not None:
+        pinned.append(snapshot)
+    return snapshot
 
 
 def _is_codex_executable(proc: ProcessInfo) -> bool:
     # Match the executable itself, never an arbitrary mention in argv.
-    return os.path.basename(proc.comm).lower() in {"codex", "codex.exe"}
+    return os.path.basename(proc.exe).lower() in {"codex", "codex.exe"}
+
+
+def is_claude_executable(proc: ProcessInfo) -> bool:
+    # The launcher (`claude`, `.../bin/claude`) and the versioned binary
+    # (`.../share/claude/versions/<v>`) both say so; a `node` whose arguments
+    # merely mention ~/.claude doesn't.
+    return "claude" in proc.exe.lower()
 
 
 def descendants(root_pid: int, snapshot: dict[int, ProcessInfo]):
-    """`root_pid`'s process (when in the snapshot) and every process below it."""
+    """`root_pid`'s process (when in the snapshot) and every process below it,
+    nearest first."""
     children: dict[int, list[ProcessInfo]] = {}
     for proc in snapshot.values():
         children.setdefault(proc.ppid, []).append(proc)
-    pending = [root_pid]
+    pending = deque([root_pid])
     seen: set[int] = set()
     while pending:
-        parent = pending.pop()
+        parent = pending.popleft()
         if parent in seen:
             continue
         seen.add(parent)
@@ -158,7 +231,9 @@ def codex_process_for_pane(pane_id: str, pane_pid: int | str | None) -> bool | N
 
 def clear_caches() -> None:
     """Test/support hook; runtime callers normally rely on TTL/invalidation."""
-    global _snapshot_cache
+    global _snapshot_cache, _last_table, _failure_logged_at
     with _lock:
         _snapshot_cache = None
+        _last_table = None
+        _failure_logged_at = None
         _pane_cache.clear()

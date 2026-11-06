@@ -9,10 +9,14 @@ and normal-size pastes) use a single `send-keys -H` subprocess; large
 inputs fall back to load-buffer + paste-buffer over stdin to dodge ARG_MAX.
 """
 
+import contextlib
 import os
 import re
 import subprocess
+import threading
+import time
 import uuid
+from contextvars import ContextVar
 
 from periscope import config
 
@@ -30,9 +34,120 @@ def tmux(*args: str) -> str:
     return r.stdout
 
 
-def _run(cmd: list[str], cwd: str | None = None, timeout: float = 3.0) -> tuple[int, str]:
+# Fields of every `list-panes -a` row. window_* and the @periscope_* window
+# options resolve against the pane's window, so one call answers both the
+# per-window questions (panes.list_windows reads each window's active pane) and
+# the per-pane ones (panes.all_pane_ids, session_status's pane -> pid map).
+PANE_FIELDS = (
+    "session_name",
+    "window_index",
+    "window_name",
+    "window_active",
+    "pane_current_path",
+    "@periscope_id",
+    "pane_id",
+    "window_activity",
+    "window_id",
+    "pane_pid",
+    "pane_current_command",
+    "@periscope_opened",
+    "pane_active",
+)
+# \x1f (unit separator) between fields: tmux prints a tab inside a window name
+# or path verbatim, which a tab separator would split out of shape.
+_PANES_FMT = "\x1f".join(f"#{{{f}}}" for f in PANE_FIELDS)
+_PANES_TTL_S = 1.0
+_panes_lock = threading.Lock()
+# (monotonic time, rows) from the last list_panes().
+_panes_snapshot: tuple[float, list[dict[str, str]]] | None = None
+# Inside pinned_snapshot(): a one-slot box for the block's rows, replaced on
+# each read, shared by its context copies.
+_pinned_rows: ContextVar[list[list[dict[str, str]]]] = ContextVar("pinned_rows")
+_unparsed_logged = False
+
+
+def _log_skipped_row(buf_lines: list[str]) -> None:
+    global _unparsed_logged
+    if not _unparsed_logged:
+        from periscope.log import log
+
+        log.warning("list-panes row skipped (a \\x1f in a window name or path, or a malformed row?): %r", buf_lines)
+        _unparsed_logged = True
+
+
+def list_panes() -> list[dict[str, str]]:
+    """Every pane as {field: value} over PANE_FIELDS, from a fresh
+    `list-panes -a` that becomes the snapshot `panes_snapshot()` serves. []
+    when tmux has no server."""
+    global _panes_snapshot
+    raw_lines = tmux("list-panes", "-a", "-F", _PANES_FMT).split("\n")
+    if raw_lines and raw_lines[-1] == "":
+        raw_lines.pop()  # the trailing newline tmux's output ends with
+    rows = []
+    buf_lines: list[str] = []
+    for line in raw_lines:
+        if not buf_lines and not line:
+            continue
+        buf_lines.append(line)
+        # A newline in a window name (only given with `new-window -n`; paths
+        # and @-options reach the output raw) splits its pane's row across
+        # raw lines — rejoin with "\n" until the field count is whole again.
+        fields = "\n".join(buf_lines).split("\x1f")
+        if len(fields) == len(PANE_FIELDS):
+            rows.append(dict(zip(PANE_FIELDS, fields, strict=True)))
+            buf_lines = []
+        elif len(fields) > len(PANE_FIELDS):
+            # Overshot: a \x1f inside a value. Not a newline — drop it and
+            # resume scanning from the next raw line.
+            _log_skipped_row(buf_lines)
+            buf_lines = []
+    if buf_lines:
+        _log_skipped_row(buf_lines)  # never reached the field count
+    _panes_snapshot = (time.monotonic(), rows)
+    pinned = _pinned_rows.get(None)
+    if pinned is not None:
+        pinned[:] = [rows]
+    return rows
+
+
+@contextlib.contextmanager
+def pinned_snapshot():
+    """Inside the block, and in copies of its context, panes_snapshot() serves
+    the rows the block's last list_panes() read, however long the block runs.
+    build_state's poll is the block: its list_windows reads the rows, and
+    a loaded poll runs 3–13 s."""
+    token = _pinned_rows.set([])
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        yield
+    finally:
+        _pinned_rows.reset(token)
+
+
+def panes_snapshot() -> list[dict[str, str]]:
+    """list_panes' rows: the pinned ones inside pinned_snapshot(), else the
+    last call's while under _PANES_TTL_S old, else a fresh call. Locked, so
+    concurrent callers wait for one fork instead of each forking."""
+    pinned = _pinned_rows.get(None)
+    if pinned:
+        return pinned[-1]
+    with _panes_lock:
+        if not (_panes_snapshot and time.monotonic() - _panes_snapshot[0] < _PANES_TTL_S):
+            return list_panes()
+        rows = _panes_snapshot[1]
+    if pinned is not None:
+        pinned[:] = [rows]
+    return rows
+
+
+def _run(
+    cmd: list[str], cwd: str | None = None, timeout: float = 3.0, env_overrides: dict[str, str] | None = None
+) -> tuple[int, str]:
+    """Run `cmd`. `env_overrides`, if given, is merged over `os.environ` here
+    so a caller wanting e.g. `LC_ALL=C` doesn't rebuild the whole environment
+    (and can't accidentally run the child with PATH/HOME missing)."""
+    env = {**os.environ, **env_overrides} if env_overrides else None
+    try:
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
         if r.returncode != 0:
             # git and gh explain failures on stderr, with stdout empty: every
             # "git worktree add failed: " the open surfaces raised ended blank,

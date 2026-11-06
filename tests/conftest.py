@@ -4,6 +4,7 @@ These fixtures sandbox side-effecting helpers so tests don't write to
 ~/.config/periscope or bind real unix sockets.
 """
 
+import math
 import os
 import shutil
 import subprocess
@@ -65,21 +66,45 @@ def _no_live_session_scan(monkeypatch):
     It resolves a pane to its running claude by walking the process tree
     (`tmux list-panes` + `ps`), and it runs on every /api/state poll — so any
     test that builds a window view would otherwise fork against the developer's
-    real tmux server and read their real ~/.claude/sessions. Stubbing the tmux
-    seam makes pane_claude_pids() return {} by its own no-panes path (no ps
-    fork either), so every test falls back to the pane_sessions row unless it
-    opts in. Tests of the live path patch these same seams themselves, which
-    overrides this."""
+    real tmux server and read their real ~/.claude/sessions. An unexpiring
+    empty list-panes snapshot makes pane_claude_pids() return {} by its own
+    no-panes path (a test's own list_windows() replaces it, as a refresh
+    would), and an unexpiring empty process snapshot answers command_lines() /
+    _claude_procs() without forking `ps`; every test falls back to the
+    pane_sessions row unless it opts in. Tests of the live path patch these
+    same seams themselves, which overrides this."""
     try:
-        from periscope import session_status
+        from periscope import agent_processes, session_status, tmux
     except ImportError:
         return
-    monkeypatch.setattr(session_status, "_tmux_pane_pids", dict, raising=False)
+    monkeypatch.setattr(tmux, "_panes_snapshot", (math.inf, []), raising=False)
     monkeypatch.setattr(session_status, "_pane_pids_cache", None, raising=False)
-    monkeypatch.setattr(session_status, "_proc_table_cache", None, raising=False)
+    monkeypatch.setattr(agent_processes, "_snapshot_cache", (math.inf, {}), raising=False)
     # pane_config_dirs' 15s TTL outlives a test — a populated cache would bleed
     # one test's pane->config-dir map into every later view build.
     monkeypatch.setattr(session_status, "_config_dirs_cache", None, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_git_caches():
+    """git_pr's per-path caches are module globals: an entry one test left
+    behind would answer the next test's read of the same path, and a stale
+    one would start a real `_bg` git refresh thread."""
+    from periscope import git_pr
+
+    git_pr._git_cache.clear()
+    git_pr._repo_identity_cache.clear()
+    git_pr._git_fetching.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_gh_token(monkeypatch):
+    """Keep gh.run from forking `gh auth token` against the developer's real
+    keychain: an unexpiring "no token" entry makes every call run on gh's own
+    credentials. tests/test_gh.py overrides this fixture by name."""
+    from periscope import gh
+
+    monkeypatch.setattr(gh, "_token_cache", (0.0, math.inf, None))
 
 
 @pytest.fixture(autouse=True)

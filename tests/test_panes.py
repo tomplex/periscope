@@ -12,12 +12,16 @@ file had.
 
 import hashlib
 import re
+import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
 
 import pane_permission_hook as hook
+import periscope.tmux as tmux_mod
+from periscope import panes, session_status
+from periscope.config import INPUT_CTL_SESSION
 from periscope.panes import (
     ACTIVE_OP_RE,
     AGENT_STICKY_S,
@@ -42,6 +46,7 @@ from periscope.panes import (
     smooth_spinner,
     update_focus_from_windows,
 )
+from tests.conftest import needs_tmux
 
 # ── Regex-level cases ───────────────────────────────────────────────────
 # Each row: (tag, line, should_match_either_regex).
@@ -1152,74 +1157,6 @@ def test_update_focus_from_windows_stamps_active_window():
     assert "main:1" not in _focused_at
 
 
-def test_list_windows_parses_tmux_list_output(mocker):
-    sample = "main\t0\tshell\t1\t/home/tom/dev/foo\t1234abcd\t%5\nmain\t1\tclaude\t0\t/home/tom/dev/bar\t1235abcd\t%6\n"
-    mocker.patch("periscope.panes.tmux", return_value=sample)
-    out = list_windows()
-    assert len(out) == 2
-    assert out[0]["session"] == "main"
-    assert out[0]["index"] == 0
-    assert out[0]["name"] == "shell"
-    assert out[0]["active"] is True
-    assert out[0]["cwd"] == "/home/tom/dev/foo"
-    assert out[0]["pid_raw"] == "1234abcd"
-    assert out[0]["pane_id"] == "%5"
-    assert out[1]["active"] is False
-    assert out[0]["pane_pid"] == ""
-    assert out[0]["current_command"] == ""
-    assert out[0]["opened"] == ""
-
-
-def test_list_windows_appends_process_metadata(mocker):
-    sample = "main\t0\tcodex\t1\t/home/tom/dev/foo\t1234abcd\t%5\t1717250000\t@9\t4242\tcodex\t1717249990 /home/tom/dev/my foo\n"
-    mocker.patch("periscope.panes.tmux", return_value=sample)
-    row = list_windows()[0]
-    assert row["window_id"] == "@9"
-    assert row["pane_pid"] == "4242"
-    assert row["current_command"] == "codex"
-    assert row["opened"] == "1717249990 /home/tom/dev/my foo"
-
-
-def test_all_pane_ids_parses_and_dedupes(mocker):
-    """list-panes -a yields every pane id (including a window's background
-    panes, which list_windows collapses to just the active one)."""
-    from periscope import panes
-
-    mocker.patch("periscope.panes.tmux", return_value="%5\n%6\n%7\n")
-    assert panes.all_pane_ids() == {"%5", "%6", "%7"}
-
-
-def test_all_pane_ids_empty_on_blank(mocker):
-    from periscope import panes
-
-    mocker.patch("periscope.panes.tmux", return_value="")
-    assert panes.all_pane_ids() == set()
-
-
-def test_list_windows_parses_window_activity(mocker):
-    """list_windows surfaces #{window_activity} as an int `activity` field."""
-    from periscope import panes
-
-    mocker.patch(
-        "periscope.panes.tmux",
-        return_value="sess\t0\twin\t1\t/cwd\tpid-abc\t%5\t1717250000\n",
-    )
-    rows = panes.list_windows()
-    assert rows[0]["activity"] == 1717250000
-
-
-def test_list_windows_activity_defaults_zero_when_absent(mocker):
-    """A short row (no activity column) defaults activity to 0, not a crash."""
-    from periscope import panes
-
-    mocker.patch(
-        "periscope.panes.tmux",
-        return_value="sess\t0\twin\t1\t/cwd\tpid-abc\t%5\n",
-    )
-    rows = panes.list_windows()
-    assert rows[0]["activity"] == 0
-
-
 def test_update_focus_ignores_window_activity(mocker):
     """Invariant #1 regression: focus is keyed on window_active, never activity.
     Two polls where only `activity` changes (same active window) must NOT
@@ -1236,13 +1173,173 @@ def test_update_focus_ignores_window_activity(mocker):
     assert panes._focused_at["s:0"] == first  # activity bump did not touch focus
 
 
-def test_list_windows_filters_input_ctl_session(mocker):
-    sample = "main\t0\tshell\t1\t/home/tom\t\t%5\nperiscope-input\t0\tshell\t1\t/tmp\t\t%6\n"
-    mocker.patch("periscope.panes.tmux", return_value=sample)
-    out = list_windows()
-    # periscope's internal control-mode session is scaffolding, not state.
-    assert len(out) == 1
-    assert out[0]["session"] == "main"
+# main:0 is split with its SECOND pane active; main:1 carries an open stamp;
+# periscope's own input session comes last.
+_PANES = (
+    "\n".join(
+        "\x1f".join(row)
+        for row in [
+            ["main", "0", "shell", "1", "/home/tom/dev/foo", "pid-a", "%5", "1717250000", "@1", "4241", "zsh", "", "0"],
+            [
+                "main",
+                "0",
+                "shell",
+                "1",
+                "/home/tom/dev/bar",
+                "pid-a",
+                "%6",
+                "1717250000",
+                "@1",
+                "4242",
+                "nvim",
+                "",
+                "1",
+            ],
+            [
+                "main",
+                "1",
+                "claude",
+                "0",
+                "/home/tom/dev/baz",
+                "pid-b",
+                "%7",
+                "1717250100",
+                "@2",
+                "4243",
+                "claude",
+                "1717249990 /home/tom/dev/my baz",
+                "1",
+            ],
+            [INPUT_CTL_SESSION, "0", "ctl", "1", "/tmp", "", "%9", "1717250200", "@3", "4244", "sh", "", "1"],
+        ]
+    )
+    + "\n"
+)
+
+
+def test_list_windows_reads_each_windows_active_pane(monkeypatch):
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: _PANES)
+    assert list_windows() == [
+        {
+            "session": "main",
+            "index": 0,
+            "name": "shell",
+            "active": True,
+            "cwd": "/home/tom/dev/bar",
+            "pid_raw": "pid-a",
+            "pane_id": "%6",
+            "activity": 1717250000,
+            "window_id": "@1",
+            "pane_pid": "4242",
+            "current_command": "nvim",
+            "opened": "",
+        },
+        {
+            "session": "main",
+            "index": 1,
+            "name": "claude",
+            "active": False,
+            "cwd": "/home/tom/dev/baz",
+            "pid_raw": "pid-b",
+            "pane_id": "%7",
+            "activity": 1717250100,
+            "window_id": "@2",
+            "pane_pid": "4243",
+            "current_command": "claude",
+            "opened": "1717249990 /home/tom/dev/my baz",
+        },
+    ]
+
+
+def test_all_pane_ids_includes_a_split_windows_background_pane(monkeypatch):
+    # Channel-alert GC keys on this: a background Claude pane (%5) must stay.
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: _PANES)
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    assert panes.all_pane_ids() == {"%5", "%6", "%7", "%9"}
+
+
+def test_no_tmux_server_means_no_windows_and_no_panes(monkeypatch):
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: "")
+    monkeypatch.setattr(tmux_mod, "_panes_snapshot", None)
+    assert list_windows() == []
+    assert panes.all_pane_ids() == set()
+
+
+def test_list_windows_never_serves_the_snapshot(monkeypatch):
+    # A window created or stamped a moment ago must read back at once.
+    calls = []
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or _PANES)
+    list_windows()
+    list_windows()
+    assert len(calls) == 2
+
+
+def test_one_list_panes_serves_the_whole_poll(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tmux_mod, "tmux", lambda *a: calls.append(a) or _PANES)
+    windows = list_windows()
+    assert panes.all_pane_ids() == {"%5", "%6", "%7", "%9"}
+    assert session_status._tmux_pane_pids() == {"%5": 4241, "%6": 4242, "%7": 4243, "%9": 4244}
+    assert len(windows) == 2
+    assert len(calls) == 1
+
+
+# The list-windows read, kept as the oracle the list-panes read reproduces.
+_LIST_WINDOWS_FMT = (
+    "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t"
+    "#{@periscope_id}\t#{pane_id}\t#{window_activity}\t#{window_id}\t#{pane_pid}\t"
+    "#{pane_current_command}\t#{@periscope_opened}"
+)
+
+
+def _list_windows_rows(out):
+    rows = []
+    for line in out.strip().split("\n"):
+        if not line:
+            continue
+        p = line.split("\t")
+        if p[0] == INPUT_CTL_SESSION:
+            continue
+        rows.append(
+            {
+                "session": p[0],
+                "index": int(p[1]),
+                "name": p[2],
+                "active": p[3] == "1",
+                "cwd": p[4],
+                "pid_raw": p[5],
+                "pane_id": p[6],
+                "activity": int(p[7]) if p[7] else 0,
+                "window_id": p[8],
+                "pane_pid": p[9],
+                "current_command": p[10],
+                "opened": p[11] if len(p) > 11 else "",
+            }
+        )
+    return rows
+
+
+@needs_tmux
+def test_list_windows_matches_list_windows_on_a_live_server(tmux_test_server):
+    def t(*args):
+        return subprocess.run(
+            ["tmux", "-L", tmux_test_server, *args], check=True, capture_output=True, text=True
+        ).stdout
+
+    t("new-session", "-d", "-s", "alpha", "-n", "one", "cat")
+    t("split-window", "-t", "alpha:one", "cat")  # the new, second pane is active
+    t("new-window", "-t", "alpha", "-n", "two", "cat")
+    t("split-window", "-t", "alpha:two", "cat")
+    t("select-pane", "-t", "alpha:two.0")  # the first pane of a split is active
+    t("set-option", "-w", "-t", "alpha:two", "@periscope_id", "p-two")
+    t("set-option", "-w", "-t", "alpha:two", "@periscope_opened", "1717249990 /tmp/my dir")
+    t("new-session", "-d", "-s", "beta", "cat")
+    t("new-session", "-d", "-s", INPUT_CTL_SESSION, "cat")
+    t("select-window", "-t", "alpha:one")
+    expected = _list_windows_rows(t("list-windows", "-a", "-F", _LIST_WINDOWS_FMT))
+    assert [(w["session"], w["index"]) for w in expected] == [("alpha", 0), ("alpha", 1), ("beta", 0)]
+    assert list_windows() == expected
+    assert panes.all_pane_ids() == set(t("list-panes", "-a", "-F", "#{pane_id}").split())
 
 
 def test_drop_target_focus_pops_both_dicts():

@@ -1,19 +1,21 @@
 """Git + GitHub PR state, plus the activity-timeline cache."""
 
+import os
+import re
 import subprocess
+import time
+from types import SimpleNamespace
 
 import pytest
 
+from periscope import git_pr, gitutil
 from periscope.git_pr import (
-    _GIT_TTL,
     _ci_checks,
     _ci_glyph,
     _gh_run_state,
-    _git_cache,
     _linked_pr_cache,
     _pr_cache,
     _signal_cache,
-    cached_git_state,
     git_signal_for,
     git_state_for,
     linear_ticket_fields,
@@ -25,12 +27,10 @@ from periscope.git_pr import (
 
 @pytest.fixture(autouse=True)
 def _reset_caches():
-    _git_cache.clear()
     _pr_cache.clear()
     _linked_pr_cache.clear()
     _signal_cache.clear()
     yield
-    _git_cache.clear()
     _pr_cache.clear()
     _linked_pr_cache.clear()
     _signal_cache.clear()
@@ -47,70 +47,44 @@ def test_git_state_for_returns_none_for_missing_path(tmp_path):
     assert git_state_for("") is None
 
 
-def test_git_state_for_returns_branch_for_mocked_git_repo(tmp_path, mocker):
-    """When git rev-parse / diff / rev-list succeed, build the expected dict."""
-
-    def fake_run(cmd, cwd=None, timeout=3.0):
-        # cmd is a list like ["git", "-C", path, ...]
-        if "rev-parse" in cmd and "--git-dir" in cmd:
-            return (0, ".git")
-        if "rev-parse" in cmd and "--abbrev-ref" in cmd:
-            return (0, "main")
-        if "diff" in cmd:
-            return (0, "")  # no insertions / deletions
-        if "rev-list" in cmd:
-            return (0, "0")  # zero ahead
-        if "rev-parse" in cmd and "--short" in cmd:
-            return (0, "abcd1234")
-        return (0, "")
-
-    # git_pr imports _run as a module-level name; patch the live binding.
-    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
-    out = git_state_for(str(tmp_path))
-    assert out is not None
-    assert out["branch"] == "main"
-    assert out["git"] == "clean"
+_HEAD = "# branch.oid 0123456789abcdef0123456789abcdef01234567\n# branch.head main\n"
 
 
-def _mock_git(mocker, *, diff="", untracked="", ahead="0"):
-    """Patch _run so git_state_for sees a controlled repo shape."""
+def _mock_git(mocker, *, status=_HEAD, diff="", code=0):
+    """Patch _run so git_state_for sees one `status --porcelain=v2 --branch`
+    answer and one `diff-index --shortstat` answer; repo identity falls back."""
 
-    def fake_run(cmd, cwd=None, timeout=3.0):
-        if "rev-parse" in cmd and "--git-dir" in cmd:
-            return (0, ".git")
-        if "rev-parse" in cmd and "--abbrev-ref" in cmd:
-            return (0, "main")
-        if "ls-files" in cmd:
-            return (0, untracked)
-        if "diff" in cmd:
+    def fake_run(cmd, cwd=None, timeout=3.0, env_overrides=None):
+        if "status" in cmd:
+            return (code, status)
+        if "diff-index" in cmd:
             return (0, diff)
-        if "rev-list" in cmd:
-            return (0, ahead)
-        return (0, "")
+        return (1, "")  # rev-parse --git-common-dir / remote get-url
 
     mocker.patch("periscope.git_pr._run", side_effect=fake_run)
+    mocker.patch("periscope.gitutil._run", side_effect=fake_run)
 
 
 def test_git_state_counts_untracked_files(tmp_path, mocker):
     """`git diff HEAD` ignores untracked files, so a worktree whose only change
     was brand-new files used to report "clean" — and isDirty() then suppressed
     the chip entirely, hiding the work."""
-    _mock_git(mocker, untracked="brand_new.py\n")
+    _mock_git(mocker, status=_HEAD + "? brand_new.py")
     assert git_state_for(str(tmp_path))["git"] == "?1"
 
 
 def test_git_state_combines_tracked_and_untracked(tmp_path, mocker):
     _mock_git(
         mocker,
+        status=_HEAD + "1 .M N... 100644 100644 100644 aaa bbb a.py\n? new.py\n? newdir/",
         diff=" 1 file changed, 12 insertions(+), 3 deletions(-)",
-        untracked="a.py\nnewdir/\n",
     )
     assert git_state_for(str(tmp_path))["git"] == "+12 -3 ?2"
 
 
 def test_git_state_untracked_with_unpushed_commits(tmp_path, mocker):
     """The `*` suffix means unpushed commits and composes with the ? count."""
-    _mock_git(mocker, untracked="a.py\n", ahead="2")
+    _mock_git(mocker, status=_HEAD + "# branch.upstream origin/main\n# branch.ab +2 -0\n? a.py")
     assert git_state_for(str(tmp_path))["git"] == "?1 *"
 
 
@@ -118,36 +92,434 @@ def test_git_state_clean_stays_clean(tmp_path, mocker):
     """No tracked diff, no untracked, no unpushed -> the literal isDirty() checks."""
     _mock_git(mocker)
     assert git_state_for(str(tmp_path))["git"] == "clean"
-    _mock_git(mocker, ahead="3")
+    _mock_git(mocker, status=_HEAD + "# branch.upstream origin/main\n# branch.ab +3 -1")
     assert git_state_for(str(tmp_path))["git"] == "clean *"
 
 
-def test_cached_git_state_uses_ttl(mocker):
-    """First call hits git_state_for; second call within TTL serves the cache."""
-    mock_inner = mocker.patch(
-        "periscope.git_pr.git_state_for",
-        return_value={"branch": "main", "git": "clean"},
-    )
-    cached_git_state("/foo")
-    cached_git_state("/foo")
-    assert mock_inner.call_count == 1
+def test_git_state_detached_head_is_the_short_sha(tmp_path, mocker):
+    _mock_git(mocker, status="# branch.oid 0123456789abcdef0123456789abcdef01234567\n# branch.head (detached)")
+    assert git_state_for(str(tmp_path))["branch"] == "@0123456"
 
 
-def test_cached_git_state_returns_none_for_empty_path():
-    assert cached_git_state("") is None
+def test_git_state_none_when_status_fails(tmp_path, mocker):
+    _mock_git(mocker, status="fatal: not a git repository (or any of the parent directories): .git", code=128)
+    assert git_state_for(str(tmp_path)) is None
 
 
-def test_cached_git_state_refetches_after_ttl(mocker):
-    """Two calls separated by more than _GIT_TTL hit git_state_for twice."""
-    mock_inner = mocker.patch(
-        "periscope.git_pr.git_state_for",
-        return_value={"branch": "main", "git": "clean"},
-    )
-    times = [1000.0, 1000.0 + _GIT_TTL + 1.0]
-    mocker.patch("periscope.git_pr.time.time", side_effect=times)
-    cached_git_state("/foo")
-    cached_git_state("/foo")
-    assert mock_inner.call_count == 2
+def test_identity_with_no_slug_is_not_cached(tmp_path, mocker):
+    """github_slug returning None (no GitHub remote, or a failed/timed-out
+    read) is not cached — the rule reviews._GH_SLUG already applies to the
+    same value. Re-read on the next git refresh instead of for the full
+    10-minute identity TTL."""
+    _mock_git(mocker)
+    slug = mocker.patch("periscope.git_pr.github_slug", return_value=None)
+    mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
+    git_state_for(str(tmp_path))
+    git_state_for(str(tmp_path))
+    assert slug.call_count == 2
+
+
+def test_identity_with_a_found_slug_is_cached_for_the_ttl(tmp_path, mocker):
+    _mock_git(mocker)
+    slug = mocker.patch("periscope.git_pr.github_slug", return_value="owner/repo")
+    mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
+    out1 = git_state_for(str(tmp_path))
+    out2 = git_state_for(str(tmp_path))
+    assert slug.call_count == 1
+    assert out1["repo_slug"] == out2["repo_slug"] == "owner/repo"
+
+
+def test_git_reads_never_write_the_index(tmp_path, git_identity):
+    # A dashboard refresh must not touch .git/index from under the user's own
+    # git commands. `git diff HEAD` rewrites it when files are stat-dirty
+    # (new mtime, same content) even with --no-optional-locks, which is why
+    # line counts come from diff-index instead.
+    repo = _committed(tmp_path)
+    (repo / "b.txt").write_text("b\n")
+    (repo / "c.txt").write_text("c\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "more files")
+    now = time.time()
+    for name in ("a.txt", "b.txt", "c.txt"):
+        os.utime(repo / name, (now, now + 86400))
+    (repo / "a.txt").write_text("one\nTWO\n")  # a real content change too
+    index = repo / ".git" / "index"
+    before = (index.stat().st_mtime_ns, index.read_bytes())
+    assert git_state_for(str(repo))["git"] == "+1 -1"
+    after = (index.stat().st_mtime_ns, index.read_bytes())
+    assert after == before
+
+
+def test_a_staged_rename_and_edit_counts_as_one_line_changed(tmp_path, git_identity):
+    # Without -M, diff-index would count a rename as a full delete+add
+    # (101 insertions/100 deletions here) instead of the +1/-1 the edit is.
+    repo = _committed(tmp_path)
+    _git(repo, "mv", "a.txt", "a2.txt")
+    (repo / "a2.txt").write_text("one\nTWO\n")
+    _git(repo, "add", "a2.txt")
+    assert git_state_for(str(repo))["git"] == "+1 -1"
+
+
+def test_git_state_passes_its_timeout_to_git(tmp_path, mocker):
+    _mock_git(mocker)
+    git_state_for(str(tmp_path), timeout=10.0)
+    assert {c.kwargs["timeout"] for c in git_pr._run.call_args_list} == {10.0}
+
+
+# --- the two-command read against real repos -------------------------------
+
+
+@pytest.fixture
+def git_identity(monkeypatch):
+    """Commit in fixture repos without the developer's git config or signing."""
+    for k, v in {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }.items():
+        monkeypatch.setenv(k, v)
+
+
+def _seven_command_state(path):
+    """The seven-command read of branch + git, kept as the oracle."""
+
+    def run(*args):
+        r = subprocess.run(["git", "-C", path, *args], capture_output=True, text=True)
+        return r.returncode, r.stdout.strip()
+
+    if run("rev-parse", "--git-dir")[0] != 0:
+        return None
+    _, branch = run("rev-parse", "--abbrev-ref", "HEAD")
+    if not branch or branch == "HEAD":
+        _, sha = run("rev-parse", "--short", "HEAD")
+        branch = f"@{sha}" if sha else "?"
+    _, diff = run("diff", "HEAD", "--shortstat")
+    adds_m = re.search(r"(\d+) insertion", diff)
+    dels_m = re.search(r"(\d+) deletion", diff)
+    adds = int(adds_m.group(1)) if adds_m else 0
+    dels = int(dels_m.group(1)) if dels_m else 0
+    _, untracked = run("ls-files", "-o", "--exclude-standard", "--directory", "--no-empty-directory")
+    new = sum(1 for line in untracked.splitlines() if line.strip())
+    code, ahead_s = run("rev-list", "--count", "@{u}..HEAD")
+    ahead = int(ahead_s) if code == 0 and ahead_s.isdigit() else 0
+    bits = []
+    if adds or dels:
+        bits.append(f"+{adds} -{dels}")
+    if new:
+        bits.append(f"?{new}")
+    state = " ".join(bits) if bits else "clean"
+    if ahead > 0:
+        state += " *"
+    return {"branch": branch, "git": state}
+
+
+def _committed(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("one\ntwo\n")
+    (repo / ".gitignore").write_text("*.log\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "init")
+    return repo
+
+
+def _clean(tmp_path):
+    return _committed(tmp_path)
+
+
+def _dirty(tmp_path):
+    repo = _committed(tmp_path)
+    (repo / "a.txt").write_text("one\nTWO\nthree\n")
+    (repo / "b.txt").write_text("staged\n")
+    _git(repo, "add", "b.txt")
+    return repo
+
+
+def _untracked_only(tmp_path):
+    # A file, a wholly-untracked tree, a dir holding only ignored files, a dir
+    # mixing ignored and untracked, and an empty dir.
+    repo = _committed(tmp_path)
+    (repo / "new.py").write_text("x\n")
+    (repo / "newdir" / "deep").mkdir(parents=True)
+    (repo / "newdir" / "deep" / "f.txt").write_text("x\n")
+    (repo / "logs").mkdir()
+    (repo / "logs" / "run.log").write_text("x\n")
+    (repo / "mixed").mkdir()
+    (repo / "mixed" / "keep.txt").write_text("x\n")
+    (repo / "mixed" / "skip.log").write_text("x\n")
+    (repo / "empty").mkdir()
+    return repo
+
+
+def _detached(tmp_path):
+    repo = _committed(tmp_path)
+    _git(repo, "checkout", "-q", "--detach")
+    return repo
+
+
+def _ahead(tmp_path):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", str(remote))
+    repo = _committed(tmp_path)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "-u", "origin", "main")
+    for n in (1, 2):
+        (repo / "a.txt").write_text(f"v{n}\n")
+        _git(repo, "commit", "-qam", f"c{n}")
+    return repo
+
+
+def _no_upstream(tmp_path):
+    repo = _committed(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "feature")
+    (repo / "a.txt").write_text("feature\n")
+    _git(repo, "commit", "-qam", "f")
+    return repo
+
+
+def _non_repo(tmp_path):
+    d = tmp_path / "plain"
+    d.mkdir()
+    return d
+
+
+@pytest.mark.parametrize(
+    ("build", "want"),
+    [
+        (_clean, ("main", "clean")),
+        (_dirty, ("main", "+3 -1")),
+        (_untracked_only, ("main", "?3")),
+        (_detached, (None, "clean")),  # branch is "@<sha7>", checked against the oracle
+        (_ahead, ("main", "clean *")),
+        (_no_upstream, ("feature", "clean")),
+        (_non_repo, None),
+    ],
+)
+def test_two_command_read_matches_the_seven_command_read(build, want, tmp_path, git_identity):
+    path = str(build(tmp_path))
+    new = git_state_for(path)
+    got = None if new is None else {"branch": new["branch"], "git": new["git"]}
+    assert got == _seven_command_state(path)
+    if want is None:
+        assert got is None
+    else:
+        assert got["git"] == want[1]
+        assert got["branch"] == want[0] or (want[0] is None and got["branch"].startswith("@"))
+
+
+def test_a_subdirectory_counts_the_whole_repos_untracked_entries(tmp_path, git_identity):
+    # The one place the two reads differ on purpose: ls-files -o was scoped to
+    # the cwd, status is whole-repo — as diff HEAD's line counts already were.
+    repo = _committed(tmp_path)
+    (repo / "pkg" / "deep").mkdir(parents=True)
+    (repo / "pkg" / "mod.py").write_text("x\n")
+    (repo / "pkg" / "deep" / "tracked.py").write_text("x\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "pkg")
+    (repo / "pkg" / "new.py").write_text("x\n")
+    (repo / "pkg" / "scratch").mkdir()
+    (repo / "pkg" / "scratch" / "x.txt").write_text("x\n")
+    (repo / "root-new.txt").write_text("x\n")
+    for sub, old in (("pkg", "?2"), ("pkg/deep", "clean")):
+        path = str(repo / sub)
+        assert _seven_command_state(path)["git"] == old
+        assert git_state_for(path)["git"] == "?3"
+
+
+def test_unborn_branch_reads_its_name(tmp_path, git_identity):
+    # `rev-parse --abbrev-ref HEAD` fails before the first commit, and _run
+    # handed its stderr back as the branch; porcelain v2 names the branch.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "trunk")
+    (repo / "new.py").write_text("x\n")
+    assert git_state_for(str(repo)) == {
+        "branch": "trunk",
+        "git": "?1",
+        "repo_slug": None,
+        "repo_key": os.path.realpath(repo),
+        "repo_label": "repo",
+    }
+
+
+def test_a_bare_container_reads_its_branch_and_repo(tmp_path, git_identity):
+    # The layout whose .git file says `gitdir: ./.bare` has no work tree at the
+    # container; it still has a branch and a repo, and its pane stays in its track.
+    src = _committed(tmp_path)
+    box = tmp_path / "box"
+    box.mkdir()
+    _git(tmp_path, "clone", "-q", "--bare", str(src), str(box / ".bare"))
+    _git(box / ".bare", "remote", "set-url", "origin", "git@github.com:tom/box.git")
+    (box / ".git").write_text("gitdir: ./.bare\n")
+    assert git_state_for(str(box)) == {
+        "branch": "main",
+        "git": "clean",
+        "repo_slug": "tom/box",
+        "repo_key": os.path.realpath(box),
+        "repo_label": "box",
+    }
+
+
+def test_a_bare_container_reads_its_branch_under_a_translated_locale(tmp_path, monkeypatch, git_identity):
+    # The no-work-tree fatal is matched against its English text; under a
+    # translated locale git prints it translated, so git_state_for must force
+    # LC_ALL=C rather than trust the caller's environment.
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+    src = _committed(tmp_path)
+    box = tmp_path / "box"
+    box.mkdir()
+    _git(tmp_path, "clone", "-q", "--bare", str(src), str(box / ".bare"))
+    _git(box / ".bare", "remote", "set-url", "origin", "git@github.com:tom/box.git")
+    (box / ".git").write_text("gitdir: ./.bare\n")
+    state = git_state_for(str(box))
+    assert state is not None
+    assert state["branch"] == "main"
+    assert state["repo_slug"] == "tom/box"
+
+
+def test_a_git_dir_without_a_work_tree_reads_its_branch(tmp_path, git_identity):
+    # A cwd inside .git, and a plain bare repo: no work tree, still a branch.
+    repo = _committed(tmp_path)
+    inside = git_state_for(str(repo / ".git"))
+    assert (inside["branch"], inside["git"]) == ("main", "clean")
+    bare = tmp_path / "plain.git"
+    _git(tmp_path, "clone", "-q", "--bare", str(repo), str(bare))
+    plain = git_state_for(str(bare))
+    assert (plain["branch"], plain["git"]) == ("main", "clean")
+
+
+def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypatch, git_identity):
+    """Identity caches only once a slug is found — a GitHub remote here, so
+    the second read skips rev-parse/remote; see test_identity_with_no_slug_is_not_cached
+    for a repo with none."""
+    repo_path = _committed(tmp_path)
+    _git(repo_path, "remote", "add", "origin", "https://github.com/faradayio/periscope.git")
+    repo = str(repo_path)
+    clock = [1000.0]
+    monkeypatch.setattr(git_pr, "time", SimpleNamespace(time=lambda: clock[0]))
+    real = git_pr._run
+    calls = []
+
+    def rec(cmd, **kw):
+        calls.append(cmd)
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(git_pr, "_run", rec)
+    monkeypatch.setattr(gitutil, "_run", rec)
+
+    def subcommands():
+        out = [c[c.index("-C") + 2] for c in calls]
+        calls.clear()
+        return out
+
+    git_state_for(repo)
+    assert subcommands() == ["status", "diff-index", "rev-parse", "remote"]
+    git_state_for(repo)
+    assert subcommands() == ["status", "diff-index"]
+    clock[0] += 601
+    git_state_for(repo)
+    assert subcommands() == ["status", "diff-index", "rev-parse", "remote"]
+
+
+@pytest.fixture
+def swr(monkeypatch, mocker):
+    """A fixed clock, no jitter, a fake git read, and no real refresh thread
+    (docs/testing.md): _bg is recorded, and a test runs the refresh itself."""
+    clock = [1000.0]
+    monkeypatch.setattr(git_pr, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(git_pr, "random", SimpleNamespace(uniform=lambda a, b: 0.0))
+    inner = mocker.patch("periscope.git_pr.git_state_for", return_value={"branch": "main", "git": "clean"})
+    bg = mocker.patch("periscope.git_pr._bg")
+    return SimpleNamespace(clock=clock, inner=inner, bg=bg)
+
+
+def test_first_sight_reads_synchronously(swr):
+    # The pid resolver matches panes on (branch, cwd) after a tmux restart, so
+    # a cwd's first read can't come back without its branch.
+    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
+    swr.inner.assert_called_once_with("/foo")
+    swr.bg.assert_not_called()
+
+
+def test_fresh_entry_is_served_without_git(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 14
+    git_pr.cached_git_state("/foo")
+    assert swr.inner.call_count == 1
+    swr.bg.assert_not_called()
+
+
+def test_stale_entry_is_served_and_refreshed_once_in_the_background(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    swr.inner.return_value = {"branch": "feat", "git": "+1 -0"}
+    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
+    assert git_pr.cached_git_state("/foo") == {"branch": "main", "git": "clean"}
+    swr.bg.assert_called_once_with("git-state", git_pr._fetch_git_state_into_cache, "/foo")
+    assert swr.inner.call_count == 1  # nothing ran on the request path
+
+
+def test_background_refresh_lands_with_the_longer_timeout(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    git_pr.cached_git_state("/foo")
+    swr.inner.return_value = {"branch": "feat", "git": "+1 -0"}
+    git_pr._fetch_git_state_into_cache("/foo")
+    swr.inner.assert_called_with("/foo", timeout=git_pr._GIT_BG_TIMEOUT_S)
+    assert "/foo" not in git_pr._git_fetching
+    assert git_pr.cached_git_state("/foo") == {"branch": "feat", "git": "+1 -0"}
+    swr.bg.assert_called_once()  # the landed entry is fresh again
+
+
+def test_a_failed_background_read_keeps_the_last_state(swr, tmp_path):
+    # A status that timed out says nothing new: keep what we had, retry at the
+    # next expiry.
+    path = str(tmp_path)
+    git_pr.cached_git_state(path)
+    swr.clock[0] += 16
+    git_pr.cached_git_state(path)
+    swr.inner.return_value = None
+    git_pr._fetch_git_state_into_cache(path)
+    assert git_pr._git_cache[path] == (swr.clock[0] + git_pr._GIT_REFRESH_S, {"branch": "main", "git": "clean"})
+
+
+def test_a_vanished_cwd_clears(swr):
+    git_pr.cached_git_state("/no/such/dir")
+    swr.clock[0] += 16
+    git_pr.cached_git_state("/no/such/dir")
+    swr.inner.return_value = None
+    git_pr._fetch_git_state_into_cache("/no/such/dir")
+    assert git_pr.cached_git_state("/no/such/dir") is None
+
+
+def test_a_refresh_that_raises_releases_the_path(swr):
+    git_pr.cached_git_state("/foo")
+    swr.clock[0] += 16
+    git_pr.cached_git_state("/foo")
+    swr.inner.side_effect = OSError("git vanished")
+    with pytest.raises(OSError):
+        git_pr._fetch_git_state_into_cache("/foo")
+    assert "/foo" not in git_pr._git_fetching
+
+
+def test_empty_path_is_none(swr):
+    assert git_pr.cached_git_state("") is None
+    swr.inner.assert_not_called()
+
+
+def test_expiry_is_jittered(monkeypatch, mocker):
+    # cwds first seen in one refresh must not all expire in the same later one.
+    monkeypatch.setattr(git_pr, "time", SimpleNamespace(time=lambda: 1000.0))
+    mocker.patch("periscope.git_pr.git_state_for", return_value=None)
+    for n in range(50):
+        git_pr.cached_git_state(f"/p{n}")
+    dues = [due for due, _ in git_pr._git_cache.values()]
+    assert all(1000.0 + 10 <= d <= 1000.0 + 20 for d in dues)
+    assert len(set(dues)) > 1
 
 
 def test_gh_run_state_maps_success_to_passed():
@@ -311,8 +683,8 @@ def test_linked_pr_state_carries_base_and_checks(tmp_path, mocker):
     payload = _json.dumps(
         {"state": "OPEN", "baseRefName": "main", "statusCheckRollup": [{"name": "test", "conclusion": "FAILURE"}]}
     )
-    mocker.patch("periscope.git_pr._run", return_value=(0, payload))
-    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.run", return_value=(0, payload))
+    mocker.patch("periscope.gh.AVAILABLE", True)
     out = linked_pr_state_for(str(tmp_path), 42)
     assert out["pr_base"] == "main"
     assert out["ci_checks"] == [{"name": "test", "state": "failure"}]
@@ -335,8 +707,8 @@ def test_pr_state_for_carries_base_and_checks(tmp_path, mocker):
             }
         ]
     )
-    mocker.patch("periscope.git_pr._run", return_value=(0, payload))
-    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.run", return_value=(0, payload))
+    mocker.patch("periscope.gh.AVAILABLE", True)
     out = pr_state_for(str(tmp_path), "feature")
     assert out["pr_base"] == "main"
     assert out["ci"] == "✗"
@@ -344,16 +716,13 @@ def test_pr_state_for_carries_base_and_checks(tmp_path, mocker):
 
 
 def _fake_gh(mocker, *, state, rollup=None):
-    """Patch _run so linked_pr_state_for sees `gh pr view` returning one PR."""
+    """Patch gh.run so linked_pr_state_for sees `gh pr view` returning one PR."""
     import json as _json
 
     payload = _json.dumps({"state": state, "statusCheckRollup": rollup or []})
 
-    def fake_run(cmd, cwd=None, timeout=3.0):
-        return (0, payload)
-
-    mocker.patch("periscope.git_pr._run", side_effect=fake_run)
-    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.run", return_value=(0, payload))
+    mocker.patch("periscope.gh.AVAILABLE", True)
 
 
 def test_linked_pr_state_merged(tmp_path, mocker):
@@ -374,7 +743,7 @@ def test_linked_pr_state_closed(tmp_path, mocker):
 
 
 def test_linked_pr_state_none_without_number(tmp_path, mocker):
-    mocker.patch("periscope.git_pr._GH_AVAILABLE", True)
+    mocker.patch("periscope.gh.AVAILABLE", True)
     assert linked_pr_state_for(str(tmp_path), 0) is None
     assert linked_pr_state_for("", 5) is None
 
@@ -411,37 +780,25 @@ def test_github_slug_none_when_no_remote(tmp_path):
 
 def test_git_state_includes_repo_key_and_label(tmp_path, mocker):
     """git_state_for() returns repo_key (full path) + repo_label (basename)."""
-    import periscope.git_pr as gp
-
-    # git_state_for short-circuits when the path is not a directory, so
-    # build a real worktree-like directory tree under tmp_path.
     repo_dir = tmp_path / "foo"
     worktree_dir = repo_dir / "branch-a"
     worktree_dir.mkdir(parents=True)
     common_dir = repo_dir / ".git"
     common_dir.mkdir()
 
-    def fake_run(args, cwd=None, timeout=None):
-        # git_state_for first probes --git-dir; return ".git" to satisfy it.
-        if "rev-parse" in args and "--git-dir" in args:
-            return (0, ".git")
-        # diff shortstat (unstaged + staged) → clean
-        if "diff" in args and "--shortstat" in args:
-            return (0, "")
-        if "rev-parse" in args and "--abbrev-ref" in args:
-            return (0, "main")
-        if "rev-list" in args:
-            return (0, "0")
-        if "remote" in args and "get-url" in args:
-            return (1, "")  # no github slug
-        if "rev-parse" in args and "--git-common-dir" in args:
+    def fake_run(args, cwd=None, timeout=None, env_overrides=None):
+        if "status" in args:
+            return (0, _HEAD)
+        if "--git-common-dir" in args:
             return (0, str(common_dir))
+        if "get-url" in args:
+            return (1, "")  # no github slug
         return (0, "")
 
     # Both modules import _run from periscope.tmux at module load — patch both.
     mocker.patch("periscope.git_pr._run", side_effect=fake_run)
     mocker.patch("periscope.gitutil._run", side_effect=fake_run)
-    out = gp.git_state_for(str(worktree_dir))
+    out = git_pr.git_state_for(str(worktree_dir))
     assert out["repo_key"] == str(repo_dir)
     assert out["repo_label"] == "foo"
 
