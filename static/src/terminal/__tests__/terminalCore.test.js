@@ -12,7 +12,7 @@ const stubEl = () => ({
   parentElement: null,
   appendChild(child) { child.parentElement = this; },
   remove() { this.parentElement = null; },
-  addEventListener() {},
+  addEventListener(type, fn, opt) { env.listeners.push({ el: this, type, fn, opt }); },
   removeEventListener() {},
   classList: { add() {}, remove() {} },
 });
@@ -32,7 +32,10 @@ class StubTerminal {
     env.term = this;
   }
   resize(cols, rows) { this.cols = cols; this.rows = rows; }
-  open() {} loadAddon() {} registerLinkProvider() {} focus() {} reset() {}
+  open(host) { env.host = host; }
+  hasSelection() { return env.selection !== ""; }
+  getSelection() { return env.selection; }
+  loadAddon() {} registerLinkProvider() {} focus() {} reset() {}
   attachCustomWheelEventHandler() {} attachCustomKeyEventHandler() {}
   onData() {} onBell() {} write() {} writeln() {} scrollToBottom() {}
 }
@@ -54,7 +57,10 @@ const NoopAddon = class { onContextLoss() {} dispose() {} };
 
 let core;
 beforeEach(async () => {
-  env = { box: { cols: 143, rows: 36 }, hidden: false, sockets: [], sent: [], ws: null, ro: null, term: null, familyWrites: [] };
+  env = {
+    box: { cols: 143, rows: 36 }, hidden: false, sockets: [], sent: [], ws: null, ro: null, term: null, familyWrites: [],
+    host: null, listeners: [], selection: "",
+  };
   vi.useFakeTimers();
   vi.stubGlobal("Terminal", StubTerminal);
   vi.stubGlobal("WebSocket", StubSocket);
@@ -188,6 +194,36 @@ describe("terminal sizing glue", () => {
     expect(env.sent).toStrictEqual([{ type: "resize", rows: 28 }]);
     await resizeBox(180, 28);
     expect(env.sent.at(-1)).toStrictEqual({ type: "resize", cols: 180, rows: 28 });
+  });
+});
+
+describe("terminal copy", () => {
+  // xterm's own copy listener sits on its element, inside the host, and writes
+  // the raw selection. Without capture or stopPropagation it runs after ours and
+  // puts the pane's padding back; collapseWhitespace's tests stay green either way.
+  const hostCopyListener = () => env.listeners.find((l) => l.el === env.host && l.type === "copy");
+  const copy = () => {
+    const ev = { clipboardData: { setData: vi.fn() }, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    hostCopyListener().fn(ev);
+    return ev;
+  };
+
+  it("copies the collapsed selection and keeps xterm's handler from overwriting it", async () => {
+    await mount("%1");
+    expect(hostCopyListener().opt).toBe(true);
+    env.selection = "foo bar      \n    baz qux    ";
+    const ev = copy();
+    expect(ev.clipboardData.setData).toHaveBeenCalledWith("text/plain", "foo bar\nbaz qux");
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(ev.stopPropagation).toHaveBeenCalled();
+  });
+
+  it("leaves a copy with nothing selected to the browser", async () => {
+    await mount("%1");
+    const ev = copy();
+    expect(ev.clipboardData.setData).not.toHaveBeenCalled();
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(ev.stopPropagation).not.toHaveBeenCalled();
   });
 });
 
