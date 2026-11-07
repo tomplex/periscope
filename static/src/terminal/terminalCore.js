@@ -109,6 +109,14 @@ export function normalizeAgentTerminalData(data, agent) {
   }
   return output || input;
 }
+
+// The pane's blank cells reach xterm as written spaces, which its copy trim
+// keeps (it drops only never-written cells), so a selection carries the
+// padding. Each whitespace run becomes one space, or one newline if it spans
+// a line break.
+export function collapseWhitespace(text) {
+  return text.trim().replace(/\s+/g, (run) => (run.includes("\n") ? "\n" : " "));
+}
 // Width is pinned for the session. Navigating panes re-runs startLiveTerminal
 // with a FRESH xterm + a fresh fit(); a mount-time measurement that differs by
 // a column or two (scrollbar appearing, layout rounding) would otherwise resize
@@ -488,6 +496,14 @@ function ensureTerminal() {
     },
   });
   term.open(xtermHost);
+  // xterm's own copy listener sits on its element, inside xtermHost: capture
+  // first and stop the event so it can't overwrite the collapsed text.
+  xtermHost.addEventListener("copy", (e) => {
+    if (!term.hasSelection()) return;
+    e.clipboardData.setData("text/plain", collapseWhitespace(term.getSelection()));
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
   remeasureWhenLoaded(termFont);
   // Settings → Fonts can change the code face while the terminal is up.
   effect(() => {
