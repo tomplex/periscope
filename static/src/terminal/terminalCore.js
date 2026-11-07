@@ -112,8 +112,8 @@ export function normalizeAgentTerminalData(data, agent) {
 
 // The pane's blank cells reach xterm as written spaces, which its copy trim
 // keeps (it drops only never-written cells), so a selection carries the
-// padding. Each whitespace run becomes one space, or one newline if it spans
-// a line break.
+// padding. Trim the selection, then collapse each whitespace run to one space,
+// or one newline if it spans a line break.
 export function collapseWhitespace(text) {
   return text.trim().replace(/\s+/g, (run) => (run.includes("\n") ? "\n" : " "));
 }
@@ -664,7 +664,7 @@ function ensureTerminal() {
       // window listener — same passthrough contract Escape already uses.
       case "r":
       case "R": return false;
-      default: return true;  // Cmd+C/V/etc fall through to xterm's clipboard handling
+      default: return true;  // Cmd+C reaches the host's copy listener (above), Cmd+V/etc xterm's own handling
     }
   });
 
