@@ -8,7 +8,7 @@
 // and the browser's default served the rare case. Full reload moves to ⌘⇧R.
 
 import { openNextEntry } from "./split/alertFeed.js";
-import { buildNext, nextAfter } from "./split/attention.js";
+import { buildNext, nextToOpen } from "./split/attention.js";
 import { togglePanel } from "./split/panels.js";
 import {
   alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, docRefreshNonce, paneActiveTab, railSelection, windows,
@@ -56,11 +56,19 @@ export function isNextKey(e) {
   return !e.repeat && e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "KeyJ";
 }
 
+// The Next entries ⌘J has opened in this walk (attention.nextToOpen).
+let opened = new Set();
+
 function openNext() {
   const entries = buildNext(windows.value, alerts.value, dismissedAlertIds.value, dismissedNeedsPids.value,
     dismissedReadyPids.value, Math.floor(Date.now() / 1000));
-  const e = nextAfter(entries, selectedPid(railSelection.value));
-  if (e) openNextEntry(e);
+  const live = new Set(entries.map((x) => x.key));
+  opened = new Set([...opened].filter((k) => live.has(k)));
+  const e = nextToOpen(entries, selectedPid(railSelection.value), opened);
+  if (!e) return;
+  if (opened.has(e.key)) opened = new Set();   // every entry seen: start over
+  opened.add(e.key);
+  openNextEntry(e);
 }
 
 export function installKeys(target = window) {

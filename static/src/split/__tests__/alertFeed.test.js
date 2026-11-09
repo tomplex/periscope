@@ -1,15 +1,18 @@
-// What clicking a live NEEDS YOU / READY row does — shared by the rail and the
-// header's Clawd (split/alertFeed.js), so the two can't drift on dismissals.
+// What opening a pane that asks or finished does — shared by the rail's Next
+// cards and the header's Clawd (split/alertFeed.js), so the two can't drift on
+// dismissals.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../prefs.js", () => ({ setLastSelected: vi.fn() }));
 
-const { dismissedNeedsPids, dismissedReadyPids, railSelection } = await import("../../store.js");
-const { markReadySeen, openNeedsPane, openReadyPane, selectReview } = await import("../alertFeed.js");
+const { alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection } = await import("../../store.js");
+const { dismissEvents, markReadySeen, openNeedsPane, openReadyPane, selectReview } = await import("../alertFeed.js");
 const prefs = await import("../../prefs.js");
 
 afterEach(() => {
+  alerts.value = [];
+  dismissedAlertIds.value = new Set();
   dismissedNeedsPids.value = new Set();
   dismissedReadyPids.value = new Set();
   railSelection.value = null;
@@ -51,6 +54,26 @@ describe("what a done banner's buttons do", () => {
     expect(prefs.setLastSelected).not.toHaveBeenCalled();
     markReadySeen(null);
     expect(dismissedReadyPids.value.size).toBe(1);
+  });
+
+  it("Mark seen also dismisses the pane's done events, which would take the row's place", () => {
+    alerts.value = [
+      { id: "d1", kind: "done", target: "s:1" },
+      { id: "q1", kind: "need_human", target: "s:1" },
+      { id: "d2", kind: "done", target: "s:2" },
+    ];
+    markReadySeen({ pid: "c", target: "s:1" });
+    expect([...dismissedAlertIds.value]).toEqual(["d1"]);
+  });
+
+  it("dismissEvents dismisses every event of one kind a pane raised", () => {
+    alerts.value = [
+      { id: "q1", kind: "need_human", target: "s:1" },
+      { id: "q2", kind: "need_human", target: "s:1" },
+      { id: "d1", kind: "done", target: "s:1" },
+    ];
+    dismissEvents("need_human", "s:1");
+    expect([...dismissedAlertIds.value].sort()).toEqual(["q1", "q2"]);
   });
 
   it("selectReview keys by repo + slug and persists repo + branch", () => {

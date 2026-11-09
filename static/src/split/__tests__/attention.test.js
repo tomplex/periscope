@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { shortestUniqueSuffix } from "../../util.js";
 import {awaitingReplyByPid, buildActivity,
   buildNeedsYou, buildNext, buildReady, buildRunning,
-  isCiFailing, isSoftQuestion, nextAfter, paneBlip, prunedStateDismissals,resolvePinned, waitingPanes, waitTier,
+  isCiFailing, isSoftQuestion, nextToOpen, paneBlip, prunedStateDismissals,resolvePinned, waitingPanes, waitTier,
 } from "../attention.js";
 
 const win = (over = {}) => ({
@@ -337,6 +337,24 @@ describe("buildNext", () => {
     expect(next[0].row.kind).toBe("live");
   });
 
+  it("shows the pane's newest unanswered question, whichever row it keeps", () => {
+    const events = [
+      evt({ id: "old", target: "p:0", ts: 100, message: "first ask" }),
+      evt({ id: "new", target: "p:0", ts: 300, message: "latest ask" }),
+    ];
+    const idle = agent({ pid: "p", target: "p:0" });
+    const [entry] = buildNext([idle], events, new Set(), new Set(), new Set(), 1000);
+    expect(entry).toMatchObject({ kind: "asks", message: "latest ask", since: 100 });
+  });
+
+  it("lists a PR failing CI once, however many panes show it", () => {
+    const red = (pid) => agent({ pid, target: `${pid}:0`, pr: 42, repo_slug: "o/r", ci: "✗" });
+    const other = agent({ pid: "z", target: "z:0", pr: 7, repo_slug: "o/r", ci: "✗" });
+    const errored = agent({ pid: "e", target: "e:0", pr: 42, repo_slug: "o/r", api_error: true });
+    const next = buildNext([red("x"), red("y"), other, errored], [], new Set(), new Set(), new Set(), 1000);
+    expect(next.map((e) => e.key)).toEqual(["broken:x", "broken:z", "broken:e"]);
+  });
+
   it("an event whose pane has closed still asks, with its message", () => {
     const next = buildNext([], [evt({ target: "gone:0", message: "help" })], new Set(), new Set(), new Set(), 1000);
     expect(next).toEqual([expect.objectContaining({ kind: "asks", w: null, message: "help" })]);
@@ -355,20 +373,29 @@ describe("buildNext", () => {
   });
 });
 
-describe("nextAfter", () => {
-  const entries = [{ w: { pid: "a" } }, { w: null }, { w: { pid: "c" } }];
+describe("nextToOpen", () => {
+  const e = (key, pid) => ({ key, w: pid ? { pid } : null });
 
-  it("opens the first entry when the selected pane wants nothing", () => {
-    expect(nextAfter(entries, "zz")).toBe(entries[0]);
-    expect(nextAfter(entries, null)).toBe(entries[0]);
+  it("walks the queue by what this walk has opened, not by position", () => {
+    // Opening a done card removes it, so the queue the next press sees has
+    // shrunk; a position-based walk fell back to the asking pane every time.
+    const asks = e("asks:p", "p");
+    const opened = new Set(["asks:p", "done:a"]);
+    expect(nextToOpen([asks, e("done:b", "b"), e("done:c", "c")], "a", opened).key).toBe("done:b");
   });
 
-  it("opens the one after the selected pane's, wrapping at the end", () => {
-    expect(nextAfter(entries, "a")).toBe(entries[1]);
-    expect(nextAfter(entries, "c")).toBe(entries[0]);
+  it("skips the pane already on screen, even for its second entry", () => {
+    const entries = [e("done:e1", "c"), e("done:e2", "c"), e("done:d", "d")];
+    expect(nextToOpen(entries, "c", new Set()).key).toBe("done:d");
   });
 
-  it("is null when nothing wants you", () => {
-    expect(nextAfter([], "a")).toBe(null);
+  it("starts over once every entry has been opened", () => {
+    const entries = [e("asks:p", "p"), e("broken:q", "q")];
+    expect(nextToOpen(entries, "q", new Set(["asks:p", "broken:q"])).key).toBe("asks:p");
+  });
+
+  it("is null when nothing but the selected pane wants you", () => {
+    expect(nextToOpen([], "a", new Set())).toBe(null);
+    expect(nextToOpen([e("done:a", "a")], "a", new Set())).toBe(null);
   });
 });

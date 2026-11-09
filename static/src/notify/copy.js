@@ -4,8 +4,8 @@
 // pane names are clipped before they push the verb off the end.
 
 import { meterLabel } from "../chrome/usageRules.js";
+import { prKey } from "../split/attention.js";
 import { paneLabel, plural, prUrl, waitKind, waitLabel } from "../util.js";
-import { prKey } from "./detect.js";
 
 // Cut by code point, not UTF-16 code unit — a pane name ending in an emoji
 // or other surrogate-pair character would otherwise leave a lone surrogate

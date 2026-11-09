@@ -5,7 +5,7 @@
 // lands as soon as the tool call that raised it returns. Native banners and
 // the dock badge are notify/feed.js's. Started once from Split.jsx.
 import * as prefs from "../prefs.js";
-import { alerts, dismissedNeedsPids, dismissedReadyPids, railSelection, windows } from "../store.js";
+import { alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection, windows } from "../store.js";
 import { onNotificationClick } from "../tauri.js";
 import { isSoftQuestion } from "./attention.js";
 
@@ -30,8 +30,8 @@ export function selectPane(w) {
   prefs.setLastSelected({ kind: "pane", pid: w.pid });
 }
 
-// What clicking a live NEEDS YOU / READY row does, shared by the rail
-// (AttentionSections) and the header's Clawd so the two can't drift. A soft
+// What opening a pane that asks or finished does, shared by the rail's Next
+// cards and the header's Clawd so the two can't drift. A soft
 // question (no real dialog) is dismissed for this episode; a real dialog stays
 // sticky. A done row is always dismissed: selecting normally acks it through
 // the terminal's WS connect, but an already-selected pane won't reconnect.
@@ -40,9 +40,20 @@ export function openNeedsPane(w) {
   selectPane(w);
 }
 
-// Dismiss a READY row without opening its pane: a done banner's Mark seen.
+// Dismiss a READY row without opening its pane: a done banner's Mark seen, or
+// a done card's ×. Its notify(done) events are the same news: READY hides
+// them only while the live row shows, so they'd take its place.
 export function markReadySeen(w) {
-  if (w?.pid) dismissedReadyPids.value = new Set([...dismissedReadyPids.value, w.pid]);
+  if (!w?.pid) return;
+  dismissedReadyPids.value = new Set([...dismissedReadyPids.value, w.pid]);
+  dismissEvents("done", w.target);
+}
+
+// Dismiss every unacked `kind` event a pane has raised: an asking card's ×
+// covers all its questions, not just the one on the card.
+export function dismissEvents(kind, target) {
+  const ids = (alerts.value || []).filter((r) => r.kind === kind && r.target === target).map((r) => r.id);
+  if (ids.length) dismissedAlertIds.value = new Set([...dismissedAlertIds.value, ...ids]);
 }
 
 export function openReadyPane(w) {
@@ -50,8 +61,9 @@ export function openReadyPane(w) {
   selectPane(w);
 }
 
-// What opening a Next entry (attention.buildNext) does: the NEEDS YOU or READY
-// row behind it opens as clicking that row did, and a broken pane is selected.
+// What opening a Next entry (attention.buildNext) does: a live question or
+// finished pane opens as above, an event reveals its pane, and a broken pane
+// is selected.
 export function openNextEntry(e) {
   if (e.kind === "broken") selectPane(e.w);
   else if (e.row.kind === "event") revealPane(e.row.target);

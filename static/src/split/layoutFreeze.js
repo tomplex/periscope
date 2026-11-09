@@ -1,9 +1,8 @@
-// Holds the rail's attention-section membership still while you're aiming at it.
+// Holds the rail's Next queue membership still while you're aiming at it.
 //
-// The sections sit above the tree and the same panes also appear in it, so one
-// pane going working→idle shifts everything below twice (leaves RUNNING, may
-// enter READY). RUNNING churns constantly, so this fires all the time and the
-// row you were about to click moves out from under the cursor.
+// The queue sits above the tree and the same panes also appear in it, so one
+// pane finishing or asking shifts everything below. That happens all the
+// time, and the row you were about to click moves out from under the cursor.
 //
 // Animating the movement does NOT fix that — a smoothly-moving target is still
 // a moving target. The fix is to stop moving while the pointer is in the rail,

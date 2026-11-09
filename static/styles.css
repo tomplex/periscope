@@ -2442,8 +2442,7 @@ body.col-resizing iframe { pointer-events: none; }
 /* Continuous tree lines drawn via CSS so adjacent child rows' connectors
    actually touch. Replaces the per-row ├/└ glyphs, which broke at every
    row boundary because of vertical padding.
-     ::before  — vertical line in the gutter (full row height for inner
-                 children; top-to-name-center for the last-in-worktree row)
+     ::before  — vertical line in the gutter, full row height
      ::after   — horizontal stub from the vertical line to the icon
    Positioned at the center of the worktree-level indent column.
    Two-line pane rows make percentage anchors (top/bottom:50%) land below
@@ -2463,10 +2462,6 @@ body.col-resizing iframe { pointer-events: none; }
   top: 0;
   bottom: 0;
   width: 1px;
-}
-.rail-row.child-row.last-in-worktree::before {
-  bottom: auto;
-  height: var(--rail-name-center);                /* line stops at the stub */
 }
 .rail-row.child-row::after {
   left: calc(10px + var(--rail-indent) + 7px);
@@ -2742,9 +2737,9 @@ body.col-resizing iframe { pointer-events: none; }
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
 }
-/* An EMPTY track's body has no rows, so the card collapses to the height of
-   its "+ New tab" row and there's nothing to aim a drag at. Give it a labelled
-   landing area — that's the only drag route to a fresh track's first tab. */
+/* An EMPTY track's body has no rows, so the card collapses to nothing and
+   there's nothing to aim a drag at. Give it a labelled landing area — that's
+   the only drag route to a fresh track's first tab. */
 #rail .rail-track-card .rail-group-body:empty {
   min-height: 30px;
   border: 1px dashed var(--line-soft);
@@ -3036,7 +3031,10 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
 .blip-broken::after { width: 7px; height: 7px; border-radius: 1px; background: var(--s-danger); }
 .blip-done::after { box-shadow: inset 0 0 0 2px var(--s-done); }
 .blip-done-old::after { box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--s-done) 45%, transparent); }
-.blip-working::after { background: var(--s-working); }
+/* A three-quarter sweep, so working differs from asks by shape, not only by
+   orange vs amber: with the pulse off (reduced motion, the legend) they'd
+   otherwise be the same filled circle. */
+.blip-working::after { background: conic-gradient(var(--s-working) 0 75%, transparent 0); }
 .blip-idle::after { width: 5px; height: 5px; background: var(--s-idle); }
 .blip-shell::after { width: 7px; height: 2px; border-radius: 1px; background: var(--s-shell); }
 .sonar-legend .blip { width: 11px; height: 11px; }
@@ -3068,12 +3066,14 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
   transition: background-color 180ms ease;
 }
 .next-card:hover { background: var(--bg-1-hi); }
-.next-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The name is the card's button; its focus rings the whole card. */
+.next-card:has(.next-name:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .next-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .next-head .rail-icon { flex: 0 0 14px; width: 14px; text-align: center; }
 .next-name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 13px; font-weight: 500; color: var(--fg-0);
+  padding: 0; background: none; border: 0; outline: none; text-align: left; cursor: pointer;
+  font: 500 13px/1.45 var(--sans); color: var(--fg-0);
 }
 .next-x {
   flex: 0 0 auto; width: 18px; height: 18px; padding: 0; margin-right: -4px;
@@ -3086,7 +3086,11 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   margin: 3px 0 0 21px; font-size: 12px; line-height: 1.5; color: var(--fg-1); overflow-wrap: anywhere;
 }
-.next-code { font: 400 11px/1.5 var(--mono); color: var(--fg-0); background: var(--bg-2); border-radius: 3px; padding: 1px 5px; }
+/* A command that wraps keeps its padding and corners on every line. */
+.next-code {
+  font: 400 11px/1.5 var(--mono); color: var(--fg-0); background: var(--bg-2); border-radius: 3px; padding: 1px 5px;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
 .next-meta { display: flex; align-items: center; gap: 5px; margin: 5px 0 0 21px; font-size: 11px; line-height: 1; color: var(--fg-2); }
 .next-track { color: var(--effort); }
 .next-why.why-broken { color: var(--s-danger); }

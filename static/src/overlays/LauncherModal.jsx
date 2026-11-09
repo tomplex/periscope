@@ -248,7 +248,7 @@ function startNewBranch() {
 export function LauncherModal() {
   useEscape(close, target.value != null);
 
-  // Register the window bridge so the rail's "+ New tab" row can open it.
+  // Register the window bridge so a rail track header's + can open it.
   useEffect(() => {
     window.__periscopeOpenLauncher = openLauncher;
     return () => {

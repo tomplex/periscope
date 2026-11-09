@@ -10,7 +10,7 @@ import { nextWords } from "../notify/copy.js";
 import * as prefs from "../prefs.js";
 import { dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, windows } from "../store.js";
 import { AGENT_META, paneLabel, relTime, shortestUniqueSuffix } from "../util.js";
-import { alertItems, markReadySeen, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
+import { alertItems, dismissEvents, markReadySeen, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
 import { buildActivity, buildNext, prunedStateDismissals, resolvePinned, waitTier } from "./attention.js";
 import { freezeRows, isStale, railHovered } from "./layoutFreeze.js";
 import { SectionHeader } from "./SectionHeader.jsx";
@@ -29,26 +29,20 @@ function entryName(e) {
   return e.w ? paneLabel(e.w) : e.row?.name || e.row?.session || "a closed pane";
 }
 
-function NextCard({ e, blip, track, nowS, onDismiss }) {
+// The whole card opens its pane on click; the name is the button a keyboard or
+// screen reader reaches (a role=button card would hide its × from them), and
+// its click bubbles to the card's.
+function NextCard({ e, blip, track, nowS, onOpen, onDismiss }) {
   const { lead, code, reason } = nextWords(e);
   const meta = AGENT_META[e.w?.agent || (e.w?.is_claude ? "claude" : null)] || AGENT_META.claude;
-  const open = () => openNextEntry(e);
   return (
-    <div
-      class={`next-card pane-blip-${blip}`}
-      role="button"
-      tabIndex={0}
-      onClick={open}
-      onKeyDown={(ev) => {
-        if (ev.target !== ev.currentTarget || (ev.key !== "Enter" && ev.key !== " ")) return;
-        ev.preventDefault();
-        open();
-      }}
-    >
+    <div class={`next-card pane-blip-${blip}`} onClick={onOpen}>
       <span class="pane-stripe" aria-hidden="true"></span>
       <div class="next-head">
         <span class={`rail-icon ${meta.className}`} title={meta.label}>{meta.glyph}</span>
-        <span class="next-name">{entryName(e)}</span>
+        <button class="next-name" aria-label={`${entryName(e)}, ${reason}: ${lead}${code ? ` ${code}` : ""}`}>
+          {entryName(e)}
+        </button>
         {e.since ? (
           <span class={`rail-age${e.kind === "asks" ? ` wait-${waitTier(e.since, nowS)}` : ""}`}>{relTime(e.since)}</span>
         ) : null}
@@ -108,14 +102,17 @@ export function NextQueue({ blipOf, trackOf }) {
     if (nextReady.size !== dismissedReadyPids.value.size) dismissedReadyPids.value = nextReady;
   }, [windows.value]);
 
-  // A dismissal is a user action, so let the pending changes through at once
-  // rather than holding a card the user just acted on.
+  // Opening or dismissing a card is a user action, so let the pending changes
+  // through at once rather than holding a card the user just acted on.
+  function openFor(e) {
+    return () => { held.current = null; openNextEntry(e); };
+  }
+  // × on a done card marks the pane seen; on an event's card it dismisses
+  // every unanswered event of that kind the pane raised. A live question and
+  // a broken pane leave on their own.
   function dismissFor(e) {
     if (e.row?.kind === "event") {
-      return () => {
-        held.current = null;
-        dismissedAlertIds.value = new Set([...dismissed, e.row.id]);
-      };
+      return () => { held.current = null; dismissEvents(e.kind === "asks" ? "need_human" : "done", e.row.target); };
     }
     if (e.kind === "done") return () => { held.current = null; markReadySeen(e.w); };
     return null;
@@ -146,6 +143,7 @@ export function NextQueue({ blipOf, trackOf }) {
           blip={e.w ? blipOf(e.w) : e.kind}
           track={e.w ? trackOf(e.w) : e.row?.session || ""}
           nowS={nowS}
+          onOpen={openFor(e)}
           onDismiss={dismissFor(e)}
         />
       ))}

@@ -6,7 +6,7 @@
 // (split/alertFeed.js openNeedsPane / openReadyPane), and the context band is
 // the rail's ctxClass: Clawd and the rail can never disagree about a pane.
 
-import { buildReady, isCiFailing, waitingPanes, waitTier } from "../split/attention.js";
+import { buildReady, isCiFailing, prKey, waitingPanes, waitTier } from "../split/attention.js";
 import { ctxClass } from "../split/ctxBand.js";
 import { paneLabel, plural } from "../util.js";
 
@@ -46,8 +46,8 @@ export function dutyItems({
   const byPid = new Map(windows.map((w) => [String(w.pid), w]));
 
   // Panes, not rows (attention.waitingPanes), so Clawd's red bubble and the
-  // rail's wait-urgent agree. A live row opens the way the rail's NEEDS YOU row
-  // does; an event row reveals its pane, as the rail's event row does.
+  // rail's wait-urgent agree. A live row opens the way the rail's Next card
+  // does; an event row reveals its pane, as an event's Next card does.
   const waiting = waitingPanes(windows, alerts, dismissedAlertIds, dismissedNeedsPids, nowSec, notSelected);
   if (waiting.size) {
     const oldest = [...waiting.values()].reduce((a, b) => (b.since < a.since ? b : a));
@@ -76,7 +76,7 @@ export function dutyItems({
   const prs = new Map();
   for (const w of windows) {
     if (!isCiFailing(w)) continue;
-    const key = `${w.repo_slug || w.repo_key || ""}#${w.pr}`;
+    const key = prKey(w);
     if (!prs.has(key)) prs.set(key, { pr: w.pr, panes: [] });
     prs.get(key).panes.push(w);
   }

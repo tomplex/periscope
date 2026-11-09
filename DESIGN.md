@@ -395,7 +395,8 @@ with three small shapes:
   between 6px from the top and 6px from the bottom
 - the **blip**: an 8px mark in a 13px hit area, whose shape says the state as well as its
   colour, so it reads without colour too: asks is a filled circle, broken a 7px square, done
-  a 2px ring, working a filled circle in amber, idle a 5px dot and a shell a 7 × 2px bar
+  a 2px ring, working a three-quarter sweep in amber, idle a 5px dot and a shell a 7 × 2px
+  bar
 - the **pulse**: a 4px ring of the state's `-bg` colour
 
 Clawd's device is the one large rounded form: a 3px Rim bezel with 16px corners, or 20px at

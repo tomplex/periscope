@@ -34,7 +34,7 @@ const NO_BRANCH = "";
 // `tracks` is the /api/state track registry (non-archived rows). It exists so
 // EMPTY GOAL TRACKS render: live windows alone can't surface a track with no
 // tabs, and a freshly created track must be visible to receive its first tab
-// (drag / "+ New tab") — otherwise creation dead-ends. Goal tracks (id !== repo
+// (drag / the header's +) — otherwise creation dead-ends. Goal tracks (id !== repo
 // — repo-default catchalls have id == repo) are always in the tree; an empty
 // repo-default track stays hidden (it's a lazy catchall, an empty one is noise).
 //

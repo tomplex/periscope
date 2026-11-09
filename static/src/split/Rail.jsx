@@ -44,7 +44,7 @@ import { mergeLiveAndPrefs, paneChip, reviewRowsByTrack, trackKind, trackLabel }
 import { SectionHeader } from "./SectionHeader.jsx";
 import { SonarStrip } from "./SonarStrip.jsx";
 
-// Bridge to the launcher modal. The "+ New tab" row opens it via
+// Bridge to the launcher modal. A track header's + opens it via
 // window.__periscopeOpenLauncher; no-op if nothing is wired yet.
 function openLauncher(key) {
   const fn = window.__periscopeOpenLauncher;
@@ -194,14 +194,15 @@ export function Rail() {
       tabsByTrack: prefs.getTabsByTrack(),
     }, allTracks
   );
-  // A scope whose track has gone shows every track rather than none.
-  const treeOrder = trackOrder.includes(trackScope) ? [trackScope] : trackOrder;
   const stripTracks = trackOrder
     .filter((t) => (tabsByTrack[t] || []).length > 0)
     .map((t) => ({
       id: t, label: trackLabel(t, live, allTracks),
       panes: tabsByTrack[t].map((pid) => windowsByPid[pid]).filter(Boolean),
     }));
+  // A scope whose track has emptied or gone shows every track: the strip has
+  // no line left to click to clear it.
+  const treeOrder = stripTracks.some((t) => t.id === trackScope) ? [trackScope] : trackOrder;
 
   // Review rows by track → branch (placement rules in railTree).
   const reviewRows = reviewRowsByTrack(trackOrder, tabsByTrack, windowsByPid, reviews.value || []);

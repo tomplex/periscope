@@ -120,8 +120,8 @@ export function waitTier(sinceTs, nowS) {
 // and taking the newest would reset its age on every repeat — exactly the
 // case that most needs escalating.
 //
-// Reuses the same predicate as the NEEDS YOU section (isAcked + dismissals) so
-// the tree marker and the section can never disagree about who is waiting.
+// Reuses the same predicate as buildNeedsYou (isAcked + dismissals) so a row's
+// blip and its Next card can never disagree about who is waiting.
 export function awaitingReplyByPid(windows, alertItems, dismissedIds = new Set()) {
   const byTarget = indexByTarget(windows);
   const out = new Map();
@@ -166,6 +166,9 @@ export function waitingPanes(windows, alertItems, dismissedIds = new Set(), dism
   return waiting;
 }
 
+// One PR, however many panes show it.
+export const prKey = (w) => `${w.repo_slug || w.repo_key || ""}#${w.pr}`;
+
 // An open PR whose checks are red. A merged or closed PR keeps its last ✗, but
 // nothing is left to fix. Clawd's CI duty asks the same question.
 export function isCiFailing(w) {
@@ -191,29 +194,41 @@ export function paneBlip(w, nowS, asked = false) {
 }
 
 // What wants you, one entry per pane, in the order ⌘J walks it: panes that
-// ask (longest wait first), then broken ones, then READY's finished ones.
+// ask (longest wait first), then broken ones, then buildReady's finished ones.
 // Entry: { key, kind: "asks" | "broken" | "done", w, row, since, message }.
-// `row` is the NEEDS YOU or READY row behind an asks or done entry (null for
-// broken), so opening it does what clicking that row did. `w` is null for an
-// event whose pane has closed. `message` is the newest unanswered need_human
-// the pane sent: the agent's own words, when it gave any.
+// `row` is the buildNeedsYou or buildReady row behind an asks or done entry
+// (null for broken), which says how opening it behaves
+// (alertFeed.openNextEntry). `w` is null for an event whose pane has closed.
+// `message` is the newest unanswered need_human the pane sent: the agent's own
+// words, when it gave any. A PR failing CI is
+// one entry however many panes show it, as Clawd counts it; its other panes
+// still show broken in the strip and the tree.
 export function buildNext(windows, alertItems, dismissedIds = new Set(), dismissedNeedsPids = new Set(),
   dismissedReadyPids = new Set(), nowS = 0) {
-  const messageByPid = new Map();
+  const messageByTarget = new Map();   // events arrive newest-first
   for (const r of buildNeedsYou(windows, alertItems, dismissedIds, dismissedNeedsPids)) {
-    if (r.kind === "event" && r.w && !messageByPid.has(r.w.pid)) messageByPid.set(r.w.pid, r.message);
+    if (r.kind === "event" && !messageByTarget.has(r.target)) messageByTarget.set(r.target, r.message);
   }
   const asks = [...waitingPanes(windows, alertItems, dismissedIds, dismissedNeedsPids, nowS)]
     .sort((a, b) => a[1].since - b[1].since)
     .map(([key, { row, since }]) => ({
       key: `asks:${key}`, kind: "asks", w: row.w, row, since,
-      message: row.kind === "event" ? row.message : messageByPid.get(row.w.pid) || null,
+      message: messageByTarget.get(row.w?.target ?? row.target) || null,
     }));
   const asking = new Set(asks.map((e) => e.w?.pid).filter(Boolean));
-  const broken = (windows || [])
-    .filter((w) => paneBlip(w, nowS, asking.has(w.pid)) === "broken")
-    .map((w) => ({ key: `broken:${w.pid}`, kind: "broken", w, row: null, since: null, message: null }));
-  const taken = new Set([...asking, ...broken.map((e) => e.w.pid)]);
+  const brokenPids = new Set();
+  const failingPrs = new Set();
+  const broken = [];
+  for (const w of windows || []) {
+    if (paneBlip(w, nowS, asking.has(w.pid)) !== "broken") continue;
+    brokenPids.add(w.pid);
+    if (!w.api_error) {
+      if (failingPrs.has(prKey(w))) continue;
+      failingPrs.add(prKey(w));
+    }
+    broken.push({ key: `broken:${w.pid}`, kind: "broken", w, row: null, since: null, message: null });
+  }
+  const taken = new Set([...asking, ...brokenPids]);
   const done = buildReady(windows, alertItems, dismissedIds, dismissedReadyPids)
     .filter((r) => !taken.has(r.w?.pid))
     .map((r) => ({
@@ -224,12 +239,13 @@ export function buildNext(windows, alertItems, dismissedIds = new Set(), dismiss
   return [...asks, ...broken, ...done];
 }
 
-// The entry ⌘J opens: the one after the selected pane's, wrapping, or the
-// first when the selected pane wants nothing.
-export function nextAfter(entries, selectedPid) {
-  if (!entries.length) return null;
-  const i = entries.findIndex((e) => e.w && String(e.w.pid) === String(selectedPid));
-  return entries[(i + 1) % entries.length];
+// The entry ⌘J opens: the first one this walk hasn't opened (`opened`, a set
+// of entry keys), skipping the pane already on screen. Opening a done card or
+// a soft question removes it, so walking by position would fall back to the
+// top on every press. Once every entry has been opened, the walk starts over.
+export function nextToOpen(entries, selectedPid, opened) {
+  const elsewhere = entries.filter((e) => !e.w || String(e.w.pid) !== String(selectedPid));
+  return elsewhere.find((e) => !opened.has(e.key)) || elsewhere[0] || null;
 }
 
 // Live "working" panes, in /api/state order. A pure mirror of pane state —

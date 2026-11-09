@@ -313,6 +313,10 @@ describe("<Rail> Next queue", () => {
     expect(html).toContain('<span class="next-track">fdy</span>');
     expect(html).toContain("needs approval");
     expect(html).not.toContain("need_human");
+    // The name is the card's button; a role=button card would hide its × from
+    // a screen reader.
+    expect(html).toContain('<button class="next-name" aria-label="weighting, needs approval: Allow Bash: uv run pytest -x">');
+    expect(html).not.toContain('role="button"');
   });
 
   it("lists a pane with an API error as broken, in the strip and the queue", () => {
