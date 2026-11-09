@@ -1,0 +1,744 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-09T00:11:15+00:00",
+  "title": "Design System: periscope",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Periscope Glass",
+        "canonical": "oklch(0.74 0.13 232)",
+        "tonalRamp": [
+          "oklch(0.15 0.019 232)",
+          "oklch(0.25 0.056 232)",
+          "oklch(0.35 0.093 232)",
+          "oklch(0.47 0.130 232)",
+          "oklch(0.60 0.130 232)",
+          "oklch(0.72 0.130 232)",
+          "oklch(0.84 0.083 232)",
+          "oklch(0.95 0.026 232)"
+        ]
+      },
+      "effort": {
+        "role": "secondary",
+        "displayName": "Track Magenta",
+        "canonical": "oklch(0.72 0.12 330)",
+        "tonalRamp": [
+          "oklch(0.15 0.018 330)",
+          "oklch(0.25 0.051 330)",
+          "oklch(0.35 0.086 330)",
+          "oklch(0.47 0.120 330)",
+          "oklch(0.60 0.120 330)",
+          "oklch(0.72 0.120 330)",
+          "oklch(0.84 0.077 330)",
+          "oklch(0.95 0.024 330)"
+        ]
+      },
+      "worktree": {
+        "role": "secondary",
+        "displayName": "Worktree Violet",
+        "canonical": "oklch(0.72 0.13 295)",
+        "tonalRamp": [
+          "oklch(0.15 0.019 295)",
+          "oklch(0.25 0.056 295)",
+          "oklch(0.35 0.093 295)",
+          "oklch(0.47 0.130 295)",
+          "oklch(0.60 0.130 295)",
+          "oklch(0.72 0.130 295)",
+          "oklch(0.84 0.083 295)",
+          "oklch(0.95 0.026 295)"
+        ]
+      },
+      "linear": {
+        "role": "tertiary",
+        "displayName": "Ticket Purple",
+        "canonical": "oklch(0.7 0.13 280)",
+        "tonalRamp": [
+          "oklch(0.15 0.019 280)",
+          "oklch(0.25 0.056 280)",
+          "oklch(0.35 0.093 280)",
+          "oklch(0.47 0.130 280)",
+          "oklch(0.60 0.130 280)",
+          "oklch(0.72 0.130 280)",
+          "oklch(0.84 0.083 280)",
+          "oklch(0.95 0.026 280)"
+        ]
+      },
+      "account": {
+        "role": "tertiary",
+        "displayName": "Account Teal",
+        "canonical": "oklch(0.75 0.11 190)",
+        "tonalRamp": [
+          "oklch(0.15 0.017 190)",
+          "oklch(0.25 0.047 190)",
+          "oklch(0.35 0.079 190)",
+          "oklch(0.47 0.110 190)",
+          "oklch(0.60 0.110 190)",
+          "oklch(0.72 0.110 190)",
+          "oklch(0.84 0.070 190)",
+          "oklch(0.95 0.022 190)"
+        ]
+      },
+      "pin-gold": {
+        "role": "tertiary",
+        "displayName": "Pin Gold",
+        "canonical": "#d8b33a",
+        "tonalRamp": [
+          "oklch(0.15 0.019 92)",
+          "oklch(0.25 0.056 92)",
+          "oklch(0.35 0.093 92)",
+          "oklch(0.47 0.130 92)",
+          "oklch(0.60 0.130 92)",
+          "oklch(0.72 0.130 92)",
+          "oklch(0.84 0.083 92)",
+          "oklch(0.95 0.026 92)"
+        ]
+      },
+      "s-needs": {
+        "role": "status",
+        "displayName": "Ping Orange (needs input)",
+        "canonical": "oklch(0.74 0.14 38)",
+        "tonalRamp": [
+          "oklch(0.15 0.021 38)",
+          "oklch(0.25 0.060 38)",
+          "oklch(0.35 0.100 38)",
+          "oklch(0.47 0.140 38)",
+          "oklch(0.60 0.140 38)",
+          "oklch(0.72 0.140 38)",
+          "oklch(0.84 0.090 38)",
+          "oklch(0.95 0.028 38)"
+        ]
+      },
+      "s-needs-bg": {
+        "role": "status",
+        "displayName": "Ping Orange tint",
+        "canonical": "color-mix(in oklch, oklch(0.74 0.14 38) 16%, transparent)",
+        "tonalRamp": [
+          "oklch(0.15 0.021 38)",
+          "oklch(0.25 0.060 38)",
+          "oklch(0.35 0.100 38)",
+          "oklch(0.47 0.140 38)",
+          "oklch(0.60 0.140 38)",
+          "oklch(0.72 0.140 38)",
+          "oklch(0.84 0.090 38)",
+          "oklch(0.95 0.028 38)"
+        ]
+      },
+      "s-working": {
+        "role": "status",
+        "displayName": "Sweep Amber (working)",
+        "canonical": "oklch(0.80 0.14 92)",
+        "tonalRamp": [
+          "oklch(0.15 0.021 92)",
+          "oklch(0.25 0.060 92)",
+          "oklch(0.35 0.100 92)",
+          "oklch(0.47 0.140 92)",
+          "oklch(0.60 0.140 92)",
+          "oklch(0.72 0.140 92)",
+          "oklch(0.84 0.090 92)",
+          "oklch(0.95 0.028 92)"
+        ]
+      },
+      "s-working-bg": {
+        "role": "status",
+        "displayName": "Sweep Amber tint",
+        "canonical": "color-mix(in oklch, oklch(0.80 0.14 92) 14%, transparent)",
+        "tonalRamp": [
+          "oklch(0.15 0.021 92)",
+          "oklch(0.25 0.060 92)",
+          "oklch(0.35 0.100 92)",
+          "oklch(0.47 0.140 92)",
+          "oklch(0.60 0.140 92)",
+          "oklch(0.72 0.140 92)",
+          "oklch(0.84 0.090 92)",
+          "oklch(0.95 0.028 92)"
+        ]
+      },
+      "s-done": {
+        "role": "status",
+        "displayName": "Contact Green (done)",
+        "canonical": "oklch(0.76 0.17 152)",
+        "tonalRamp": [
+          "oklch(0.15 0.026 152)",
+          "oklch(0.25 0.073 152)",
+          "oklch(0.35 0.121 152)",
+          "oklch(0.47 0.170 152)",
+          "oklch(0.60 0.170 152)",
+          "oklch(0.72 0.170 152)",
+          "oklch(0.84 0.109 152)",
+          "oklch(0.95 0.034 152)"
+        ]
+      },
+      "s-done-bg": {
+        "role": "status",
+        "displayName": "Contact Green tint",
+        "canonical": "color-mix(in oklch, oklch(0.76 0.17 152) 16%, transparent)",
+        "tonalRamp": [
+          "oklch(0.15 0.026 152)",
+          "oklch(0.25 0.073 152)",
+          "oklch(0.35 0.121 152)",
+          "oklch(0.47 0.170 152)",
+          "oklch(0.60 0.170 152)",
+          "oklch(0.72 0.170 152)",
+          "oklch(0.84 0.109 152)",
+          "oklch(0.95 0.034 152)"
+        ]
+      },
+      "s-idle": {
+        "role": "status",
+        "displayName": "Static Grey (idle)",
+        "canonical": "oklch(0.65 0.01 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.002 250)",
+          "oklch(0.25 0.004 250)",
+          "oklch(0.35 0.007 250)",
+          "oklch(0.47 0.010 250)",
+          "oklch(0.60 0.010 250)",
+          "oklch(0.72 0.010 250)",
+          "oklch(0.84 0.006 250)",
+          "oklch(0.95 0.002 250)"
+        ]
+      },
+      "s-shell": {
+        "role": "status",
+        "displayName": "Shore Green (shell)",
+        "canonical": "oklch(0.72 0.10 165)",
+        "tonalRamp": [
+          "oklch(0.15 0.015 165)",
+          "oklch(0.25 0.043 165)",
+          "oklch(0.35 0.071 165)",
+          "oklch(0.47 0.100 165)",
+          "oklch(0.60 0.100 165)",
+          "oklch(0.72 0.100 165)",
+          "oklch(0.84 0.064 165)",
+          "oklch(0.95 0.020 165)"
+        ]
+      },
+      "s-success": {
+        "role": "status",
+        "displayName": "Success",
+        "canonical": "oklch(0.74 0.13 150)",
+        "tonalRamp": [
+          "oklch(0.15 0.019 150)",
+          "oklch(0.25 0.056 150)",
+          "oklch(0.35 0.093 150)",
+          "oklch(0.47 0.130 150)",
+          "oklch(0.60 0.130 150)",
+          "oklch(0.72 0.130 150)",
+          "oklch(0.84 0.083 150)",
+          "oklch(0.95 0.026 150)"
+        ]
+      },
+      "s-danger": {
+        "role": "status",
+        "displayName": "Danger",
+        "canonical": "oklch(0.70 0.16 25)",
+        "tonalRamp": [
+          "oklch(0.15 0.024 25)",
+          "oklch(0.25 0.069 25)",
+          "oklch(0.35 0.114 25)",
+          "oklch(0.47 0.160 25)",
+          "oklch(0.60 0.160 25)",
+          "oklch(0.72 0.160 25)",
+          "oklch(0.84 0.102 25)",
+          "oklch(0.95 0.032 25)"
+        ]
+      },
+      "bg-0": {
+        "role": "neutral",
+        "displayName": "Abyss",
+        "canonical": "oklch(0.235 0.007 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "bg-1": {
+        "role": "neutral",
+        "displayName": "Hull",
+        "canonical": "oklch(0.282 0.008 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "bg-1-hi": {
+        "role": "neutral",
+        "displayName": "Hull, lit",
+        "canonical": "oklch(0.318 0.009 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "bg-2": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "canonical": "oklch(0.335 0.009 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "bg-3": {
+        "role": "neutral",
+        "displayName": "Rim",
+        "canonical": "oklch(0.395 0.010 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "bg-modal": {
+        "role": "neutral",
+        "displayName": "Console",
+        "canonical": "oklch(0.255 0.008 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "bg-term": {
+        "role": "neutral",
+        "displayName": "Terminal",
+        "canonical": "#282c34",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "fg-0": {
+        "role": "neutral",
+        "displayName": "Text 0 (titles)",
+        "canonical": "oklch(0.970 0.004 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "fg-1": {
+        "role": "neutral",
+        "displayName": "Text 1 (body)",
+        "canonical": "oklch(0.850 0.006 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "fg-2": {
+        "role": "neutral",
+        "displayName": "Text 2 (controls)",
+        "canonical": "oklch(0.660 0.008 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "fg-3": {
+        "role": "neutral",
+        "displayName": "Text 3 (meta)",
+        "canonical": "oklch(0.520 0.008 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "fg-4": {
+        "role": "neutral",
+        "displayName": "Text 4 (hints)",
+        "canonical": "oklch(0.420 0.008 250)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "color-mix(in oklch, oklch(0.50 0.008 250) 30%, transparent)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "line-soft": {
+        "role": "neutral",
+        "displayName": "Rule, soft",
+        "canonical": "color-mix(in oklch, oklch(0.50 0.008 250) 16%, transparent)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Rule, strong",
+        "canonical": "color-mix(in oklch, oklch(0.60 0.008 250) 45%, transparent)",
+        "tonalRamp": [
+          "oklch(0.235 0.007 250)",
+          "oklch(0.282 0.008 250)",
+          "oklch(0.318 0.009 250)",
+          "oklch(0.335 0.009 250)",
+          "oklch(0.395 0.010 250)",
+          "oklch(0.520 0.008 250)",
+          "oklch(0.850 0.006 250)",
+          "oklch(0.970 0.004 250)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Modal and dialog titles; the omnibox input text."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "The periscope wordmark."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Rail rows, omnibox rows, dialog text."
+      },
+      "body-sm": {
+        "displayName": "Body small",
+        "purpose": "Filter buttons, menu items, the detail header, toasts."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "Narrator status lines, attention reasons, omnibox sub-paths, footers."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "UPPERCASE section headers and track labels; never content."
+      },
+      "ref": {
+        "displayName": "Ref",
+        "purpose": "Mono chips for PR / ticket refs, keycaps, the cwd chip."
+      }
+    },
+    "shadows": [
+      {
+        "name": "pane-lift",
+        "value": "0 1px 6px oklch(0 0 0 / .25)",
+        "purpose": "The one pane card that is expanded (selected or needs-input)."
+      },
+      {
+        "name": "pane-lift-selected",
+        "value": "0 1px 8px oklch(0 0 0 / .3), inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent)",
+        "purpose": "The expanded pane card when selected."
+      },
+      {
+        "name": "menu",
+        "value": "0 8px 24px oklch(0 0 0 / 0.35)",
+        "purpose": "Toolbar dropdown menus."
+      },
+      {
+        "name": "toast",
+        "value": "0 8px 20px oklch(0 0 0 / 0.4)",
+        "purpose": "The toast stack."
+      },
+      {
+        "name": "modal",
+        "value": "0 0 0 1px var(--line-strong), 0 30px 80px oklch(0 0 0 / 0.55)",
+        "purpose": "Modals and the omnibox; the 1px ring keeps the edge against a dark backdrop."
+      },
+      {
+        "name": "drop-line",
+        "value": "inset 0 2px 0 var(--accent)",
+        "purpose": "Where a dragged row will land (use -2px for 'after')."
+      },
+      {
+        "name": "pulse-ring",
+        "value": "0 0 0 4px var(--s-needs-bg)",
+        "purpose": "Peak of the needs-input pulse; the done pulse uses var(--s-done-bg)."
+      }
+    ],
+    "motion": [
+      {
+        "name": "hover",
+        "value": "0.1s–0.12s",
+        "purpose": "Colour, background and edge on hover."
+      },
+      {
+        "name": "state-change",
+        "value": "180ms ease",
+        "purpose": "Colour, background, edge and opacity of stripes, dots, chips and rows when live state changes."
+      },
+      {
+        "name": "row-enter",
+        "value": "140ms ease-out; from opacity 0, translateY(-2px)",
+        "purpose": "Rows arriving in the rail. No exit animation."
+      },
+      {
+        "name": "pulse",
+        "value": "1.6s ease-in-out infinite",
+        "purpose": "Needs-input and done only; a 4px ring of the state's -bg colour."
+      },
+      {
+        "name": "brand-blink",
+        "value": "1.1s steps(2) infinite",
+        "purpose": "The wordmark's cursor block."
+      },
+      {
+        "name": "toast",
+        "value": "180ms ease; from opacity 0, translateY(8px)",
+        "purpose": "Toast entry."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "1100px",
+        "purpose": "Below this width the modal sidebar and Clawd's device hide."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Filter Button",
+      "kind": "button",
+      "refersTo": "filter-btn",
+      "description": "Header toolbar pill: muted at rest, Periscope Glass wash when active; the dashed variant makes something.",
+      "html": "<div class=\"ds-row\"><button class=\"ds-filter\">all</button><button class=\"ds-filter is-active\">needs you</button><button class=\"ds-filter is-action\">+ new</button></div>",
+      "css": ".ds-row { display: flex; gap: 6px; align-items: center; } .ds-filter { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-family: var(--sans); font-size: 12px; color: var(--fg-2); background: transparent; border: 1px solid var(--line-soft); border-radius: 999px; cursor: pointer; transition: color 0.12s, background 0.12s, border-color 0.12s; } .ds-filter:hover { color: var(--fg-1); border-color: var(--line); background: var(--bg-1); } .ds-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; } .ds-filter.is-active { color: var(--fg-0); background: color-mix(in oklch, var(--accent) 18%, transparent); border-color: color-mix(in oklch, var(--accent) 50%, transparent); } .ds-filter.is-action { border-style: dashed; } .ds-filter.is-action:hover { color: var(--fg-0); border-style: solid; border-color: var(--accent); background: transparent; }"
+    },
+    {
+      "name": "Dialog Buttons",
+      "kind": "button",
+      "refersTo": "dialog-button",
+      "description": "Confirm / prompt dialog actions. Danger is meant as a red tint, never solid red; the in-oklch mix into bg-1 renders violet today (the Mixed-Tint Rule).",
+      "html": "<div class=\"ds-actions\"><button class=\"ds-dbtn\">Cancel</button><button class=\"ds-dbtn is-danger\">Remove worktree</button></div>",
+      "css": ".ds-actions { display: flex; gap: 8px; justify-content: flex-end; } .ds-dbtn { padding: 6px 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-1); color: var(--fg-0); font: 13px/1.45 var(--sans); cursor: pointer; transition: background 0.12s; } .ds-dbtn:hover { background: var(--bg-1-hi); } .ds-dbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; } .ds-dbtn.is-danger { background: color-mix(in oklch, var(--s-danger) 25%, var(--bg-1)); border-color: color-mix(in oklch, var(--s-danger) 50%, var(--line)); } .ds-dbtn.is-danger:hover { background: color-mix(in oklch, var(--s-danger) 38%, var(--bg-1)); }"
+    },
+    {
+      "name": "Segmented Pins",
+      "kind": "custom",
+      "refersTo": "segment",
+      "description": "Spawn account / model / effort pins: tight segments, the active one filled with Periscope Glass.",
+      "html": "<div class=\"ds-pins\"><span class=\"ds-pins-label\">model</span><button class=\"ds-seg\">auto</button><button class=\"ds-seg\">sonnet</button><button class=\"ds-seg is-active\">opus 1m</button><button class=\"ds-seg\">fable</button></div>",
+      "css": ".ds-pins { display: inline-flex; align-items: center; gap: 2px; } .ds-pins-label { font-family: var(--sans); font-size: 10px; color: var(--fg-3); letter-spacing: 0.04em; min-width: 40px; margin-right: 3px; } .ds-seg { font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: var(--fg-3); background: var(--bg-2); border: none; border-radius: 3px; padding: 1px 6px; cursor: pointer; transition: color 0.12s; } .ds-seg:hover { color: var(--fg-1); } .ds-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; } .ds-seg.is-active { color: var(--bg-0); background: var(--accent); }"
+    },
+    {
+      "name": "Ref Chips",
+      "kind": "chip",
+      "refersTo": "pane-pill",
+      "description": "Pane pills: mono refs, coloured by kind (PR, ticket, account, CI, context %); merged PRs go violet.",
+      "html": "<div class=\"ds-chips\"><a class=\"ds-pill ds-pr\" href=\"#\">#9275</a><a class=\"ds-pill ds-pr is-merged\" href=\"#\">#9264</a><a class=\"ds-pill ds-ticket\" href=\"#\">FDY-9246</a><span class=\"ds-pill ds-acct\">B</span><span class=\"ds-pill ds-ci-ok\">✓ ci</span><span class=\"ds-pill ds-ctx is-warn\">68%</span></div>",
+      "css": ".ds-chips { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; } .ds-pill { display: inline-flex; align-items: center; gap: 3px; padding: 0 5px; height: 15px; border-radius: 3px; background: var(--bg-2); color: var(--fg-2); font-family: var(--sans); font-size: 10px; text-decoration: none; white-space: nowrap; transition: background 0.12s, color 0.12s; } a.ds-pill:hover { background: var(--bg-3); color: var(--fg-1); } a.ds-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; } .ds-pr, .ds-ticket { font-family: var(--mono); } .ds-pr { color: var(--fg-1); } .ds-pr.is-merged { color: var(--worktree); } .ds-ticket { color: oklch(0.7 0.13 280); } .ds-acct { color: oklch(0.75 0.11 190); } .ds-ci-ok { color: var(--s-success); } .ds-ctx { color: var(--fg-3); font-variant-numeric: tabular-nums; } .ds-ctx.is-warn { color: var(--s-working); }"
+    },
+    {
+      "name": "Omnibox Input",
+      "kind": "input",
+      "refersTo": "omnibox-input",
+      "description": "The ⌘K field: raised fill, strong rule, only the edge changes on focus.",
+      "html": "<input class=\"ds-omni\" placeholder=\"Open a repo, path, branch or #PR…\" />",
+      "css": ".ds-omni { width: 100%; max-width: 540px; box-sizing: border-box; background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: var(--r-sm); color: var(--fg-0); font-family: var(--sans); font-size: 15px; padding: 10px 12px; outline: none; transition: border-color 0.12s; } .ds-omni::placeholder { color: var(--fg-3); } .ds-omni:focus { border-color: var(--accent); }"
+    },
+    {
+      "name": "Pane Card",
+      "kind": "card",
+      "refersTo": "pane-card-expanded",
+      "description": "A rail pane row lifted onto Raised because it needs you: state stripe pulsing Ping Orange, narrator line, ref chips.",
+      "html": "<div class=\"ds-pane\"><span class=\"ds-stripe\"></span><div class=\"ds-pane-main\"><span class=\"ds-glyph\">✻</span><span class=\"ds-pane-name\">blocklist</span><span class=\"ds-pane-ctx\">446k</span></div><div class=\"ds-pane-status\">waiting on permission to run migrations</div><div class=\"ds-pane-foot\"><span class=\"ds-mini ds-mini-pr\">#9275</span><span class=\"ds-mini ds-mini-ticket\">FDY-9246</span><span class=\"ds-pane-time\">23h</span></div></div>",
+      "css": ".ds-pane { position: relative; width: 280px; background: var(--bg-2); border-radius: var(--r-md); padding: 9px 10px 9px 12px; box-shadow: 0 1px 6px oklch(0 0 0 / .25); font-family: var(--sans); font-size: 13px; color: var(--fg-1); cursor: pointer; transition: background-color 180ms ease; } .ds-pane:hover { background: var(--bg-1-hi); } .ds-stripe { position: absolute; left: 3px; top: 6px; bottom: 6px; width: 2px; border-radius: 2px; background: var(--s-needs); animation: ds-pulse 1.6s ease-in-out infinite; } @keyframes ds-pulse { 50% { box-shadow: 0 0 0 4px var(--s-needs-bg); } } @media (prefers-reduced-motion: reduce) { .ds-stripe { animation: none; } } .ds-pane-main { display: flex; align-items: center; gap: 7px; } .ds-glyph { width: 14px; text-align: center; color: oklch(0.74 0.12 38); } .ds-pane-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-pane-ctx { font-size: 10px; color: var(--fg-4); } .ds-pane-status { margin: 3px 0 0 21px; font-size: 11px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-pane-foot { display: flex; align-items: center; gap: 5px; margin: 7px 0 1px 21px; } .ds-mini { display: inline-flex; align-items: center; padding: 0 5px; height: 15px; border-radius: 3px; background: var(--bg-1); font-family: var(--mono); font-size: 10px; } .ds-mini-pr { color: var(--fg-1); } .ds-mini-ticket { color: oklch(0.7 0.13 280); } .ds-pane-time { margin-left: auto; font-size: 10px; color: var(--fg-4); }"
+    },
+    {
+      "name": "Track Card",
+      "kind": "card",
+      "refersTo": "track-card",
+      "description": "A track's uppercase magenta label with its hairline rule, above a Hull card edged in Track Magenta; a branch sub-cluster nests on a violet rule.",
+      "html": "<div class=\"ds-track\"><div class=\"ds-track-head\"><span class=\"ds-track-glyph\">⧉</span><span class=\"ds-track-label\">fdy</span><span class=\"ds-track-rule\"></span><span class=\"ds-dot\"></span></div><div class=\"ds-track-card\"><div class=\"ds-branch\"><div class=\"ds-branch-head\"><span class=\"ds-wt\">⎇</span> tdody/fdy-9237-move…</div><div class=\"ds-row\"><span class=\"ds-claude\">✻</span>cohabitants-piis</div><div class=\"ds-row is-selected\"><span class=\"ds-claude\">✻</span>blocklist</div></div><div class=\"ds-new\">+ New tab</div></div></div>",
+      "css": ".ds-track { width: 280px; font-family: var(--sans); font-size: 13px; color: var(--fg-1); } .ds-track-head { display: flex; align-items: center; gap: 7px; padding: 11px 10px 4px; } .ds-track-glyph { color: var(--effort); width: 14px; text-align: center; } .ds-track-label { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--effort); } .ds-track-rule { flex: 1; height: 1px; background: var(--line-soft); } .ds-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--s-done); } .ds-track-card { background: var(--bg-1); border: 1px solid color-mix(in oklch, var(--effort) 30%, transparent); border-radius: var(--r-lg); margin: 2px 8px 7px; padding: 5px; } .ds-branch { margin: 2px 0 2px 4px; padding-left: 7px; border-left: 2px solid color-mix(in oklch, var(--worktree) 40%, transparent); } .ds-branch-head { padding: 3px 4px; color: var(--fg-1); font-weight: 500; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .ds-wt { color: var(--worktree); } .ds-row { display: flex; align-items: center; gap: 7px; padding: 7px 10px 7px 8px; border-radius: var(--r-sm); border-left: 2px solid transparent; cursor: pointer; transition: background-color 180ms ease; } .ds-row:hover { background: var(--bg-1-hi); } .ds-row.is-selected { background: var(--bg-1-hi); border-left-color: var(--accent); } .ds-claude { width: 14px; text-align: center; color: oklch(0.74 0.12 38); } .ds-new { padding: 3px 10px; color: var(--fg-3); font-size: 13px; cursor: pointer; } .ds-new:hover { color: var(--fg-1); }"
+    },
+    {
+      "name": "Attention Section Header",
+      "kind": "nav",
+      "refersTo": "label",
+      "description": "UPPERCASE status-coloured section labels with filled count badges; READY and RUNNING take dark text on the status fill.",
+      "html": "<div class=\"ds-attn\"><div class=\"ds-sec ds-sec-alert\"><span class=\"ds-sec-label\">Needs you</span><span class=\"ds-count\">2</span></div><div class=\"ds-sec ds-sec-ready\"><span class=\"ds-sec-label\">Ready</span><span class=\"ds-count\">1</span></div><div class=\"ds-sec ds-sec-working\"><span class=\"ds-sec-label\">Running</span><span class=\"ds-count\">4</span></div></div>",
+      "css": ".ds-attn { width: 280px; display: flex; flex-direction: column; gap: 2px; } .ds-sec { display: flex; align-items: center; padding: 3px 10px; font-family: var(--sans); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; cursor: pointer; user-select: none; } .ds-sec-label { font-weight: 600; } .ds-count { margin-left: auto; border-radius: 9px; padding: 0 6px; font-size: 10px; font-weight: 700; } .ds-sec-alert { color: #f0857d; } .ds-sec-alert .ds-count { background: #f85149; color: #fff; } .ds-sec-ready { color: var(--s-done); } .ds-sec-ready .ds-count { background: var(--s-done); color: #0d1117; } .ds-sec-working { color: var(--s-working); } .ds-sec-working .ds-count { background: var(--s-working); color: #0d1117; }"
+    },
+    {
+      "name": "Keycap",
+      "kind": "custom",
+      "refersTo": "keycap",
+      "description": "Shortcut glyphs as small physical keys; the 2px bottom edge is the tactile cue.",
+      "html": "<span class=\"ds-hint\">open <kbd class=\"ds-kbd\">⌘</kbd><kbd class=\"ds-kbd\">K</kbd> · history <kbd class=\"ds-kbd\">⌘</kbd><kbd class=\"ds-kbd\">/</kbd></span>",
+      "css": ".ds-hint { font-family: var(--sans); font-size: 11px; color: var(--fg-3); } .ds-kbd { display: inline-flex; align-items: center; justify-content: center; padding: 1px 5px; font-family: var(--mono); font-size: 10px; color: var(--fg-2); background: var(--bg-2); border: 1px solid var(--line-soft); border-bottom-width: 2px; border-radius: 3px; margin: 0 2px; }"
+    },
+    {
+      "name": "Wordmark",
+      "kind": "custom",
+      "refersTo": "title",
+      "description": "periscope with its blinking Periscope Glass cursor block, the one expressive animation outside the critters.",
+      "html": "<span class=\"ds-brand\">periscope<span class=\"ds-cursor\"></span></span>",
+      "css": ".ds-brand { font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--fg-0); letter-spacing: -0.01em; } .ds-cursor { display: inline-block; width: 7px; height: 13px; background: var(--accent); vertical-align: -1px; margin-left: 4px; animation: ds-blink 1.1s steps(2) infinite; } @keyframes ds-blink { 50% { opacity: 0; } } @media (prefers-reduced-motion: reduce) { .ds-cursor { animation: none; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Sonar Screen",
+    "overview": "periscope is a quiet grey field that agents show up on. Most of the time nothing on it is lit: surfaces, rules and text all sit in one cool, nearly colourless grey (hue 250, chroma under 0.010). When an agent has something to report, it appears as a coloured blip: an orange ping when it needs you, a green contact when it is done, an amber sweep while it works. The field exists so those blips can't be missed, and a screen that adds colour for any other reason has broken the instrument.\n\nThe density is that of a tool you live in all day. Body text is 13px, metadata 10–11px, rows have 3–9px of vertical padding, and the whole dashboard is one split view: the rail on the left, the live pane on the right, a header strip above. Controls are compact and tactile: small pills, keycaps with a thicker bottom edge, segmented pins. They stay muted until hovered or chosen. The interface is dark only; there is no light theme.\n\nThe one place the instrument lets personality in is Clawd's device in the header's top-right corner. It is a pixel-art critter inside its own bezel that keeps a daily schedule, holds up the most urgent item and takes you there when clicked. It is part of the identity, not a decoration. Its frame keeps it visibly separate from the work around it.\n\n**Rejected looks** (confirmed): SaaS analytics dashboards (KPI tiles, decorative charts, gradient hero cards, airy spacing); neon hacker terminals (green on black, glow, scanlines); colour used as decoration.",
+    "keyCharacteristics": [
+      "A cool grey field, made of one hue at very low chroma, with depth built from tonal steps.",
+      "Colour means a state or a kind of thing, never ornament.",
+      "Every status colour has the same lightness, so urgency comes from motion and position rather than brightness.",
+      "One interactive accent (Periscope Glass) for selection, focus and \"active\".",
+      "Sans for labels and prose, mono for anything you could paste: refs, paths and commands.",
+      "Compact, tactile controls: pills, keycaps, segmented pins.",
+      "Unicode glyphs instead of an icon set (◆ ◇ $ ✻ ⬡ ⎇ ★), each coloured by the kind of thing it marks.",
+      "Clawd lives in a bezel: personality is welcome but framed."
+    ],
+    "rules": [
+      {
+        "name": "The Blip Rule",
+        "body": "Colour on the field is a signal: either a state, or a kind of thing (repo, track, branch, ticket, account). A hue that reports nothing doesn't ship.",
+        "section": "colors"
+      },
+      {
+        "name": "The Same-Brightness Rule",
+        "body": "Status hues sit at lightness 0.74–0.80 and chroma 0.13–0.17, and differ only in hue. No state wins by being brighter. Urgency comes from the pulse and from position (NEEDS YOU sits at the top of the rail).",
+        "section": "colors"
+      },
+      {
+        "name": "The One Glass Rule",
+        "body": "Periscope Glass is the only interactive accent. Selection, focus, active and drop targets use it. Agent state never does.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mixed-Tint Rule",
+        "body": "Build a tint by mixing a token into transparent (`color-mix(in oklch, <token> 16%, transparent)`), the way the `-bg` tokens are built. Transparent has no hue, so the token keeps its own. When the tint must be opaque, mix into the surface `in srgb` (as the drop-target wash does). Mixing into a grey surface `in oklch` swings the hue toward the grey's 250: the danger button's red mix comes out violet. The attention rows' tinted backgrounds (`#241316`, `#122019`, `#1d1a10`, `#161a14`) are still hard-coded hex near those mixes. Both are drift, not patterns to copy.",
+        "section": "colors"
+      },
+      {
+        "name": "The Paste-It Rule",
+        "body": "If the user could copy a value into a terminal (a PR number, ticket ID, branch, path or command), set it in `--mono`. Labels, status and prose stay `--sans`.",
+        "section": "typography"
+      },
+      {
+        "name": "The Organizer Rule",
+        "body": "UPPERCASE letter-spaced 10px text only labels a section; it is never content. A track name shown as a label is uppercase; the same name inside a sentence is not.",
+        "section": "typography"
+      },
+      {
+        "name": "The Column Rule",
+        "body": "A pane's metadata lines (cwd chip, narrator status, PR and ticket chips) each take a full line, indented 21px so they start under the label (14px icon plus a 7px gap). Fields stay in one column from row to row, and never share a line in a way that makes their position depend on content length.",
+        "section": "layout"
+      },
+      {
+        "name": "The Tonal Stack Rule",
+        "body": "Surfaces separate by lightness step, not by shadow. If a new container needs to read as raised, move it one `bg-` step up.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Only-What-Floats Rule",
+        "body": "Ambient shadows belong to menus, toasts, modals and the one lifted pane. Nothing that sits in the layout gets a drop shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep every surface in the cool-grey family (hue 250, chroma ≤ 0.010) and build depth by stepping through `bg-0` → `bg-1` → `bg-2`.",
+      "**Do** give each hue a single meaning everywhere it appears: Periscope Glass for interaction, Track Magenta for tracks, Worktree Violet for branches, Ticket Purple for tickets, Account Teal for accounts, and the sonar colours for state.",
+      "**Do** put any new status colour on the shared brightness (lightness 0.74–0.80, chroma 0.13–0.17) and vary only its hue.",
+      "**Do** derive tints with `color-mix(in oklch, <token> N%, transparent)`, or `in srgb` when mixing into an opaque surface, instead of adding new hex values.",
+      "**Do** set refs, paths, branches and commands in `--mono`, and check every new size in every face on the Settings → Fonts list.",
+      "**Do** show shortcuts as keycaps (the 2px bottom edge).",
+      "**Do** register every new animation in the `prefers-reduced-motion` block.",
+      "**Do** keep critters inside a bezel or their own frame wherever they appear.",
+      "**Do** match `bg-term` (`#282c34`) exactly on anything that frames a terminal canvas."
+    ],
+    "donts": [
+      "**Don't** use colour as decoration. If a hue isn't reporting a state or marking a kind of thing, it doesn't ship.",
+      "**Don't** reach for SaaS analytics vocabulary: KPI tiles, decorative charts, gradient hero cards, generous empty spacing around a few numbers.",
+      "**Don't** go neon hacker terminal: no green on black, glow, scanlines or \"cyber\" styling.",
+      "**Don't** add a second interactive accent, and don't use Periscope Glass to report agent state.",
+      "**Don't** make one state louder than another by brightness. Urgency comes from the pulse and from position.",
+      "**Don't** pulse or loop anything in the work surface except needs-input and done.",
+      "**Don't** put drop shadows on things that sit in the layout. Shadows are for menus, toasts, modals and the one lifted pane.",
+      "**Don't** add half-pixel type sizes or new hard-coded hex values. Both exist today as drift, not as patterns."
+    ]
+  }
+}
