@@ -7,8 +7,12 @@
 // the rare intent; refreshing the thing you are looking at is the common one,
 // and the browser's default served the rare case. Full reload moves to ⌘⇧R.
 
+import { openNextEntry } from "./split/alertFeed.js";
+import { buildNext, nextAfter } from "./split/attention.js";
 import { togglePanel } from "./split/panels.js";
-import { docRefreshNonce, paneActiveTab, railSelection } from "./store.js";
+import {
+  alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, docRefreshNonce, paneActiveTab, railSelection, windows,
+} from "./store.js";
 import { requestTerminalReconcile } from "./terminal/terminalCore.js";
 
 // Which pane the rail has selected, or null. railSelection is a string
@@ -44,8 +48,28 @@ export function panelToggleFor(e) {
   return e.altKey ? "side" : "rail";
 }
 
+// ⌘J → open the next pane that wants you, in the rail's Next order. e.code, as
+// for ⌘B; a held chord would race through the whole queue, so repeats don't
+// count. ⌘ only: xterm sends Ctrl+J to the pane as a line feed before this
+// listener sees it, which would submit whatever the composer holds.
+export function isNextKey(e) {
+  return !e.repeat && e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "KeyJ";
+}
+
+function openNext() {
+  const entries = buildNext(windows.value, alerts.value, dismissedAlertIds.value, dismissedNeedsPids.value,
+    dismissedReadyPids.value, Math.floor(Date.now() / 1000));
+  const e = nextAfter(entries, selectedPid(railSelection.value));
+  if (e) openNextEntry(e);
+}
+
 export function installKeys(target = window) {
   target.addEventListener("keydown", (e) => {
+    if (isNextKey(e)) {
+      e.preventDefault();
+      openNext();
+      return;
+    }
     const panel = panelToggleFor(e);
     if (panel) {
       e.preventDefault();

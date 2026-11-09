@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { waitKind } from "../../util.js";
-import { firstSentence, payloadFor } from "../copy.js";
+import { firstSentence, nextWords, payloadFor } from "../copy.js";
 
 // actions.js (imported below for the category cross-check) pulls in UI
 // modules that reach tauri.js; feed.test.js's mock, unused here otherwise.
@@ -289,5 +289,39 @@ describe("helpers", () => {
     expect(waitKind("Approve AskUserQuestion")).toBe("question");
     expect(waitKind("dialog open")).toBe("dialog");
     expect(waitKind(null)).toBeNull();
+  });
+});
+
+describe("nextWords", () => {
+  it("shows a permission request's command in mono, as the banner words it", () => {
+    const pane = w({ state: "needs-input", waiting_for: "permission prompt",
+      pending_permission: { request_id: "r", tool: "Bash", summary: "uv run pytest -x" } });
+    expect(nextWords({ kind: "asks", w: pane, message: null }))
+      .toEqual({ lead: "Allow Bash:", code: "uv run pytest -x", reason: "needs approval" });
+  });
+
+  it("prefers the agent's need_human message to a generic wait line", () => {
+    const pane = w({ state: "needs-input", waiting_for: "approve AskUserQuestion" });
+    expect(nextWords({ kind: "asks", w: pane, message: "Ship v3 first?" }))
+      .toEqual({ lead: "Ship v3 first?", code: null, reason: "needs answer" });
+    expect(nextWords({ kind: "asks", w: pane, message: null }).lead).toBe("Waiting for your answer.");
+  });
+
+  it("says 'asked' for a need_human with no dialog open, or whose pane has closed", () => {
+    expect(nextWords({ kind: "asks", w: w({ state: "idle" }), message: "help" }).reason).toBe("asked");
+    expect(nextWords({ kind: "asks", w: null, message: "help" })).toEqual({ lead: "help", code: null, reason: "asked" });
+  });
+
+  it("names an API error, or the failing checks", () => {
+    expect(nextWords({ kind: "broken", w: w({ api_error: true }) }).reason).toBe("API error");
+    const red = w({ pr: 12, ci: "✗", ci_checks: [{ name: "pytest", state: "failure" }, { name: "lint", state: "success" }] });
+    expect(nextWords({ kind: "broken", w: red })).toEqual({ lead: "Failing: pytest", code: null, reason: "CI failing" });
+    expect(nextWords({ kind: "broken", w: w({ pr: 12, ci: "✗" }) }).lead).toBe("Checks are failing on #12.");
+  });
+
+  it("a done entry says what the done banner says", () => {
+    const pane = w({ state: "done", last_reply: "Merged the fix. Next I would bump the version." });
+    expect(nextWords({ kind: "done", w: pane, message: null })).toEqual({ lead: "Merged the fix.", code: null, reason: "done" });
+    expect(nextWords({ kind: "done", w: null, message: "All green." }).lead).toBe("All green.");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRefreshKey, panelToggleFor, refreshTargetFor, selectedPid } from "../keys.js";
+import { isNextKey, isRefreshKey, panelToggleFor, refreshTargetFor, selectedPid } from "../keys.js";
 
 const key = (over = {}) => ({ key: "r", metaKey: false, ctrlKey: false, shiftKey: false, ...over });
 
@@ -83,5 +83,24 @@ describe("panelToggleFor", () => {
   });
   it("ignores key-repeat, so a held chord toggles once", () => {
     expect(panelToggleFor(b({ metaKey: true, repeat: true }))).toBe(null);
+  });
+});
+
+describe("isNextKey", () => {
+  const j = (over = {}) => ({ code: "KeyJ", key: "j", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, repeat: false, ...over });
+
+  it("is ⌘J", () => {
+    expect(isNextKey(j({ metaKey: true }))).toBe(true);
+  });
+
+  it("ignores Ctrl+J, which the terminal sends to the pane as a line feed", () => {
+    expect(isNextKey(j({ ctrlKey: true }))).toBe(false);
+  });
+
+  it("ignores a bare J, other modifiers and auto-repeat", () => {
+    expect(isNextKey(j())).toBe(false);
+    expect(isNextKey(j({ metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isNextKey(j({ metaKey: true, altKey: true }))).toBe(false);
+    expect(isNextKey(j({ metaKey: true, repeat: true }))).toBe(false);
   });
 });

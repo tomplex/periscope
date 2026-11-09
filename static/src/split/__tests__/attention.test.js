@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { shortestUniqueSuffix } from "../../util.js";
 import {awaitingReplyByPid, buildActivity,
-  buildNeedsYou, buildReady, buildRunning, 
-  isSoftQuestion, needsYouCount, prunedStateDismissals,resolvePinned, waitingPanes, waitTier,
+  buildNeedsYou, buildNext, buildReady, buildRunning,
+  isCiFailing, isSoftQuestion, nextAfter, paneBlip, prunedStateDismissals,resolvePinned, waitingPanes, waitTier,
 } from "../attention.js";
 
 const win = (over = {}) => ({
@@ -74,12 +74,6 @@ describe("buildActivity", () => {
   it("keeps done/info, drops need_human", () => {
     const items = [evt({ kind: "done" }), evt({ kind: "need_human" }), evt({ kind: "info" })];
     expect(buildActivity(items).map((r) => r.kind)).toEqual(["done", "info"]);
-  });
-});
-
-describe("needsYouCount", () => {
-  it("counts rows", () => {
-    expect(needsYouCount([{ kind: "live" }, { kind: "event" }])).toBe(2);
   });
 });
 
@@ -272,5 +266,109 @@ describe("waitingPanes", () => {
     const b = win({ pid: "b", target: "b:0", state: "needs-input" });
     const m = waitingPanes([a, b], [], new Set(), new Set(), 1000, (w) => w?.pid !== "a");
     expect([...m.keys()]).toEqual(["pid:b"]);
+  });
+});
+
+describe("isCiFailing", () => {
+  it("is true for a red open PR, or one whose state isn't known yet", () => {
+    expect(isCiFailing(win({ pr: 7, ci: "✗", pr_state: "open" }))).toBe(true);
+    expect(isCiFailing(win({ pr: 7, ci: "✗" }))).toBe(true);
+  });
+
+  it("is false once the PR merged or closed, when CI isn't red, or with no PR", () => {
+    expect(isCiFailing(win({ pr: 7, ci: "✗", pr_state: "merged" }))).toBe(false);
+    expect(isCiFailing(win({ pr: 7, ci: "✗", pr_state: "closed" }))).toBe(false);
+    expect(isCiFailing(win({ pr: 7, ci: "✓" }))).toBe(false);
+    expect(isCiFailing(win({ ci: "✗" }))).toBe(false);
+  });
+});
+
+describe("paneBlip", () => {
+  const agent = (over) => win({ agent: "claude", ...over });
+
+  it("a shell is a shell whatever its PR says", () => {
+    expect(paneBlip(win({ agent: null, pr: 7, ci: "✗" }), 0)).toBe("shell");
+  });
+
+  it("reads a pre-agent server's is_claude as an agent", () => {
+    expect(paneBlip(win({ agent: undefined, is_claude: true, state: "working" }), 0)).toBe("working");
+  });
+
+  it("asks on a dialog, or on an unanswered need_human while idle", () => {
+    expect(paneBlip(agent({ state: "needs-input" }), 0)).toBe("asks");
+    expect(paneBlip(agent({ state: "idle" }), 0, true)).toBe("asks");
+  });
+
+  it("is broken on an API error or failing CI, unless the agent is working on it", () => {
+    expect(paneBlip(agent({ api_error: true }), 0)).toBe("broken");
+    expect(paneBlip(agent({ pr: 7, ci: "✗" }), 0)).toBe("broken");
+    expect(paneBlip(agent({ state: "working", api_error: true }), 0)).toBe("working");
+  });
+
+  it("a done pane dims an hour after it finished", () => {
+    expect(paneBlip(agent({ state: "done", completed_at: 1000 }), 1000 + 3599)).toBe("done");
+    expect(paneBlip(agent({ state: "done", completed_at: 1000 }), 1000 + 3600)).toBe("done-old");
+  });
+
+  it("anything else is idle", () => {
+    expect(paneBlip(agent({ state: "idle" }), 0)).toBe("idle");
+  });
+});
+
+describe("buildNext", () => {
+  const agent = (over) => win({ agent: "claude", ...over });
+
+  it("orders asks (longest wait first), then broken, then done", () => {
+    const done = agent({ pid: "d", target: "d:0", state: "done", completed_at: 900 });
+    const broken = agent({ pid: "b", target: "b:0", api_error: true });
+    const newer = agent({ pid: "n", target: "n:0", state: "needs-input", needs_since: 800 });
+    const older = agent({ pid: "o", target: "o:0", state: "needs-input", needs_since: 500 });
+    const next = buildNext([done, broken, newer, older], [], new Set(), new Set(), new Set(), 1000);
+    expect(next.map((e) => e.key)).toEqual(["asks:pid:o", "asks:pid:n", "broken:b", "done:d"]);
+    expect(next.map((e) => e.since)).toEqual([500, 800, null, 900]);
+  });
+
+  it("carries the agent's own words from its unanswered need_human onto the live entry", () => {
+    const pane = agent({ pid: "p", target: "p:0", state: "needs-input", needs_since: 900 });
+    const next = buildNext([pane], [evt({ target: "p:0", ts: 950, message: "which branch?" })],
+      new Set(), new Set(), new Set(), 1000);
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({ kind: "asks", message: "which branch?", since: 900 });
+    expect(next[0].row.kind).toBe("live");
+  });
+
+  it("an event whose pane has closed still asks, with its message", () => {
+    const next = buildNext([], [evt({ target: "gone:0", message: "help" })], new Set(), new Set(), new Set(), 1000);
+    expect(next).toEqual([expect.objectContaining({ kind: "asks", w: null, message: "help" })]);
+  });
+
+  it("lists a pane once: asking beats broken, and broken beats done", () => {
+    const both = agent({ pid: "x", target: "x:0", state: "needs-input", api_error: true, needs_since: 1 });
+    const brokenDone = agent({ pid: "y", target: "y:0", state: "done", completed_at: 5, pr: 3, ci: "✗" });
+    const next = buildNext([both, brokenDone], [], new Set(), new Set(), new Set(), 1000);
+    expect(next.map((e) => e.key)).toEqual(["asks:pid:x", "broken:y"]);
+  });
+
+  it("drops a done pane once it's been marked seen", () => {
+    const done = agent({ pid: "d", target: "d:0", state: "done", completed_at: 900 });
+    expect(buildNext([done], [], new Set(), new Set(), new Set(["d"]), 1000)).toEqual([]);
+  });
+});
+
+describe("nextAfter", () => {
+  const entries = [{ w: { pid: "a" } }, { w: null }, { w: { pid: "c" } }];
+
+  it("opens the first entry when the selected pane wants nothing", () => {
+    expect(nextAfter(entries, "zz")).toBe(entries[0]);
+    expect(nextAfter(entries, null)).toBe(entries[0]);
+  });
+
+  it("opens the one after the selected pane's, wrapping at the end", () => {
+    expect(nextAfter(entries, "a")).toBe(entries[1]);
+    expect(nextAfter(entries, "c")).toBe(entries[0]);
+  });
+
+  it("is null when nothing wants you", () => {
+    expect(nextAfter([], "a")).toBe(null);
   });
 });

@@ -6,7 +6,7 @@
 // (split/alertFeed.js openNeedsPane / openReadyPane), and the context band is
 // the rail's ctxClass: Clawd and the rail can never disagree about a pane.
 
-import { buildReady, waitingPanes, waitTier } from "../split/attention.js";
+import { buildReady, isCiFailing, waitingPanes, waitTier } from "../split/attention.js";
 import { ctxClass } from "../split/ctxBand.js";
 import { paneLabel, plural } from "../util.js";
 
@@ -75,7 +75,7 @@ export function dutyItems({
   // when any of them is the one you're looking at.
   const prs = new Map();
   for (const w of windows) {
-    if (w.ci !== "✗" || !w.pr || (w.pr_state && w.pr_state !== "open")) continue;
+    if (!isCiFailing(w)) continue;
     const key = `${w.repo_slug || w.repo_key || ""}#${w.pr}`;
     if (!prs.has(key)) prs.set(key, { pr: w.pr, panes: [] });
     prs.get(key).panes.push(w);

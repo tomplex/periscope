@@ -356,14 +356,16 @@ button.res-line { font: inherit; color: inherit; background: none; border: 0; te
 .rail-mem { flex: 0 0 auto; font-size: 10px; cursor: help; }
 .rail-mem.mem-warn, .header-mem.mem-warn { color: var(--s-working); }
 .rail-mem.mem-bad, .header-mem.mem-bad { color: var(--s-danger); }
-/* Unanswered need_human, aged (see attention.js waitTier). The tier ramp is
-   the point: a pane parked for an hour must not read like one that just
-   asked. `urgent` pulses because that is the state we most need noticed. */
-.rail-await { flex: 0 0 auto; font-size: 10px; cursor: help; white-space: nowrap; }
-.rail-await.wait-fresh  { color: var(--fg-2); }
-.rail-await.wait-stale  { color: var(--s-working); }
-.rail-await.wait-urgent { color: var(--s-danger); animation: await-pulse 1.6s ease-in-out infinite; }
-@keyframes await-pulse { 50% { opacity: .4; } }
+/* A rail row's age (RailRows rowAge): how long it has waited for you, or how
+   long since its last turn finished. An unanswered question ramps with age
+   (attention.js waitTier) — a pane parked for an hour must not read like one
+   that just asked. Its stripe already pulses, so the age only changes colour. */
+.rail-age {
+  flex: 0 0 auto; min-width: 22px; text-align: right; white-space: nowrap;
+  font-size: 11px; color: var(--fg-2); font-variant-numeric: tabular-nums;
+}
+.rail-age.wait-stale  { color: var(--s-working); }
+.rail-age.wait-urgent { color: var(--s-danger); }
 /* Delegation lineage — which pane spawned this one. Lives in the detail
    header (its own line above the status summary), quiet: it is orientation,
    not a status. Click reveals the lead in the rail. */
@@ -1453,7 +1455,9 @@ body.modal-open { overflow: hidden; }
   /* Row-enter animations too — the transition clamp above doesn't cover
      keyframes, and enter motion is the one thing that would still move. Also
      stops the Settings critter previews (.critter-preview sits outside .tama). */
-  .attn-row, .rail-row { animation: none !important; }
+  .attn-row, .rail-row, .next-card { animation: none !important; }
+  /* The asking pulse: the stripe, and its blip in the sonar strip. */
+  .pane-stripe, .blip::after { animation: none !important; }
   .tama *, .critter-preview * { animation: none !important; }
 }
 
@@ -1470,8 +1474,8 @@ body.modal-open { overflow: hidden; }
 .attn-row { animation: row-enter 140ms ease-out; }
 /* Status/among-row colour changes: the pane state stripe, the dots, and the
    chips all key off live state and previously snapped between colours. */
-.pane-stripe, .attn-dot, .dot,
-.pane-pill, .wt-meta-chip, .pane-ci, .wt-meta-ci,
+.pane-stripe, .blip::after,
+.pane-pill, .pane-ci,
 .rail-row, .attn-row {
   transition: background-color 180ms ease, color 180ms ease,
               border-color 180ms ease, opacity 180ms ease;
@@ -1479,8 +1483,8 @@ body.modal-open { overflow: hidden; }
 /* The freeze hint — deliberately quiet; it explains a pause, it isn't an alert. */
 .attn-frozen {
   padding: 2px 12px;
-  color: var(--fg-4);
-  font-size: 9.5px;
+  color: var(--fg-3);
+  font-size: 10px;
   letter-spacing: .06em;
   text-transform: uppercase;
   opacity: .75;
@@ -1823,27 +1827,14 @@ body.modal-open { overflow: hidden; }
 }
 
 
-/* ─── Attention sections (NEEDS YOU / PINNED / ACTIVITY) ────────── */
+/* ─── Attention rows (PINNED / ACTIVITY) ────────── */
 
 #rail .attn-row { display: flex; align-items: center; gap: 8px; padding: 3px 10px 3px 16px; cursor: pointer; }
-#rail .attn-needs { background: #241316; }
-#rail .attn-needs:hover { background: #2c181c; }
-#rail .attn-ready { background: #122019; }
-#rail .attn-ready:hover { background: #16281f; }
-#rail .attn-ready .attn-reason { color: #6f8a78; }
-#rail .attn-ready .attn-x { color: #52665a; }
-#rail .attn-running { background: #1d1a10; }
-#rail .attn-running:hover { background: #242015; }
-#rail .attn-running .attn-reason { color: #8d8159; }
-#rail .attn-pinned { background: #161a14; }
-#rail .attn-pinned:hover { background: #1b2018; }
-#rail .attn-activity:hover { background: #1a1c20; }
+#rail .attn-row:hover { background: var(--bg-1); }
 #rail .attn-ico { width: 14px; text-align: center; flex-shrink: 0; }
-#rail .attn-label { color: #e6e9ef; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#rail .attn-reason { margin-left: auto; color: #8a6c6f; font-size: 11px; white-space: nowrap; }
-#rail .attn-activity .attn-reason { color: #5b606b; }
-#rail .attn-x { color: #6b5256; background: none; border: 0; cursor: pointer; }
-#rail .attn-dot { width: 7px; height: 7px; border-radius: 50%; }
+#rail .attn-label { color: var(--fg-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#rail .attn-reason { margin-left: auto; color: var(--fg-2); font-size: 11px; white-space: nowrap; }
+#rail .attn-pinned .attn-reason { color: var(--effort); }
 
 /* Pin star: hidden until row hover; always visible when pinned. */
 #rail .child-row .rail-pin { opacity: 0; margin-left: auto; background: none; border: 0; cursor: pointer; color: #5b606b; }
@@ -2313,12 +2304,14 @@ body.col-resizing iframe { pointer-events: none; }
 }
 .rail-empty { padding: 14px; font-size: 12px; color: var(--fg-3); }
 
-.section-header {
+/* .rail-row.section-header: a bare .section-header lost its 10px to the
+   13px .rail-row rule below, so TRACKS read as a row, not a label. */
+.rail-row.section-header {
   cursor: pointer;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   font-size: 10px;
-  color: var(--muted, #7b818c);
+  color: var(--fg-2);
   user-select: none;
 }
 .section-header .section-header-label { font-weight: 600; }
@@ -2329,15 +2322,9 @@ body.col-resizing iframe { pointer-events: none; }
   padding: 0 6px;
   font-size: 10px;
   font-weight: 700;
-  background: var(--chip-bg, #2a2e37);
-  color: var(--chip-fg, #9aa0ab);
+  background: var(--bg-2);
+  color: var(--fg-1);
 }
-.section-header-alert { color: #f0857d; }
-.section-header-alert .section-header-count { background: #f85149; color: #fff; }
-.section-header-ready { color: var(--s-done); }
-.section-header-ready .section-header-count { background: var(--s-done); color: #0d1117; }
-.section-header-working { color: var(--s-working); }
-.section-header-working .section-header-count { background: var(--s-working); color: #0d1117; }
 
 /* Each nesting level adds --rail-indent of left-padding so the tree's
    hierarchy reads visually. repo at base; worktree at base + 1 step;
@@ -2389,7 +2376,7 @@ body.col-resizing iframe { pointer-events: none; }
 .rail-meta.stale { opacity: .5; }
 .rail-status {
   flex: 1 1 100%; min-width: 0;
-  font-size: 11px; color: var(--fg-3);
+  font-size: 11px; color: var(--fg-2);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .rail-status.stale { opacity: .5; }
@@ -2417,85 +2404,12 @@ body.col-resizing iframe { pointer-events: none; }
 .rail-chip {
   font-family: var(--mono);   /* a cwd path */
   font-size: 10px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
   flex: 1 1 100%;   /* own line — the cwd is the field that actually needs width */
-}
-
-/* Worktree metadata strip — appears below the worktree label, aligned
-   with the icon column so it visually nests with the parent. PR/CI/Linear
-   chips stay quiet (muted color, small font) so they don't compete with
-   the branch name. */
-.wt-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px 8px;
-  padding: 0 10px 5px calc(10px + var(--rail-indent) + 24px);
-  font-size: 11px;
-  margin-top: -3px;
-}
-.wt-meta-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 0 5px;
-  border-radius: 3px;
-  background: var(--bg-2);
-  color: var(--fg-2);
-  text-decoration: none;
-  font-family: var(--mono);
-  font-size: 10px;
-  white-space: nowrap;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wt-meta-chip:hover { background: var(--bg-3); color: var(--fg-1); }
-.wt-meta-pr { color: var(--fg-1); }
-.wt-meta-linear { color: oklch(0.7 0.13 280); }
-.wt-meta-git { color: var(--s-needs); }
-.wt-meta-ci-ok { color: var(--s-success); }
-.wt-meta-ci-bad { color: var(--s-danger); }
-.wt-meta-ci-running { color: var(--s-working); }
-.wt-meta-ci-neutral { color: var(--fg-3); }
-
-/* Track-scope filter chips — a strip above the rail tree that narrows the
-   whole rail (attention sort + tree) to one track. <button>s need an explicit
-   appearance reset or the browser's native chrome shows through (the unstyled
-   grey-box look). Matches the wt-meta-chip pill vocabulary; the active chip
-   carries the accent. */
-.rail-filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--bg-2);
-}
-.rail-filter-chip {
-  appearance: none;
-  -webkit-appearance: none;
-  border: 1px solid transparent;
-  background: var(--bg-2);
-  color: var(--fg-2);
-  font-family: var(--sans);
-  font-size: 10px;
-  line-height: 1.5;
-  padding: 1px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-  max-width: 12em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.rail-filter-chip:hover { background: var(--bg-3); color: var(--fg-1); }
-.rail-filter-chip.is-active {
-  background: var(--bg-3);
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* Track-row action menu (⋯ → Dissolve / Tear down). The trigger + popup +
@@ -2561,17 +2475,6 @@ body.col-resizing iframe { pointer-events: none; }
   height: 1px;
 }
 
-.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.dot-green { background: var(--s-working); }
-.dot-blue { background: var(--s-done); }
-.dot-grey { background: var(--s-idle); }
-.dot-alert { background: var(--s-needs); }
-.dot-none { background: transparent; }
-.dot-pulse { animation: rail-pulse 1.6s ease-in-out infinite; }
-@keyframes rail-pulse { 50% { box-shadow: 0 0 0 4px var(--s-needs-bg); } }
-.dot-pulse-done { animation: rail-pulse-done 1.6s ease-in-out infinite; }
-@keyframes rail-pulse-done { 50% { box-shadow: 0 0 0 4px var(--s-done-bg); } }
-
 .detail-pane-header {
   padding: 5px 14px; border-bottom: 1px solid var(--line);
   display: flex; gap: 8px; align-items: baseline; font-size: 12px;
@@ -2630,7 +2533,6 @@ body.col-resizing iframe { pointer-events: none; }
    tripping each other up. */
 .rail-row[draggable="true"] { cursor: grab; }
 .rail-row[draggable="true"]:active { cursor: grabbing; }
-.rail-row.newtab-row { cursor: pointer; }   /* not draggable, just click-to-open */
 .rail-row.dragging { opacity: .35; }
 
 /* Inline-rename input: replaces .rail-label's contents on dblclick.
@@ -2734,8 +2636,6 @@ body.col-resizing iframe { pointer-events: none; }
   font-size: 12px;
 }
 .launcher-branch-search:focus { outline: none; border-color: var(--accent, #6c8cff); }
-.newtab-row { opacity: .6; }
-.newtab-row:hover { opacity: .9; }
 
 /* --- Open omnibox -------------------------------------------------------- */
 .open-omnibox-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-start; justify-content: center; z-index: 1000; }
@@ -2778,7 +2678,6 @@ body.col-resizing iframe { pointer-events: none; }
    tight — they're chrome, the cards are the content). */
 #rail .pane-row { padding-top: 7px; padding-bottom: 7px; }
 #rail .repo-row { margin-top: 6px; }
-#rail .wt-row { color: #aeb4bf; }
 #rail .child-row { padding-left: calc(10px + 2 * var(--rail-indent) + 6px); }
 #rail .child-row { --rail-name-center: 12px; }   /* compact: 3px pad + 9px */
 
@@ -2862,9 +2761,9 @@ body.col-resizing iframe { pointer-events: none; }
 }
 #rail .rail-track-card.drop-into .rail-group-body:empty { border-color: var(--accent); }
 
-/* Branch sub-cluster: only appears when a track spans ≥2 branches. A violet
-   left-rail (the ⎇ worktree accent) + indent groups the branch's tabs without
-   a second full card — the convenience tier the mockup calls a "sub-cluster". */
+/* Branch sub-cluster: only for a branch two or more of a track's tabs share.
+   A violet left-rail (the ⎇ worktree accent) + indent groups the branch's tabs
+   without a second full card. */
 .rail-subgroup {
   margin: 2px 0 2px 4px;
   padding-left: 7px;
@@ -2879,12 +2778,13 @@ body.col-resizing iframe { pointer-events: none; }
 
 /* Branch sub-cluster head (.wt-row inside a .rail-subgroup) reads as a compact
    subhead, not a card title: the violet left-rail already marks the group, so
-   the row just carries ⎇ + branch name + rolled-up dot at a shallow indent. */
+   the row just carries ⎇ + the branch name, in mono like anything you'd paste. */
 #rail .rail-subgroup > .wt-row {
   padding-left: 4px;
   gap: 6px;
+  cursor: pointer;
 }
-#rail .rail-subgroup > .wt-row .rail-label b { font-weight: 500; color: var(--fg-1); }
+#rail .rail-subgroup > .wt-row .rail-label { font-family: var(--mono); font-size: 11px; color: var(--fg-2); }
 #rail .rail-subgroup > .wt-row .icon-worktree { color: var(--worktree); }
 /* Tabs inside a subgroup sit at a shallow fixed indent (the violet rail + the
    card already group them); no need for the deep tree indent. */
@@ -2897,24 +2797,31 @@ body.col-resizing iframe { pointer-events: none; }
 #rail .rail-group-body .child-row::after { content: none; }
 
 /* Pane state rides a left stripe (a real element, so it survives the disabled
-   tree-guide pseudos). Replaces the trailing status dot at both sizes. */
+   tree-guide pseudos), keyed by its blip (attention.paneBlip) on tree rows and
+   Next cards alike. Only an asking pane's stripe pulses. */
 .pane-row { border-left-width: 0; border-radius: var(--r-sm); }
 .pane-stripe {
   position: absolute; left: 3px; top: 6px; bottom: 6px;
   width: 2px; border-radius: 2px; background: transparent;
 }
-.pane-state-working .pane-stripe { background: var(--s-working); }
-.pane-state-needs-input .pane-stripe { background: var(--s-needs); animation: rail-pulse 1.6s ease-in-out infinite; }
-.pane-state-done .pane-stripe { background: var(--s-done); animation: rail-pulse-done 1.6s ease-in-out infinite; }
-.pane-state-idle .pane-stripe { background: var(--s-idle); opacity: .5; }
-.pane-state-shell .pane-stripe { background: var(--s-shell); opacity: .5; }
+.pane-blip-asks .pane-stripe { background: var(--s-needs); animation: rail-pulse 1.6s ease-in-out infinite; }
+.pane-blip-working .pane-stripe { background: var(--s-working); }
+.pane-blip-broken .pane-stripe { background: var(--s-danger); }
+.pane-blip-done .pane-stripe { background: var(--s-done); }
+.pane-blip-done-old .pane-stripe { background: var(--s-done); opacity: .45; }
+.pane-blip-idle .pane-stripe { background: var(--s-idle); opacity: .5; }
+.pane-blip-shell .pane-stripe { background: var(--s-shell); opacity: .5; }
+@keyframes rail-pulse { 50% { box-shadow: 0 0 0 4px var(--s-needs-bg); } }
 
-/* Compact metric (line 1, right of the name): PR# + context%, the pane's one
-   glanceable number. Context goes amber >60%, red >80% — the pane about to
-   compact is the one worth seeing. */
-.pane-mini { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-.pane-mini-pr { font-size: 10px; color: var(--fg-3); }
-.pane-mini-ctx { font-size: 10px; color: var(--fg-4); cursor: help; }
+/* What the narrator line leads with when the stripe alone doesn't say why
+   (RailRows blipWhy). */
+.rail-why.why-broken { color: var(--s-danger); }
+.rail-why.why-done { color: var(--s-done); }
+
+/* Compact context (line 1, right of the name), only once it's in a warning
+   band: amber >60%, red >80% — the pane about to compact is the one worth
+   seeing. */
+.pane-mini-ctx { flex: 0 0 auto; font-size: 10px; cursor: help; }
 .pane-mini-ctx.ctx-warn { color: var(--s-working); }
 .pane-mini-ctx.ctx-hot { color: var(--s-danger); }
 .pane-model { font-size: 10px; color: var(--fg-3); flex: 0 0 auto; }
@@ -2956,8 +2863,12 @@ body.col-resizing iframe { pointer-events: none; }
   margin: 7px 0 1px 21px;
 }
 .pane-foot-spacer { flex: 1; }
-.pane-time { font-size: 10px; color: var(--fg-4); white-space: nowrap; }
-.pane-pill {
+/* The selected pane's branch (a tab alone on its branch has no cluster head
+   to name it). */
+.pane-branch {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 400 10px/15px var(--mono); color: var(--fg-2);
+}.pane-pill {
   display: inline-flex; align-items: center; gap: 3px;
   padding: 0 5px; height: 15px; border-radius: 3px;
   background: var(--bg-2); color: var(--fg-2);
@@ -2967,14 +2878,14 @@ body.col-resizing iframe { pointer-events: none; }
    keep the inset read. Compact rows are on the group card (bg-1) → pills bg-2. */
 .pane-expanded .pane-pill { background: var(--bg-1); }
 .pane-pill:hover { background: var(--bg-3); color: var(--fg-1); }
-/* Refs stay mono like .header-pr / .wt-meta-chip; the pill itself is sans. */
+/* Refs stay mono like .header-pr; the pill itself is sans. */
 .pane-pill-pr, .pane-pill-linear { font-family: var(--mono); }
 .pane-pill-pr { color: var(--fg-1); }
 /* Linked-PR lifecycle: a landed PR reads violet (merged), a dropped one dims
    (closed) — so neither masquerades as live open work. Shared by every PR
-   badge surface (pill, wt-meta chip, detail header, review queue). */
-.pane-pill-pr.is-merged, .wt-meta-pr.is-merged, .header-pr.is-merged, .rq-pr-link.is-merged { color: var(--worktree); }
-.pane-pill-pr.is-closed, .wt-meta-pr.is-closed, .header-pr.is-closed, .rq-pr-link.is-closed { color: var(--fg-3); text-decoration: line-through; }
+   badge surface (pill, detail header, review queue). */
+.pane-pill-pr.is-merged, .header-pr.is-merged, .rq-pr-link.is-merged { color: var(--worktree); }
+.pane-pill-pr.is-closed, .header-pr.is-closed, .rq-pr-link.is-closed { color: var(--fg-3); text-decoration: line-through; }
 .header-pr-state { opacity: 0.7; font-size: 0.9em; }
 .pane-pill-linear, .rq-linear { color: oklch(0.7 0.13 280); }
 /* Which subscription a pane bills; absent on the default account. Teal — clear
@@ -2996,7 +2907,7 @@ body.col-resizing iframe { pointer-events: none; }
 /* At-rest pinned flag on line 1 — gold star, hidden on hover (the toggle lives
    in the action overlay). Keeps the "pinned" signal without reserving width. */
 .pane-pin-flag { font-size: 10px; color: #d8b33a; flex: 0 0 auto; }
-.pane-row:hover .pane-pin-flag { display: none; }
+.pane-row:hover .pane-pin-flag, .pane-row:focus-within .pane-pin-flag { display: none; }
 
 /* Hover-only action overlay (pin + close). Absolutely positioned with ZERO
    layout footprint at rest, so the name uses the full row width; it fades in
@@ -3010,7 +2921,8 @@ body.col-resizing iframe { pointer-events: none; }
   background: linear-gradient(to right, transparent, var(--bg-1-hi) 42%);
   transition: opacity .12s;
 }
-.pane-row:hover .pane-actions { opacity: 1; pointer-events: auto; }
+.pane-row:hover .pane-actions, .pane-row:focus-within .pane-actions { opacity: 1; pointer-events: auto; }
+#rail .pane-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-radius: 3px; }
 .pane-expanded .pane-actions { background: linear-gradient(to right, transparent, var(--bg-2) 42%); }
 .pane-expanded.selected .pane-actions { background: linear-gradient(to right, transparent, var(--bg-1-hi) 42%); }
 /* The overlay owns visibility; neutralize the rows' own pin/close opacity
@@ -3067,8 +2979,126 @@ body.col-resizing iframe { pointer-events: none; }
 }
 #rail .repo-row.repo-ws .rail-label { color: var(--effort); }
 .repo-rule { flex: 1 1 auto; height: 1px; background: var(--line-soft); min-width: 8px; }
+/* + in the track header: a new tab in this track (the launcher picks its
+   branch). */
+#rail .rail-track-add {
+  flex: 0 0 auto; width: 18px; height: 18px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 0; border-radius: var(--r-sm);
+  color: var(--fg-2); font-size: 14px; line-height: 1; cursor: pointer;
+}
+#rail .rail-track-add:hover { background: var(--bg-1); color: var(--fg-0); }
+#rail .rail-track-add:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .icon-effort { color: var(--effort); }
 .icon-workspace { color: var(--effort); }
+
+/* ───────────────────────────────────────────────────────────────────────
+   Sonar strip (SonarStrip.jsx): every pane as a blip, one line per track,
+   pinned to the top of the rail while the tree scrolls under it. A blip's
+   SHAPE says its state as well as its colour (filled, square, ring, small dot,
+   bar), so the strip reads without colour too. Only an asking blip pulses:
+   urgency is motion and position, never brightness (the Blip Rule).
+   ─────────────────────────────────────────────────────────────────────── */
+.sonar {
+  position: sticky; top: 0; z-index: 3;
+  padding: 10px 10px 8px 12px;
+  background: var(--bg-0);
+  border-bottom: 1px solid var(--line-soft);
+}
+.sonar-row { display: flex; align-items: flex-start; gap: 8px; }
+.sonar-track {
+  flex: 0 0 84px; min-width: 0; height: 19px; padding: 0 4px; margin-left: -4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
+  background: none; border: 0; border-radius: var(--r-sm); cursor: pointer;
+  font: 600 10px/19px var(--sans); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--effort);
+}
+.sonar-track:hover { background: var(--bg-1); }
+/* The scoped track: "active" is Periscope Glass's job. */
+.sonar-track.is-active { background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--fg-0); }
+.sonar-track:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sonar-blips { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; flex: 1; min-width: 0; padding-top: 3px; }
+.sonar-count { flex: 0 0 auto; font-size: 11px; line-height: 19px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.sonar-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 10px; line-height: 13px; color: var(--fg-2); }
+.sonar-legend > span { display: inline-flex; align-items: center; gap: 3px; }
+
+.blip {
+  flex: 0 0 auto; width: 13px; height: 13px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 0; border-radius: 50%;
+}
+button.blip { cursor: pointer; }
+button.blip:hover { background: var(--bg-1-hi); }
+button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.blip.is-selected { box-shadow: 0 0 0 1px var(--accent); }
+.blip::after { content: ""; display: block; width: 8px; height: 8px; border-radius: 50%; }
+.blip-asks::after { background: var(--s-needs); animation: rail-pulse 1.6s ease-in-out infinite; }
+.blip-broken::after { width: 7px; height: 7px; border-radius: 1px; background: var(--s-danger); }
+.blip-done::after { box-shadow: inset 0 0 0 2px var(--s-done); }
+.blip-done-old::after { box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--s-done) 45%, transparent); }
+.blip-working::after { background: var(--s-working); }
+.blip-idle::after { width: 5px; height: 5px; background: var(--s-idle); }
+.blip-shell::after { width: 7px; height: 2px; border-radius: 1px; background: var(--s-shell); }
+.sonar-legend .blip { width: 11px; height: 11px; }
+.sonar-legend .blip::after { animation: none; }
+#rail .attn-pinned .blip { margin-left: -3px; }
+
+/* ───────────────────────────────────────────────────────────────────────
+   Next (AttentionSections NextQueue): what wants you, under the strip, in the
+   agent's own words. Cards sit on bg-1 like the track cards, so the queue is
+   the rail's top layer rather than a recessed band, and carry the pane's
+   stripe. The count badge takes the colour of the most urgent card.
+   ─────────────────────────────────────────────────────────────────────── */
+.next { padding-bottom: 2px; }
+.next-title-row { display: flex; align-items: center; gap: 6px; padding: 12px 12px 7px; }
+.next-title { font: 600 10px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-1); }
+.next-count {
+  min-width: 16px; height: 16px; padding: 0 5px; border-radius: 9px;
+  font: 700 10px/16px var(--sans); text-align: center; color: #0d1117;
+}
+.next-count.count-asks { background: var(--s-needs); }
+.next-count.count-broken { background: var(--s-danger); }
+.next-count.count-done { background: var(--s-done); }
+.next-hint { margin-left: auto; font-size: 11px; color: var(--fg-2); }
+.next-hint .ps-kbd { margin: 0 0 0 4px; }
+.next-card {
+  position: relative; margin: 0 8px 6px; padding: 8px 10px 9px 14px;
+  background: var(--bg-1); border-radius: var(--r-md); cursor: pointer;
+  animation: row-enter 140ms ease-out;
+  transition: background-color 180ms ease;
+}
+.next-card:hover { background: var(--bg-1-hi); }
+.next-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.next-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.next-head .rail-icon { flex: 0 0 14px; width: 14px; text-align: center; }
+.next-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; font-weight: 500; color: var(--fg-0);
+}
+.next-x {
+  flex: 0 0 auto; width: 18px; height: 18px; padding: 0; margin-right: -4px;
+  background: none; border: 0; border-radius: 3px;
+  color: var(--fg-2); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.next-x:hover { background: var(--bg-2); color: var(--fg-0); }
+.next-x:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.next-words {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  margin: 3px 0 0 21px; font-size: 12px; line-height: 1.5; color: var(--fg-1); overflow-wrap: anywhere;
+}
+.next-code { font: 400 11px/1.5 var(--mono); color: var(--fg-0); background: var(--bg-2); border-radius: 3px; padding: 1px 5px; }
+.next-meta { display: flex; align-items: center; gap: 5px; margin: 5px 0 0 21px; font-size: 11px; line-height: 1; color: var(--fg-2); }
+.next-track { color: var(--effort); }
+.next-why.why-broken { color: var(--s-danger); }
+.next-more {
+  display: flex; align-items: center; gap: 6px; width: calc(100% - 16px); margin: 0 8px 4px;
+  padding: 5px 8px 5px 14px; background: none; border: 0; border-radius: var(--r-sm);
+  font: inherit; font-size: 11px; color: var(--fg-2); text-align: left; cursor: pointer;
+}
+.next-more:hover { background: var(--bg-1); color: var(--fg-1); }
+.next-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.next-more-n { flex: 0 0 auto; color: var(--fg-1); }
+.next-more-list { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ───────────────────────────────────────────────────────────────────────
    Segmented transcript — Claude turns (split-view detail).
@@ -3946,9 +3976,8 @@ li.md-task input { vertical-align: middle; margin-right: 6px; accent-color: var(
 
 /* --- review walkthrough + queue --- */
 .rail-review .rail-label { font-style: italic; }
-.rail-review-badge { margin-left: auto; font-size: 10px; padding: 0 5px; border-radius: 8px; background: var(--s-needs); color: #fff; }
-.icon-review { color: var(--s-shell); font-size: 11px; }
-.rail-review-head { padding-top: 0; padding-bottom: 2px; }
+.rail-review-badge { margin-left: auto; font-size: 10px; padding: 0 5px; border-radius: 8px; background: var(--s-needs); color: #0d1117; }
+.icon-review { color: var(--fg-2); font-size: 11px; }
 .reviews-queue { padding: 14px 18px; overflow: auto; height: 100%; box-sizing: border-box; }
 .wt-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
 .wt-head h2 { margin: 0; font-size: 16px; }
@@ -4214,7 +4243,7 @@ button.wt-file:hover .wt-file-range, button.wt-file:hover .wt-file-count { color
 .rq-row.is-merged { opacity: .55; }
 .rq-open { font: inherit; background: none; border: 0; color: var(--fg-1); cursor: pointer; padding: 0; text-decoration: underline dotted; }
 .rq-actions button { margin-right: 6px; }
-/* Refs in the queue are mono like the pane pill / wt-meta chip / detail header
+/* Refs in the queue are mono like the pane pill / detail header
    ones (THI-442). In a table of plain text, fg-1 didn't read as clickable, so a
    linked PR number takes the accent; the shared lifecycle rules above still
    turn a merged one violet and strike a closed one. */

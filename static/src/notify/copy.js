@@ -1,9 +1,10 @@
 // What each notification says (notify/detect.js finds them, notify/feed.js
-// sends them): the pure part. macOS truncates titles around 40 characters, so
+// sends them), and what the rail's Next cards say, so the two agree: the pure
+// part. macOS truncates titles around 40 characters, so
 // pane names are clipped before they push the verb off the end.
 
 import { meterLabel } from "../chrome/usageRules.js";
-import { paneLabel, plural, prUrl, waitKind } from "../util.js";
+import { paneLabel, plural, prUrl, waitKind, waitLabel } from "../util.js";
 import { prKey } from "./detect.js";
 
 // Cut by code point, not UTF-16 code unit — a pane name ending in an emoji
@@ -46,6 +47,34 @@ const NEEDS_BODY = {
   question: "Waiting for your answer.",
   dialog: "Waiting for your input.",
 };
+const needsBody = (w) => NEEDS_BODY[waitKind(w?.waiting_for)] || NEEDS_BODY.dialog;
+
+// The reply from the transcript first: recap and last_line are read off the
+// screen, where the footer's statusline passed for the reply (THI-416).
+const doneBody = (w) => firstSentence(w.last_reply || w.recap || w.last_line) || "Finished.";
+
+// A Next card's words (attention.buildNext's entry): `lead` is what the agent
+// said, or the closest thing periscope can read; `code` is a command to show
+// in mono after it; `reason` is why the pane is in the queue.
+export function nextWords(entry) {
+  const { kind, w, message } = entry;
+  if (kind === "asks") {
+    const perm = w?.pending_permission;
+    if (perm) {
+      return perm.summary
+        ? { lead: `Allow ${toolLabel(perm.tool)}:`, code: perm.summary, reason: "needs approval" }
+        : { lead: `Allow ${toolLabel(perm.tool)}?`, code: null, reason: "needs approval" };
+    }
+    const asked = w?.state !== "needs-input";
+    return { lead: message || needsBody(w), code: null, reason: asked ? "asked" : waitLabel(w.waiting_for) };
+  }
+  if (kind === "broken") {
+    if (w.api_error) return { lead: "Hit an API error and has written nothing since.", code: null, reason: "API error" };
+    const failing = (w.ci_checks || []).filter((c) => c.state === "failure").map((c) => c.name);
+    return { lead: failing.length ? `Failing: ${failing.join(", ")}` : `Checks are failing on #${w.pr}.`, code: null, reason: "CI failing" };
+  }
+  return { lead: message || (w ? doneBody(w) : "Finished."), code: null, reason: "done" };
+}
 const CHECK_MARK = { failure: "✗", pending: "⟳", success: "✓" };
 
 // A usage banner's category when it can offer Spawn on {B}: one per B,
@@ -75,7 +104,7 @@ export function payloadFor(ev, ctx = {}) {
       }
       return {
         ...base, title: `${pane(w)} needs you`, subtitle: where(w),
-        body: NEEDS_BODY[waitKind(w.waiting_for)] || NEEDS_BODY.dialog,
+        body: needsBody(w),
         category: "needs_dialog", data: { open: "pane", pid: w.pid },
       };
     }
@@ -96,9 +125,7 @@ export function payloadFor(ev, ctx = {}) {
         // The linked PR only: an auto-detected one is just the branch's, often
         // days old, and would ride every finished turn.
         subtitle: w.pr && w.pr_linked ? `${w.session} · PR #${w.pr}` : where(w),
-        // The reply from the transcript first: recap and last_line are read off
-        // the screen, where the footer's statusline passed for the reply (THI-416).
-        body: firstSentence(w.last_reply || w.recap || w.last_line) || "Finished.",
+        body: doneBody(w),
         category: "done_seen", data: { open: "pane", pid: w.pid, session: w.session },
       };
     case "ci_failed": {

@@ -1,9 +1,11 @@
-// Left rail of the split view (#rail): the Track → (derived Branch) → Pane tree
-// derived from prefs (curated order) joined with /api/state (live status).
-// Membership is TRACK-ANCHORED (railTree.js header has the full contract): a
-// window belongs to its `w.track_id` (resolved server-side, always present).
-// The mid tier — branch sub-clusters — is DERIVED from `w.branch`, not a pref:
-// a track spanning ≥2 distinct branches renders sub-clusters, otherwise flat.
+// Left rail of the split view (#rail): the sonar strip (every pane as a blip,
+// pinned to the top), the Next queue (what wants you), PINNED, then the
+// Track → (derived Branch) → Pane tree derived from prefs (curated order)
+// joined with /api/state (live status). Membership is TRACK-ANCHORED
+// (railTree.js header has the full contract): a window belongs to its
+// `w.track_id` (resolved server-side, always present). The mid tier — branch
+// sub-clusters — is DERIVED from `w.branch`, not a pref: a branch two or more
+// of a track's tabs share clusters, every other tab sits flat.
 //
 // Read model:
 //   - `windows` signal  → live membership + status (rebuilt each poll)
@@ -33,63 +35,20 @@ import * as prefs from "../prefs.js";
 import { currentFilter, dismissedAlertIds, dragState, editor as editorSignal, projects, railSelection, reviews, tracks, windows, workspaces } from "../store.js";
 import { track } from "../track.js";
 import { apiCall, paneLabel, targetQuery } from "../util.js";
-import { ActivitySection, AttentionTop } from "./AttentionSections.jsx";
+import { ActivitySection, NextQueue, PinnedSection } from "./AttentionSections.jsx";
 import { alertItems, selectReview, selectReviewsQueue } from "./alertFeed.js";
-import { awaitingReplyByPid } from "./attention.js";
+import { awaitingReplyByPid, paneBlip } from "./attention.js";
 import { railHovered } from "./layoutFreeze.js";
-import { BranchRow, NewTabRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
-import { maxSeverity, mergeLiveAndPrefs, paneChip, reviewRowsByTrack, trackKind, trackLabel } from "./railTree.js";
+import { BranchRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
+import { mergeLiveAndPrefs, paneChip, reviewRowsByTrack, trackKind, trackLabel } from "./railTree.js";
 import { SectionHeader } from "./SectionHeader.jsx";
-
-// The branch label used in railTree's flat-fallback bucket for a window with no
-// `branch` (non-git cwd / pre-resolution race). Kept in sync with railTree's
-// NO_BRANCH so the same window slots into the same key on both sides.
-const NO_BRANCH = "";
+import { SonarStrip } from "./SonarStrip.jsx";
 
 // Bridge to the launcher modal. The "+ New tab" row opens it via
 // window.__periscopeOpenLauncher; no-op if nothing is wired yet.
 function openLauncher(key) {
   const fn = window.__periscopeOpenLauncher;
   if (typeof fn === "function") fn(key);
-}
-
-// --- Track-scope filter chips ------------------------------------------------
-// A chip strip above the rail that narrows the whole rail (attention sort +
-// mergeLiveAndPrefs) to a single track. "all" clears the scope. The active
-// track id is transient UI state (a signal lives in store), not a pref — it's
-// a momentary lens, not durable config. Returns the scoped windows list.
-function scopeWindows(live, trackScope) {
-  if (!trackScope || trackScope === "all") return live;
-  return live.filter((w) => w.track_id === trackScope);
-}
-
-function TrackFilterChips({ live, scope, onScope }) {
-  // Distinct tracks present in the live set, first-seen order, with labels.
-  const seen = [];
-  const seenSet = new Set();
-  for (const w of live) {
-    if (w.track_id && !seenSet.has(w.track_id)) {
-      seenSet.add(w.track_id);
-      seen.push(w.track_id);
-    }
-  }
-  if (seen.length < 2) return null;   // nothing to scope between
-  return (
-    <div class="rail-filter-chips" role="tablist" aria-label="filter by track">
-      <button
-        class={`rail-filter-chip${!scope || scope === "all" ? " is-active" : ""}`}
-        onClick={() => onScope("all")}
-      >all</button>
-      {seen.map((tid) => (
-        <button
-          key={tid}
-          class={`rail-filter-chip${scope === tid ? " is-active" : ""}`}
-          onClick={() => onScope(tid)}
-          title={trackLabel(tid, live)}
-        >{trackLabel(tid, live)}</button>
-      ))}
-    </div>
-  );
 }
 
 // --- syncRailPrefs: reconcile prefs with live state, throttled to 5s. --------
@@ -105,7 +64,6 @@ function syncRailPrefs() {
   const merged = mergeLiveAndPrefs(live, projects.value, workspaces.value, {
     trackOrder: prefs.getTrackOrder(),
     tabsByTrack: prefs.getTabsByTrack(),
-    branchOrderByTrack: prefs.getBranchOrderByTrack(),
   }, tracks.value);
   const prefTrackOrder = prefs.getTrackOrder();
   const prefTabsByTrack = prefs.getTabsByTrack();
@@ -141,7 +99,6 @@ function currentMergedOrder() {
   return mergeLiveAndPrefs(windows.value, projects.value, workspaces.value, {
     trackOrder: prefs.getTrackOrder(),
     tabsByTrack: prefs.getTabsByTrack(),
-    branchOrderByTrack: prefs.getBranchOrderByTrack(),
   }, tracks.value);
 }
 
@@ -200,11 +157,12 @@ export function Rail() {
   const drag = useRef(null);
   // Drop indicator: { key, pos:"before"|"after" }.
   const [dropTarget, setDropTarget] = useState(null);
-  // Track-scope filter (transient — a momentary lens, not a pref).
+  // Track scope (transient — a momentary lens, not a pref): clicking a track's
+  // name in the sonar strip shows only that track in the tree.
   const [trackScope, setTrackScope] = useState("all");
 
   // Reading these signals subscribes the component → re-render each poll.
-  const allLive = windows.value;
+  const live = windows.value;
   const filter = currentFilter.value;
   const selectedKey = railSelection.value;
   // Subscribe to prefs so collapse/order changes re-render.
@@ -213,33 +171,37 @@ export function Rail() {
   // Reconcile prefs ⇄ live (throttled). Side-effecting read; fine here.
   syncRailPrefs();
 
-  // The filter chips scope the whole rail to one track BEFORE the tree merge.
-  const live = scopeWindows(allLive, trackScope);
-
   const collapsed = prefs.getRailCollapsed();
   const tracksCollapsed = collapsed["sec:projects"] === true;
   // Across-all-windows pid → window map (the flat per-track tab lists).
   const windowsByPid = {};
   for (const w of live) windowsByPid[w.pid] = w;
-  // Panes with an unanswered need_human, so the tree row carries the same
-  // signal the NEEDS YOU section does. Without it a blocked pane looks normal
-  // in the tree, and NEEDS YOU is collapsible — collapse it and the whole
-  // escalation disappears.
+  // Panes with an unanswered need_human ask even once they've gone idle, so
+  // their blip, stripe and age say so too, not only their Next card.
   const awaiting = awaitingReplyByPid(
-    allLive, alertItems.value, dismissedAlertIds.value
+    live, alertItems.value, dismissedAlertIds.value
   );
-  // Registry rows feed EMPTY goal tracks into the tree; a track-scope lens
-  // narrows them the same way scopeWindows narrows the live set.
+  // The rail's one paneBlip: the strip, the Next cards, PINNED and the tree
+  // rows all read it, so they can't disagree about a pane.
+  const nowS = Math.floor(Date.now() / 1000);
+  const blipOf = (w) => paneBlip(w, nowS, awaiting.has(w.pid));
+  // Registry rows feed EMPTY goal tracks into the tree.
   const allTracks = tracks.value;
-  const scopedTracks = (!trackScope || trackScope === "all")
-    ? allTracks : allTracks.filter((t) => t.id === trackScope);
-  const { trackOrder, tabsByTrack, branchesByTrack, tabsByBranch } = mergeLiveAndPrefs(
+  const trackOf = (w) => trackLabel(w.track_id, live, allTracks);
+  const { trackOrder, tabsByTrack, rowsByTrack } = mergeLiveAndPrefs(
     live, projects.value, workspaces.value, {
       trackOrder: prefs.getTrackOrder(),
       tabsByTrack: prefs.getTabsByTrack(),
-      branchOrderByTrack: prefs.getBranchOrderByTrack(),
-    }, scopedTracks
+    }, allTracks
   );
+  // A scope whose track has gone shows every track rather than none.
+  const treeOrder = trackOrder.includes(trackScope) ? [trackScope] : trackOrder;
+  const stripTracks = trackOrder
+    .filter((t) => (tabsByTrack[t] || []).length > 0)
+    .map((t) => ({
+      id: t, label: trackLabel(t, live, allTracks),
+      panes: tabsByTrack[t].map((pid) => windowsByPid[pid]).filter(Boolean),
+    }));
 
   // Review rows by track → branch (placement rules in railTree).
   const reviewRows = reviewRowsByTrack(trackOrder, tabsByTrack, windowsByPid, reviews.value || []);
@@ -469,8 +431,9 @@ export function Rail() {
   }
 
   // Build the pane rows for a flat list of pids (within a track or a branch
-  // sub-cluster). trackKey is the drag/reorder parent.
-  function paneRowsFor(pids, trackKey) {
+  // sub-cluster). trackKey is the drag/reorder parent; showBranch is false
+  // inside a cluster, whose header names the branch.
+  function paneRowsFor(pids, trackKey, showBranch) {
     return pids
       .map((pid) => windowsByPid[pid])
       .filter(Boolean)
@@ -479,6 +442,8 @@ export function Rail() {
           key={`pane:${w.pid}`}
           w={w}
           chip={paneChip(w)}
+          blip={blipOf(w)}
+          showBranch={showBranch}
           selectedKey={selectedKey}
           dim={passesFilter(w, filter)}
           onSelect={selectKey}
@@ -520,32 +485,45 @@ export function Rail() {
       onMouseEnter={() => { railHovered.value = true; }}
       onMouseLeave={() => { railHovered.value = false; }}
     >
-      <AttentionTop />
-      <TrackFilterChips live={allLive} scope={trackScope} onScope={setTrackScope} />
+      <SonarStrip
+        tracks={stripTracks}
+        blipOf={blipOf}
+        selectedKey={selectedKey}
+        scope={trackScope}
+        onScope={setTrackScope}
+        onSelect={selectKey}
+      />
+      <NextQueue blipOf={blipOf} trackOf={trackOf} />
+      <PinnedSection blipOf={blipOf} trackOf={trackOf} />
       <SectionHeader
         label="TRACKS"
         count={null}
         collapsed={tracksCollapsed}
         onToggle={() => toggleCollapse("sec:projects")}
       />
-      {!tracksCollapsed && trackOrder.map((trackId) => {
+      {!tracksCollapsed && treeOrder.map((trackId) => {
         const trackKeyStr = `track:${trackId}`;
         const trackCollapsed = collapsed[`repo:${trackId}`] === true;
-        const branches = branchesByTrack[trackId] || [];
-        const multiBranch = branches.length >= 2;
         const label = trackLabel(trackId, live, allTracks);
 
-        // Rolled-up status + filter-dim over ALL the track's tabs.
-        const trackPids = tabsByTrack[trackId] || [];
-        const trackWindows = trackPids.map((pid) => windowsByPid[pid]).filter(Boolean);
-        const trackStates = trackWindows.map((w) => w.state || "shell");
-        const trackRolledUp = maxSeverity(trackStates);
+        // Filter-dim over ALL the track's tabs.
+        const trackWindows = (tabsByTrack[trackId] || []).map((pid) => windowsByPid[pid]).filter(Boolean);
         // `dim` means "matches the filter" (RailRows inverts it). An EMPTY
         // track has no tab to match, and `[].some()` is false — so a freshly
         // created track rendered at .35 opacity under EVERY filter, including
         // `all`, and read as disabled. Emptiness is not a filter miss.
         const trackDim = trackWindows.length === 0
           || trackWindows.some((w) => passesFilter(w, filter));
+        // A branch's review rows sit just above its first tab (or inside its
+        // cluster), once.
+        const reviewsShown = new Set();
+        const reviewsFor = (branch) => {
+          if (reviewsShown.has(branch)) return null;
+          reviewsShown.add(branch);
+          return (reviewRows[trackId]?.[branch] || []).map((row) => (
+            <ReviewRow key={`review:${row.repo}/${row.slug}`} row={row} selectedKey={selectedKey} onSelect={selectKey} />
+          ));
+        };
 
         return (
           <RailFragment key={trackKeyStr}>
@@ -553,77 +531,57 @@ export function Rail() {
               kind={trackKind(trackId, live, allTracks)}
               label={label}
               collapsed={trackCollapsed}
-              rolledUp={trackRolledUp}
               dim={trackDim}
               onToggle={() => toggleCollapse(`repo:${trackId}`)}
               onRename={(next) => renameTrack(trackId, next)}
+              onNewTab={() => openLauncher(trackId)}
               onDissolve={() => dissolveTrack(trackId)}
               onTeardown={() => teardownTrack(trackId, label)}
               dragProps={makeDragProps({ kind: "track", key: trackKeyStr })}
               dropPos={dropPosFor(trackKeyStr)}
             />
             {/* ONE card per track (Model B). The track header (TrackRow) is a
-                seclabel sitting ABOVE the card; everything below — optional
-                branch sub-clusters, then the flat pane list, then "+ New tab"
-                — lives inside this single bordered container. */}
+                seclabel sitting ABOVE the card; its tabs, with any shared
+                branch's cluster in place, live inside this bordered container.
+                The launcher's branch picker chooses which branch a new tab
+                lands in, so the header's + covers every branch. */}
             {!trackCollapsed && (
               <div
                 class={`rail-group rail-track-card${dropPosFor(`card:${trackId}`) ? " drop-into" : ""}`}
                 {...makeCardDropProps(trackId)}
               >
-                {multiBranch ? (
-                  // Multi-branch: branch sub-clusters INSIDE the card (purple
-                  // left-rail subgroups), not separate top-level cards.
-                  branches.map((branch) => {
-                    const branchKey = `${trackId}::${branch}`;   // track+branch collapse key
+                <div class="rail-group-body">
+                  {(rowsByTrack[trackId] || []).map((item) => {
+                    if (!item.pids) {
+                      const w = windowsByPid[item.pid];
+                      return (
+                        <RailFragment key={`pane:${item.pid}`}>
+                          {w && reviewsFor(w.branch || "")}
+                          {paneRowsFor([item.pid], trackId, true)}
+                        </RailFragment>
+                      );
+                    }
+                    const branchKey = `${trackId}::${item.branch}`;   // track+branch collapse key
                     const branchCollapsed = collapsed[`wt:${branchKey}`] === true;
-                    const pids = tabsByBranch[trackId]?.[branch] || [];
-                    const childRows = paneRowsFor(pids, trackId);
-                    const childStates = pids.map((pid) => windowsByPid[pid]).filter(Boolean).map((w) => w.state || "shell");
-                    const branchDim = pids.map((pid) => windowsByPid[pid]).filter(Boolean).some((w) => passesFilter(w, filter));
-                    const branchLabel = branch === NO_BRANCH ? "(no branch)" : branch;
+                    const members = item.pids.map((pid) => windowsByPid[pid]).filter(Boolean);
                     return (
                       <div class="rail-subgroup" key={`wt:${branchKey}`}>
                         <BranchRow
-                          label={branchLabel}
+                          label={item.branch}
                           collapsed={branchCollapsed}
-                          childCount={pids.length}
-                          rolledUp={maxSeverity(childStates)}
-                          dim={branchDim}
+                          childCount={item.pids.length}
+                          dim={members.some((w) => passesFilter(w, filter))}
                           onToggle={() => toggleCollapse(`wt:${branchKey}`)}
-                          dragProps={{}}
-                          dropPos={undefined}
                         />
                         {!branchCollapsed && (
                           <div class="rail-group-body">
-                            {(reviewRows[trackId]?.[branch] || []).map((row) => (
-                              <ReviewRow key={`review:${row.repo}/${row.slug}`} row={row} selectedKey={selectedKey} onSelect={selectKey} />
-                            ))}
-                            {childRows}
+                            {reviewsFor(item.branch)}
+                            {paneRowsFor(item.pids, trackId, false)}
                           </div>
                         )}
                       </div>
                     );
-                  })
-                ) : (
-                  // Single-branch: flat tab list straight inside the card.
-                  <>
-                    {Object.values(reviewRows[trackId] || {}).flat().map((row) => (
-                      <div class="rail-group-body rail-review-head" key={`review:${row.repo}/${row.slug}`}>
-                        <ReviewRow row={row} selectedKey={selectedKey} onSelect={selectKey} />
-                      </div>
-                    ))}
-                    <div class="rail-group-body">
-                      {paneRowsFor(trackPids, trackId)}
-                    </div>
-                  </>
-                )}
-                {/* ONE "+ New tab" per track, at the bottom of the card. The
-                    launcher's branch picker chooses which branch (existing or
-                    new) the tab lands in — so a single row covers every branch
-                    subgroup above. */}
-                <div class="rail-group-body rail-track-newtab">
-                  <NewTabRow key={`newtab:${trackId}`} worktreeKey={trackId} onOpen={openLauncher} />
+                  })}
                 </div>
               </div>
             )}

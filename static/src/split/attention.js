@@ -98,10 +98,6 @@ export function isAcked(event, windowByTarget) {
   return Math.max(w.focused_at || 0, w.acted_at || 0) > event.ts;
 }
 
-export function needsYouCount(needsYouRows) {
-  return needsYouRows.length;
-}
-
 // How long an unanswered question has been waiting, as a severity tier. A
 // question that has sat for an hour is a different event from one raised a
 // minute ago, and rendering them identically is how a blocked pane stays
@@ -168,6 +164,72 @@ export function waitingPanes(windows, alertItems, dismissedIds = new Set(), dism
     });
   }
   return waiting;
+}
+
+// An open PR whose checks are red. A merged or closed PR keeps its last ✗, but
+// nothing is left to fix. Clawd's CI duty asks the same question.
+export function isCiFailing(w) {
+  return w?.ci === "✗" && !!w.pr && (!w.pr_state || w.pr_state === "open");
+}
+
+// A finished pane is news for an hour. After that its blip dims, though it
+// stays in Next until it's seen.
+const DONE_FRESH_S = 3600;
+
+// What a pane's blip says (DESIGN.md's blips), one word per pane: "asks",
+// "working", "broken", "done", "done-old", "idle" or "shell". `asked` is an
+// unanswered need_human for the pane (awaitingReplyByPid), which asks even
+// when the pane itself has gone idle. A spinner beats broken: an agent
+// retrying after an API error, or fixing its red CI, doesn't need you yet.
+export function paneBlip(w, nowS, asked = false) {
+  if (!w.agent && !w.is_claude) return "shell";
+  if (w.state === "needs-input" || asked) return "asks";
+  if (w.state === "working") return "working";
+  if (w.api_error || isCiFailing(w)) return "broken";
+  if (w.state === "done") return nowS - (w.completed_at || 0) < DONE_FRESH_S ? "done" : "done-old";
+  return "idle";
+}
+
+// What wants you, one entry per pane, in the order ⌘J walks it: panes that
+// ask (longest wait first), then broken ones, then READY's finished ones.
+// Entry: { key, kind: "asks" | "broken" | "done", w, row, since, message }.
+// `row` is the NEEDS YOU or READY row behind an asks or done entry (null for
+// broken), so opening it does what clicking that row did. `w` is null for an
+// event whose pane has closed. `message` is the newest unanswered need_human
+// the pane sent: the agent's own words, when it gave any.
+export function buildNext(windows, alertItems, dismissedIds = new Set(), dismissedNeedsPids = new Set(),
+  dismissedReadyPids = new Set(), nowS = 0) {
+  const messageByPid = new Map();
+  for (const r of buildNeedsYou(windows, alertItems, dismissedIds, dismissedNeedsPids)) {
+    if (r.kind === "event" && r.w && !messageByPid.has(r.w.pid)) messageByPid.set(r.w.pid, r.message);
+  }
+  const asks = [...waitingPanes(windows, alertItems, dismissedIds, dismissedNeedsPids, nowS)]
+    .sort((a, b) => a[1].since - b[1].since)
+    .map(([key, { row, since }]) => ({
+      key: `asks:${key}`, kind: "asks", w: row.w, row, since,
+      message: row.kind === "event" ? row.message : messageByPid.get(row.w.pid) || null,
+    }));
+  const asking = new Set(asks.map((e) => e.w?.pid).filter(Boolean));
+  const broken = (windows || [])
+    .filter((w) => paneBlip(w, nowS, asking.has(w.pid)) === "broken")
+    .map((w) => ({ key: `broken:${w.pid}`, kind: "broken", w, row: null, since: null, message: null }));
+  const taken = new Set([...asking, ...broken.map((e) => e.w.pid)]);
+  const done = buildReady(windows, alertItems, dismissedIds, dismissedReadyPids)
+    .filter((r) => !taken.has(r.w?.pid))
+    .map((r) => ({
+      key: r.kind === "live" ? `done:${r.pid}` : `done:${r.id}`, kind: "done", w: r.w, row: r,
+      since: r.kind === "live" ? r.w.completed_at : r.ts,
+      message: r.kind === "event" ? r.message : null,
+    }));
+  return [...asks, ...broken, ...done];
+}
+
+// The entry ⌘J opens: the one after the selected pane's, wrapping, or the
+// first when the selected pane wants nothing.
+export function nextAfter(entries, selectedPid) {
+  if (!entries.length) return null;
+  const i = entries.findIndex((e) => e.w && String(e.w.pid) === String(selectedPid));
+  return entries[(i + 1) % entries.length];
 }
 
 // Live "working" panes, in /api/state order. A pure mirror of pane state —

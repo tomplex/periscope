@@ -286,14 +286,6 @@ export function setTabsByTrack(map) {
   return patchUI({ tabs_by_track: map });
 }
 
-export function getBranchOrderByTrack() {
-  return { ...(P().ui?.branch_order_by_track || {}) };
-}
-
-export function setBranchOrderByTrack(map) {
-  return patchUI({ branch_order_by_track: map });
-}
-
 export function getRailCollapsed() {
   return { ...(P().ui?.rail_collapsed || {}) };
 }

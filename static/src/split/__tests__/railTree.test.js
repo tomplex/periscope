@@ -18,7 +18,7 @@ describe("mergeLiveAndPrefs — track grouping", () => {
       win({ pid: "a", track_id: "tk_a" }),
       win({ pid: "b", track_id: "tk_b" }),
     ];
-    const m = mergeLiveAndPrefs(wins, [], [], { trackOrder: [], tabsByTrack: {}, branchOrderByTrack: {} });
+    const m = mergeLiveAndPrefs(wins, [], [], { trackOrder: [], tabsByTrack: {} });
     expect(new Set(m.trackOrder)).toEqual(new Set(["tk_a", "tk_b"]));
     expect(m.tabsByTrack.tk_a).toEqual(["a"]);
     expect(m.tabsByTrack.tk_b).toEqual(["b"]);
@@ -30,32 +30,37 @@ describe("mergeLiveAndPrefs — track grouping", () => {
     expect(m.tabsByTrack.tk_x).toEqual(["a"]);
   });
 
-  it("a track with one branch renders flat (no branch sub-clusters)", () => {
+  it("a track on one branch lists its tabs flat", () => {
     const wins = [
       win({ pid: "a", track_id: "tk_a", branch: "master" }),
       win({ pid: "b", track_id: "tk_a", branch: "master" }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], {});
-    expect(m.branchesByTrack.tk_a).toEqual([]);          // flat marker
+    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "a" }, { pid: "b" }]);
     expect(m.tabsByTrack.tk_a).toEqual(["a", "b"]);
-    expect(m.tabsByBranch.tk_a).toBeUndefined();
   });
 
-  it("a track with two distinct branches emits two sub-clusters", () => {
+  it("clusters a shared branch where its first tab sits, and keeps a lone branch's tab flat", () => {
     const wins = [
       win({ pid: "a", track_id: "tk_a", branch: "master" }),
       win({ pid: "b", track_id: "tk_a", branch: "feat-x" }),
       win({ pid: "c", track_id: "tk_a", branch: "master" }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], {});
-    // first-seen branch order
-    expect(m.branchesByTrack.tk_a).toEqual(["master", "feat-x"]);
-    expect(m.tabsByBranch.tk_a.master).toEqual(["a", "c"]);
-    expect(m.tabsByBranch.tk_a["feat-x"]).toEqual(["b"]);
+    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["a", "c"] }, { pid: "b" }]);
     // tabsByTrack stays the flat all-tabs order regardless
     expect(m.tabsByTrack.tk_a).toEqual(["a", "b", "c"]);
   });
 
+  it("a track where every tab has its own branch has no clusters", () => {
+    const wins = [
+      win({ pid: "a", track_id: "tk_a", branch: "td/one" }),
+      win({ pid: "b", track_id: "tk_a", branch: "td/two" }),
+      win({ pid: "c", track_id: "tk_a", branch: "td/three" }),
+    ];
+    const m = mergeLiveAndPrefs(wins, [], [], {});
+    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "a" }, { pid: "b" }, { pid: "c" }]);
+  });
   it("track order is honored from prefs; live-new tracks append", () => {
     const wins = [
       win({ pid: "a", track_id: "tk_a" }),
@@ -82,50 +87,36 @@ describe("mergeLiveAndPrefs — track grouping", () => {
     expect(m.tabsByTrack.tk_a).toEqual(["y", "x"]);  // pref first, new appended
   });
 
-  it("branch order within a track is honored from prefs", () => {
-    const wins = [
-      win({ pid: "a", track_id: "tk_a", branch: "master" }),
-      win({ pid: "b", track_id: "tk_a", branch: "feat-x" }),
-    ];
-    const m = mergeLiveAndPrefs(wins, [], [], { branchOrderByTrack: { tk_a: ["feat-x"] } });
-    expect(m.branchesByTrack.tk_a).toEqual(["feat-x", "master"]);  // pref first
-  });
-
-  it("branch sub-clusters honor the pref tab order", () => {
-    // A multi-branch track renders from tabsByBranch, which used to be built
-    // from raw poll order — so a drag inside a sub-cluster wrote the pref and
-    // then snapped back on the next poll. Single-branch tracks render flat
-    // from tabsByTrack and always worked, which is what made it feel random.
+  it("clusters honor the pref tab order", () => {
+    // A drag inside a cluster writes tabsByTrack; building the cluster from
+    // raw poll order snapped the row back on the next poll.
     const wins = [
       win({ pid: "a", track_id: "tk_a", branch: "master" }),
       win({ pid: "b", track_id: "tk_a", branch: "master" }),
       win({ pid: "c", track_id: "tk_a", branch: "feat-x" }),
     ];
-    const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: ["b", "a", "c"] } });
-    expect(m.tabsByTrack.tk_a).toEqual(["b", "a", "c"]);
-    expect(m.tabsByBranch.tk_a.master).toEqual(["b", "a"]);   // pref, not poll order
-    expect(m.tabsByBranch.tk_a["feat-x"]).toEqual(["c"]);
+    const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: ["c", "b", "a"] } });
+    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "c" }, { branch: "master", pids: ["b", "a"] }]);
   });
 
-  it("a pane new since the last pref still lands in its branch bucket", () => {
+  it("a pane new since the last pref still lands in its cluster", () => {
     const wins = [
       win({ pid: "a", track_id: "tk_a", branch: "master" }),
       win({ pid: "c", track_id: "tk_a", branch: "feat-x" }),
       win({ pid: "new", track_id: "tk_a", branch: "master" }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: ["a", "c"] } });
-    expect(m.tabsByBranch.tk_a.master).toEqual(["a", "new"]);  // appended, not dropped
+    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["a", "new"] }, { pid: "c" }]);
   });
 
-  it("a window missing branch is bucketed without crashing", () => {
+  it("tabs without a branch never cluster", () => {
     const wins = [
       win({ pid: "a", track_id: "tk_a", branch: "master" }),
       win({ pid: "b", track_id: "tk_a", branch: undefined }),
+      win({ pid: "c", track_id: "tk_a", branch: undefined }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], {});
-    // two distinct branch buckets ("master" + the empty fallback) → sub-clusters
-    expect(m.branchesByTrack.tk_a.length).toBe(2);
-    expect(m.tabsByTrack.tk_a).toEqual(["a", "b"]);
+    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "a" }, { pid: "b" }, { pid: "c" }]);
   });
 });
 
@@ -137,7 +128,7 @@ describe("mergeLiveAndPrefs — empty goal tracks (registry rows)", () => {
     const m = mergeLiveAndPrefs([win({ pid: "a", track_id: "tk_a" })], [], [], {}, [goal]);
     expect(m.trackOrder).toEqual(["tk_a", "tk_fresh"]);
     expect(m.tabsByTrack.tk_fresh).toEqual([]);      // no tabs yet
-    expect(m.branchesByTrack.tk_fresh).toEqual([]);  // flat render
+    expect(m.rowsByTrack.tk_fresh).toEqual([]);      // nothing to list
   });
 
   it("an empty repo-default track stays hidden (lazy catchall, id == repo)", () => {

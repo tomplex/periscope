@@ -50,6 +50,15 @@ export function openReadyPane(w) {
   selectPane(w);
 }
 
+// What opening a Next entry (attention.buildNext) does: the NEEDS YOU or READY
+// row behind it opens as clicking that row did, and a broken pane is selected.
+export function openNextEntry(e) {
+  if (e.kind === "broken") selectPane(e.w);
+  else if (e.row.kind === "event") revealPane(e.row.target);
+  else if (e.kind === "asks") openNeedsPane(e.w);
+  else openReadyPane(e.w);
+}
+
 export function startAlertFeed() {
   if (started) return;
   started = true;

@@ -1,9 +1,7 @@
 // Row components for the split-view rail, ported from rail.js's row-builder
-// functions (paneRow / newTabRow / worktreeRow / repoRow +
-// worktreeMetaLine). One component per row kind; all CSS class names and glyphs
-// are preserved verbatim (rail-row, child-row, wt-row, repo-row, rail-chev,
-// rail-icon, rail-label, rail-count, rail-close, rail-dim, newtab-row,
-// last-in-worktree, dot/dot-*, wt-meta*, drop-target).
+// functions (paneRow / worktreeRow / repoRow). One component per row kind
+// (rail-row, child-row, wt-row, repo-row, rail-chev, rail-icon, rail-label,
+// rail-count, rail-close, rail-dim, drop-target).
 //
 // Two cross-cutting conventions:
 //   - PR/Linear anchors call e.stopPropagation() in a real onClick (#4) so
@@ -28,14 +26,6 @@ import { canOpenInEditor, openInEditorTitle } from "./openInEditor.js";
 // quiet) and the one-liner no longer reflects "now".
 const STATUS_STALE_S = 900;
 
-export function statusDotClass(s) {
-  if (s === "needs-input") return "dot dot-alert dot-pulse";
-  if (s === "working") return "dot dot-green";
-  if (s === "done") return "dot dot-blue dot-pulse-done";
-  if (s === "idle") return "dot dot-grey";
-  return "dot dot-none";
-}
-
 function ciClass(ci) {
   if (ci === "✓") return "ok";
   if (ci === "✗") return "bad";
@@ -51,11 +41,12 @@ function shortModel(m) {
 }
 
 function fmtCtxTokens(n) {
-  return `${Math.round(n / 1000)}k`;
+  return `${Math.round(n / 1000)}k ctx`;
 }
 
-// The chip shows the percentage when Claude's status line parsed, and the raw
-// context otherwise — so a pane whose status line is unreadable still paints.
+// The chip shows the percentage when Claude's status line parsed, and the
+// context's size otherwise — so a pane whose status line is unreadable still
+// paints.
 export function ctxChipText(w) {
   if (w.context_pct != null) return `${w.context_pct}%`;
   if (w.ctx_tokens != null) return fmtCtxTokens(w.ctx_tokens);
@@ -131,22 +122,45 @@ function RailLabel({ label, kind, renameable, onCommit }) {
   );
 }
 
-// Adaptive pane row. Default state is a COMPACT row: name + one key metric on
-// line 1, then the narrator summary, with PR/Linear/account/profile chips on
-// the bottom line. A pane LIFTS into an expanded card — gaining a model badge
-// and a PR/Linear/account/ctx/time footer — only when it's selected or needs
-// input. State rides the left stripe at both sizes, so collapsing never loses
-// what a pane is or how it's doing. Lineage (↳ spawned-by) and git-dirty are
-// deliberately NOT here — both live in the detail header.
+// When a row's age counts from: how long it has waited on you, or since its
+// last turn finished. A working pane is "now"; a shell has none.
+function rowAge(w, blip, awaitingSince) {
+  if (blip === "shell") return null;
+  if (blip === "working") return { text: "now", cls: "", title: "working now" };
+  if (blip === "asks") {
+    const since = Math.min(...[awaitingSince, w.needs_since].filter((t) => t > 0));
+    if (!Number.isFinite(since)) return null;
+    return {
+      text: relTime(since), cls: ` wait-${waitTier(since, Math.floor(Date.now() / 1000))}`,
+      title: "how long it has waited for you",
+    };
+  }
+  return w.completed_at ? { text: relTime(w.completed_at), cls: "", title: "since its last turn finished" } : null;
+}
+
+// What the narrator line leads with when the blip alone doesn't say why.
+function blipWhy(w, blip) {
+  if (blip === "broken") return w.api_error ? "API error" : "CI failing";
+  if (blip === "done" || blip === "done-old") return "done";
+  return null;
+}
+
+// Adaptive pane row. Default state is a COMPACT row: name, PR and age on line
+// 1, then the narrator summary, with Linear/account/profile chips on the
+// bottom line. The selected pane LIFTS into an expanded card — gaining a
+// model badge and a branch/PR/Linear/account/ctx footer. `blip`
+// (attention.paneBlip) rides the left stripe at both sizes; only an asking
+// pane's pulses. Lineage (↳ spawned-by) and git-dirty are deliberately NOT
+// here — both live in the detail header. `showBranch` is false inside a
+// branch cluster, whose header already names it.
 export function PaneRow({
-  w, chip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
-  pinned, onTogglePin, awaitingSince,
+  w, chip, blip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
+  pinned, onTogglePin, awaitingSince, showBranch,
   onMoveAccount, onToggleNamePin, editor, onOpenInEditor,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
-  const expanded = sel || w.state === "needs-input";
-  const stateCls = w.agent ? (w.state || "idle") : "shell";
+  const expanded = sel;
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
   const label = paneLabel(w);
@@ -160,19 +174,21 @@ export function PaneRow({
     w.status_at && Math.floor(Date.now() / 1000) - w.status_at > STATUS_STALE_S;
   const model = shortModel(w.model);
   const prHref = w.pr ? prUrl(w.repo_slug, w.pr) : null;
-  const mh = memHint(w.mem);  // cycle-hint: server sends w.mem only past thresholds
-  // An unanswered question, aged. The tier drives colour so a pane parked for
-  // an hour stops looking like one that just asked.
-  const waitTierCls = awaitingSince
-    ? waitTier(awaitingSince, Math.floor(Date.now() / 1000)) : null;
+  // ↻ only when memory tripped it. Age alone tripped it on most panes and said
+  // nothing new; the detail header still shows either.
+  const mh = w.mem?.trigger === "mem" ? memHint(w.mem) : null;
+  const age = rowAge(w, blip, awaitingSince);
+  const why = blipWhy(w, blip);
+  // A compact row shows context only once it's in a warning band.
+  const ctxCls = ctxClass(w);
   // Capacity pooling: one subscription runs out before the others, and the
   // work stuck on the exhausted one has to keep going. null on shell panes and
   // on an unrecognised config dir (see moveAccountTarget).
   const moveAcct = moveAccountTarget(w);
 
-  // PR + Linear as clickable chips, shared between the compact line-2 strip and
-  // the expanded footer (the link just relocates as the card grows). stop-prop
-  // so clicking the chip opens the link without also selecting the pane (#4).
+  // PR + Linear as clickable chips: PR on line 1 (compact) or the footer
+  // (expanded), Linear on the bottom line or the footer. stop-prop so
+  // clicking the chip opens the link without also selecting the pane (#4).
   // CI glyph is moot on a merged/closed PR — suppress it so a stale ✓/✗ can't
   // ride a landed PR.
   const prMeta = prStateMeta(w.pr_state);
@@ -206,10 +222,13 @@ export function PaneRow({
       title={`running the ${profileLabel(w.profile)} profile — a different plugin set and system prompt than a normal pane`}
     >{profileLabel(w.profile)}</span>
   );
+  const branchRef = showBranch && w.branch && (
+    <span class="pane-branch" title={`branch ${w.branch}`}><span class="icon-worktree">⎇</span> {w.branch}</span>
+  );
 
   return (
     <div
-      class={`rail-row child-row pane-row pane-state-${stateCls}${expanded ? " pane-expanded" : ""}${sel ? " selected" : ""}${dimCls}${drop}`}
+      class={`rail-row child-row pane-row pane-blip-${blip}${expanded ? " pane-expanded" : ""}${sel ? " selected" : ""}${dimCls}${drop}`}
       data-drop-pos={dropPos || undefined}
       draggable
       onClick={() => onSelect(k)}
@@ -221,42 +240,41 @@ export function PaneRow({
           ? <span class={`rail-icon ${agentMeta.className}`} title={agentMeta.label}>{agentMeta.glyph}</span>
           : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
-        {/* Line 1 carries only the name + one quiet metric: model when
-            expanded, context% when compact. PR/Linear ride line 2 (compact) or
-            the footer (expanded) so they never crowd the name. */}
-        {expanded
-          ? (model && <span class="pane-model" title={w.model}>{model}</span>)
-          : (ctxChipText(w) != null && (
-              <span
-                class={`pane-mini-ctx${ctxClass(w)}`}
-                title={w.ctx_hint || "context window used"}
-              >{ctxChipText(w)}</span>
-            ))}
-        {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
-        {waitTierCls && (
-          <span
-            class={`rail-await wait-${waitTierCls}`}
-            title={`asked you something ${relTime(awaitingSince)} ago and has had no reply since`}
-          >⚠{relTime(awaitingSince)}</span>
-        )}
         {/* At-rest pinned flag — the hover actions take no width, so this keeps
             the "this tab is pinned" signal visible without one. Hidden on hover
             (the real toggle is in the action overlay). */}
         {pinned && <span class="pane-pin-flag" title="pinned">★</span>}
+        {expanded && model && <span class="pane-model" title={w.model}>{model}</span>}
+        {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
+        {!expanded && ctxCls && ctxChipText(w) != null && (
+          <span
+            class={`pane-mini-ctx${ctxCls}`}
+            title={w.ctx_hint || "context window used"}
+          >{ctxChipText(w)}</span>
+        )}
+        {!expanded && prChip}
+        {age && (
+          <span class={`rail-age${age.cls}`} title={age.title}>{age.text}</span>
+        )}
       </div>
-      {(chip || statusText || (!expanded && (prChip || linChip || acctChip || profChip))) && (
-        <div class={`rail-meta${statusStale ? " stale" : ""}`}>
+      {(chip || statusText || why || (!expanded && (linChip || acctChip || profChip))) && (
+        <div class={`rail-meta${statusStale && !why ? " stale" : ""}`}>
           {chip && <span class="rail-chip" title={w.cwd}>⧉ {chip}</span>}
-          {statusText && (
-            <span class="rail-status" title={w.status_line}>{statusText}</span>
+          {(why || statusText) && (
+            <span class="rail-status" title={w.status_line}>
+              {why && <span class={`rail-why why-${blip}`}>{why}</span>}
+              {why && statusText ? " · " : null}
+              {statusText}
+            </span>
           )}
-          {!expanded && (prChip || linChip || acctChip || profChip) && (
-            <span class="rail-chips">{prChip}{linChip}{acctChip}{profChip}</span>
+          {!expanded && (linChip || acctChip || profChip) && (
+            <span class="rail-chips">{linChip}{acctChip}{profChip}</span>
           )}
         </div>
       )}
-      {expanded && (w.pr || lin || ctxChipText(w) != null || acctChip || profChip) && (
+      {expanded && (branchRef || w.pr || lin || ctxChipText(w) != null || acctChip || profChip) && (
         <div class="pane-foot">
+          {branchRef}
           {prChip}
           {linChip}
           <span class="pane-foot-spacer"></span>
@@ -264,11 +282,10 @@ export function PaneRow({
           {profChip}
           {ctxChipText(w) != null && (
             <span
-              class={`pane-pill pane-pill-ctx${ctxClass(w)}`}
+              class={`pane-pill pane-pill-ctx${ctxCls}`}
               title={w.ctx_hint || "context window used"}
             >{ctxChipText(w)}</span>
           )}
-          {w.status_at ? <span class="pane-time">{relTime(w.status_at)}</span> : null}
         </div>
       )}
       {/* Hover-only actions, zero footprint at rest (absolute + faded). */}
@@ -321,80 +338,22 @@ export function PaneRow({
   );
 }
 
-export function NewTabRow({ worktreeKey, onOpen }) {
-  return (
-    <div
-      class="rail-row child-row newtab-row last-in-worktree"
-      onClick={() => onOpen(worktreeKey)}
-    >
-      <span class="rail-icon">+</span>
-      <span class="rail-label">New tab</span>
-    </div>
-  );
-}
-
-// Compact per-worktree metadata strip: PR badge + CI glyph, Linear chip, git
-// dirty indicator. Drawn from the worktree's first window (all panes share
-// branch/repo). PR/Linear anchors stop propagation (#4).
-export function WorktreeMeta({ wtWindows }) {
-  const w = wtWindows[0];
-  if (!w) return null;
-  const parts = [];
-
-  if (w.pr) {
-    const href = prUrl(w.repo_slug, w.pr);
-    const meta = prStateMeta(w.pr_state);
-    const ciGlyph = w.ci && !meta.cls
-      ? <span class={`wt-meta-ci wt-meta-ci-${ciClass(w.ci)}`}>{w.ci}</span>
-      : null;
-    const inner = <>#{w.pr}{ciGlyph ? <> {ciGlyph}</> : null}</>;
-    parts.push(
-      href
-        ? <a class={`wt-meta-chip wt-meta-pr ${meta.cls}`} href={href} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={`PR #${w.pr}${meta.suffix}`}>{inner}</a>
-        : <span class={`wt-meta-chip wt-meta-pr ${meta.cls}`} title={`PR #${w.pr}${meta.suffix}`}>{inner}</span>
-    );
-  }
-
-  const lin = linearTicket(w);
-  if (lin) {
-    parts.push(
-      <a class="wt-meta-chip wt-meta-linear" href={lin.href} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title={lin.tip}>{lin.id}</a>
-    );
-  }
-
-  if (w.git && w.git !== "clean") {
-    parts.push(<span class="wt-meta-chip wt-meta-git" title="git status">{w.git}</span>);
-  }
-
-  if (!parts.length) return null;
-  return <div class="wt-meta">{parts.map((p) => <>{p}</>)}</div>;
-}
-
-// Branch sub-cluster header (the DERIVED mid-tier). A track that spans ≥2
-// distinct branches renders one BranchRow per branch; the label IS the branch
-// name. There is NO close button — a branch sub-cluster is derived from live
-// `w.branch`, not an entity you can kill. Tear down the whole TRACK, or
-// move/close individual tabs. `collapsed` hides the children (rendered by the
-// caller). No rename (the branch name is the git branch).
-export function BranchRow({
-  label, collapsed, childCount, rolledUp, dim, onToggle, dragProps, dropPos,
-}) {
+// Branch sub-cluster header (the DERIVED mid-tier): one per branch that two
+// or more of a track's tabs share; the label IS the branch name, in mono like
+// anything you'd paste. There is NO close button — a branch sub-cluster is
+// derived from live `w.branch`, not an entity you can kill. Tear down the
+// whole TRACK, or move/close individual tabs. `collapsed` hides the children
+// (rendered by the caller). No rename (the branch name is the git branch),
+// and no drag: there is nowhere to drop a branch.
+export function BranchRow({ label, collapsed, childCount, dim, onToggle }) {
   const chev = collapsed ? "▸" : "▾";
   const dimCls = dim ? "" : " rail-dim";
-  const drop = dropPos ? " drop-target" : "";
   return (
-    <div
-      class={`rail-row wt-row${dimCls}${drop}`}
-      data-drop-pos={dropPos || undefined}
-      draggable
-      onClick={(e) => { if (e.target.closest("button") || e.target.closest("input")) return; onToggle(); }}
-      {...dragProps}
-    >
+    <div class={`rail-row wt-row${dimCls}`} onClick={onToggle}>
       <span class="rail-chev">{chev}</span>
       <span class="rail-icon icon-worktree">⎇</span>
-      <span class="rail-label"><b>{label}</b></span>
+      <span class="rail-label">{label}</span>
       {collapsed && childCount > 0 ? <span class="rail-count">{childCount}</span> : null}
-      <span class={statusDotClass(rolledUp)}></span>
     </div>
   );
 }
@@ -418,8 +377,10 @@ export function ReviewRow({ row, selectedKey, onSelect }) {
 // dissolve [safe default — POSTs /dissolve, tabs survive] and tear down
 // [destructive — the caller confirms against the kill list from /teardown].
 // The catchalls render 🗀 and carry no menu. Rename POSTs PATCH /api/tracks?track_id=.
+// + opens the launcher for a new tab in this track. The sonar strip carries
+// the track's state, so the row has no roll-up dot.
 export function TrackRow({
-  kind, label, collapsed, rolledUp, dim, onToggle, onRename, onDissolve, onTeardown, dragProps, dropPos,
+  kind, label, collapsed, dim, onToggle, onRename, onNewTab, onDissolve, onTeardown, dragProps, dropPos,
 }) {
   const chev = collapsed ? "▸" : "▾";
   const dimCls = dim ? "" : " rail-dim";
@@ -459,7 +420,12 @@ export function TrackRow({
       <span class="rail-icon icon-effort" title={kind === "goal" ? "track" : "project"}>{icon}</span>
       <RailLabel label={label} kind="track" renameable={kind !== "loose"} onCommit={onRename} />
       <span class="repo-rule" aria-hidden="true"></span>
-      <span class={statusDotClass(rolledUp)}></span>
+      <button
+        class="rail-track-add"
+        title={`new tab in ${label}`}
+        aria-label={`new tab in ${label}`}
+        onClick={(e) => { e.stopPropagation(); onNewTab(); }}
+      >+</button>
       {!isCatchall && (
         <span class="track-menu">
           <button
