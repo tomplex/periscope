@@ -12,3 +12,10 @@ src-tauri/target/
 src-tauri/gen/
 static/memtest.json
 static/memtest-frame.html
+
+# Impeccable's per-run and per-developer files; the rest of .impeccable/ is committed
+.impeccable/config.local.json
+.impeccable/live/sessions/
+.impeccable/live/annotations/
+.impeccable/critique/*
+!.impeccable/critique/ignore.md
