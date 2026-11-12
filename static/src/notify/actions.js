@@ -209,7 +209,7 @@ export function runAction({ target, action, text, data } = {}, o = OPENERS) {
         if (data.spawn_to) o.pickSpawnAccount(data.spawn_to);
         return;
       case "mark_seen":
-        // A gone pane has no READY row left to dismiss.
+        // A gone pane has no done card left to mark seen.
         if (w) o.markReadySeen(w);
         return;
       case "cleanup": {

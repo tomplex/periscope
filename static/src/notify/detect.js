@@ -93,7 +93,7 @@ export function detect(prev, snap, nowSec) {
     if (a.kind === "need_human" && dismissedAlertIds.has(a.id)) keep(questionKey(a));
   }
 
-  // Done: each finished turn (completed_at), the rail's READY rule.
+  // Done: each finished turn (completed_at), the rail's done rule (buildReady).
   for (const w of windows) {
     if (w.state !== "done") continue;
     const key = `done:${w.pid}@${w.completed_at || 0}`;
