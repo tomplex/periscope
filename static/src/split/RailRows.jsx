@@ -164,11 +164,7 @@ export function PaneRow({
   const dimCls = dim ? "" : " rail-dim";
   const drop = dropPos ? " drop-target" : "";
   const label = paneLabel(w);
-  // Keep the provider mark visible during a rolling frontend/backend reload.
-  // Pre-agent-discriminator servers still emit `is_claude`; once the server
-  // restarts, `agent` is the only path used. Codex has no legacy equivalent.
-  const displayAgent = w.agent || (w.is_claude ? "claude" : null);
-  const agentMeta = AGENT_META[displayAgent];
+  const agentMeta = AGENT_META[w.agent];
   const statusText = w.status_rail || w.status_line;
   const statusStale =
     w.status_at && Math.floor(Date.now() / 1000) - w.status_at > STATUS_STALE_S;

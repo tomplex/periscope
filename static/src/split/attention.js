@@ -185,7 +185,7 @@ const DONE_FRESH_S = 3600;
 // when the pane itself has gone idle. A spinner beats broken: an agent
 // retrying after an API error, or fixing its red CI, doesn't need you yet.
 export function paneBlip(w, nowS, asked = false) {
-  if (!w.agent && !w.is_claude) return "shell";
+  if (!w.agent) return "shell";
   if (w.state === "needs-input" || asked) return "asks";
   if (w.state === "working") return "working";
   if (w.api_error || isCiFailing(w)) return "broken";

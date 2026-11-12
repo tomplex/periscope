@@ -290,10 +290,6 @@ describe("paneBlip", () => {
     expect(paneBlip(win({ agent: null, pr: 7, ci: "✗" }), 0)).toBe("shell");
   });
 
-  it("reads a pre-agent server's is_claude as an agent", () => {
-    expect(paneBlip(win({ agent: undefined, is_claude: true, state: "working" }), 0)).toBe("working");
-  });
-
   it("asks on a dialog, or on an unanswered need_human while idle", () => {
     expect(paneBlip(agent({ state: "needs-input" }), 0)).toBe("asks");
     expect(paneBlip(agent({ state: "idle" }), 0, true)).toBe("asks");

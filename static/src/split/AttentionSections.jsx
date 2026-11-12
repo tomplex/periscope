@@ -34,7 +34,7 @@ function entryName(e) {
 // its click bubbles to the card's.
 function NextCard({ e, blip, track, nowS, onOpen, onDismiss }) {
   const { lead, code, reason } = nextWords(e);
-  const meta = AGENT_META[e.w?.agent || (e.w?.is_claude ? "claude" : null)] || AGENT_META.claude;
+  const meta = AGENT_META[e.w?.agent] || AGENT_META.claude;
   return (
     <div class={`next-card pane-blip-${blip}`} onClick={onOpen}>
       <span class="pane-stripe" aria-hidden="true"></span>

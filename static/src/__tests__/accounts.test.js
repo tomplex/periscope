@@ -39,10 +39,6 @@ describe("moveAccountTarget", () => {
     expect(moveAccountTarget(claude({ account: "b" }), REG, { b: "b" })).toBeNull();
     expect(moveAccountTarget(claude({ account: "b" }), REG, { b: "zz" })).toBeNull();
   });
-
-  it("honours the legacy is_claude flag during a rolling reload", () => {
-    expect(moveAccountTarget({ is_claude: true, account: "default" }, REG, { default: "b" })).toEqual(B);
-  });
 });
 
 describe("multiAccount / accountLabel", () => {

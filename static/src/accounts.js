@@ -39,7 +39,7 @@ export function multiAccount(registry = accounts.value) {
 // A missing `account` is the default account: /api/state stamps the field on
 // every window, but a rolling reload can paint rows from a pre-account server.
 export function moveAccountTarget(w, registry = accounts.value, targets = moveTargets.value) {
-  if (!(w.agent === "claude" || w.is_claude)) return null;
+  if (w.agent !== "claude") return null;
   const current = w.account || "default";
   if (!registry.some((a) => a.id === current)) return null;
   const id = targets?.[current];

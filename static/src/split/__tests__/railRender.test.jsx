@@ -175,21 +175,6 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain("→ A");   // the B pane's destination
   });
 
-  it("keeps the Claude symbol during a frontend-only rolling reload", () => {
-    projects.value = [];
-    tracks.value = [];
-    windows.value = [{
-      pid: "legacy", session: "managed", index: 0, target: "managed:0",
-      name: "legacy-claude", is_claude: true, state: "idle",
-      track_id: "/dev/myproj", track_name: "myproj",
-      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
-      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"), pane_id: "%1",
-    }];
-
-    expect(render(<Rail />))
-      .toContain('<span class="rail-icon icon-claude" title="Claude">✻</span>');
-  });
-
   it("renders an EMPTY goal track from the registry with its +", () => {
     projects.value = [];
     tracks.value = [{ id: "tk_fresh", name: "Fresh goal", repo: "/dev/fdy" }];
