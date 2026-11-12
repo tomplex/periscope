@@ -101,18 +101,15 @@ export function NextQueue({ blipOf, trackOf }) {
   const folded = entries.slice(NEXT_SHOWN);
   return (
     <section class="next" aria-label="what wants you">
-      {/* Say so when the freeze is actually withholding something. A rail that
-          quietly stops updating is worse than one that moves. */}
-      {stale && (
-        <div class="attn-frozen" title="Move the pointer out of the rail to apply">
-          updates paused
-        </div>
-      )}
       <div class="next-title-row">
         <span class="next-title">Next</span>
         {entries.length > 0 && <span class={`next-count count-${entries[0].kind}`}>{entries.length}</span>}
+        {/* Say so when the freeze is actually withholding something: a rail
+            that quietly stops updating is worse than one that moves. In the
+            title row, so the hint can't push down the cards it holds. */}
         <span class="next-hint">
-          {entries.length > 0 ? <>open next <kbd class="ps-kbd">⌘J</kbd></> : "nothing wants you"}
+          {stale ? <span class="attn-frozen" title="Move the pointer out of the rail to apply">updates paused</span>
+            : entries.length > 0 ? <>open next <kbd class="ps-kbd">⌘J</kbd></> : "nothing wants you"}
         </span>
       </div>
       {shown.map((e) => (

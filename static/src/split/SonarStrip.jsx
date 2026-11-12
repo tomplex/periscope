@@ -5,6 +5,7 @@
 // clicking a track's name shows only that track in the tree.
 import { blipReason } from "../notify/copy.js";
 import { paneLabel, relTime } from "../util.js";
+import { useFrozenRows } from "./layoutFreeze.js";
 
 const LEGEND = ["asks", "broken", "done", "working", "idle", "shell"];
 
@@ -20,9 +21,12 @@ function blipLabel(w, blip) {
 // `tracks`: [{ id, label, panes: [w] }] in the tree's order. `blipOf(w)` is
 // the rail's one paneBlip call, so a blip and its row's stripe always agree.
 export function SonarStrip({ tracks, blipOf, selectedKey, scope, onScope, onSelect }) {
+  // Its lines hold still while you aim at the rail, as Next's cards do: a line
+  // appearing above the queue would move every card under the pointer.
+  const { rows } = useFrozenRows(tracks, (t) => t.id);
   return (
     <div class="sonar" role="group" aria-label="every pane, by track">
-      {tracks.map(({ id, label, panes }) => {
+      {rows.map(({ id, label, panes }) => {
         const scoped = scope === id;
         return (
           <div class="sonar-row" key={id}>

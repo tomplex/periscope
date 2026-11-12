@@ -1,8 +1,11 @@
-// Holds the rail's Next queue membership still while you're aiming at it.
+// Holds the top of the rail still while you're aiming at it: the sonar
+// strip's lines and the Next queue under them.
 //
 // The queue sits above the tree and the same panes also appear in it, so one
 // pane finishing or asking shifts everything below. That happens all the
 // time, and the row you were about to click moves out from under the cursor.
+// The strip sits above the queue, so a track gaining its first pane or losing
+// its last would move every card too.
 //
 // Animating the movement does NOT fix that — a smoothly-moving target is still
 // a moving target. The fix is to stop moving while the pointer is in the rail,
