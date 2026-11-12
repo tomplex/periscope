@@ -254,6 +254,7 @@ describe("<Rail> awaiting-reply marker", () => {
     expect(html).toContain("pane-row pane-blip-asks");
     expect(html).toContain('<span class="rail-age wait-fresh" title="how long it has waited for you">');
     expect(html).toContain("which branch?");   // the agent's words, on its Next card
+    expect(html).toContain('<button class="blip blip-asks" aria-label="claude: asked you something"');
     expect(html).toContain('<button class="next-x" title="dismiss" aria-label="dismiss claude">');
 
     // Over an hour later, same unanswered ask -> urgent.
@@ -306,7 +307,9 @@ describe("<Rail> Next queue", () => {
   it("names the track and shows a permission request's command", () => {
     projects.value = [];
     tracks.value = [];
-    alerts.value = [];
+    // The pane's own need_human, so a card that leaked the event kind would print it.
+    alerts.value = [{ id: "q1", kind: "need_human", target: "managed:0", ts: 1, session: "managed",
+      name: "weighting", message: "may I run the tests?" }];
     windows.value = [paneWin({
       pid: "p1", index: 0, target: "managed:0", name: "weighting", pane_id: "%1",
       state: "needs-input", waiting_for: "permission prompt", needs_since: 1,
@@ -330,7 +333,8 @@ describe("<Rail> Next queue", () => {
     alerts.value = [];
     windows.value = [paneWin({ pid: "p2", index: 0, target: "managed:0", name: "gcp", pane_id: "%1", api_error: true })];
     const html = render(<Rail />);
-    expect(html).toContain("blip blip-broken");
+    // The strip's button, not its legend, which always shows every blip.
+    expect(html).toContain('<button class="blip blip-broken" aria-label="gcp: API error"');
     expect(html).toContain('<span class="next-why why-broken">API error</span>');
     expect(html).toContain('<span class="rail-why why-broken">API error</span>');
     expect(html).not.toContain("next-x");   // a broken pane leaves once fixed
@@ -340,13 +344,15 @@ describe("<Rail> Next queue", () => {
     projects.value = [];
     tracks.value = [];
     alerts.value = [];
+    const now = Math.floor(Date.now() / 1000);
     windows.value = [1, 2, 3, 4, 5].map((i) => paneWin({
       pid: `d${i}`, index: i, target: `managed:${i}`, name: `done-${i}`, pane_id: `%${i}`,
-      state: "done", completed_at: 100 + i,
+      state: "done", completed_at: now - 120 * i,
     }));
     const html = render(<Rail />);
     expect(html.split('class="next-card').length - 1).toBe(3);
     expect(html).toContain('<span class="next-more-n">+2</span>');
+    expect(html).toContain('<button class="blip blip-done" aria-label="done-1: done 2m ago"');
     // A done card can be marked seen without opening its pane.
     expect(html).toContain('<button class="next-x" title="mark seen without opening it" aria-label="mark done-1 seen">');
   });
