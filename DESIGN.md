@@ -449,8 +449,9 @@ forward on hover or selection.
   dragged over it, the edge turns Periscope Glass and the fill takes an 8% wash. An empty
   card shows a dashed "drop a tab here" landing area.
 - **Pane card**: a 4px-cornered row at rest, which lifts on expansion (see Elevation). The
-  state stripe on its left edge carries the pane's state, and the pin and close actions fade
-  in over the top-right corner on hover, on a gradient so they read over the row's text.
+  state stripe on its left edge carries the pane's state. Its first line ends with the PR
+  chip and the row's age; on hover the pin and close actions fade in just left of them, on
+  a gradient over the name's tail, so the chip stays clickable and the age stays in view.
 - **Modal**: `bg-modal` with 10px corners and the Modal shadow. It fills most of the viewport
   (96vw × 94vh) and the user can resize it.
 

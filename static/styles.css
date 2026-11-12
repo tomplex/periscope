@@ -2904,15 +2904,19 @@ body.col-resizing iframe { pointer-events: none; }
 .pane-pin-flag { font-size: 10px; color: #d8b33a; flex: 0 0 auto; }
 .pane-row:hover .pane-pin-flag, .pane-row:focus-within .pane-pin-flag { display: none; }
 
+/* The end of a pane row's first line: its PR chip and age, with the hover
+   actions hanging off its left edge. */
+.pane-row-end { position: relative; display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
 /* Hover-only action overlay (pin + close). Absolutely positioned with ZERO
    layout footprint at rest, so the name uses the full row width; it fades in
-   over the top-right on hover, with a gradient so it reads over whatever's
-   beneath (ctx% / name tail). The line-2 chips sit below it and stay clickable. */
+   on hover just left of .pane-row-end, with a gradient so it reads over the
+   name's tail. The PR chip, the age and the line-2 chips stay visible and
+   clickable beside and below it. */
 .pane-actions {
-  position: absolute; top: 3px; right: 5px;
+  position: absolute; top: 50%; right: 100%; transform: translateY(-50%);
   display: flex; align-items: center; gap: 1px;
   opacity: 0; pointer-events: none;
-  padding-left: 22px;
+  padding: 0 4px 0 22px;
   background: linear-gradient(to right, transparent, var(--bg-1-hi) 42%);
   transition: opacity .12s;
 }

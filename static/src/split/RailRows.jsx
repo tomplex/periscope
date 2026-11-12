@@ -246,10 +246,60 @@ export function PaneRow({
             title={w.ctx_hint || "context window used"}
           >{ctxChipText(w)}</span>
         )}
-        {!expanded && prChip}
-        {age && (
-          <span class={`rail-age${age.cls}`} title={age.title}>{age.text}</span>
-        )}
+        <div class="pane-row-end">
+          {/* Hover-only actions, zero footprint at rest (absolute + faded):
+              they fade in just left of the PR chip and age, which stay
+              readable and clickable on hover. */}
+          <div class="pane-actions">
+            {/* Re-open this pane's session on another subscription. Labeled with
+                the destination, never the current account: "→ B" is unambiguous
+                where a bare "move" is not. Hover-only because it's a rare,
+                deliberate act — unlike the account chip, which is orientation. */}
+            {moveAcct && (
+              <button
+                class="rail-move-acct"
+                title={`re-open this session on Claude account ${moveAcct.label} — spawns a resumed pane there and leaves this one running`}
+                onClick={(e) => { e.stopPropagation(); onMoveAccount?.(moveAcct.id); }}
+              >→ {moveAcct.label}</button>
+            )}
+            <button
+              class={`rail-pin${pinned ? " pinned" : ""}`}
+              title={pinned ? "unpin" : "pin"}
+              onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
+            >{pinned ? "★" : "☆"}</button>
+            {/* Distinct from the ★ above: that pins the tab into the PINNED
+                section, this freezes its NAME against the narrator's auto-rename.
+                Renaming pins on its own, so the useful direction here is the
+                release — plus keeping a generated name you happen to like. */}
+            <button
+              class={`rail-name-pin${w.name_pinned ? " pinned" : ""}`}
+              title={w.name_pinned
+                ? "name pinned — click to let periscope rename this tab again"
+                : "freeze this name — periscope won't rename this tab"}
+              onClick={(e) => { e.stopPropagation(); onToggleNamePin?.(); }}
+            >{w.name_pinned ? "🔒" : "🔓"}</button>
+            {/* Opens the pane's WORKTREE ROOT (the server resolves the git
+                toplevel), not its cwd — an editor treats the opened folder as the
+                project, so a pane sitting in a subdirectory would get a fragment
+                of the tree. Hidden entirely for panes outside a repo. */}
+            {canOpenInEditor(w, editor) && (
+              <button
+                class="rail-editor"
+                title={openInEditorTitle(w, editor)}
+                onClick={(e) => { e.stopPropagation(); onOpenInEditor?.(); }}
+              >↗</button>
+            )}
+            <button
+              class="rail-close"
+              title="kill this tab"
+              onClick={(e) => { e.stopPropagation(); onClose(); }}
+            >×</button>
+          </div>
+          {!expanded && prChip}
+          {age && (
+            <span class={`rail-age${age.cls}`} title={age.title}>{age.text}</span>
+          )}
+        </div>
       </div>
       {(chip || statusText || why || (!expanded && (linChip || acctChip || profChip))) && (
         <div class={`rail-meta${statusStale && !why ? " stale" : ""}`}>
@@ -282,52 +332,6 @@ export function PaneRow({
           )}
         </div>
       )}
-      {/* Hover-only actions, zero footprint at rest (absolute + faded). */}
-      <div class="pane-actions">
-        {/* Re-open this pane's session on another subscription. Labeled with
-            the destination, never the current account: "→ B" is unambiguous
-            where a bare "move" is not. Hover-only because it's a rare,
-            deliberate act — unlike the account chip, which is orientation. */}
-        {moveAcct && (
-          <button
-            class="rail-move-acct"
-            title={`re-open this session on Claude account ${moveAcct.label} — spawns a resumed pane there and leaves this one running`}
-            onClick={(e) => { e.stopPropagation(); onMoveAccount?.(moveAcct.id); }}
-          >→ {moveAcct.label}</button>
-        )}
-        <button
-          class={`rail-pin${pinned ? " pinned" : ""}`}
-          title={pinned ? "unpin" : "pin"}
-          onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
-        >{pinned ? "★" : "☆"}</button>
-        {/* Distinct from the ★ above: that pins the tab into the PINNED
-            section, this freezes its NAME against the narrator's auto-rename.
-            Renaming pins on its own, so the useful direction here is the
-            release — plus keeping a generated name you happen to like. */}
-        <button
-          class={`rail-name-pin${w.name_pinned ? " pinned" : ""}`}
-          title={w.name_pinned
-            ? "name pinned — click to let periscope rename this tab again"
-            : "freeze this name — periscope won't rename this tab"}
-          onClick={(e) => { e.stopPropagation(); onToggleNamePin?.(); }}
-        >{w.name_pinned ? "🔒" : "🔓"}</button>
-        {/* Opens the pane's WORKTREE ROOT (the server resolves the git
-            toplevel), not its cwd — an editor treats the opened folder as the
-            project, so a pane sitting in a subdirectory would get a fragment
-            of the tree. Hidden entirely for panes outside a repo. */}
-        {canOpenInEditor(w, editor) && (
-          <button
-            class="rail-editor"
-            title={openInEditorTitle(w, editor)}
-            onClick={(e) => { e.stopPropagation(); onOpenInEditor?.(); }}
-          >↗</button>
-        )}
-        <button
-          class="rail-close"
-          title="kill this tab"
-          onClick={(e) => { e.stopPropagation(); onClose(); }}
-        >×</button>
-      </div>
     </div>
   );
 }
