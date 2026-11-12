@@ -354,6 +354,21 @@ describe("buildNext", () => {
     expect(next.map((e) => e.key)).toEqual(["broken:x", "broken:z", "broken:e"]);
   });
 
+  it("gives a failing PR's card to a finished pane, then the linked one, and keeps the others' done news", () => {
+    const red = (pid, over) => agent({ pid, target: `${pid}:0`, pr: 12, repo_slug: "o/r", ci: "✗", ...over });
+    const reviewer = red("rev");                                     // its branch's PR, idle
+    const author = red("auth", { state: "done", completed_at: 990, pr_linked: true });
+    const pushed = evt({ id: "x1", kind: "done", target: "auth:0", ts: 995, message: "Pushed the fix." });
+    expect(buildNext([reviewer, author], [pushed], new Set(), new Set(), new Set(), 1000).map((e) => e.key))
+      .toEqual(["broken:auth"]);
+    expect(buildNext([reviewer, red("link", { pr_linked: true })], [], new Set(), new Set(), new Set(), 1000)
+      .map((e) => e.key)).toEqual(["broken:link"]);
+    // A second finished pane on the same red PR keeps its own done card.
+    const fixer = red("fix", { state: "done", completed_at: 980 });
+    expect(buildNext([reviewer, author, fixer], [], new Set(), new Set(), new Set(), 1000).map((e) => e.key))
+      .toEqual(["broken:auth", "done:fix"]);
+  });
+
   it("an event whose pane has closed still asks, with its message", () => {
     const next = buildNext([], [evt({ target: "gone:0", message: "help" })], new Set(), new Set(), new Set(), 1000);
     expect(next).toEqual([expect.objectContaining({ kind: "asks", w: null, message: "help" })]);

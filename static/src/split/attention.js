@@ -210,27 +210,29 @@ export function paneBlip(w, nowS, asks = false) {
 // (null for broken), which says how opening it behaves
 // (alertFeed.openNextEntry). `w` is null for an event whose pane has closed.
 // `message` is an asking pane's newest need_human (waitingPanes). A PR failing
-// CI is one entry however many panes show it, as Clawd counts it; its other
-// panes still show broken in the strip and the tree.
+// CI is one entry however many panes show it, as Clawd counts it, opening the
+// pane that speaks for it (prSpeaker); its other panes still show broken in
+// the strip and the tree, and keep their own done news.
 export function buildNext(windows, alertItems, dismissedIds = new Set(), dismissedNeedsPids = new Set(),
   dismissedReadyPids = new Set(), nowS = 0) {
   const asks = [...waitingPanes(windows, alertItems, dismissedIds, dismissedNeedsPids, nowS)]
     .sort((a, b) => a[1].since - b[1].since)
     .map(([key, { row, since, message }]) => ({ key: `asks:${key}`, kind: "asks", w: row.w, row, since, message }));
   const asking = new Set(asks.map((e) => e.w?.pid).filter(Boolean));
-  const brokenPids = new Set();
-  const failingPrs = new Set();
   const broken = [];
+  const prAt = new Map();   // prKey -> its entry's index in `broken`
   for (const w of windows || []) {
     if (paneBlip(w, nowS, asking.has(w.pid)) !== "broken") continue;
-    brokenPids.add(w.pid);
-    if (brokenCause(w) === "ci") {
-      if (failingPrs.has(prKey(w))) continue;
-      failingPrs.add(prKey(w));
+    const entry = { key: `broken:${w.pid}`, kind: "broken", w, row: null, since: null, message: null };
+    const at = brokenCause(w) === "ci" ? prAt.get(prKey(w)) : undefined;
+    if (at === undefined) {
+      if (brokenCause(w) === "ci") prAt.set(prKey(w), broken.length);
+      broken.push(entry);
+    } else if (prSpeaker(w) < prSpeaker(broken[at].w)) {
+      broken[at] = entry;
     }
-    broken.push({ key: `broken:${w.pid}`, kind: "broken", w, row: null, since: null, message: null });
   }
-  const taken = new Set([...asking, ...brokenPids]);
+  const taken = new Set([...asking, ...broken.map((e) => e.w.pid)]);
   const done = buildReady(windows, alertItems, dismissedIds, dismissedReadyPids)
     .filter((r) => !taken.has(r.w?.pid))
     .map((r) => ({
@@ -239,6 +241,14 @@ export function buildNext(windows, alertItems, dismissedIds = new Set(), dismiss
       message: r.kind === "event" ? r.message : null,
     }));
   return [...asks, ...broken, ...done];
+}
+
+// Which of a failing PR's panes its one Next card opens, lowest first: one
+// that finished (it has news, and most likely pushed), then the one that
+// linked the PR, as notify/detect.js lets the linked pane speak for it.
+function prSpeaker(w) {
+  if (w.state === "done") return 0;
+  return w.pr_linked ? 1 : 2;
 }
 
 // The entry ⌘J opens: the first one this walk hasn't opened (`opened`, a set

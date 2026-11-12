@@ -96,6 +96,12 @@ describe("dutyItems", () => {
     expect(kinds(dutyItems({ windows, selectedPid: "b", nowSec: NOW }))).not.toContain("ci");
   });
 
+  it("aims a failing PR at the pane its Next card opens, not the first in window order", () => {
+    const windows = [pane("a", { ci: "✗", pr: 9000, repo_slug: "o/r" }),
+      pane("b", { ci: "✗", pr: 9000, repo_slug: "o/r", pr_linked: true })];
+    expect(dutyItems({ windows, nowSec: NOW })[0].target).toMatchObject({ action: "select", pid: "b" });
+  });
+
   it("is on duty for exactly what the rail's Next lists, so the two never disagree", () => {
     const counts = (windows, alerts = []) =>
       Object.fromEntries(dutyItems({ windows, alerts, nowSec: NOW }).map((i) => [i.kind, i.count]));
