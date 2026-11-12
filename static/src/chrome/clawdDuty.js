@@ -1,12 +1,13 @@
 // What Clawd is on duty for (Tamagotchi.jsx): the pure part, so the priority
 // rule and every trigger unit-test without signals or a DOM.
 //
-// Needs-you and ready come from the rail's own builders (split/attention.js)
-// with the same dismissals, a click goes through the rail's own row behaviour
-// (split/alertFeed.js openNeedsPane / openReadyPane), and the context band is
-// the rail's ctxClass: Clawd and the rail can never disagree about a pane.
+// What asks, what's broken and what finished are the rail's Next queue
+// (split/attention.js buildNext) with the same dismissals, a click goes through
+// the rail's own row behaviour (split/alertFeed.js openNeedsPane /
+// openReadyPane), and the context band is the rail's ctxClass: Clawd and the
+// rail can never disagree about a pane.
 
-import { buildReady, isCiFailing, prKey, waitingPanes, waitTier } from "../split/attention.js";
+import { brokenCause, buildNext, prKey, waitTier } from "../split/attention.js";
 import { ctxClass } from "../split/ctxBand.js";
 import { paneLabel, plural } from "../util.js";
 
@@ -44,60 +45,57 @@ export function dutyItems({
   const notSelected = (w) => !w || selectedPid == null || String(w.pid) !== String(selectedPid);
   const live = windows.filter(notSelected);
   const byPid = new Map(windows.map((w) => [String(w.pid), w]));
+  const selected = selectedPid == null ? null : byPid.get(String(selectedPid));
+  const next = buildNext(windows, alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, nowSec)
+    .filter((e) => notSelected(e.w));
+  const broken = (cause) => next.filter((e) => e.kind === "broken" && brokenCause(e.w) === cause);
 
-  // Panes, not rows (attention.waitingPanes), so Clawd's red bubble and the
-  // rail's wait-urgent agree. A live row opens the way the rail's Next card
-  // does; an event row reveals its pane, as an event's Next card does.
-  const waiting = waitingPanes(windows, alerts, dismissedAlertIds, dismissedNeedsPids, nowSec, notSelected);
-  if (waiting.size) {
-    const oldest = [...waiting.values()].reduce((a, b) => (b.since < a.since ? b : a));
+  // Panes, not rows, longest wait first, so Clawd's red bubble and the rail's
+  // wait-urgent agree. A live row opens the way the rail's Next card does; an
+  // event row reveals its pane, as an event's Next card does.
+  const asks = next.filter((e) => e.kind === "asks");
+  if (asks.length) {
+    const [oldest] = asks;
     const r = oldest.row;
     const name = r.w ? paneLabel(r.w) : r.name || r.session || "a pane";
     items.push({
-      kind: "bell", count: waiting.size, label: String(waiting.size),
+      kind: "bell", count: asks.length, label: String(asks.length),
       urgent: waitTier(oldest.since, nowSec) !== "fresh",
-      phrase: waiting.size === 1 ? `${name} needs you${waited(oldest.since, nowSec)}`
-        : `needs you in ${waiting.size} panes · ${name} has waited longest${waited(oldest.since, nowSec)}`,
+      phrase: asks.length === 1 ? `${name} needs you${waited(oldest.since, nowSec)}`
+        : `needs you in ${asks.length} panes · ${name} has waited longest${waited(oldest.since, nowSec)}`,
       target: r.kind === "live" ? pane("needs", r.w) : { action: "reveal", target: r.target, says: `open ${name}` },
     });
   }
 
-  const api = live.filter((w) => w.api_error);
+  const api = broken("api");
   if (api.length) {
     items.push({
       kind: "api", count: api.length, label: "API",
       phrase: `the Anthropic API is erroring in ${plural(api.length, "pane")}, not your code`,
-      target: pane("select", api[0]),
+      target: pane("select", api[0].w),
     });
   }
 
-  // One PR can have several panes; it counts once, and drops out entirely
-  // when any of them is the one you're looking at.
-  const prs = new Map();
-  for (const w of windows) {
-    if (!isCiFailing(w)) continue;
-    const key = prKey(w);
-    if (!prs.has(key)) prs.set(key, { pr: w.pr, panes: [] });
-    prs.get(key).panes.push(w);
-  }
-  const red = [...prs.values()].filter((p) => p.panes.every(notSelected));
+  // Next lists a failing PR once, by the pane that speaks for it; the PR drops
+  // out entirely when any pane showing it is the one you're looking at.
+  const red = broken("ci").filter((e) => !(selected?.pr && prKey(selected) === prKey(e.w)));
   if (red.length) {
     items.push({
       kind: "ci", count: red.length, label: String(red.length),
-      phrase: red.length === 1 ? `PR #${red[0].pr} is failing CI` : `${red.length} PRs failing CI`,
-      target: pane("select", red[0].panes[0]),
+      phrase: red.length === 1 ? `PR #${red[0].w.pr} is failing CI` : `${red.length} PRs failing CI`,
+      target: pane("select", red[0].w),
     });
   }
 
-  const ready = buildReady(windows, alerts, dismissedAlertIds, dismissedReadyPids).filter((r) => notSelected(r.w));
-  if (ready.length) {
-    const first = ready[0];
-    const name = first.w ? paneLabel(first.w) : first.name || "a pane";
+  const done = next.filter((e) => e.kind === "done");
+  if (done.length) {
+    const [first] = done;
+    const name = first.w ? paneLabel(first.w) : first.row.name || "a pane";
     items.push({
-      kind: "done", count: ready.length, label: String(ready.length),
-      phrase: ready.length === 1 ? `${name} finished` : `${ready.length} panes finished`,
-      target: first.kind === "live" ? pane("ready", first.w)
-        : { action: "reveal", target: first.target, says: `open ${name}` },
+      kind: "done", count: done.length, label: String(done.length),
+      phrase: done.length === 1 ? `${name} finished` : `${done.length} panes finished`,
+      target: first.row.kind === "live" ? pane("ready", first.w)
+        : { action: "reveal", target: first.row.target, says: `open ${name}` },
     });
   }
 

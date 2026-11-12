@@ -260,13 +260,6 @@ describe("waitingPanes", () => {
     const m = waitingPanes([], [evt({ target: "gone:3" })], new Set(), new Set(), 1000);
     expect([...m.keys()]).toEqual(["target:gone:3"]);
   });
-
-  it("leaves out the panes `keep` rejects", () => {
-    const a = win({ pid: "a", target: "a:0", state: "needs-input" });
-    const b = win({ pid: "b", target: "b:0", state: "needs-input" });
-    const m = waitingPanes([a, b], [], new Set(), new Set(), 1000, (w) => w?.pid !== "a");
-    expect([...m.keys()]).toEqual(["pid:b"]);
-  });
 });
 
 describe("isCiFailing", () => {

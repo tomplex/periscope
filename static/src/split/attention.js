@@ -142,17 +142,15 @@ export function awaitingReplyByPid(windows, alertItems, dismissedIds = new Set()
 // pane sits waiting), and the rail lists both. A pane waits since the earlier
 // of the server's needs-input stamp (needs_since, which survives a reload) and
 // its oldest unanswered event, the rail's own urgency tier
-// (awaitingReplyByPid). Clawd's bell and the dock badge both count these, so
-// neither can disagree with the rail. `keep(w)` filters panes out (Clawd skips
-// the one open in the detail view). Map of key -> { row, since, message }; a
-// live row wins over an event row for the same pane, and `message` is the
-// newest unanswered need_human's: the agent's own words, when it gave any.
-export function waitingPanes(windows, alertItems, dismissedIds = new Set(), dismissedNeedsPids = new Set(), nowSec = 0,
-  keep = () => true) {
+// (awaitingReplyByPid). Next's asks (and through them Clawd's bell) and the
+// dock badge all count these, so none can disagree with the rail. Map of
+// key -> { row, since, message }; a live row wins over an event row for the
+// same pane, and `message` is the newest unanswered need_human's: the agent's
+// own words, when it gave any.
+export function waitingPanes(windows, alertItems, dismissedIds = new Set(), dismissedNeedsPids = new Set(), nowSec = 0) {
   const asked = awaitingReplyByPid(windows, alertItems, dismissedIds);
   const waiting = new Map();
   for (const r of buildNeedsYou(windows, alertItems, dismissedIds, dismissedNeedsPids)) {
-    if (!keep(r.w)) continue;
     const key = r.w?.pid != null ? `pid:${r.w.pid}` : `target:${r.target}`;
     const since = Math.min(
       r.kind === "event" ? r.ts : (r.w.needs_since || nowSec),
