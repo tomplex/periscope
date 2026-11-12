@@ -2821,16 +2821,12 @@ body.col-resizing iframe { pointer-events: none; }
 .pane-mini-ctx.ctx-hot { color: var(--s-danger); }
 .pane-model { font-size: 10px; color: var(--fg-3); flex: 0 0 auto; }
 
-/* Expanded pane: lifts off the list onto its own raised surface. */
+/* Expanded pane (the selected one): lifts off the list onto its own surface. */
 #rail .rail-group-body .pane-expanded {
-  background: var(--bg-2);
+  background: var(--bg-1-hi);
   border-radius: var(--r-md);
   margin: 3px 0;
   padding-top: 9px; padding-bottom: 9px;
-  box-shadow: 0 1px 6px oklch(0 0 0 / .25);
-}
-#rail .rail-group-body .pane-expanded.selected {
-  background: var(--bg-1-hi);
   box-shadow: 0 1px 8px oklch(0 0 0 / .3),
               inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent);
 }
@@ -2839,11 +2835,10 @@ body.col-resizing iframe { pointer-events: none; }
    data-drop-pos="before" → line at top; "after" → line at bottom.
    Box-shadow (inset) avoids conflicting with the tree-connector
    ::before/::after pseudos already used on child rows.
-   MUST sit after the .pane-expanded rules above and carry the #rail prefix:
-   a pane row EXPANDS when selected or needs-input, and those rules set
-   box-shadow at (1,3,0) — an unprefixed .rail-row.drop-target[…] is (0,3,0)
-   and loses, so the row you were most likely aiming at showed no landing
-   line at all. Equal specificity now, decided by source order. */
+   MUST carry the #rail prefix: a pane row EXPANDS when selected, and that
+   rule sets box-shadow at (1,2,0) — an unprefixed .rail-row.drop-target[…]
+   is (0,3,0) and loses, so the row you were most likely aiming at showed no
+   landing line at all. */
 #rail .rail-row.drop-target[data-drop-pos="before"] {
   box-shadow: inset 0 2px 0 var(--accent);
 }
@@ -2922,8 +2917,6 @@ body.col-resizing iframe { pointer-events: none; }
 }
 .pane-row:hover .pane-actions, .pane-row:focus-within .pane-actions { opacity: 1; pointer-events: auto; }
 #rail .pane-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-radius: 3px; }
-.pane-expanded .pane-actions { background: linear-gradient(to right, transparent, var(--bg-2) 42%); }
-.pane-expanded.selected .pane-actions { background: linear-gradient(to right, transparent, var(--bg-1-hi) 42%); }
 /* The overlay owns visibility; neutralize the rows' own pin/close opacity
    rules (need #rail to outrank #rail .child-row .rail-pin / :hover .rail-close). */
 #rail .pane-actions .rail-pin,

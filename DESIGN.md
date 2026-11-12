@@ -246,7 +246,7 @@ differ only in hue.
 - **Abyss** (`bg-0`): the page, the rail tray and the detail area.
 - **Hull** (`bg-1`): track cards, menus, the sidebar and the critter's screen.
 - **Hull, lit** (`bg-1-hi`): row hover and the selected pane.
-- **Raised** (`bg-2`): chips, keycaps, the omnibox input, toasts and the expanded pane card.
+- **Raised** (`bg-2`): chips, keycaps, the omnibox input and toasts.
 - **Rim** (`bg-3`): chip hover, scrollbar thumbs and the critter's bezel border.
 - **Console** (`bg-modal`): modal and dialog cards, slightly lifted off the page.
 - **Terminal** (`bg-term`): the xterm canvas background. Anything that frames a terminal
@@ -358,14 +358,14 @@ makes their position depend on content length.
 
 Depth is a tonal stack: Abyss tray (`bg-0`) → Hull card (`bg-1`) → Raised card (`bg-2`).
 Each step is about +0.05 lightness at the same hue. Structure never uses shadows. Exactly
-one thing in the rail lifts: the pane card that is expanded because it is selected or needs
-you. It rises onto `bg-2` with a soft shadow, and when selected it moves to `bg-1-hi` with a
-1px Periscope Glass inset ring at 45%. Real shadows belong only to layers that float above
-the page.
+one thing in the rail lifts: the selected pane's card, which expands onto `bg-1-hi` with a
+soft shadow and a 1px Periscope Glass inset ring at 45%. A pane that needs you says so with
+its stripe, its blip and its Next card, not by expanding. Real shadows belong only to layers
+that float above the page.
 
 ### Shadow Vocabulary
-- **Pane lift** (`box-shadow: 0 1px 6px oklch(0 0 0 / .25)`): the expanded pane card.
-  Selected: `0 1px 8px oklch(0 0 0 / .3), inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent)`.
+- **Pane lift** (`box-shadow: 0 1px 8px oklch(0 0 0 / .3), inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent)`):
+  the selected, expanded pane card.
 - **Menu** (`box-shadow: 0 8px 24px oklch(0 0 0 / 0.35)`): toolbar dropdowns.
 - **Toast** (`box-shadow: 0 8px 20px oklch(0 0 0 / 0.4)`): the toast stack.
 - **Modal** (`box-shadow: 0 0 0 1px var(--line-strong), 0 30px 80px oklch(0 0 0 / 0.55)`):
