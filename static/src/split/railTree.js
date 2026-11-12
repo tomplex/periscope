@@ -49,10 +49,10 @@ const NO_BRANCH = "";
 //                  its card lists them (a cluster's tabs together, at its
 //                  first tab's slot); always present. Drag reorders splice
 //                  this, so they move what the user sees.
-//   rowsByTrack  — { trackId: [{ pid } | { branch, pids }] } what the
-//                  track's card lists, in tab order. A shared branch is one
+//   rowsByTrack  — { trackId: [{ pid, branch } | { branch, pids }] } what
+//                  the track's card lists, in tab order. A shared branch is one
 //                  { branch, pids } cluster, placed where its first tab sits;
-//                  every other tab is its own { pid }. A single-branch track
+//                  every other tab is its own { pid, branch }. A single-branch track
 //                  never clusters (its header already says where it is), and
 //                  neither does the no-branch bucket.
 export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, tracks = []) {
@@ -111,7 +111,7 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, t
     for (const pid of merged) {
       const b = branchOf[pid];
       if (!multiBranch || b === NO_BRANCH || count[b] < 2) {
-        rowsByTrack[t].push({ pid });
+        rowsByTrack[t].push({ pid, branch: b });
         continue;
       }
       if (!clusterOf[b]) {

@@ -56,9 +56,9 @@ export function openNeedsPane(w) {
   selectPane(w);
 }
 
-// Dismiss a READY row without opening its pane: a done banner's Mark seen, or
-// a done card's ×. Its notify(done) events are the same news: READY hides
-// them only while the live row shows, so they'd take its place.
+// Mark a finished pane seen without opening it: a done banner's Mark seen, or
+// a done card's ×. Its notify(done) events are the same news: buildReady
+// hides them only while the live row shows, so they'd take its place.
 export function markReadySeen(w) {
   if (!w?.pid) return;
   dismissedReadyPids.value = new Set([...dismissedReadyPids.value, w.pid]);

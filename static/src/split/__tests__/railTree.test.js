@@ -36,7 +36,7 @@ describe("mergeLiveAndPrefs — track grouping", () => {
       win({ pid: "b", track_id: "tk_a", branch: "master" }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], {});
-    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "a" }, { pid: "b" }]);
+    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "a", branch: "master" }, { pid: "b", branch: "master" }]);
     expect(m.tabsByTrack.tk_a).toEqual(["a", "b"]);
   });
 
@@ -47,7 +47,7 @@ describe("mergeLiveAndPrefs — track grouping", () => {
       win({ pid: "c", track_id: "tk_a", branch: "master" }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], {});
-    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["a", "c"] }, { pid: "b" }]);
+    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["a", "c"] }, { pid: "b", branch: "feat-x" }]);
     // tabsByTrack is the order the card lists, a cluster's tabs together
     expect(m.tabsByTrack.tk_a).toEqual(["a", "c", "b"]);
   });
@@ -64,7 +64,7 @@ describe("mergeLiveAndPrefs — track grouping", () => {
     order.splice(order.indexOf("a"), 1);
     order.splice(order.indexOf("c") + 1, 0, "a");   // drop a below c
     const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: order } });
-    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["c", "a"] }, { pid: "b" }]);
+    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["c", "a"] }, { pid: "b", branch: "feat-x" }]);
   });
 
   it("a track where every tab has its own branch has no clusters", () => {
@@ -74,7 +74,9 @@ describe("mergeLiveAndPrefs — track grouping", () => {
       win({ pid: "c", track_id: "tk_a", branch: "td/three" }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], {});
-    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "a" }, { pid: "b" }, { pid: "c" }]);
+    expect(m.rowsByTrack.tk_a).toEqual([
+      { pid: "a", branch: "td/one" }, { pid: "b", branch: "td/two" }, { pid: "c", branch: "td/three" },
+    ]);
   });
   it("track order is honored from prefs; live-new tracks append", () => {
     const wins = [
@@ -111,7 +113,7 @@ describe("mergeLiveAndPrefs — track grouping", () => {
       win({ pid: "c", track_id: "tk_a", branch: "feat-x" }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: ["c", "b", "a"] } });
-    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "c" }, { branch: "master", pids: ["b", "a"] }]);
+    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "c", branch: "feat-x" }, { branch: "master", pids: ["b", "a"] }]);
   });
 
   it("a pane new since the last pref still lands in its cluster", () => {
@@ -121,7 +123,7 @@ describe("mergeLiveAndPrefs — track grouping", () => {
       win({ pid: "new", track_id: "tk_a", branch: "master" }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: ["a", "c"] } });
-    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["a", "new"] }, { pid: "c" }]);
+    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["a", "new"] }, { pid: "c", branch: "feat-x" }]);
   });
 
   it("tabs without a branch never cluster", () => {
@@ -131,7 +133,7 @@ describe("mergeLiveAndPrefs — track grouping", () => {
       win({ pid: "c", track_id: "tk_a", branch: undefined }),
     ];
     const m = mergeLiveAndPrefs(wins, [], [], {});
-    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "a" }, { pid: "b" }, { pid: "c" }]);
+    expect(m.rowsByTrack.tk_a).toEqual([{ pid: "a", branch: "master" }, { pid: "b", branch: "" }, { pid: "c", branch: "" }]);
   });
 });
 

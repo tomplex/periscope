@@ -560,10 +560,9 @@ export function Rail() {
                 <div class="rail-group-body">
                   {(rowsByTrack[trackId] || []).map((item) => {
                     if (!item.pids) {
-                      const w = windowsByPid[item.pid];
                       return (
                         <RailFragment key={`pane:${item.pid}`}>
-                          {w && reviewsFor(w.branch || "")}
+                          {reviewsFor(item.branch)}
                           {paneRowsFor([item.pid], trackId, true)}
                         </RailFragment>
                       );
