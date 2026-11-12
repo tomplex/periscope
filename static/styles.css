@@ -1481,13 +1481,13 @@ body.modal-open { overflow: hidden; }
               border-color 180ms ease, opacity 180ms ease;
 }
 /* The freeze hint, in Next's title row — deliberately quiet; it explains a
-   pause, it isn't an alert. */
+   pause, it isn't an alert. Still fg-2: it is the only thing that says why
+   Next stopped changing, so it must stay readable at 10px. */
 .attn-frozen {
-  color: var(--fg-3);
+  color: var(--fg-2);
   font-size: 10px;
   letter-spacing: .06em;
   text-transform: uppercase;
-  opacity: .75;
 }
 
 .commands-modal-overlay {
