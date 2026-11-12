@@ -13,11 +13,42 @@
 // while frozen — freezing those would make the rail look hung.
 
 import { signal } from "@preact/signals";
+import { useEffect, useRef } from "preact/hooks";
 
 // True while the pointer is inside the rail. Set by <Rail>, read by the
 // attention sections. A signal rather than a prop so nothing between them has
 // to re-render to pass it down.
 export const railHovered = signal(false);
+
+// Bumped when you act on what Next lists, wherever from: opening an entry (its
+// card, ⌘J) or dismissing one (its ×, a banner's Mark seen). That is a user
+// action, so a held list lets its pending changes through at once rather than
+// keep showing the card you just acted on.
+export const freezeReleases = signal(0);
+export function releaseFreeze() {
+  freezeReleases.value += 1;
+}
+
+// freezeRows for a component: holds `liveRows`' membership while the pointer
+// is in the rail, until the pointer leaves or releaseFreeze. { rows, stale }.
+export function useFrozenRows(liveRows, identity = (r) => r.key) {
+  const frozen = railHovered.value;
+  const held = useRef(null);
+  const release = useRef(freezeReleases.value);
+  if (release.current !== freezeReleases.value) {
+    release.current = freezeReleases.value;
+    held.current = null;
+  }
+  // Capture the live set whenever we're thawed; that snapshot is what the next
+  // freeze holds. No dep array — cheap, and it must track every render.
+  useEffect(() => {
+    if (!frozen) held.current = liveRows;
+  });
+  return {
+    rows: freezeRows(liveRows, held.current, frozen, identity),
+    stale: isStale(liveRows, held.current, frozen, identity),
+  };
+}
 
 /**
  * Pick which rows to render given the live rows and whether we're frozen.

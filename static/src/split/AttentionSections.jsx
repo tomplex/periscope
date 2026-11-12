@@ -5,14 +5,14 @@
 // Reads the windows + alertItems signals through the pure transforms in
 // attention.js. Out-of-tree rows use `attn-row` classes (NOT child-row) so they
 // never enter the tree's connector-adjacency CSS.
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { nextWords } from "../notify/copy.js";
 import * as prefs from "../prefs.js";
-import { dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, windows } from "../store.js";
+import { dismissedNeedsPids, dismissedReadyPids, windows } from "../store.js";
 import { AGENT_META, paneLabel, relTime, shortestUniqueSuffix } from "../util.js";
-import { alertItems, dismissEvents, markReadySeen, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
-import { buildActivity, buildNext, prunedStateDismissals, resolvePinned, waitTier } from "./attention.js";
-import { freezeRows, isStale, railHovered } from "./layoutFreeze.js";
+import { alertItems, dismissEvents, markReadySeen, nextEntries, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
+import { buildActivity, prunedStateDismissals, resolvePinned, waitTier } from "./attention.js";
+import { useFrozenRows } from "./layoutFreeze.js";
 import { SectionHeader } from "./SectionHeader.jsx";
 
 // Cards shown before the rest fold into "+N".
@@ -71,26 +71,12 @@ function NextCard({ e, blip, track, nowS, onOpen, onDismiss }) {
 // so a card's stripe matches its blip and its row.
 export function NextQueue({ blipOf, trackOf }) {
   const live = windows.value || [];
-  const items = alertItems.value || [];
-  const dismissed = dismissedAlertIds.value;
   const nowS = Math.floor(Date.now() / 1000);
-  const entriesLive = buildNext(live, items, dismissed, dismissedNeedsPids.value, dismissedReadyPids.value, nowS);
   const [showAll, setShowAll] = useState(false);
-
-  // --- layout freeze (see layoutFreeze.js) ---------------------------------
   // Hold the queue's MEMBERSHIP still while the pointer is in the rail, so the
-  // card you're aiming at can't move out from under the cursor. Contents stay
-  // live.
-  const frozen = railHovered.value;
-  const held = useRef(null);
-  const entries = freezeRows(entriesLive, held.current, frozen, (e) => e.key);
-  const stale = isStale(entriesLive, held.current, frozen, (e) => e.key);
-
-  // Capture the live set whenever we're thawed; that snapshot is what the next
-  // freeze holds. No dep array — cheap, and it must track every render.
-  useEffect(() => {
-    if (!frozen) held.current = entriesLive;
-  });
+  // card you're aiming at can't move out from under the cursor (layoutFreeze.js).
+  // Contents stay live.
+  const { rows: entries, stale } = useFrozenRows(nextEntries.value);
 
   // Prune episode-scoped dismissals for panes that have left the relevant
   // state, so the next question/completion re-surfaces. Runs after render
@@ -102,19 +88,12 @@ export function NextQueue({ blipOf, trackOf }) {
     if (nextReady.size !== dismissedReadyPids.value.size) dismissedReadyPids.value = nextReady;
   }, [windows.value]);
 
-  // Opening or dismissing a card is a user action, so let the pending changes
-  // through at once rather than holding a card the user just acted on.
-  function openFor(e) {
-    return () => { held.current = null; openNextEntry(e); };
-  }
   // × on a done card marks the pane seen; on an event's card it dismisses
   // every unanswered event of that kind the pane raised. A live question and
   // a broken pane leave on their own.
   function dismissFor(e) {
-    if (e.row?.kind === "event") {
-      return () => { held.current = null; dismissEvents(e.kind === "asks" ? "need_human" : "done", e.row.target); };
-    }
-    if (e.kind === "done") return () => { held.current = null; markReadySeen(e.w); };
+    if (e.row?.kind === "event") return () => dismissEvents(e.kind === "asks" ? "need_human" : "done", e.row.target);
+    if (e.kind === "done") return () => markReadySeen(e.w);
     return null;
   }
 
@@ -143,7 +122,7 @@ export function NextQueue({ blipOf, trackOf }) {
           blip={e.w ? blipOf(e.w) : e.kind}
           track={e.w ? trackOf(e.w) : e.row?.session || ""}
           nowS={nowS}
-          onOpen={openFor(e)}
+          onOpen={() => openNextEntry(e)}
           onDismiss={dismissFor(e)}
         />
       ))}

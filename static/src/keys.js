@@ -7,21 +7,10 @@
 // the rare intent; refreshing the thing you are looking at is the common one,
 // and the browser's default served the rare case. Full reload moves to ⌘⇧R.
 
-import { openNextEntry } from "./split/alertFeed.js";
-import { buildNext, nextToOpen } from "./split/attention.js";
+import { openNext, selectedPid } from "./split/alertFeed.js";
 import { togglePanel } from "./split/panels.js";
-import {
-  alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, docRefreshNonce, paneActiveTab, railSelection, windows,
-} from "./store.js";
+import { docRefreshNonce, paneActiveTab, railSelection } from "./store.js";
 import { requestTerminalReconcile } from "./terminal/terminalCore.js";
-
-// Which pane the rail has selected, or null. railSelection is a string
-// highlight-key ("pane:<pid>" | "review:<repo>/<slug>" | "reviews" | null) —
-// only the pane form carries a pid.
-export function selectedPid(selection) {
-  if (typeof selection !== "string") return null;
-  return selection.startsWith("pane:") ? selection.slice("pane:".length) : null;
-}
 
 // What ⌘R should act on, given the selection and the per-pane active-tab map.
 // Pure so the dispatch table is testable without a DOM: returns "document"
@@ -54,21 +43,6 @@ export function panelToggleFor(e) {
 // listener sees it, which would submit whatever the composer holds.
 export function isNextKey(e) {
   return !e.repeat && e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "KeyJ";
-}
-
-// The Next entries ⌘J has opened in this walk (attention.nextToOpen).
-let opened = new Set();
-
-function openNext() {
-  const entries = buildNext(windows.value, alerts.value, dismissedAlertIds.value, dismissedNeedsPids.value,
-    dismissedReadyPids.value, Math.floor(Date.now() / 1000));
-  const live = new Set(entries.map((x) => x.key));
-  opened = new Set([...opened].filter((k) => live.has(k)));
-  const e = nextToOpen(entries, selectedPid(railSelection.value), opened);
-  if (!e) return;
-  if (opened.has(e.key)) opened = new Set();   // every entry seen: start over
-  opened.add(e.key);
-  openNextEntry(e);
 }
 
 export function installKeys(target = window) {

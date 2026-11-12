@@ -1,19 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { isNextKey, isRefreshKey, panelToggleFor, refreshTargetFor, selectedPid } from "../keys.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../prefs.js", async (importOriginal) => ({ ...(await importOriginal()), setLastSelected: vi.fn() }));
+
+const { installKeys, isNextKey, isRefreshKey, panelToggleFor, refreshTargetFor } = await import("../keys.js");
+const { railSelection, windows } = await import("../store.js");
 
 const key = (over = {}) => ({ key: "r", metaKey: false, ctrlKey: false, shiftKey: false, ...over });
 
-describe("selectedPid", () => {
-  it("extracts a pid from a pane highlight-key", () => {
-    expect(selectedPid("pane:aa11")).toBe("aa11");
-  });
-
-  it("returns null for the review form and for no selection", () => {
-    // railSelection is a union of key shapes; only the pane form has a pid.
-    expect(selectedPid("review:/dev/x")).toBeNull();
-    expect(selectedPid(null)).toBeNull();
-    expect(selectedPid(undefined)).toBeNull();
-  });
+afterEach(() => {
+  windows.value = [];
+  railSelection.value = null;
 });
 
 describe("isRefreshKey", () => {
@@ -95,6 +91,16 @@ describe("isNextKey", () => {
 
   it("ignores Ctrl+J, which the terminal sends to the pane as a line feed", () => {
     expect(isNextKey(j({ ctrlKey: true }))).toBe(false);
+  });
+
+  it("opens the next pane that wants you, wherever focus is", () => {
+    windows.value = [{ pid: "A", target: "s:0", agent: "claude", state: "idle", api_error: true }];
+    const target = new EventTarget();
+    installKeys(target);
+    const ev = Object.assign(new Event("keydown", { cancelable: true }), j({ metaKey: true }));
+    target.dispatchEvent(ev);
+    expect(railSelection.value).toBe("pane:A");
+    expect(ev.defaultPrevented).toBe(true);
   });
 
   it("ignores a bare J, other modifiers and auto-repeat", () => {

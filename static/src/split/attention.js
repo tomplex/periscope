@@ -144,8 +144,9 @@ export function awaitingReplyByPid(windows, alertItems, dismissedIds = new Set()
 // its oldest unanswered event, the rail's own urgency tier
 // (awaitingReplyByPid). Clawd's bell and the dock badge both count these, so
 // neither can disagree with the rail. `keep(w)` filters panes out (Clawd skips
-// the one open in the detail view). Map of key -> { row, since }; a live row
-// wins over an event row for the same pane.
+// the one open in the detail view). Map of key -> { row, since, message }; a
+// live row wins over an event row for the same pane, and `message` is the
+// newest unanswered need_human's: the agent's own words, when it gave any.
 export function waitingPanes(windows, alertItems, dismissedIds = new Set(), dismissedNeedsPids = new Set(), nowSec = 0,
   keep = () => true) {
   const asked = awaitingReplyByPid(windows, alertItems, dismissedIds);
@@ -157,10 +158,11 @@ export function waitingPanes(windows, alertItems, dismissedIds = new Set(), dism
       r.kind === "event" ? r.ts : (r.w.needs_since || nowSec),
       ...(r.w?.pid != null && asked.has(r.w.pid) ? [asked.get(r.w.pid)] : []),
     );
-    const prev = waiting.get(key);
+    const prev = waiting.get(key);   // events arrive newest-first
     waiting.set(key, {
       row: prev?.row.kind === "live" ? prev.row : r,
       since: prev ? Math.min(prev.since, since) : since,
+      message: prev?.message || (r.kind === "event" ? r.message : null) || null,
     });
   }
   return waiting;
@@ -208,22 +210,14 @@ export function paneBlip(w, nowS, asked = false) {
 // `row` is the buildNeedsYou or buildReady row behind an asks or done entry
 // (null for broken), which says how opening it behaves
 // (alertFeed.openNextEntry). `w` is null for an event whose pane has closed.
-// `message` is the newest unanswered need_human the pane sent: the agent's own
-// words, when it gave any. A PR failing CI is
-// one entry however many panes show it, as Clawd counts it; its other panes
-// still show broken in the strip and the tree.
+// `message` is an asking pane's newest need_human (waitingPanes). A PR failing
+// CI is one entry however many panes show it, as Clawd counts it; its other
+// panes still show broken in the strip and the tree.
 export function buildNext(windows, alertItems, dismissedIds = new Set(), dismissedNeedsPids = new Set(),
   dismissedReadyPids = new Set(), nowS = 0) {
-  const messageByTarget = new Map();   // events arrive newest-first
-  for (const r of buildNeedsYou(windows, alertItems, dismissedIds, dismissedNeedsPids)) {
-    if (r.kind === "event" && !messageByTarget.has(r.target)) messageByTarget.set(r.target, r.message);
-  }
   const asks = [...waitingPanes(windows, alertItems, dismissedIds, dismissedNeedsPids, nowS)]
     .sort((a, b) => a[1].since - b[1].since)
-    .map(([key, { row, since }]) => ({
-      key: `asks:${key}`, kind: "asks", w: row.w, row, since,
-      message: messageByTarget.get(row.w?.target ?? row.target) || null,
-    }));
+    .map(([key, { row, since, message }]) => ({ key: `asks:${key}`, kind: "asks", w: row.w, row, since, message }));
   const asking = new Set(asks.map((e) => e.w?.pid).filter(Boolean));
   const brokenPids = new Set();
   const failingPrs = new Set();
