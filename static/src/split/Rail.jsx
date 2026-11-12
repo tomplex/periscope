@@ -32,12 +32,12 @@ import { confirmDialog } from "../overlays/Dialog.jsx";
 import { modalRequest } from "../overlays/modalRequest.js";
 import { showToast } from "../overlays/Toast.jsx";
 import * as prefs from "../prefs.js";
-import { currentFilter, dismissedAlertIds, dragState, editor as editorSignal, projects, railSelection, reviews, tracks, windows, workspaces } from "../store.js";
+import { currentFilter, dragState, editor as editorSignal, projects, railSelection, reviews, tracks, windows, workspaces } from "../store.js";
 import { track } from "../track.js";
 import { apiCall, paneLabel, targetQuery } from "../util.js";
 import { ActivitySection, NextQueue, PinnedSection } from "./AttentionSections.jsx";
-import { alertItems, selectReview, selectReviewsQueue } from "./alertFeed.js";
-import { awaitingReplyByPid, paneBlip } from "./attention.js";
+import { nextEntries, selectReview, selectReviewsQueue } from "./alertFeed.js";
+import { paneBlip } from "./attention.js";
 import { railHovered } from "./layoutFreeze.js";
 import { BranchRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
 import { mergeLiveAndPrefs, paneChip, reviewRowsByTrack, trackKind, trackLabel } from "./railTree.js";
@@ -176,15 +176,12 @@ export function Rail() {
   // Across-all-windows pid → window map (the flat per-track tab lists).
   const windowsByPid = {};
   for (const w of live) windowsByPid[w.pid] = w;
-  // Panes with an unanswered need_human ask even once they've gone idle, so
-  // their blip, stripe and age say so too, not only their Next card.
-  const awaiting = awaitingReplyByPid(
-    live, alertItems.value, dismissedAlertIds.value
-  );
-  // The rail's one paneBlip: the strip, the Next cards, PINNED and the tree
-  // rows all read it, so they can't disagree about a pane.
+  // The panes Next lists as asking, and since when. The rail's one paneBlip
+  // takes its asks from them, and the strip, the Next cards' stripes, PINNED
+  // and the tree rows all read it, so they can't disagree about a pane's state.
+  const waitingSince = new Map(nextEntries.value.filter((e) => e.kind === "asks" && e.w).map((e) => [e.w.pid, e.since]));
   const nowS = Math.floor(Date.now() / 1000);
-  const blipOf = (w) => paneBlip(w, nowS, awaiting.has(w.pid));
+  const blipOf = (w) => paneBlip(w, nowS, waitingSince.has(w.pid));
   // Registry rows feed EMPTY goal tracks into the tree.
   const allTracks = tracks.value;
   const trackOf = (w) => trackLabel(w.track_id, live, allTracks);
@@ -458,7 +455,7 @@ export function Rail() {
           onToggleNamePin={() => toggleNamePin(w)}
           editor={editorSignal.value}
           onOpenInEditor={() => openInEditor(w)}
-          awaitingSince={awaiting.get(w.pid)}
+          waitingSince={waitingSince.get(w.pid)}
         />
       ));
   }

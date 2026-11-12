@@ -191,13 +191,14 @@ export function brokenCause(w) {
 const DONE_FRESH_S = 3600;
 
 // What a pane's blip says (DESIGN.md's blips), one word per pane: "asks",
-// "working", "broken", "done", "done-old", "idle" or "shell". `asked` is an
-// unanswered need_human for the pane (awaitingReplyByPid), which asks even
-// when the pane itself has gone idle. A spinner beats broken: an agent
-// retrying after an API error, or fixing its red CI, doesn't need you yet.
-export function paneBlip(w, nowS, asked = false) {
+// "working", "broken", "done", "done-old", "idle" or "shell". `asks` is
+// whether Next lists the pane as asking (waitingPanes): a live question, less
+// a soft one you've opened, or an unanswered need_human, which asks even once
+// the pane has gone idle. A spinner beats broken: an agent retrying after an
+// API error, or fixing its red CI, doesn't need you yet.
+export function paneBlip(w, nowS, asks = false) {
   if (!w.agent) return "shell";
-  if (w.state === "needs-input" || asked) return "asks";
+  if (asks) return "asks";
   if (w.state === "working") return "working";
   if (brokenCause(w)) return "broken";
   if (w.state === "done") return nowS - (w.completed_at || 0) < DONE_FRESH_S ? "done" : "done-old";

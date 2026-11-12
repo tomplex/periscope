@@ -298,9 +298,11 @@ describe("paneBlip", () => {
     expect(paneBlip(win({ agent: null, pr: 7, ci: "✗" }), 0)).toBe("shell");
   });
 
-  it("asks on a dialog, or on an unanswered need_human while idle", () => {
-    expect(paneBlip(agent({ state: "needs-input" }), 0)).toBe("asks");
+  it("asks only when Next lists the pane as asking", () => {
+    expect(paneBlip(agent({ state: "needs-input" }), 0, true)).toBe("asks");
     expect(paneBlip(agent({ state: "idle" }), 0, true)).toBe("asks");
+    // A soft question you've opened has left Next, so its blip stops asking too.
+    expect(paneBlip(agent({ state: "needs-input", asked_question: true }), 0, false)).toBe("idle");
   });
 
   it("is broken on an API error or failing CI, unless the agent is working on it", () => {
@@ -369,6 +371,13 @@ describe("buildNext", () => {
     const brokenDone = agent({ pid: "y", target: "y:0", state: "done", completed_at: 5, pr: 3, ci: "✗" });
     const next = buildNext([both, brokenDone], [], new Set(), new Set(), new Set(), 1000);
     expect(next.map((e) => e.key)).toEqual(["asks:pid:x", "broken:y"]);
+  });
+
+  it("lists a soft question you've opened as broken when its PR is red, not nowhere", () => {
+    const soft = agent({ pid: "q", target: "q:0", state: "needs-input", asked_question: true, waiting_for: null,
+      needs_since: 1, pr: 4, repo_slug: "o/r", ci: "✗" });
+    expect(buildNext([soft], [], new Set(), new Set(), new Set(), 1000).map((e) => e.key)).toEqual(["asks:pid:q"]);
+    expect(buildNext([soft], [], new Set(), new Set(["q"]), new Set(), 1000).map((e) => e.key)).toEqual(["broken:q"]);
   });
 
   it("drops a done pane once it's been marked seen", () => {

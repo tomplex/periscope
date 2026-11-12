@@ -8,7 +8,9 @@
 
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { accounts, alerts, dismissedAlertIds, moveTargets, projects, railSelection, tracks, windows } from "../../store.js";
+import {
+  accounts, alerts, dismissedAlertIds, dismissedNeedsPids, moveTargets, projects, railSelection, tracks, windows,
+} from "../../store.js";
 import { PaneHeader } from "../Detail.jsx";
 import { Rail } from "../Rail.jsx";
 
@@ -18,6 +20,7 @@ afterEach(() => {
   vi.useRealTimers();
   alerts.value = [];
   dismissedAlertIds.value = new Set();
+  dismissedNeedsPids.value = new Set();
   accounts.value = [];
   moveTargets.value = {};
 });
@@ -221,8 +224,8 @@ describe("<Rail> render smoke", () => {
 
 describe("<Rail> awaiting-reply marker", () => {
   // The pane row must carry the unanswered-question signal on its own, not
-  // only on its Next card. Drives the real wiring: store.alerts -> Rail.jsx
-  // awaitingReplyByPid -> paneBlip -> PaneRow stripe and age.
+  // only on its Next card. Drives the real wiring: store.alerts -> alertFeed's
+  // nextEntries -> Rail.jsx waitingSince -> paneBlip -> PaneRow stripe and age.
   const paneWin = (over = {}) => ({
     pid: "aa11", session: "managed", index: 0, target: "managed:0",
     name: "claude", agent: "claude", state: "idle", track_id: "/dev/myproj",
@@ -265,6 +268,19 @@ describe("<Rail> awaiting-reply marker", () => {
     const html = render(<Rail />);
     expect(html).not.toContain("pane-blip-asks");
     expect(html).not.toContain("wait-");
+  });
+
+  it("stops asking on the row and in the strip once its soft question is opened, as Next does", () => {
+    projects.value = [];
+    tracks.value = [];
+    alerts.value = [];
+    windows.value = [paneWin({ state: "needs-input", asked_question: true, waiting_for: null, needs_since: 1 })];
+    expect(render(<Rail />)).toContain("pane-row pane-blip-asks");
+    dismissedNeedsPids.value = new Set(["aa11"]);
+    const html = render(<Rail />);
+    expect(html).toContain("pane-row pane-blip-idle");
+    expect(html).toContain('<button class="blip blip-idle" aria-label="claude: idle"');
+    expect(html).not.toContain("next-card");
   });
 
   it("shows no marker when nothing has been asked", () => {

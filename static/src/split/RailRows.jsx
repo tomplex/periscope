@@ -123,16 +123,15 @@ function RailLabel({ label, kind, renameable, onCommit }) {
   );
 }
 
-// When a row's age counts from: how long it has waited on you, or since its
-// last turn finished. A working pane is "now"; a shell has none.
-function rowAge(w, blip, awaitingSince) {
+// When a row's age counts from: how long it has waited on you (Next's
+// `since` for the pane), or since its last turn finished. A working pane is
+// "now"; a shell has none.
+function rowAge(w, blip, waitingSince) {
   if (blip === "shell") return null;
   if (blip === "working") return { text: "now", cls: "", title: "working now" };
   if (blip === "asks") {
-    const since = Math.min(...[awaitingSince, w.needs_since].filter((t) => t > 0));
-    if (!Number.isFinite(since)) return null;
     return {
-      text: relTime(since), cls: ` wait-${waitTier(since, Math.floor(Date.now() / 1000))}`,
+      text: relTime(waitingSince), cls: ` wait-${waitTier(waitingSince, Math.floor(Date.now() / 1000))}`,
       title: "how long it has waited for you",
     };
   }
@@ -154,7 +153,7 @@ function blipWhy(w, blip) {
 // branch cluster, whose header already names it.
 export function PaneRow({
   w, chip, blip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
-  pinned, onTogglePin, awaitingSince, showBranch,
+  pinned, onTogglePin, waitingSince, showBranch,
   onMoveAccount, onToggleNamePin, editor, onOpenInEditor,
 }) {
   const k = `pane:${w.pid}`;
@@ -172,7 +171,7 @@ export function PaneRow({
   // ↻ only when memory tripped it. Age alone tripped it on most panes and said
   // nothing new; the detail header still shows either.
   const mh = w.mem?.trigger === "mem" ? memHint(w.mem) : null;
-  const age = rowAge(w, blip, awaitingSince);
+  const age = rowAge(w, blip, waitingSince);
   const why = blipWhy(w, blip);
   // A compact row shows context only once it's in a warning band.
   const ctxCls = ctxClass(w);
