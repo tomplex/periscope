@@ -26,7 +26,7 @@
 // "track" (top-level reorder) and "pane" (reorder within a track, or move a tab
 // to another track by POST /api/tracks/move-tab?track_id=). The id is a QUERY
 // param, never a path segment — a repo-default id is a repo PATH (invariant #6).
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { passesFilter } from "../filter.js";
 import { confirmDialog } from "../overlays/Dialog.jsx";
 import { modalRequest } from "../overlays/modalRequest.js";
@@ -197,9 +197,14 @@ export function Rail() {
       id: t, label: trackLabel(t, live, allTracks),
       panes: tabsByTrack[t].map((pid) => windowsByPid[pid]).filter(Boolean),
     }));
-  // A scope whose track has emptied or gone shows every track: the strip has
-  // no line left to click to clear it.
-  const treeOrder = stripTracks.some((t) => t.id === trackScope) ? [trackScope] : trackOrder;
+  // A scope whose track has emptied or gone is cleared, not just bypassed: the
+  // strip has no line left to show it, so the track's next pane mustn't narrow
+  // the tree again without warning.
+  const scoped = stripTracks.some((t) => t.id === trackScope);
+  useEffect(() => {
+    if (!scoped && trackScope !== "all") setTrackScope("all");
+  }, [scoped, trackScope]);
+  const treeOrder = scoped ? [trackScope] : trackOrder;
 
   // Review rows by track → branch (placement rules in railTree).
   const reviewRows = reviewRowsByTrack(trackOrder, tabsByTrack, windowsByPid, reviews.value || []);
