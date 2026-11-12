@@ -5,7 +5,7 @@
 // Reads the windows + alertItems signals through the pure transforms in
 // attention.js. Out-of-tree rows use `attn-row` classes (NOT child-row) so they
 // never enter the tree's connector-adjacency CSS.
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { nextWords } from "../notify/copy.js";
 import * as prefs from "../prefs.js";
 import { dismissedNeedsPids, dismissedReadyPids, windows } from "../store.js";
@@ -51,7 +51,7 @@ function NextCard({ e, blip, track, nowS, onOpen, onDismiss }) {
             class="next-x"
             title={e.kind === "done" ? "mark seen without opening it" : "dismiss"}
             aria-label={e.kind === "done" ? `mark ${entryName(e)} seen` : `dismiss ${entryName(e)}`}
-            onClick={(ev) => { ev.stopPropagation(); onDismiss(); }}
+            onClick={(ev) => { ev.stopPropagation(); onDismiss(ev); }}
           >×</button>
         )}
       </div>
@@ -77,6 +77,16 @@ export function NextQueue({ blipOf, trackOf }) {
   // card you're aiming at can't move out from under the cursor (layoutFreeze.js).
   // Contents stay live.
   const { rows: entries, stale } = useFrozenRows(nextEntries.value);
+  const section = useRef(null);
+  // Where focus goes once a card whose × had keyboard focus is gone: the
+  // card that took its place, else the one above, else the title row.
+  const refocusAt = useRef(null);
+  useEffect(() => {
+    if (refocusAt.current == null || !section.current) return;
+    const names = section.current.querySelectorAll(".next-name");
+    (names[Math.min(refocusAt.current, names.length - 1)] || section.current.querySelector(".next-title-row")).focus();
+    refocusAt.current = null;
+  });
 
   // Prune episode-scoped dismissals for panes that have left the relevant
   // state, so the next question/completion re-surfaces. Runs after render
@@ -91,17 +101,21 @@ export function NextQueue({ blipOf, trackOf }) {
   // × on a done card marks the pane seen; on an event's card it dismisses
   // every unanswered event of that kind the pane raised. A live question and
   // a broken pane leave on their own.
-  function dismissFor(e) {
-    if (e.row?.kind === "event") return () => dismissEvents(e.kind === "asks" ? "need_human" : "done", e.row.target);
-    if (e.kind === "done") return () => markReadySeen(e.w);
-    return null;
+  function dismissFor(e, at) {
+    let dismiss = null;
+    if (e.row?.kind === "event") dismiss = () => dismissEvents(e.kind === "asks" ? "need_human" : "done", e.row.target);
+    else if (e.kind === "done") dismiss = () => markReadySeen(e.w);
+    return dismiss && ((ev) => {
+      if (ev.currentTarget.matches(":focus-visible")) refocusAt.current = at;
+      dismiss();
+    });
   }
 
   const shown = showAll ? entries : entries.slice(0, NEXT_SHOWN);
   const folded = entries.slice(NEXT_SHOWN);
   return (
-    <section class="next" aria-label="what wants you">
-      <div class="next-title-row">
+    <section class="next" aria-label="what wants you" ref={section}>
+      <div class="next-title-row" tabIndex={-1}>
         <span class="next-title">Next</span>
         {entries.length > 0 && <span class={`next-count count-${entries[0].kind}`}>{entries.length}</span>}
         {/* Say so when the freeze is actually withholding something: a rail
@@ -112,7 +126,7 @@ export function NextQueue({ blipOf, trackOf }) {
             : entries.length > 0 ? <>open next <kbd class="ps-kbd">⌘J</kbd></> : "nothing wants you"}
         </span>
       </div>
-      {shown.map((e) => (
+      {shown.map((e, at) => (
         <NextCard
           key={e.key}
           e={e}
@@ -120,7 +134,7 @@ export function NextQueue({ blipOf, trackOf }) {
           track={e.w ? trackOf(e.w) : e.row?.session || ""}
           nowS={nowS}
           onOpen={() => openNextEntry(e)}
-          onDismiss={dismissFor(e)}
+          onDismiss={dismissFor(e, at)}
         />
       ))}
       {folded.length > 0 && (

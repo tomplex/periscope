@@ -38,7 +38,7 @@ import { apiCall, paneLabel, targetQuery } from "../util.js";
 import { ActivitySection, NextQueue, PinnedSection } from "./AttentionSections.jsx";
 import { nextEntries, selectReview, selectReviewsQueue } from "./alertFeed.js";
 import { paneBlip } from "./attention.js";
-import { railHovered } from "./layoutFreeze.js";
+import { railFocused, railHovered } from "./layoutFreeze.js";
 import { BranchRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
 import { mergeLiveAndPrefs, paneChip, reviewRowsByTrack, trackKind, trackLabel } from "./railTree.js";
 import { SectionHeader } from "./SectionHeader.jsx";
@@ -477,11 +477,15 @@ export function Rail() {
     <aside
       id="rail"
       aria-label="tracks rail"
-      // Layout-freeze latch: while the pointer is in the rail, the attention
-      // sections hold their membership so a row can't move out from under the
-      // cursor mid-click. See layoutFreeze.js.
+      // Layout-freeze latch: while the pointer or keyboard focus is in the
+      // rail, the strip and Next hold their membership so a row can't move out
+      // from under the cursor mid-click. Only :focus-visible counts, so a
+      // button a mouse click focused doesn't keep the rail held once the
+      // pointer leaves. See layoutFreeze.js.
       onMouseEnter={() => { railHovered.value = true; }}
       onMouseLeave={() => { railHovered.value = false; }}
+      onFocusIn={(e) => { railFocused.value = e.target.matches(":focus-visible"); }}
+      onFocusOut={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) railFocused.value = false; }}
     >
       <SonarStrip
         tracks={stripTracks}

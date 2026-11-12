@@ -18,10 +18,12 @@
 import { signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 
-// True while the pointer is inside the rail. Set by <Rail>, read by the
-// attention sections. A signal rather than a prop so nothing between them has
-// to re-render to pass it down.
+// True while the pointer is inside the rail, and while keyboard focus is (a
+// card you've tabbed to mustn't move either). Set by <Rail>, read through
+// useFrozenRows. Signals rather than props so nothing between them has to
+// re-render to pass them down.
 export const railHovered = signal(false);
+export const railFocused = signal(false);
 
 // Bumped when you act on what Next lists, wherever from: opening an entry (its
 // card, ⌘J) or dismissing one (its ×, a banner's Mark seen). That is a user
@@ -33,9 +35,10 @@ export function releaseFreeze() {
 }
 
 // freezeRows for a component: holds `liveRows`' membership while the pointer
-// is in the rail, until the pointer leaves or releaseFreeze. { rows, stale }.
+// or keyboard focus is in the rail, until it leaves or releaseFreeze.
+// { rows, stale }.
 export function useFrozenRows(liveRows, identity = (r) => r.key) {
-  const frozen = railHovered.value;
+  const frozen = railHovered.value || railFocused.value;
   const held = useRef(null);
   const release = useRef(freezeReleases.value);
   if (release.current !== freezeReleases.value) {

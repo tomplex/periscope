@@ -3049,6 +3049,8 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
    ─────────────────────────────────────────────────────────────────────── */
 .next { padding-bottom: 2px; }
 .next-title-row { display: flex; align-items: center; gap: 6px; padding: 12px 12px 7px; }
+/* Where focus lands when × dismisses the last card. */
+.next-title-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r-sm); }
 .next-title { font: 600 10px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-1); }
 .next-count {
   min-width: 16px; height: 16px; padding: 0 5px; border-radius: 9px;
