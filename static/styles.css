@@ -3062,6 +3062,13 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
 .next-count.count-broken { background: var(--s-danger); }
 .next-count.count-done { background: var(--s-done); }
 .next-hint { margin-left: auto; font-size: 11px; color: var(--fg-2); }
+/* A quiet text button, like "+N": the cards stay the loud part. */
+.next-all-seen {
+  padding: 0 6px; background: none; border: 0; border-radius: var(--r-sm);
+  font: inherit; font-size: 11px; line-height: 16px; color: var(--fg-2); cursor: pointer;
+}
+.next-all-seen:hover { background: var(--bg-1); color: var(--fg-1); }
+.next-all-seen:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .next-hint .ps-kbd { margin: 0 0 0 4px; }
 .next-card {
   position: relative; margin: 0 8px 6px; padding: 8px 10px 9px 14px;

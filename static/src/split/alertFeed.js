@@ -4,7 +4,7 @@
 // shares the state hub's transport and its notify()-driven kick — an alert
 // lands as soon as the tool call that raised it returns. Native banners and
 // the dock badge are notify/feed.js's. Started once from Split.jsx.
-import { computed } from "@preact/signals";
+import { batch, computed } from "@preact/signals";
 import * as prefs from "../prefs.js";
 import { alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection, windows } from "../store.js";
 import { onNotificationClick } from "../tauri.js";
@@ -97,6 +97,13 @@ export function dismissalFor(e) {
   if (e.row?.kind === "event") return () => dismissEvents(e.kind === "asks" ? "need_human" : "done", e.row.target);
   if (e.kind === "done") return () => markReadySeen(e.w);
   return null;
+}
+
+// Next's "mark all seen": every done card's ×, as one write.
+export function markDoneCardsSeen(entries) {
+  batch(() => {
+    for (const e of entries) if (e.kind === "done") dismissalFor(e)();
+  });
 }
 
 // The Next entries ⌘J has opened in this walk (attention.nextToOpen).
