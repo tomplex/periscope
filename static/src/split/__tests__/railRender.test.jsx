@@ -248,15 +248,17 @@ describe("<Rail> awaiting-reply marker", () => {
     // Just asked -> quiet tier.
     vi.setSystemTime(1000 * 1000);
     alerts.value = [ask()];
+    // The row's own stripe and age: the Next card renders the same classes,
+    // so these assert the strings only the tree row carries.
     const html = render(<Rail />);
-    expect(html).toContain("pane-blip-asks");
-    expect(html).toContain('class="rail-age wait-fresh"');
+    expect(html).toContain("pane-row pane-blip-asks");
+    expect(html).toContain('<span class="rail-age wait-fresh" title="how long it has waited for you">');
     expect(html).toContain("which branch?");   // the agent's words, on its Next card
     expect(html).toContain('<button class="next-x" title="dismiss" aria-label="dismiss claude">');
 
     // Over an hour later, same unanswered ask -> urgent.
     vi.setSystemTime((1000 + 3700) * 1000);
-    expect(render(<Rail />)).toContain('class="rail-age wait-urgent"');
+    expect(render(<Rail />)).toContain('<span class="rail-age wait-urgent" title="how long it has waited for you">');
   });
 
   it("drops the marker once the user has engaged the pane", () => {
