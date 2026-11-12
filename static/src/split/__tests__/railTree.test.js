@@ -48,8 +48,23 @@ describe("mergeLiveAndPrefs — track grouping", () => {
     ];
     const m = mergeLiveAndPrefs(wins, [], [], {});
     expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["a", "c"] }, { pid: "b" }]);
-    // tabsByTrack stays the flat all-tabs order regardless
-    expect(m.tabsByTrack.tk_a).toEqual(["a", "b", "c"]);
+    // tabsByTrack is the order the card lists, a cluster's tabs together
+    expect(m.tabsByTrack.tk_a).toEqual(["a", "c", "b"]);
+  });
+
+  it("a drag inside a cluster keeps the cluster where it sits", () => {
+    // Rail.reorderTabs splices tabsByTrack. Splicing a flat order where the
+    // cluster's tabs were apart ([a, b, c]) moved the whole cluster below b.
+    const wins = [
+      win({ pid: "a", track_id: "tk_a", branch: "master" }),
+      win({ pid: "b", track_id: "tk_a", branch: "feat-x" }),
+      win({ pid: "c", track_id: "tk_a", branch: "master" }),
+    ];
+    const order = [...mergeLiveAndPrefs(wins, [], [], {}).tabsByTrack.tk_a];
+    order.splice(order.indexOf("a"), 1);
+    order.splice(order.indexOf("c") + 1, 0, "a");   // drop a below c
+    const m = mergeLiveAndPrefs(wins, [], [], { tabsByTrack: { tk_a: order } });
+    expect(m.rowsByTrack.tk_a).toEqual([{ branch: "master", pids: ["c", "a"] }, { pid: "b" }]);
   });
 
   it("a track where every tab has its own branch has no clusters", () => {

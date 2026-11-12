@@ -45,8 +45,10 @@ const NO_BRANCH = "";
 //
 // Return shape:
 //   trackOrder   — ordered live track ids (pref-first, live-new appended)
-//   tabsByTrack  — { trackId: [pid, ...] } the FLAT all-tabs order for a
-//                  track; always present (drag reorders splice this)
+//   tabsByTrack  — { trackId: [pid, ...] } every tab of a track in the order
+//                  its card lists them (a cluster's tabs together, at its
+//                  first tab's slot); always present. Drag reorders splice
+//                  this, so they move what the user sees.
 //   rowsByTrack  — { trackId: [{ pid } | { branch, pids }] } what the
 //                  track's card lists, in tab order. A shared branch is one
 //                  { branch, pids } cluster, placed where its first tab sits;
@@ -91,22 +93,22 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, t
   const tabsByTrack = {};
   const rowsByTrack = {};
   for (const t of trackOrder) {
-    // Flat tab order: pref-first (kept iff live), then new live pids.
+    // Merged tab order: pref-first (kept iff live), then new live pids.
     const liveTabs = liveTabsByTrack[t] || [];
     const liveTabSet = new Set(liveTabs);
     const prefTabs = (prefTabsByTrack[t] || []).filter(p => liveTabSet.has(p));
     const prefTabSet = new Set(prefTabs);
-    tabsByTrack[t] = [...prefTabs, ...liveTabs.filter(p => !prefTabSet.has(p))];
+    const merged = [...prefTabs, ...liveTabs.filter(p => !prefTabSet.has(p))];
 
-    // Clusters are built from the MERGED flat order, not the raw live order,
-    // so a drag inside a cluster keeps the pref it just wrote instead of
-    // snapping back on the next poll.
+    // Clusters are built from the MERGED order, not the raw live order, so a
+    // drag inside a cluster keeps the pref it just wrote instead of snapping
+    // back on the next poll.
     const count = {};
-    for (const pid of tabsByTrack[t]) count[branchOf[pid]] = (count[branchOf[pid]] || 0) + 1;
+    for (const pid of merged) count[branchOf[pid]] = (count[branchOf[pid]] || 0) + 1;
     const multiBranch = Object.keys(count).length >= 2;
     const clusterOf = {};
     rowsByTrack[t] = [];
-    for (const pid of tabsByTrack[t]) {
+    for (const pid of merged) {
       const b = branchOf[pid];
       if (!multiBranch || b === NO_BRANCH || count[b] < 2) {
         rowsByTrack[t].push({ pid });
@@ -118,6 +120,9 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, t
       }
       clusterOf[b].pids.push(pid);
     }
+    // A new pane on a shared branch usually arrives after other branches'
+    // tabs; splicing the merged order would then move its whole cluster.
+    tabsByTrack[t] = rowsByTrack[t].flatMap((item) => item.pids || [item.pid]);
   }
 
   return { trackOrder, tabsByTrack, rowsByTrack };
