@@ -126,8 +126,8 @@ export function waitTier(sinceTs, nowS) {
 // and taking the newest would reset its age on every repeat — exactly the
 // case that most needs escalating.
 //
-// Reuses the same predicate as buildNeedsYou (isAcked + dismissals) so a row's
-// blip and its Next card can never disagree about who is waiting.
+// The same predicate as buildNeedsYou (isAcked + dismissals), so waitingPanes
+// ages a pane only by questions it still lists.
 export function awaitingReplyByPid(windows, alertItems, dismissedIds = new Set()) {
   const byTarget = indexByTarget(windows);
   const out = new Map();
@@ -176,7 +176,7 @@ export function waitingPanes(windows, alertItems, dismissedIds = new Set(), dism
 export const prKey = (w) => `${w.repo_slug || w.repo_key || ""}#${w.pr}`;
 
 // An open PR whose checks are red. A merged or closed PR keeps its last ✗, but
-// nothing is left to fix. Clawd's CI duty asks the same question.
+// nothing is left to fix.
 export function isCiFailing(w) {
   return w?.ci === "✗" && !!w.pr && (!w.pr_state || w.pr_state === "open");
 }
