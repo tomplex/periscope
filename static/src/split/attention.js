@@ -56,22 +56,28 @@ export function buildNeedsYou(windows, alertItems, dismissedIds, dismissedNeedsP
 }
 
 // The green counterpart to buildNeedsYou: live "done" panes (Claude finished,
-// unacked) + unacked done events, live-first then events newest-first. A done
-// event whose target is already a live row is dropped — notify(done) fires at
-// the same moment the pane's state flips, so the duplicate is the common case.
+// unacked) + unacked done events, live-first then events newest-first, one row
+// per pane. A done event whose target is already a live row is dropped —
+// notify(done) fires at the same moment the pane's state flips, so the
+// duplicate is the common case — and a pane's older events fold into its
+// newest, which carries the message.
 export function buildReady(windows, alertItems, dismissedIds, dismissedReadyPids = new Set()) {
   const byTarget = indexByTarget(windows);
   const live = (windows || [])
     .filter((w) => w.state === "done")
     .filter((w) => !dismissedReadyPids.has(w.pid))
     .map((w) => ({ kind: "live", pid: w.pid, w }));
-  const liveTargets = new Set(live.map((r) => r.w.target));
+  const listed = new Set(live.map((r) => r.w.target));
   const events = (alertItems || [])
     .filter((r) => r.kind === "done")
     .filter((r) => !dismissedIds.has(r.id))
-    .filter((r) => !liveTargets.has(r.target))
     .filter((r) => !isAcked(r, byTarget))
     .sort((a, b) => b.ts - a.ts)
+    .filter((r) => {
+      if (listed.has(r.target)) return false;
+      listed.add(r.target);
+      return true;
+    })
     .map((r) => ({
       kind: "event",
       id: r.id,
@@ -209,10 +215,12 @@ export function paneBlip(w, nowS, asks = false) {
 // `row` is the buildNeedsYou or buildReady row behind an asks or done entry
 // (null for broken), which says how opening it behaves
 // (alertFeed.openNextEntry). `w` is null for an event whose pane has closed.
-// `message` is an asking pane's newest need_human (waitingPanes). A PR failing
-// CI is one entry however many panes show it, as Clawd counts it, opening the
-// pane that speaks for it (prSpeaker); its other panes still show broken in
-// the strip and the tree, and keep their own done news.
+// `message` is an asking pane's newest need_human (waitingPanes), or a done
+// event's. A PR failing CI is one entry however many panes show it, as Clawd
+// counts it, opening the pane that speaks for it (prSpeaker); its other panes
+// still show broken in the strip and the tree, and keep their own done news.
+// A pane that sent notify(done) and went back to work keeps its done entry
+// until you've seen it: its stripe says working, its reason done.
 export function buildNext(windows, alertItems, dismissedIds = new Set(), dismissedNeedsPids = new Set(),
   dismissedReadyPids = new Set(), nowS = 0) {
   const asks = [...waitingPanes(windows, alertItems, dismissedIds, dismissedNeedsPids, nowS)]
@@ -236,7 +244,7 @@ export function buildNext(windows, alertItems, dismissedIds = new Set(), dismiss
   const done = buildReady(windows, alertItems, dismissedIds, dismissedReadyPids)
     .filter((r) => !taken.has(r.w?.pid))
     .map((r) => ({
-      key: r.kind === "live" ? `done:${r.pid}` : `done:${r.id}`, kind: "done", w: r.w, row: r,
+      key: r.w ? `done:pid:${r.w.pid}` : `done:target:${r.target}`, kind: "done", w: r.w, row: r,
       since: r.kind === "live" ? r.w.completed_at : r.ts,
       message: r.kind === "event" ? r.message : null,
     }));

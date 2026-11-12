@@ -83,6 +83,12 @@ describe("dutyItems", () => {
     expect(event[0].target).toMatchObject({ action: "reveal", target: "s:d" });
   });
 
+  it("counts finished panes, not their done events", () => {
+    const alerts = [{ id: 1, kind: "done", target: "s:a", ts: NOW - 50 }, { id: 2, kind: "done", target: "s:a", ts: NOW - 20 }];
+    expect(dutyItems({ windows: [pane("a", { state: "working" })], alerts, nowSec: NOW })[0])
+      .toMatchObject({ kind: "done", count: 1, phrase: "pane-a finished" });
+  });
+
   it("respects the rail's dismissals", () => {
     const windows = [pane("a", { state: "needs-input", asked_question: true }), pane("b", { state: "done" })];
     expect(dutyItems({ windows, dismissedNeedsPids: new Set(["a"]), dismissedReadyPids: new Set(["b"]), nowSec: NOW })).toEqual([]);

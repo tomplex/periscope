@@ -156,10 +156,19 @@ describe("buildReady", () => {
 
   it("sorts events newest-first", () => {
     const rows = buildReady([], [
-      evt({ kind: "done", id: "old", ts: 50 }),
-      evt({ kind: "done", id: "new", ts: 90 }),
+      evt({ kind: "done", id: "old", ts: 50, target: "a:0" }),
+      evt({ kind: "done", id: "new", ts: 90, target: "b:0" }),
     ], new Set());
     expect(rows.map((r) => r.id)).toEqual(["new", "old"]);
+  });
+
+  it("folds a pane's done events into its newest, which carries the message", () => {
+    const rows = buildReady([], [
+      evt({ kind: "done", id: "first", ts: 50, message: "Opened the PR." }),
+      evt({ kind: "done", id: "second", ts: 90, message: "Fixed the review." }),
+    ], new Set());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: "second", message: "Fixed the review." });
   });
 });
 
@@ -323,7 +332,7 @@ describe("buildNext", () => {
     const newer = agent({ pid: "n", target: "n:0", state: "needs-input", needs_since: 800 });
     const older = agent({ pid: "o", target: "o:0", state: "needs-input", needs_since: 500 });
     const next = buildNext([done, broken, newer, older], [], new Set(), new Set(), new Set(), 1000);
-    expect(next.map((e) => e.key)).toEqual(["asks:pid:o", "asks:pid:n", "broken:b", "done:d"]);
+    expect(next.map((e) => e.key)).toEqual(["asks:pid:o", "asks:pid:n", "broken:b", "done:pid:d"]);
     expect(next.map((e) => e.since)).toEqual([500, 800, null, 900]);
   });
 
@@ -366,7 +375,7 @@ describe("buildNext", () => {
     // A second finished pane on the same red PR keeps its own done card.
     const fixer = red("fix", { state: "done", completed_at: 980 });
     expect(buildNext([reviewer, author, fixer], [], new Set(), new Set(), new Set(), 1000).map((e) => e.key))
-      .toEqual(["broken:auth", "done:fix"]);
+      .toEqual(["broken:auth", "done:pid:fix"]);
   });
 
   it("an event whose pane has closed still asks, with its message", () => {
@@ -386,6 +395,16 @@ describe("buildNext", () => {
       needs_since: 1, pr: 4, repo_slug: "o/r", ci: "✗" });
     expect(buildNext([soft], [], new Set(), new Set(), new Set(), 1000).map((e) => e.key)).toEqual(["asks:pid:q"]);
     expect(buildNext([soft], [], new Set(), new Set(["q"]), new Set(), 1000).map((e) => e.key)).toEqual(["broken:q"]);
+  });
+
+  it("lists a pane that finished twice and went back to work once, keyed by the pane", () => {
+    const back = agent({ pid: "w", target: "w:0", state: "working" });
+    const events = [evt({ id: "d1", kind: "done", target: "w:0", ts: 100 }), evt({ id: "d2", kind: "done", target: "w:0", ts: 200 })];
+    const next = buildNext([back], events, new Set(), new Set(), new Set(), 1000);
+    expect(next.map((e) => e.key)).toEqual(["done:pid:w"]);
+    expect(next[0]).toMatchObject({ since: 200, row: { id: "d2" } });
+    // A pane that has closed keeps its done news, keyed by its target.
+    expect(buildNext([], events, new Set(), new Set(), new Set(), 1000).map((e) => e.key)).toEqual(["done:target:w:0"]);
   });
 
   it("drops a done pane once it's been marked seen", () => {
