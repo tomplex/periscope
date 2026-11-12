@@ -252,6 +252,7 @@ describe("<Rail> awaiting-reply marker", () => {
     expect(html).toContain("pane-blip-asks");
     expect(html).toContain('class="rail-age wait-fresh"');
     expect(html).toContain("which branch?");   // the agent's words, on its Next card
+    expect(html).toContain('<button class="next-x" title="dismiss" aria-label="dismiss claude">');
 
     // Over an hour later, same unanswered ask -> urgent.
     vi.setSystemTime((1000 + 3700) * 1000);
@@ -318,6 +319,7 @@ describe("<Rail> Next queue", () => {
     // a screen reader.
     expect(html).toContain('<button class="next-name" aria-label="weighting, needs approval: Allow Bash: uv run pytest -x">');
     expect(html).not.toContain('role="button"');
+    expect(html).not.toContain("next-x");   // a live question leaves on its own
   });
 
   it("lists a pane with an API error as broken, in the strip and the queue", () => {
@@ -329,6 +331,7 @@ describe("<Rail> Next queue", () => {
     expect(html).toContain("blip blip-broken");
     expect(html).toContain('<span class="next-why why-broken">API error</span>');
     expect(html).toContain('<span class="rail-why why-broken">API error</span>');
+    expect(html).not.toContain("next-x");   // a broken pane leaves once fixed
   });
 
   it("folds everything past the third card into +N", () => {
@@ -342,6 +345,8 @@ describe("<Rail> Next queue", () => {
     const html = render(<Rail />);
     expect(html.split('class="next-card').length - 1).toBe(3);
     expect(html).toContain('<span class="next-more-n">+2</span>');
+    // A done card can be marked seen without opening its pane.
+    expect(html).toContain('<button class="next-x" title="mark seen without opening it" aria-label="mark done-1 seen">');
   });
 });
 

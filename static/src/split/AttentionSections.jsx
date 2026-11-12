@@ -10,7 +10,7 @@ import { nextWords } from "../notify/copy.js";
 import * as prefs from "../prefs.js";
 import { dismissedNeedsPids, dismissedReadyPids, windows } from "../store.js";
 import { AGENT_META, paneLabel, relTime, shortestUniqueSuffix } from "../util.js";
-import { alertItems, dismissEvents, markReadySeen, nextEntries, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
+import { alertItems, dismissalFor, nextEntries, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
 import { buildActivity, prunedStateDismissals, resolvePinned, waitTier } from "./attention.js";
 import { useFrozenRows } from "./layoutFreeze.js";
 import { SectionHeader } from "./SectionHeader.jsx";
@@ -98,13 +98,8 @@ export function NextQueue({ blipOf, trackOf }) {
     if (nextReady.size !== dismissedReadyPids.value.size) dismissedReadyPids.value = nextReady;
   }, [windows.value]);
 
-  // × on a done card marks the pane seen; on an event's card it dismisses
-  // every unanswered event of that kind the pane raised. A live question and
-  // a broken pane leave on their own.
   function dismissFor(e, at) {
-    let dismiss = null;
-    if (e.row?.kind === "event") dismiss = () => dismissEvents(e.kind === "asks" ? "need_human" : "done", e.row.target);
-    else if (e.kind === "done") dismiss = () => markReadySeen(e.w);
+    const dismiss = dismissalFor(e);
     return dismiss && ((ev) => {
       if (ev.currentTarget.matches(":focus-visible")) refocusAt.current = at;
       dismiss();

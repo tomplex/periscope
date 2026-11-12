@@ -89,6 +89,16 @@ export function openNextEntry(e) {
   else openReadyPane(e.w);
 }
 
+// What × on a Next card does, or null when the card has none: a done card
+// marks its pane seen; an event's card dismisses every unanswered event of
+// that kind the pane raised. A live question and a broken pane leave on their
+// own.
+export function dismissalFor(e) {
+  if (e.row?.kind === "event") return () => dismissEvents(e.kind === "asks" ? "need_human" : "done", e.row.target);
+  if (e.kind === "done") return () => markReadySeen(e.w);
+  return null;
+}
+
 // The Next entries ⌘J has opened in this walk (attention.nextToOpen).
 let opened = new Set();
 

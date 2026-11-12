@@ -7,8 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../prefs.js", () => ({ setLastSelected: vi.fn() }));
 
 const { alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection, windows } = await import("../../store.js");
-const { dismissEvents, markReadySeen, openNeedsPane, openNext, openNextEntry, openReadyPane, selectedPid, selectReview } =
-  await import("../alertFeed.js");
+const {
+  dismissalFor, dismissEvents, markReadySeen, openNeedsPane, openNext, openNextEntry, openReadyPane, selectedPid, selectReview,
+} = await import("../alertFeed.js");
 const { freezeReleases } = await import("../layoutFreeze.js");
 const prefs = await import("../../prefs.js");
 
@@ -65,6 +66,34 @@ describe("opening a Next entry", () => {
     dismissEvents("done", "s:b");
     markReadySeen(pane("c"));
     expect(freezeReleases.value).toBe(before + 3);
+  });
+});
+
+describe("a Next card's ×", () => {
+  const w = { pid: "p", target: "s:p" };
+
+  it("marks a live done pane seen, and its done events with it", () => {
+    alerts.value = [{ id: "d1", kind: "done", target: "s:p" }];
+    dismissalFor({ kind: "done", w, row: { kind: "live", pid: "p", w } })();
+    expect([...dismissedReadyPids.value]).toEqual(["p"]);
+    expect([...dismissedAlertIds.value]).toEqual(["d1"]);
+  });
+
+  it("dismisses an event card's kind of event, every one the pane raised", () => {
+    alerts.value = [
+      { id: "q1", kind: "need_human", target: "s:p" }, { id: "q2", kind: "need_human", target: "s:p" },
+      { id: "d1", kind: "done", target: "s:p" },
+    ];
+    dismissalFor({ kind: "asks", w, row: { kind: "event", target: "s:p" } })();
+    expect([...dismissedAlertIds.value].sort()).toEqual(["q1", "q2"]);
+    dismissalFor({ kind: "done", w: null, row: { kind: "event", target: "s:p" } })();
+    expect([...dismissedAlertIds.value].sort()).toEqual(["d1", "q1", "q2"]);
+    expect(dismissedReadyPids.value.size).toBe(0);
+  });
+
+  it("is absent on a live question and a broken pane, which leave on their own", () => {
+    expect(dismissalFor({ kind: "asks", w, row: { kind: "live", pid: "p", w } })).toBe(null);
+    expect(dismissalFor({ kind: "broken", w, row: null })).toBe(null);
   });
 });
 
