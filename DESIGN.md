@@ -471,7 +471,8 @@ forward on hover or selection.
 - **Next card**: what wants you, under the strip. A `bg-1` card with 6px corners and the
   pane's state stripe: name and age, then up to three lines of what the agent said (12px;
   a command in mono on `bg-2`), then the track in magenta and the reason. Three show; the
-  rest fold into a "+N" row.
+  rest fold into a "+N" row. With two or more finished cards, the title row offers "mark
+  all seen", an 11px `fg-2` text button.
 - **Menu**: a `bg-1` panel with a 1px `line` edge, 6px corners and 4px padding. Items are
   12px, 6px × 10px, with 4px corners. Hover fills with `bg-2` and turns the text `fg-0`;
   the active item gets the 18% Periscope Glass wash.

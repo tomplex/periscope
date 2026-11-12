@@ -356,6 +356,7 @@ button.res-line { font: inherit; color: inherit; background: none; border: 0; te
 .rail-mem { flex: 0 0 auto; font-size: 10px; cursor: help; }
 .rail-mem.mem-warn, .header-mem.mem-warn { color: var(--s-working); }
 .rail-mem.mem-bad, .header-mem.mem-bad { color: var(--s-danger); }
+.header-mem.mem-age { color: var(--fg-3); }
 /* A rail row's age (RailRows rowAge): how long it has waited for you, or how
    long since its last turn finished. An unanswered question ramps with age
    (attention.js waitTier) — a pane parked for an hour must not read like one
@@ -1456,8 +1457,9 @@ body.modal-open { overflow: hidden; }
      keyframes, and enter motion is the one thing that would still move. Also
      stops the Settings critter previews (.critter-preview sits outside .tama). */
   .attn-row, .rail-row, .next-card { animation: none !important; }
-  /* The asking pulse: the stripe, and its blip in the sonar strip. */
-  .pane-stripe, .blip::after { animation: none !important; }
+  /* The asking pulse: the stripe, its blip in the sonar strip, and the
+     transcript's needs-input dot. */
+  .pane-stripe, .blip::after, .transcript-status-dot { animation: none !important; }
   .tama *, .critter-preview * { animation: none !important; }
 }
 
@@ -3060,6 +3062,13 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
 .next-count.count-broken { background: var(--s-danger); }
 .next-count.count-done { background: var(--s-done); }
 .next-hint { margin-left: auto; font-size: 11px; color: var(--fg-2); }
+/* A quiet text button, like "+N": the cards stay the loud part. */
+.next-all-seen {
+  padding: 0 6px; background: none; border: 0; border-radius: var(--r-sm);
+  font: inherit; font-size: 11px; line-height: 16px; color: var(--fg-2); cursor: pointer;
+}
+.next-all-seen:hover { background: var(--bg-1); color: var(--fg-1); }
+.next-all-seen:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .next-hint .ps-kbd { margin: 0 0 0 4px; }
 .next-card {
   position: relative; margin: 0 8px 6px; padding: 8px 10px 9px 14px;
@@ -3285,8 +3294,8 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
   50% { opacity: 0.4; transform: scale(0.82); }
 }
 
-/* working — no box, just a pulsing dot + the verb Claude chose (matches its
-   own TUI spinner line). */
+/* working — no box, just a still dot + the verb Claude chose (matches its
+   own TUI spinner line). Only needs-input pulses. */
 .transcript-working {
   display: flex; align-items: center; gap: 8px;
   margin: 5px 0 2px; padding: 2px 0;
@@ -3295,7 +3304,6 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
 .transcript-working-dot {
   width: 7px; height: 7px; border-radius: 50%; flex: none;
   background: var(--s-working);
-  animation: transcript-status-pulse 1.4s ease-in-out infinite;
 }
 .transcript-working-verb { min-width: 0; }
 

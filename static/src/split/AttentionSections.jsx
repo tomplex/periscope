@@ -10,7 +10,7 @@ import { nextWords } from "../notify/copy.js";
 import * as prefs from "../prefs.js";
 import { dismissedNeedsPids, dismissedReadyPids, windows } from "../store.js";
 import { AGENT_META, paneLabel, relTime, shortestUniqueSuffix } from "../util.js";
-import { alertItems, dismissalFor, nextEntries, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
+import { alertItems, dismissalFor, markDoneCardsSeen, nextEntries, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
 import { buildActivity, prunedStateDismissals, resolvePinned, waitTier } from "./attention.js";
 import { useFrozenRows } from "./layoutFreeze.js";
 import { SectionHeader } from "./SectionHeader.jsx";
@@ -108,11 +108,24 @@ export function NextQueue({ blipOf, trackOf }) {
 
   const shown = showAll ? entries : entries.slice(0, NEXT_SHOWN);
   const folded = entries.slice(NEXT_SHOWN);
+  // The cards on screen, folded ones included; a pane that finished while the
+  // queue was held hasn't been seen. One card's × already does this.
+  const done = entries.filter((e) => e.kind === "done");
   return (
     <section class="next" aria-label="what wants you" ref={section}>
       <div class="next-title-row" tabIndex={-1}>
         <span class="next-title">Next</span>
         {entries.length > 0 && <span class={`next-count count-${entries[0].kind}`}>{entries.length}</span>}
+        {done.length > 1 && (
+          <button
+            class="next-all-seen"
+            title={`mark all ${done.length} finished cards seen without opening them`}
+            onClick={(ev) => {
+              if (ev.currentTarget.matches(":focus-visible")) refocusAt.current = 0;
+              markDoneCardsSeen(done);
+            }}
+          >mark all seen</button>
+        )}
         {/* Say so when the freeze is actually withholding something: a rail
             that quietly stops updating is worse than one that moves. In the
             title row, so the hint can't push down the cards it holds. */}

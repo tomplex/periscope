@@ -8,7 +8,7 @@ vi.mock("../../prefs.js", () => ({ setLastSelected: vi.fn() }));
 
 const { alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection, windows } = await import("../../store.js");
 const {
-  dismissalFor, dismissEvents, markReadySeen, openNeedsPane, openNext, openNextEntry, openReadyPane, selectedPid, selectReview,
+  dismissalFor, dismissEvents, markDoneCardsSeen, markReadySeen, openNeedsPane, openNext, openNextEntry, openReadyPane, selectedPid, selectReview,
 } = await import("../alertFeed.js");
 const { freezeReleases } = await import("../layoutFreeze.js");
 const prefs = await import("../../prefs.js");
@@ -94,6 +94,24 @@ describe("a Next card's ×", () => {
   it("is absent on a live question and a broken pane, which leave on their own", () => {
     expect(dismissalFor({ kind: "asks", w, row: { kind: "live", pid: "p", w } })).toBe(null);
     expect(dismissalFor({ kind: "broken", w, row: null })).toBe(null);
+  });
+});
+
+describe("Next's mark all seen", () => {
+  it("marks every done card seen, live or event, and leaves the questions", () => {
+    const a = { pid: "a", target: "s:a" };
+    const q = { pid: "q", target: "s:q" };
+    alerts.value = [
+      { id: "d1", kind: "done", target: "s:a" }, { id: "d2", kind: "done", target: "s:gone" },
+      { id: "q1", kind: "need_human", target: "s:q" },
+    ];
+    markDoneCardsSeen([
+      { kind: "asks", w: q, row: { kind: "event", target: "s:q" } },
+      { kind: "done", w: a, row: { kind: "live", pid: "a", w: a } },
+      { kind: "done", w: null, row: { kind: "event", target: "s:gone" } },
+    ]);
+    expect([...dismissedReadyPids.value]).toEqual(["a"]);
+    expect([...dismissedAlertIds.value].sort()).toEqual(["d1", "d2"]);
   });
 });
 

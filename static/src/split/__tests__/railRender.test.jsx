@@ -355,6 +355,17 @@ describe("<Rail> Next queue", () => {
     expect(html).toContain('<button class="blip blip-done" aria-label="done-1: done 2m ago"');
     // A done card can be marked seen without opening its pane.
     expect(html).toContain('<button class="next-x" title="mark seen without opening it" aria-label="mark done-1 seen">');
+    // Every done card at once, folded ones included.
+    expect(html).toContain('<button class="next-all-seen" title="mark all 5 finished cards seen without opening them">mark all seen</button>');
+  });
+
+  it("offers mark all seen only with two or more done cards: one card's × already does it", () => {
+    projects.value = [];
+    tracks.value = [];
+    alerts.value = [];
+    const now = Math.floor(Date.now() / 1000);
+    windows.value = [paneWin({ pid: "d1", index: 0, target: "managed:0", name: "done-1", pane_id: "%1", state: "done", completed_at: now - 60 })];
+    expect(render(<Rail />)).not.toContain("next-all-seen");
   });
 });
 
