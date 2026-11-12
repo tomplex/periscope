@@ -15,6 +15,7 @@
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { accountLabel, moveAccountTarget, multiAccount } from "../accounts.js";
+import { blipReason } from "../notify/copy.js";
 import { profileLabel } from "../profiles.js";
 import { AGENT_META, memHint, paneLabel, prStateMeta, prUrl, relTime } from "../util.js";
 import { waitTier } from "./attention.js";
@@ -140,9 +141,7 @@ function rowAge(w, blip, awaitingSince) {
 
 // What the narrator line leads with when the blip alone doesn't say why.
 function blipWhy(w, blip) {
-  if (blip === "broken") return w.api_error ? "API error" : "CI failing";
-  if (blip === "done" || blip === "done-old") return "done";
-  return null;
+  return blip === "broken" || blip === "done" || blip === "done-old" ? blipReason(w, blip) : null;
 }
 
 // Adaptive pane row. Default state is a COMPACT row: name, PR and age on line

@@ -3,18 +3,18 @@
 // The blip's shape says the state as well as its colour (attention.paneBlip),
 // so it still reads for colour-blind eyes. Clicking a blip opens its pane;
 // clicking a track's name shows only that track in the tree.
-import { paneLabel, relTime, waitLabel } from "../util.js";
+import { blipReason } from "../notify/copy.js";
+import { paneLabel, relTime } from "../util.js";
 
 const LEGEND = ["asks", "broken", "done", "working", "idle", "shell"];
 
-// What a blip says to a screen reader and in its tooltip.
+// What a blip says to a screen reader and in its tooltip: the pane's reason,
+// and how long ago a finished or idle pane last finished.
 function blipLabel(w, blip) {
-  const name = paneLabel(w);
-  if (blip === "asks") return `${name}: ${w.state === "needs-input" ? waitLabel(w.waiting_for) : "asked you something"}`;
-  if (blip === "broken") return `${name}: ${w.api_error ? "API error" : "CI failing"}`;
-  if (blip === "done" || blip === "done-old") return `${name}: done ${relTime(w.completed_at)} ago`;
-  if (blip === "idle" && w.completed_at) return `${name}: idle ${relTime(w.completed_at)}`;
-  return `${name}: ${blip}`;
+  const reason = blipReason(w, blip);
+  if (reason === "done") return `${paneLabel(w)}: done ${relTime(w.completed_at)} ago`;
+  if (reason === "idle" && w.completed_at) return `${paneLabel(w)}: idle ${relTime(w.completed_at)}`;
+  return `${paneLabel(w)}: ${reason}`;
 }
 
 // `tracks`: [{ id, label, panes: [w] }] in the tree's order. `blipOf(w)` is

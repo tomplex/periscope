@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { waitKind } from "../../util.js";
-import { firstSentence, nextWords, payloadFor } from "../copy.js";
+import { blipReason, firstSentence, nextWords, payloadFor } from "../copy.js";
 
 // actions.js (imported below for the category cross-check) pulls in UI
 // modules that reach tauri.js; feed.test.js's mock, unused here otherwise.
@@ -307,9 +307,10 @@ describe("nextWords", () => {
     expect(nextWords({ kind: "asks", w: pane, message: null }).lead).toBe("Waiting for your answer.");
   });
 
-  it("says 'asked' for a need_human with no dialog open, or whose pane has closed", () => {
-    expect(nextWords({ kind: "asks", w: w({ state: "idle" }), message: "help" }).reason).toBe("asked");
-    expect(nextWords({ kind: "asks", w: null, message: "help" })).toEqual({ lead: "help", code: null, reason: "asked" });
+  it("says 'asked you something' for a need_human with no dialog open, or whose pane has closed", () => {
+    expect(nextWords({ kind: "asks", w: w({ state: "idle" }), message: "help" }).reason).toBe("asked you something");
+    expect(nextWords({ kind: "asks", w: null, message: "help" }))
+      .toEqual({ lead: "help", code: null, reason: "asked you something" });
   });
 
   it("names an API error, or the failing checks", () => {
@@ -319,9 +320,43 @@ describe("nextWords", () => {
     expect(nextWords({ kind: "broken", w: w({ pr: 12, ci: "✗" }) }).lead).toBe("Checks are failing on #12.");
   });
 
+  it("gives the card the reason its blip gives", () => {
+    for (const [kind, pane] of [
+      ["asks", w({ state: "needs-input", waiting_for: "approve AskUserQuestion" })],
+      ["asks", w({ state: "idle" })],
+      ["broken", w({ api_error: true })],
+      ["broken", w({ pr: 12, ci: "✗" })],
+      ["done", w({ state: "done" })],
+    ]) {
+      expect(nextWords({ kind, w: pane, message: null }).reason).toBe(blipReason(pane, kind));
+    }
+  });
+
   it("a done entry says what the done banner says", () => {
     const pane = w({ state: "done", last_reply: "Merged the fix. Next I would bump the version." });
     expect(nextWords({ kind: "done", w: pane, message: null })).toEqual({ lead: "Merged the fix.", code: null, reason: "done" });
     expect(nextWords({ kind: "done", w: null, message: "All green." }).lead).toBe("All green.");
+  });
+});
+
+describe("blipReason", () => {
+  it("words a question by what the pane waits on, and a permission as needing approval", () => {
+    expect(blipReason(w({ state: "needs-input", waiting_for: "approve AskUserQuestion" }), "asks")).toBe("needs answer");
+    expect(blipReason(w({ state: "needs-input", waiting_for: "dialog open",
+      pending_permission: { tool: "Bash" } }), "asks")).toBe("needs approval");
+    expect(blipReason(w({ state: "idle" }), "asks")).toBe("asked you something");
+    expect(blipReason(null, "asks")).toBe("asked you something");
+  });
+
+  it("names a broken pane's cause, an API error before failing CI", () => {
+    expect(blipReason(w({ api_error: true, pr: 12, ci: "✗" }), "broken")).toBe("API error");
+    expect(blipReason(w({ pr: 12, ci: "✗" }), "broken")).toBe("CI failing");
+  });
+
+  it("says done however long ago, and the state's own word otherwise", () => {
+    expect(blipReason(w(), "done")).toBe("done");
+    expect(blipReason(w(), "done-old")).toBe("done");
+    expect(blipReason(w(), "working")).toBe("working");
+    expect(blipReason(w({ agent: null }), "shell")).toBe("shell");
   });
 });

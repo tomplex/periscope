@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { shortestUniqueSuffix } from "../../util.js";
-import {awaitingReplyByPid, buildActivity,
+import {awaitingReplyByPid, brokenCause, buildActivity,
   buildNeedsYou, buildNext, buildReady, buildRunning,
   isCiFailing, isSoftQuestion, nextToOpen, paneBlip, prunedStateDismissals,resolvePinned, waitingPanes, waitTier,
 } from "../attention.js";
@@ -280,6 +280,14 @@ describe("isCiFailing", () => {
     expect(isCiFailing(win({ pr: 7, ci: "✗", pr_state: "closed" }))).toBe(false);
     expect(isCiFailing(win({ pr: 7, ci: "✓" }))).toBe(false);
     expect(isCiFailing(win({ ci: "✗" }))).toBe(false);
+  });
+});
+
+describe("brokenCause", () => {
+  it("is an API error before failing CI, and null for neither", () => {
+    expect(brokenCause(win({ api_error: true, pr: 7, ci: "✗" }))).toBe("api");
+    expect(brokenCause(win({ pr: 7, ci: "✗" }))).toBe("ci");
+    expect(brokenCause(win({ pr: 7, ci: "✗", pr_state: "merged" }))).toBe(null);
   });
 });
 

@@ -175,6 +175,15 @@ export function isCiFailing(w) {
   return w?.ci === "✗" && !!w.pr && (!w.pr_state || w.pr_state === "open");
 }
 
+// Why a pane is broken, or null: "api" (an API error) or "ci" (its open PR's
+// checks are red). The blip, its words (notify/copy.js blipReason), Next's one
+// card per PR and Clawd all ask this.
+export function brokenCause(w) {
+  if (w.api_error) return "api";
+  if (isCiFailing(w)) return "ci";
+  return null;
+}
+
 // A finished pane is news for an hour. After that its blip dims, though it
 // stays in Next until it's seen.
 const DONE_FRESH_S = 3600;
@@ -188,7 +197,7 @@ export function paneBlip(w, nowS, asked = false) {
   if (!w.agent) return "shell";
   if (w.state === "needs-input" || asked) return "asks";
   if (w.state === "working") return "working";
-  if (w.api_error || isCiFailing(w)) return "broken";
+  if (brokenCause(w)) return "broken";
   if (w.state === "done") return nowS - (w.completed_at || 0) < DONE_FRESH_S ? "done" : "done-old";
   return "idle";
 }
@@ -222,7 +231,7 @@ export function buildNext(windows, alertItems, dismissedIds = new Set(), dismiss
   for (const w of windows || []) {
     if (paneBlip(w, nowS, asking.has(w.pid)) !== "broken") continue;
     brokenPids.add(w.pid);
-    if (!w.api_error) {
+    if (brokenCause(w) === "ci") {
       if (failingPrs.has(prKey(w))) continue;
       failingPrs.add(prKey(w));
     }
