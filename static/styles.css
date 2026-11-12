@@ -2994,6 +2994,9 @@ body.col-resizing iframe { pointer-events: none; }
    bar), so the strip reads without colour too. Only an asking blip pulses:
    urgency is motion and position, never brightness (the Blip Rule).
    ─────────────────────────────────────────────────────────────────────── */
+/* SonarStrip keeps --sonar-h at the strip's height, so a control focused
+   while tabbing up the rail scrolls into view below the strip, not under it. */
+#rail { scroll-padding-top: var(--sonar-h, 0px); }
 .sonar {
   position: sticky; top: 0; z-index: 3;
   padding: 10px 10px 8px 12px;

@@ -3,6 +3,7 @@
 // The blip's shape says the state as well as its colour (attention.paneBlip),
 // so it still reads for colour-blind eyes. Clicking a blip opens its pane;
 // clicking a track's name shows only that track in the tree.
+import { useEffect, useRef } from "preact/hooks";
 import { blipReason } from "../notify/copy.js";
 import { paneLabel, relTime } from "../util.js";
 import { useFrozenRows } from "./layoutFreeze.js";
@@ -24,8 +25,22 @@ export function SonarStrip({ tracks, blipOf, selectedKey, scope, onScope, onSele
   // Its lines hold still while you aim at the rail, as Next's cards do: a line
   // appearing above the queue would move every card under the pointer.
   const { rows } = useFrozenRows(tracks, (t) => t.id);
+  // The tree scrolls under the strip, so a control that Shift+Tab focuses
+  // would scroll to the rail's top edge, behind it. The rail keeps the strip's
+  // height as its scroll padding (#rail's --sonar-h).
+  const strip = useRef(null);
+  useEffect(() => {
+    const el = strip.current;
+    const rail = el.parentElement;
+    const sized = new ResizeObserver(() => rail.style.setProperty("--sonar-h", `${el.offsetHeight}px`));
+    sized.observe(el);
+    return () => {
+      sized.disconnect();
+      rail.style.removeProperty("--sonar-h");
+    };
+  }, []);
   return (
-    <div class="sonar" role="group" aria-label="every pane, by track">
+    <div class="sonar" role="group" aria-label="every pane, by track" ref={strip}>
       {rows.map(({ id, label, panes }) => {
         const scoped = scope === id;
         return (
