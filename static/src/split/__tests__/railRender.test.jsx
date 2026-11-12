@@ -358,6 +358,42 @@ describe("<Rail> Next queue", () => {
   });
 });
 
+describe("<Rail> compact row", () => {
+  const one = (over) => {
+    projects.value = [];
+    tracks.value = [];
+    alerts.value = [];
+    windows.value = [{
+      pid: "p1", session: "managed", index: 0, target: "managed:0", name: "worker",
+      agent: "claude", state: "idle", track_id: "t1", track_name: "fdy",
+      repo_key: "/dev/fdy", repo_label: "fdy", branch: "master", cwd: "/dev/fdy",
+      worktree_affiliation: aff("at-pin"), pane_id: "%1", focused_at: 0, acted_at: 0, ...over,
+    }];
+    return render(<Rail />);
+  };
+
+  it("shows ↻ when memory tripped it, not age", () => {
+    expect(one({ mem: { tier: "warn", trigger: "age", gb: 0.5, age_s: 3 * 86400 } })).not.toContain("rail-mem");
+    expect(one({ mem: { tier: "bad", trigger: "mem", gb: 4.2, age_s: 86400 } }))
+      .toContain('<span class="rail-mem mem-bad"');
+  });
+
+  it("shows context only once it's in a warning band", () => {
+    expect(one({ context_pct: 20 })).not.toContain("pane-mini-ctx");
+    expect(one({ context_pct: 65 })).toContain('<span class="pane-mini-ctx ctx-warn"');
+  });
+
+  it("ages a waiting pane from its needs-input stamp, a working one as now, an idle one from its last turn", () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(one({ state: "needs-input", waiting_for: "permission prompt", needs_since: now - 900 }))
+      .toContain('<span class="rail-age wait-stale" title="how long it has waited for you">15m</span>');
+    expect(one({ state: "working" })).toContain('<span class="rail-age" title="working now">now</span>');
+    expect(one({ completed_at: now - 7200 }))
+      .toContain('<span class="rail-age" title="since its last turn finished">2h</span>');
+    expect(one({ agent: null, state: "shell" })).not.toContain("rail-age");
+  });
+});
+
 describe("delegation lineage placement", () => {
   const paneWin = (over = {}) => ({
     session: "managed", agent: "claude", state: "idle",
