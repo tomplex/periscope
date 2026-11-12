@@ -1,37 +1,22 @@
-// The left-rail attention zone. Two mount points (see <Rail>):
-//   <AttentionTop>    — NEEDS YOU + READY + RUNNING + PINNED, rendered ABOVE the project tree.
+// The rail's attention zone. Three mount points (see <Rail>):
+//   <NextQueue>       — what wants you, in the agent's words, under the sonar strip.
+//   <PinnedSection>   — the panes you pinned, above the tree.
 //   <ActivitySection> — the low-signal ACTIVITY log, rendered BELOW the tree.
 // Reads the windows + alertItems signals through the pure transforms in
 // attention.js. Out-of-tree rows use `attn-row` classes (NOT child-row) so they
 // never enter the tree's connector-adjacency CSS.
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { nextWords } from "../notify/copy.js";
 import * as prefs from "../prefs.js";
-import {dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids,
-  windows, 
-} from "../store.js";
-import { AGENT_META, paneLabel, relTime, shortestUniqueSuffix, waitLabel } from "../util.js";
-import { alertItems, openNeedsPane, openReadyPane, revealPane, selectPane } from "./alertFeed.js";
-import {buildActivity,
-  buildNeedsYou, buildReady, buildRunning, 
-  needsYouCount, prunedStateDismissals,resolvePinned, 
-} from "./attention.js";
-import { freezeRows, isStale, railHovered } from "./layoutFreeze.js";
-import { statusDotClass } from "./RailRows.jsx";
+import { dismissedNeedsPids, dismissedReadyPids, windows } from "../store.js";
+import { AGENT_META, paneLabel, relTime, shortestUniqueSuffix } from "../util.js";
+import { alertItems, dismissalFor, nextEntries, openNextEntry, revealPane, selectPane } from "./alertFeed.js";
+import { buildActivity, prunedStateDismissals, resolvePinned, waitTier } from "./attention.js";
+import { useFrozenRows } from "./layoutFreeze.js";
 import { SectionHeader } from "./SectionHeader.jsx";
 
-// `shorten` collapses a long slash-path session to its shortest unique suffix.
-function originLabel(w, fallbackSession, fallbackName, shorten) {
-  const session = w?.session || fallbackSession || "";
-  const name = paneLabel(w) || fallbackName || "";
-  return `${shorten ? shorten(session) : session} · ${name}`;
-}
-// Suffix-shortener over every live session name, so a label only grows a
-// segment when it would actually collide with another open session.
-function sessionShortener(live) {
-  const all = [...new Set((live || []).map((w) => w.session).filter(Boolean))];
-  return (s) => shortestUniqueSuffix(s, all);
-}
-
+// Cards shown before the rest fold into "+N".
+const NEXT_SHOWN = 3;
 
 // Toggle takes the section's already-computed current state so the inverted
 // Activity default lives at exactly one place (the read site), not here.
@@ -39,66 +24,69 @@ function toggle(key, currentlyCollapsed) {
   prefs.setRailCollapsedKey(key, !currentlyCollapsed);
 }
 
-// Stable identity for the freeze latch — mirrors the JSX keys below, where
-// live rows key on pane pid and event rows on alert id.
-function rowKey(r) {
-  return `${r.kind}:${r.pid ?? r.id}`;
+// A pane that has closed since its event fired has only the event's names.
+function entryName(e) {
+  return e.w ? paneLabel(e.w) : e.row?.name || e.row?.session || "a closed pane";
 }
 
-// NEEDS YOU + READY + RUNNING + PINNED — top of the rail, above the project tree.
-export function AttentionTop() {
-  // Subscribe to prefs explicitly (pins + section-collapse live there), the
-  // same way Rail does — so reactivity is self-contained.
-  prefs.prefsSignal.value;
+// The whole card opens its pane on click; the name is the button a keyboard or
+// screen reader reaches (a role=button card would hide its × from them), and
+// its click bubbles to the card's.
+function NextCard({ e, blip, track, nowS, onOpen, onDismiss }) {
+  const { lead, code, reason } = nextWords(e);
+  const meta = AGENT_META[e.w?.agent] || AGENT_META.claude;
+  return (
+    <div class={`next-card pane-blip-${blip}`} onClick={onOpen}>
+      <span class="pane-stripe" aria-hidden="true"></span>
+      <div class="next-head">
+        <span class={`rail-icon ${meta.className}`} title={meta.label}>{meta.glyph}</span>
+        <button class="next-name" aria-label={`${entryName(e)}, ${reason}: ${lead}${code ? ` ${code}` : ""}`}>
+          {entryName(e)}
+        </button>
+        {e.since ? (
+          <span class={`rail-age${e.kind === "asks" ? ` wait-${waitTier(e.since, nowS)}` : ""}`}>{relTime(e.since)}</span>
+        ) : null}
+        {onDismiss && (
+          <button
+            class="next-x"
+            title={e.kind === "done" ? "mark seen without opening it" : "dismiss"}
+            aria-label={e.kind === "done" ? `mark ${entryName(e)} seen` : `dismiss ${entryName(e)}`}
+            onClick={(ev) => { ev.stopPropagation(); onDismiss(ev); }}
+          >×</button>
+        )}
+      </div>
+      <div class="next-words" title={code ? `${lead} ${code}` : lead}>
+        {lead}{code && <> <code class="next-code">{code}</code></>}
+      </div>
+      <div class="next-meta">
+        <span class="next-track">{track}</span>
+        <span aria-hidden="true">·</span>
+        <span class={`next-why why-${e.kind}`}>{reason}</span>
+      </div>
+    </div>
+  );
+}
+
+// What wants you, under the sonar strip. `blipOf` / `trackOf` are the rail's,
+// so a card's stripe matches its blip and its row.
+export function NextQueue({ blipOf, trackOf }) {
   const live = windows.value || [];
-  const items = alertItems.value || [];
-  const dismissed = dismissedAlertIds.value;
-  const dismissedNeeds = dismissedNeedsPids.value;
-  const collapsed = prefs.getRailCollapsed();
-  const shorten = sessionShortener(live);
-
-  const needsRowsLive = buildNeedsYou(live, items, dismissed, dismissedNeeds);
-  const needsCollapsed = collapsed["sec:needs"] === true;
-
-  const readyRowsLive = buildReady(live, items, dismissed, dismissedReadyPids.value);
-  const readyCollapsed = collapsed["sec:ready"] === true;
-
-  const runningRowsLive = buildRunning(live);
-  const runningCollapsed = collapsed["sec:running"] === true;
-
-  const pinned = resolvePinned(prefs.getPinnedPids(), live);
-  const pinnedCollapsed = collapsed["sec:pinned"] === true;
-
-  // --- layout freeze (see layoutFreeze.js) ---------------------------------
-  // Hold section MEMBERSHIP still while the pointer is in the rail, so the row
-  // you're aiming at can't move out from under the cursor. Contents stay live.
-  // PINNED is deliberately excluded: it only changes when you pin something,
-  // and a user action must never be the thing that's withheld.
-  const frozen = railHovered.value;
-  const held = useRef(null);
-  const needsRows = freezeRows(needsRowsLive, held.current?.needs, frozen, rowKey);
-  const readyRows = freezeRows(readyRowsLive, held.current?.ready, frozen, rowKey);
-  const runningRows = freezeRows(runningRowsLive, held.current?.running, frozen, rowKey);
-  const stale =
-    isStale(needsRowsLive, held.current?.needs, frozen, rowKey) ||
-    isStale(readyRowsLive, held.current?.ready, frozen, rowKey) ||
-    isStale(runningRowsLive, held.current?.running, frozen, rowKey);
-
-  // Capture the live set whenever we're thawed; that snapshot is what the next
-  // freeze holds. No dep array — cheap, and it must track every render.
+  const nowS = Math.floor(Date.now() / 1000);
+  const [showAll, setShowAll] = useState(false);
+  // Hold the queue's MEMBERSHIP still while the pointer is in the rail, so the
+  // card you're aiming at can't move out from under the cursor (layoutFreeze.js).
+  // Contents stay live.
+  const { rows: entries, stale } = useFrozenRows(nextEntries.value);
+  const section = useRef(null);
+  // Where focus goes once a card whose × had keyboard focus is gone: the
+  // card that took its place, else the one above, else the title row.
+  const refocusAt = useRef(null);
   useEffect(() => {
-    if (!frozen) {
-      held.current = {
-        needs: needsRowsLive, ready: readyRowsLive, running: runningRowsLive,
-      };
-    }
+    if (refocusAt.current == null || !section.current) return;
+    const names = section.current.querySelectorAll(".next-name");
+    (names[Math.min(refocusAt.current, names.length - 1)] || section.current.querySelector(".next-title-row")).focus();
+    refocusAt.current = null;
   });
-
-  // Any click inside the sections is a user action, so let the pending changes
-  // through immediately rather than holding a row the user just acted on.
-  function flush() {
-    held.current = null;
-  }
 
   // Prune episode-scoped dismissals for panes that have left the relevant
   // state, so the next question/completion re-surfaces. Runs after render
@@ -110,131 +98,74 @@ export function AttentionTop() {
     if (nextReady.size !== dismissedReadyPids.value.size) dismissedReadyPids.value = nextReady;
   }, [windows.value]);
 
-  function dismiss(id) {
-    flush();
-    const next = new Set(dismissed);
-    next.add(id);
-    dismissedAlertIds.value = next;
-  }
-  // Click a live needs-you row: navigate to it, and if it's a soft question
-  // (no real dialog), dismiss it from the zone. Real dialogs stay sticky.
-  function onLiveClick(w) {
-    flush();
-    openNeedsPane(w);
-  }
-  // Click a live ready row: navigate + always dismiss for this done-episode.
-  // Selecting normally acks via the detail terminal's WS connect, but an
-  // already-selected pane won't reconnect — the dismissal covers that case.
-  function onReadyClick(w) {
-    flush();
-    openReadyPane(w);
+  function dismissFor(e, at) {
+    const dismiss = dismissalFor(e);
+    return dismiss && ((ev) => {
+      if (ev.currentTarget.matches(":focus-visible")) refocusAt.current = at;
+      dismiss();
+    });
   }
 
+  const shown = showAll ? entries : entries.slice(0, NEXT_SHOWN);
+  const folded = entries.slice(NEXT_SHOWN);
+  return (
+    <section class="next" aria-label="what wants you" ref={section}>
+      <div class="next-title-row" tabIndex={-1}>
+        <span class="next-title">Next</span>
+        {entries.length > 0 && <span class={`next-count count-${entries[0].kind}`}>{entries.length}</span>}
+        {/* Say so when the freeze is actually withholding something: a rail
+            that quietly stops updating is worse than one that moves. In the
+            title row, so the hint can't push down the cards it holds. */}
+        <span class="next-hint">
+          {stale ? <span class="attn-frozen" title="Move the pointer out of the rail to apply">updates paused</span>
+            : entries.length > 0 ? <>open next <kbd class="ps-kbd">⌘J</kbd></> : "nothing wants you"}
+        </span>
+      </div>
+      {shown.map((e, at) => (
+        <NextCard
+          key={e.key}
+          e={e}
+          blip={e.w ? blipOf(e.w) : e.kind}
+          track={e.w ? trackOf(e.w) : e.row?.session || ""}
+          nowS={nowS}
+          onOpen={() => openNextEntry(e)}
+          onDismiss={dismissFor(e, at)}
+        />
+      ))}
+      {folded.length > 0 && (
+        <button class="next-more" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
+          {showAll ? "show fewer" : (
+            <>
+              <span class="next-more-n">+{folded.length}</span>
+              <span class="next-more-list">{folded.map((e) => `${entryName(e)} ${nextWords(e).reason}`).join(" · ")}</span>
+            </>
+          )}
+        </button>
+      )}
+    </section>
+  );
+}
+
+// The panes you pinned, above the tree.
+export function PinnedSection({ blipOf, trackOf }) {
+  prefs.prefsSignal.value;
+  const pinned = resolvePinned(prefs.getPinnedPids(), windows.value || []);
+  const collapsed = prefs.getRailCollapsed()["sec:pinned"] === true;
+  if (!pinned.length) return null;
   return (
     <>
-      {/* Say so when the freeze is actually withholding something. A rail that
-          quietly stops updating is worse than one that moves. */}
-      {stale && (
-        <div class="attn-frozen" title="Move the pointer out of the rail to apply">
-          updates paused
+      <SectionHeader
+        icon="★" label="PINNED" count={pinned.length}
+        collapsed={collapsed}
+        onToggle={() => toggle("sec:pinned", collapsed)}
+      />
+      {!collapsed && pinned.map((w) => (
+        <div key={`pin:${w.pid}`} class="rail-row attn-row attn-pinned" onClick={() => selectPane(w)}>
+          <span class={`blip blip-${blipOf(w)}`} aria-hidden="true"></span>
+          <span class="attn-label">{paneLabel(w)}</span>
+          <span class="attn-reason">{trackOf(w)}</span>
         </div>
-      )}
-      {needsRows.length > 0 && (
-        <>
-          <SectionHeader
-            icon="⚠" label="NEEDS YOU" tone="alert"
-            count={needsYouCount(needsRows)}
-            collapsed={needsCollapsed}
-            onToggle={() => toggle("sec:needs", needsCollapsed)}
-          />
-          {!needsCollapsed && needsRows.map((r) =>
-            r.kind === "live" ? (
-              <div key={`live:${r.pid}`} class="rail-row attn-row attn-needs"
-                   onClick={() => onLiveClick(r.w)}>
-                <span class="attn-dot dot dot-alert dot-pulse"></span>
-                <span class="attn-label">{originLabel(r.w, null, null, shorten)}</span>
-                <span class="attn-reason">{waitLabel(r.w?.waiting_for)}</span>
-              </div>
-            ) : (
-              <div key={`evt:${r.id}`} class="rail-row attn-row attn-needs attn-event"
-                   onClick={() => revealPane(r.target)}>
-                <span class="attn-ico">⚠</span>
-                <span class="attn-label">{originLabel(r.w, r.session, r.name, shorten)}</span>
-                <span class="attn-reason">need_human · {relTime(r.ts)}</span>
-                <button class="attn-x" title="dismiss"
-                        onClick={(e) => { e.stopPropagation(); dismiss(r.id); }}>×</button>
-              </div>
-            )
-          )}
-        </>
-      )}
-
-      {readyRows.length > 0 && (
-        <>
-          <SectionHeader
-            icon="✓" label="READY" tone="ready"
-            count={readyRows.length}
-            collapsed={readyCollapsed}
-            onToggle={() => toggle("sec:ready", readyCollapsed)}
-          />
-          {!readyCollapsed && readyRows.map((r) =>
-            r.kind === "live" ? (
-              <div key={`rlive:${r.pid}`} class="rail-row attn-row attn-ready"
-                   onClick={() => onReadyClick(r.w)}>
-                <span class="attn-dot dot dot-blue dot-pulse-done"></span>
-                <span class="attn-label">{originLabel(r.w, null, null, shorten)}</span>
-                <span class="attn-reason">{relTime(r.w?.completed_at)}</span>
-              </div>
-            ) : (
-              <div key={`revt:${r.id}`} class="rail-row attn-row attn-ready attn-event"
-                   onClick={() => revealPane(r.target)}>
-                <span class="attn-ico">✓</span>
-                <span class="attn-label">{originLabel(r.w, r.session, r.name, shorten)}</span>
-                <span class="attn-reason">done · {relTime(r.ts)}</span>
-                <button class="attn-x" title="dismiss"
-                        onClick={(e) => { e.stopPropagation(); dismiss(r.id); }}>×</button>
-              </div>
-            )
-          )}
-        </>
-      )}
-
-      {runningRows.length > 0 && (
-        <>
-          <SectionHeader
-            icon="⟳" label="RUNNING" tone="working"
-            count={runningRows.length}
-            collapsed={runningCollapsed}
-            onToggle={() => toggle("sec:running", runningCollapsed)}
-          />
-          {!runningCollapsed && runningRows.map((r) => (
-            <div key={`run:${r.pid}`} class="rail-row attn-row attn-running"
-                 onClick={() => selectPane(r.w)}>
-              <span class="attn-dot dot dot-green"></span>
-              <span class="attn-label">{originLabel(r.w, null, null, shorten)}</span>
-              <span class="attn-reason">{`${r.w?.spinner || "working"}…`}</span>
-            </div>
-          ))}
-        </>
-      )}
-
-      {pinned.length > 0 && (
-        <>
-          <SectionHeader
-            icon="★" label="PINNED" count={pinned.length}
-            collapsed={pinnedCollapsed}
-            onToggle={() => toggle("sec:pinned", pinnedCollapsed)}
-          />
-          {!pinnedCollapsed && pinned.map((w) => (
-            <div key={`pin:${w.pid}`} class="rail-row attn-row attn-pinned"
-                 onClick={() => selectPane(w)}>
-              <span class={`attn-ico ${AGENT_META[w.agent]?.className || ""}`}>{AGENT_META[w.agent]?.glyph || "$"}</span>
-              <span class="attn-label">{originLabel(w, null, null, shorten)}</span>
-              <span class={statusDotClass(w.state)} style="margin-left:auto"></span>
-            </div>
-          ))}
-        </>
-      )}
+      ))}
     </>
   );
 }
@@ -244,7 +175,9 @@ export function ActivitySection() {
   prefs.prefsSignal.value;
   const items = alertItems.value || [];
   const collapsed = prefs.getRailCollapsed();
-  const shorten = sessionShortener(windows.value || []);
+  // Suffix-shortener over every live session name, so a label only grows a
+  // segment when it would actually collide with another open session.
+  const sessions = [...new Set((windows.value || []).map((w) => w.session).filter(Boolean))];
 
   const activity = buildActivity(items);
   const activityCollapsed = collapsed["sec:activity"] !== false;  // absent → collapsed
@@ -260,7 +193,7 @@ export function ActivitySection() {
         <div key={`act:${r.id}`} class={`rail-row attn-row attn-activity attn-${r.kind}`}
              onClick={() => revealPane(r.target)}>
           <span class="attn-ico">{r.kind === "done" ? "✓" : "•"}</span>
-          <span class="attn-label">{originLabel(null, r.session, r.name, shorten)}</span>
+          <span class="attn-label">{`${shortestUniqueSuffix(r.session || "", sessions)} · ${r.name || ""}`}</span>
           <span class="attn-reason">{relTime(r.ts)}</span>
         </div>
       ))}

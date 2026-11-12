@@ -9,27 +9,18 @@
 // old repo/workspace/MAIN_KEY trichotomy collapsed into it. cd never moves a
 // row; the cwd-derived repo_key/branch fields are display-only (chips).
 //
-// Mid-tier is DERIVED, not a pref: within a track, tabs group by `w.branch`.
-// A track spanning ≥2 distinct branches emits branch sub-clusters; at ≤1
-// branch it renders flat. There is no catchall group and no separate
-// workspace tier — the no-tag case is handled backend-side (the resolution
-// ladder always returns a home track).
-
-// Severity ranking for status rollup: higher index = higher priority.
-const SEVERITY = ["shell", "idle", "done", "working", "needs-input"];
-
-export function maxSeverity(states) {
-  let best = -1;
-  for (const s of states) {
-    const i = SEVERITY.indexOf(s);
-    if (i > best) best = i;
-  }
-  return best >= 0 ? SEVERITY[best] : "shell";
-}
+// Mid-tier is DERIVED, not a pref: within a track that spans ≥2 distinct
+// branches, a branch that two or more tabs share becomes a sub-cluster. With
+// one worktree per branch most branches hold a single tab, and a header per
+// tab doubled the rail's height, so those tabs stay flat and show their
+// branch themselves. There is no catchall group and no separate workspace
+// tier — the no-tag case is handled backend-side (the resolution ladder
+// always returns a home track).
 
 // Empty-string fallback bucket for a window that arrives without a `branch`
 // (non-git cwd, pre-resolution race). Kept a distinct key so it counts as its
-// own branch in the distinct-count rather than colliding with a real branch.
+// own branch in the distinct-count rather than colliding with a real branch,
+// but it never clusters: "(no branch)" says nothing the tabs share.
 const NO_BRANCH = "";
 
 // Merge live /api/state windows with persisted ordering prefs to produce the
@@ -43,51 +34,43 @@ const NO_BRANCH = "";
 // `tracks` is the /api/state track registry (non-archived rows). It exists so
 // EMPTY GOAL TRACKS render: live windows alone can't surface a track with no
 // tabs, and a freshly created track must be visible to receive its first tab
-// (drag / "+ New tab") — otherwise creation dead-ends. Goal tracks (id !== repo
+// (drag / the header's +) — otherwise creation dead-ends. Goal tracks (id !== repo
 // — repo-default catchalls have id == repo) are always in the tree; an empty
 // repo-default track stays hidden (it's a lazy catchall, an empty one is noise).
 //
-// `prefs` is `{ trackOrder?, tabsByTrack?, branchOrderByTrack? }`:
-//   trackOrder          — ordered track ids (replaces the old repo_order)
-//   tabsByTrack         — { trackId: [pid, ...] } tab order within a track
-//                         (replaces panes_by_worktree, now keyed by track id)
-//   branchOrderByTrack  — { trackId: [branch, ...] } branch sub-cluster order
+// `prefs` is `{ trackOrder?, tabsByTrack? }`:
+//   trackOrder   — ordered track ids (replaces the old repo_order)
+//   tabsByTrack  — { trackId: [pid, ...] } tab order within a track
+//                  (replaces panes_by_worktree, now keyed by track id)
 //
 // Return shape:
-//   trackOrder       — ordered live track ids (pref-first, live-new appended)
-//   tabsByTrack      — { trackId: [pid, ...] } the FLAT all-tabs order for a
-//                      track; always present, used directly when a track is
-//                      single-branch (flat render)
-//   branchesByTrack  — { trackId: [branch, ...] } the ordered distinct
-//                      branches; [] (empty) means "single-branch → render
-//                      flat from tabsByTrack"
-//   tabsByBranch     — { trackId: { branch: [pid, ...] } } per-branch tab
-//                      order; only populated for MULTI-branch tracks
+//   trackOrder   — ordered live track ids (pref-first, live-new appended)
+//   tabsByTrack  — { trackId: [pid, ...] } every tab of a track in the order
+//                  its card lists them (a cluster's tabs together, at its
+//                  first tab's slot); always present. Drag reorders splice
+//                  this, so they move what the user sees.
+//   rowsByTrack  — { trackId: [{ pid, branch } | { branch, pids }] } what
+//                  the track's card lists, in tab order. A shared branch is one
+//                  { branch, pids } cluster, placed where its first tab sits;
+//                  every other tab is its own { pid, branch }. A single-branch track
+//                  never clusters (its header already says where it is), and
+//                  neither does the no-branch bucket.
 export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, tracks = []) {
   const prefTrackOrder = prefs.trackOrder || [];
   const prefTabsByTrack = prefs.tabsByTrack || {};
-  const prefBranchOrder = prefs.branchOrderByTrack || {};
 
   const liveTracks = [];                 // ordered track ids (first-seen)
   const liveTabsByTrack = {};            // trackId → [pid] (first-seen)
-  const liveBranchesByTrack = {};        // trackId → [branch] (first-seen)
-  const liveTabsByBranch = {};           // trackId → { branch: [pid] }
   const branchOf = {};                   // pid → branch (buckets the merged order)
   for (const w of (windows || [])) {
     const t = w.track_id;
     if (!t) continue;  // backend guarantees a track_id; skip defensively
-    const branch = w.branch || NO_BRANCH;
     if (!liveTabsByTrack[t]) {
       liveTracks.push(t);
       liveTabsByTrack[t] = [];
-      liveBranchesByTrack[t] = [];
-      liveTabsByBranch[t] = {};
     }
     if (!liveTabsByTrack[t].includes(w.pid)) liveTabsByTrack[t].push(w.pid);
-    if (!liveBranchesByTrack[t].includes(branch)) liveBranchesByTrack[t].push(branch);
-    if (!liveTabsByBranch[t][branch]) liveTabsByBranch[t][branch] = [];
-    if (!liveTabsByBranch[t][branch].includes(w.pid)) liveTabsByBranch[t][branch].push(w.pid);
-    branchOf[w.pid] = branch;
+    branchOf[w.pid] = w.branch || NO_BRANCH;
   }
 
   // Empty goal tracks join the tree alongside live membership (see header).
@@ -108,43 +91,41 @@ export function mergeLiveAndPrefs(windows, _projects, _workspaces, prefs = {}, t
   ];
 
   const tabsByTrack = {};
-  const branchesByTrack = {};
-  const tabsByBranch = {};
+  const rowsByTrack = {};
   for (const t of trackOrder) {
-    // Flat tab order: pref-first (kept iff live), then new live pids.
+    // Merged tab order: pref-first (kept iff live), then new live pids.
     const liveTabs = liveTabsByTrack[t] || [];
     const liveTabSet = new Set(liveTabs);
     const prefTabs = (prefTabsByTrack[t] || []).filter(p => liveTabSet.has(p));
     const prefTabSet = new Set(prefTabs);
-    tabsByTrack[t] = [...prefTabs, ...liveTabs.filter(p => !prefTabSet.has(p))];
+    const merged = [...prefTabs, ...liveTabs.filter(p => !prefTabSet.has(p))];
 
-    // Distinct branches: pref-first (kept iff live), then live-new branches.
-    const liveBranches = liveBranchesByTrack[t] || [];
-    const liveBranchSet = new Set(liveBranches);
-    const prefBranches = (prefBranchOrder[t] || []).filter(b => liveBranchSet.has(b));
-    const prefBranchSet = new Set(prefBranches);
-    const branches = [...prefBranches, ...liveBranches.filter(b => !prefBranchSet.has(b))];
-
-    if (branches.length >= 2) {
-      branchesByTrack[t] = branches;
-      tabsByBranch[t] = {};
-      for (const b of branches) tabsByBranch[t][b] = [];
-      // Bucket the MERGED flat order, not the raw live order: a multi-branch
-      // track renders from tabsByBranch, so taking live order here threw away
-      // the pref that a drag had just written — the row snapped back on the
-      // next poll, and only in multi-branch tracks (single-branch renders flat
-      // from tabsByTrack, which honors the pref). Reported as tabs not landing
-      // where they were dropped.
-      for (const pid of tabsByTrack[t]) {
-        const b = branchOf[pid];
-        if (tabsByBranch[t][b]) tabsByBranch[t][b].push(pid);
+    // Clusters are built from the MERGED order, not the raw live order, so a
+    // drag inside a cluster keeps the pref it just wrote instead of snapping
+    // back on the next poll.
+    const count = {};
+    for (const pid of merged) count[branchOf[pid]] = (count[branchOf[pid]] || 0) + 1;
+    const multiBranch = Object.keys(count).length >= 2;
+    const clusterOf = {};
+    rowsByTrack[t] = [];
+    for (const pid of merged) {
+      const b = branchOf[pid];
+      if (!multiBranch || b === NO_BRANCH || count[b] < 2) {
+        rowsByTrack[t].push({ pid, branch: b });
+        continue;
       }
-    } else {
-      branchesByTrack[t] = [];  // single-branch → flat render from tabsByTrack
+      if (!clusterOf[b]) {
+        clusterOf[b] = { branch: b, pids: [] };
+        rowsByTrack[t].push(clusterOf[b]);
+      }
+      clusterOf[b].pids.push(pid);
     }
+    // A new pane on a shared branch usually arrives after other branches'
+    // tabs; splicing the merged order would then move its whole cluster.
+    tabsByTrack[t] = rowsByTrack[t].flatMap((item) => item.pids || [item.pid]);
   }
 
-  return { trackOrder, tabsByTrack, branchesByTrack, tabsByBranch };
+  return { trackOrder, tabsByTrack, rowsByTrack };
 }
 
 // Top-level track row label. The backend ships `track_name` on every window

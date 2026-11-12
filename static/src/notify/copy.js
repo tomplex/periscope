@@ -1,10 +1,11 @@
 // What each notification says (notify/detect.js finds them, notify/feed.js
-// sends them): the pure part. macOS truncates titles around 40 characters, so
+// sends them), and what the rail's Next cards say, so the two agree: the pure
+// part. macOS truncates titles around 40 characters, so
 // pane names are clipped before they push the verb off the end.
 
 import { meterLabel } from "../chrome/usageRules.js";
-import { paneLabel, plural, prUrl, waitKind } from "../util.js";
-import { prKey } from "./detect.js";
+import { brokenCause, prKey } from "../split/attention.js";
+import { paneLabel, plural, prUrl, waitKind, waitLabel } from "../util.js";
 
 // Cut by code point, not UTF-16 code unit — a pane name ending in an emoji
 // or other surrogate-pair character would otherwise leave a lone surrogate
@@ -46,6 +47,51 @@ const NEEDS_BODY = {
   question: "Waiting for your answer.",
   dialog: "Waiting for your input.",
 };
+const needsBody = (w) => NEEDS_BODY[waitKind(w?.waiting_for)] || NEEDS_BODY.dialog;
+
+// The reply from the transcript first: recap and last_line are read off the
+// screen, where the footer's statusline passed for the reply (THI-416).
+const doneBody = (w) => firstSentence(w.last_reply || w.recap || w.last_line) || "Finished.";
+
+const failingChecks = (w) => (w.ci_checks || []).filter((c) => c.state === "failure").map((c) => c.name);
+
+const BROKEN_REASON = { api: "API error", ci: "CI failing" };
+
+// Why a pane's blip (attention.paneBlip) is what it is, in the words its strip
+// blip, its row and its Next card all use. `w` is null for an event whose pane
+// has closed: it can only have asked, or finished.
+export function blipReason(w, blip) {
+  if (blip === "asks") {
+    if (w?.pending_permission) return "needs approval";
+    return w?.state === "needs-input" ? waitLabel(w.waiting_for) : "asked you something";
+  }
+  if (blip === "broken") return BROKEN_REASON[brokenCause(w)];
+  if (blip === "done" || blip === "done-old") return "done";
+  return blip;
+}
+
+// A Next card's words (attention.buildNext's entry): `lead` is what the agent
+// said, or the closest thing periscope can read; `code` is a command to show
+// in mono after it; `reason` is why the pane is in the queue.
+export function nextWords(entry) {
+  const { kind, w, message } = entry;
+  const reason = blipReason(w, kind);
+  if (kind === "asks") {
+    const perm = w?.pending_permission;
+    if (perm) {
+      return perm.summary
+        ? { lead: `Allow ${toolLabel(perm.tool)}:`, code: perm.summary, reason }
+        : { lead: `Allow ${toolLabel(perm.tool)}?`, code: null, reason };
+    }
+    return { lead: message || needsBody(w), code: null, reason };
+  }
+  if (kind === "broken") {
+    if (brokenCause(w) === "api") return { lead: "Hit an API error and has written nothing since.", code: null, reason };
+    const failing = failingChecks(w);
+    return { lead: failing.length ? `Failing: ${failing.join(", ")}` : `Checks are failing on #${w.pr}.`, code: null, reason };
+  }
+  return { lead: message || (w ? doneBody(w) : "Finished."), code: null, reason };
+}
 const CHECK_MARK = { failure: "✗", pending: "⟳", success: "✓" };
 
 // A usage banner's category when it can offer Spawn on {B}: one per B,
@@ -75,7 +121,7 @@ export function payloadFor(ev, ctx = {}) {
       }
       return {
         ...base, title: `${pane(w)} needs you`, subtitle: where(w),
-        body: NEEDS_BODY[waitKind(w.waiting_for)] || NEEDS_BODY.dialog,
+        body: needsBody(w),
         category: "needs_dialog", data: { open: "pane", pid: w.pid },
       };
     }
@@ -96,9 +142,7 @@ export function payloadFor(ev, ctx = {}) {
         // The linked PR only: an auto-detected one is just the branch's, often
         // days old, and would ride every finished turn.
         subtitle: w.pr && w.pr_linked ? `${w.session} · PR #${w.pr}` : where(w),
-        // The reply from the transcript first: recap and last_line are read off
-        // the screen, where the footer's statusline passed for the reply (THI-416).
-        body: firstSentence(w.last_reply || w.recap || w.last_line) || "Finished.",
+        body: doneBody(w),
         category: "done_seen", data: { open: "pane", pid: w.pid, session: w.session },
       };
     case "ci_failed": {
@@ -122,7 +166,7 @@ export function payloadFor(ev, ctx = {}) {
         // no agent around to fix it (target can name a neighbour by now).
         data: {
           open: "url", url, pid: fixer?.pid || w.pid, pr: w.pr,
-          checks: (w.ci_checks || []).filter((c) => c.state === "failure").map((c) => c.name),
+          checks: failingChecks(w),
         },
       };
     }

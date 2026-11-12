@@ -8,7 +8,9 @@
 
 import render from "preact-render-to-string";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { accounts, alerts, dismissedAlertIds, moveTargets, projects, tracks, windows } from "../../store.js";
+import {
+  accounts, alerts, dismissedAlertIds, dismissedNeedsPids, moveTargets, projects, railSelection, tracks, windows,
+} from "../../store.js";
 import { PaneHeader } from "../Detail.jsx";
 import { Rail } from "../Rail.jsx";
 
@@ -18,6 +20,7 @@ afterEach(() => {
   vi.useRealTimers();
   alerts.value = [];
   dismissedAlertIds.value = new Set();
+  dismissedNeedsPids.value = new Set();
   accounts.value = [];
   moveTargets.value = {};
 });
@@ -25,7 +28,7 @@ afterEach(() => {
 const TWO_ACCOUNTS = [{ id: "default", label: "A" }, { id: "b", label: "B" }];
 
 describe("<Rail> render smoke", () => {
-  it("renders track groups, chips, and single-branch flat tabs", () => {
+  it("renders track groups, chips, and tabs without branch rows when no branch is shared", () => {
     projects.value = [];
     windows.value = [
       // single-branch track: two tabs on the same branch render flat
@@ -37,7 +40,7 @@ describe("<Rail> render smoke", () => {
         agent: null, state: "shell", track_id: "/dev/myproj", track_name: "myproj",
         repo_key: "/dev/other", repo_label: "other", branch: "master",
         cwd: "/dev/other", worktree_affiliation: aff("off-repo", "other"), pane_id: "%2" },
-      // a second track with two distinct branches → branch sub-clusters
+      // a second track with two branches, one tab each → still flat
       { pid: "cc33", session: "managed", index: 2, target: "managed:2", name: "feat-work",
         agent: "claude", state: "idle", track_id: "tk_feature", track_name: "Feature",
         repo_key: "/dev/fdy", repo_label: "fdy", branch: "master",
@@ -53,10 +56,31 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain("myproj");        // single-branch track row label
     expect(html).toContain("Feature");       // multi-branch track row label
     expect(html).toContain("⧉ other/master"); // off-repo chip on a track tab
-    expect(html).toContain("master");        // branch sub-cluster label
-    expect(html).toContain("feat-x");        // second branch sub-cluster label
-    expect(html).toContain("New tab");       // newtab affordance
+    expect(html).not.toContain("wt-row");    // no branch rows: no branch is shared
+    expect(html.split("rail-track-add").length - 1).toBe(2);  // + on each track header
     expect(html).toContain('<span class="rail-icon icon-claude" title="Claude">✻</span>');
+  });
+
+  it("clusters a branch two tabs share, and names a lone tab's branch on its selected card", () => {
+    projects.value = [];
+    tracks.value = [];
+    const pane = (over) => ({
+      session: "managed", agent: "claude", state: "idle", track_id: "t1", track_name: "fdy",
+      repo_key: "/dev/fdy", repo_label: "fdy", cwd: "/dev/fdy",
+      worktree_affiliation: aff("at-pin"), ...over,
+    });
+    windows.value = [
+      pane({ pid: "a", index: 0, target: "managed:0", name: "blocklist", branch: "td/blocklist", pane_id: "%1" }),
+      pane({ pid: "b", index: 1, target: "managed:1", name: "deck", branch: "td/deck", pane_id: "%2" }),
+      pane({ pid: "c", index: 2, target: "managed:2", name: "cohabitants", branch: "td/blocklist", pane_id: "%3" }),
+    ];
+    railSelection.value = "pane:b";
+    const html = render(<Rail />);
+    railSelection.value = null;
+
+    expect(html.split("wt-row").length - 1).toBe(1);
+    expect(html).toContain('<span class="rail-label">td/blocklist</span>');
+    expect(html).toContain('<span class="pane-branch" title="branch td/deck">');
   });
 
   it("shows distinct provider symbols on Claude and Codex panes", () => {
@@ -154,22 +178,7 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain("→ A");   // the B pane's destination
   });
 
-  it("keeps the Claude symbol during a frontend-only rolling reload", () => {
-    projects.value = [];
-    tracks.value = [];
-    windows.value = [{
-      pid: "legacy", session: "managed", index: 0, target: "managed:0",
-      name: "legacy-claude", is_claude: true, state: "idle",
-      track_id: "/dev/myproj", track_name: "myproj",
-      repo_key: "/dev/myproj", repo_label: "myproj", branch: "master",
-      cwd: "/dev/myproj", worktree_affiliation: aff("at-pin"), pane_id: "%1",
-    }];
-
-    expect(render(<Rail />))
-      .toContain('<span class="rail-icon icon-claude" title="Claude">✻</span>');
-  });
-
-  it("renders an EMPTY goal track from the registry with its + New tab", () => {
+  it("renders an EMPTY goal track from the registry with its +", () => {
     projects.value = [];
     tracks.value = [{ id: "tk_fresh", name: "Fresh goal", repo: "/dev/fdy" }];
     windows.value = [
@@ -183,7 +192,7 @@ describe("<Rail> render smoke", () => {
     tracks.value = [];   // don't leak into other cases
 
     expect(html).toContain("Fresh goal");    // empty track card renders
-    const newTabs = html.split("New tab").length - 1;
+    const newTabs = html.split("rail-track-add").length - 1;
     expect(newTabs).toBe(2);                 // one per track, incl. the empty one
   });
 
@@ -215,8 +224,8 @@ describe("<Rail> render smoke", () => {
 
 describe("<Rail> awaiting-reply marker", () => {
   // The pane row must carry the unanswered-question signal on its own, not
-  // only inside the collapsible NEEDS YOU section. Drives the real wiring:
-  // store.alerts -> Rail.jsx awaitingReplyByPid -> PaneRow chip.
+  // only on its Next card. Drives the real wiring: store.alerts -> alertFeed's
+  // nextEntries -> Rail.jsx waitingSince -> paneBlip -> PaneRow stripe and age.
   const paneWin = (over = {}) => ({
     pid: "aa11", session: "managed", index: 0, target: "managed:0",
     name: "claude", agent: "claude", state: "idle", track_id: "/dev/myproj",
@@ -239,11 +248,18 @@ describe("<Rail> awaiting-reply marker", () => {
     // Just asked -> quiet tier.
     vi.setSystemTime(1000 * 1000);
     alerts.value = [ask()];
-    expect(render(<Rail />)).toContain("wait-fresh");
+    // The row's own stripe and age: the Next card renders the same classes,
+    // so these assert the strings only the tree row carries.
+    const html = render(<Rail />);
+    expect(html).toContain("pane-row pane-blip-asks");
+    expect(html).toContain('<span class="rail-age wait-fresh" title="how long it has waited for you">');
+    expect(html).toContain("which branch?");   // the agent's words, on its Next card
+    expect(html).toContain('<button class="blip blip-asks" aria-label="claude: asked you something"');
+    expect(html).toContain('<button class="next-x" title="dismiss" aria-label="dismiss claude">');
 
     // Over an hour later, same unanswered ask -> urgent.
     vi.setSystemTime((1000 + 3700) * 1000);
-    expect(render(<Rail />)).toContain("wait-urgent");
+    expect(render(<Rail />)).toContain('<span class="rail-age wait-urgent" title="how long it has waited for you">');
   });
 
   it("drops the marker once the user has engaged the pane", () => {
@@ -253,7 +269,22 @@ describe("<Rail> awaiting-reply marker", () => {
     dismissedAlertIds.value = new Set();
     alerts.value = [ask({ ts: 1000 })];
     vi.setSystemTime(3000 * 1000);
-    expect(render(<Rail />)).not.toContain("rail-await");
+    const html = render(<Rail />);
+    expect(html).not.toContain("pane-blip-asks");
+    expect(html).not.toContain("wait-");
+  });
+
+  it("stops asking on the row and in the strip once its soft question is opened, as Next does", () => {
+    projects.value = [];
+    tracks.value = [];
+    alerts.value = [];
+    windows.value = [paneWin({ state: "needs-input", asked_question: true, waiting_for: null, needs_since: 1 })];
+    expect(render(<Rail />)).toContain("pane-row pane-blip-asks");
+    dismissedNeedsPids.value = new Set(["aa11"]);
+    const html = render(<Rail />);
+    expect(html).toContain("pane-row pane-blip-idle");
+    expect(html).toContain('<button class="blip blip-idle" aria-label="claude: idle"');
+    expect(html).not.toContain("next-card");
   });
 
   it("shows no marker when nothing has been asked", () => {
@@ -262,7 +293,104 @@ describe("<Rail> awaiting-reply marker", () => {
     windows.value = [paneWin()];
     dismissedAlertIds.value = new Set();
     alerts.value = [];
-    expect(render(<Rail />)).not.toContain("rail-await");
+    expect(render(<Rail />)).not.toContain("wait-");
+  });
+});
+
+describe("<Rail> Next queue", () => {
+  const paneWin = (over = {}) => ({
+    session: "managed", agent: "claude", state: "idle", track_id: "t1", track_name: "fdy",
+    repo_key: "/dev/fdy", repo_label: "fdy", branch: "master", cwd: "/dev/fdy",
+    worktree_affiliation: aff("at-pin"), focused_at: 0, acted_at: 0, ...over,
+  });
+
+  it("names the track and shows a permission request's command", () => {
+    projects.value = [];
+    tracks.value = [];
+    // The pane's own need_human, so a card that leaked the event kind would print it.
+    alerts.value = [{ id: "q1", kind: "need_human", target: "managed:0", ts: 1, session: "managed",
+      name: "weighting", message: "may I run the tests?" }];
+    windows.value = [paneWin({
+      pid: "p1", index: 0, target: "managed:0", name: "weighting", pane_id: "%1",
+      state: "needs-input", waiting_for: "permission prompt", needs_since: 1,
+      pending_permission: { request_id: "r1", tool: "Bash", summary: "uv run pytest -x" },
+    })];
+    const html = render(<Rail />);
+    expect(html).toContain('<code class="next-code">uv run pytest -x</code>');
+    expect(html).toContain('<span class="next-track">fdy</span>');
+    expect(html).toContain("needs approval");
+    expect(html).not.toContain("need_human");
+    // The name is the card's button; a role=button card would hide its × from
+    // a screen reader.
+    expect(html).toContain('<button class="next-name" aria-label="weighting, needs approval: Allow Bash: uv run pytest -x">');
+    expect(html).not.toContain('role="button"');
+    expect(html).not.toContain("next-x");   // a live question leaves on its own
+  });
+
+  it("lists a pane with an API error as broken, in the strip and the queue", () => {
+    projects.value = [];
+    tracks.value = [];
+    alerts.value = [];
+    windows.value = [paneWin({ pid: "p2", index: 0, target: "managed:0", name: "gcp", pane_id: "%1", api_error: true })];
+    const html = render(<Rail />);
+    // The strip's button, not its legend, which always shows every blip.
+    expect(html).toContain('<button class="blip blip-broken" aria-label="gcp: API error"');
+    expect(html).toContain('<span class="next-why why-broken">API error</span>');
+    expect(html).toContain('<span class="rail-why why-broken">API error</span>');
+    expect(html).not.toContain("next-x");   // a broken pane leaves once fixed
+  });
+
+  it("folds everything past the third card into +N", () => {
+    projects.value = [];
+    tracks.value = [];
+    alerts.value = [];
+    const now = Math.floor(Date.now() / 1000);
+    windows.value = [1, 2, 3, 4, 5].map((i) => paneWin({
+      pid: `d${i}`, index: i, target: `managed:${i}`, name: `done-${i}`, pane_id: `%${i}`,
+      state: "done", completed_at: now - 120 * i,
+    }));
+    const html = render(<Rail />);
+    expect(html.split('class="next-card').length - 1).toBe(3);
+    expect(html).toContain('<span class="next-more-n">+2</span>');
+    expect(html).toContain('<button class="blip blip-done" aria-label="done-1: done 2m ago"');
+    // A done card can be marked seen without opening its pane.
+    expect(html).toContain('<button class="next-x" title="mark seen without opening it" aria-label="mark done-1 seen">');
+  });
+});
+
+describe("<Rail> compact row", () => {
+  const one = (over) => {
+    projects.value = [];
+    tracks.value = [];
+    alerts.value = [];
+    windows.value = [{
+      pid: "p1", session: "managed", index: 0, target: "managed:0", name: "worker",
+      agent: "claude", state: "idle", track_id: "t1", track_name: "fdy",
+      repo_key: "/dev/fdy", repo_label: "fdy", branch: "master", cwd: "/dev/fdy",
+      worktree_affiliation: aff("at-pin"), pane_id: "%1", focused_at: 0, acted_at: 0, ...over,
+    }];
+    return render(<Rail />);
+  };
+
+  it("shows ↻ when memory tripped it, not age", () => {
+    expect(one({ mem: { tier: "warn", trigger: "age", gb: 0.5, age_s: 3 * 86400 } })).not.toContain("rail-mem");
+    expect(one({ mem: { tier: "bad", trigger: "mem", gb: 4.2, age_s: 86400 } }))
+      .toContain('<span class="rail-mem mem-bad"');
+  });
+
+  it("shows context only once it's in a warning band", () => {
+    expect(one({ context_pct: 20 })).not.toContain("pane-mini-ctx");
+    expect(one({ context_pct: 65 })).toContain('<span class="pane-mini-ctx ctx-warn"');
+  });
+
+  it("ages a waiting pane from its needs-input stamp, a working one as now, an idle one from its last turn", () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(one({ state: "needs-input", waiting_for: "permission prompt", needs_since: now - 900 }))
+      .toContain('<span class="rail-age wait-stale" title="how long it has waited for you">15m</span>');
+    expect(one({ state: "working" })).toContain('<span class="rail-age" title="working now">now</span>');
+    expect(one({ completed_at: now - 7200 }))
+      .toContain('<span class="rail-age" title="since its last turn finished">2h</span>');
+    expect(one({ agent: null, state: "shell" })).not.toContain("rail-age");
   });
 });
 
@@ -389,7 +517,7 @@ describe("ctxChipText", () => {
   });
 
   it("falls back to tokens when the status line did not parse", () => {
-    expect(ctxChipText({ context_pct: null, ctx_tokens: 600000 })).toBe("600k");
+    expect(ctxChipText({ context_pct: null, ctx_tokens: 600000 })).toBe("600k ctx");
   });
 
   it("returns null when there is nothing to show", () => {

@@ -21,8 +21,8 @@
 import { computed, useComputed, useSignal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { accountLabel, multiAccount } from "../accounts.js";
-import { selectedPid } from "../keys.js";
 import { getClawdDay, getTamaCritter, noteClawdDay } from "../prefs.js";
+import { selectedPid } from "../split/alertFeed.js";
 import { buildRunning } from "../split/attention.js";
 import {
   alerts, dismissedAlertIds, dismissedNeedsPids, dismissedReadyPids, railSelection, updateInfo, usage, wallSpans, walls,

@@ -83,6 +83,12 @@ describe("dutyItems", () => {
     expect(event[0].target).toMatchObject({ action: "reveal", target: "s:d" });
   });
 
+  it("counts finished panes, not their done events", () => {
+    const alerts = [{ id: 1, kind: "done", target: "s:a", ts: NOW - 50 }, { id: 2, kind: "done", target: "s:a", ts: NOW - 20 }];
+    expect(dutyItems({ windows: [pane("a", { state: "working" })], alerts, nowSec: NOW })[0])
+      .toMatchObject({ kind: "done", count: 1, phrase: "pane-a finished" });
+  });
+
   it("respects the rail's dismissals", () => {
     const windows = [pane("a", { state: "needs-input", asked_question: true }), pane("b", { state: "done" })];
     expect(dutyItems({ windows, dismissedNeedsPids: new Set(["a"]), dismissedReadyPids: new Set(["b"]), nowSec: NOW })).toEqual([]);
@@ -94,6 +100,28 @@ describe("dutyItems", () => {
     expect(dutyItems({ windows, nowSec: NOW })[0])
       .toMatchObject({ kind: "ci", count: 1, phrase: "PR #9000 is failing CI", target: { action: "select", pid: "a" } });
     expect(kinds(dutyItems({ windows, selectedPid: "b", nowSec: NOW }))).not.toContain("ci");
+  });
+
+  it("aims a failing PR at the pane its Next card opens, not the first in window order", () => {
+    const windows = [pane("a", { ci: "✗", pr: 9000, repo_slug: "o/r" }),
+      pane("b", { ci: "✗", pr: 9000, repo_slug: "o/r", pr_linked: true })];
+    expect(dutyItems({ windows, nowSec: NOW })[0].target).toMatchObject({ action: "select", pid: "b" });
+  });
+
+  it("is on duty for exactly what the rail's Next lists, so the two never disagree", () => {
+    const counts = (windows, alerts = []) =>
+      Object.fromEntries(dutyItems({ windows, alerts, nowSec: NOW }).map((i) => [i.kind, i.count]));
+    const red = { pr: 12, repo_slug: "o/r", ci: "✗", pr_state: "open" };
+    // An agent already working on its API error or its red CI doesn't need you
+    // yet, and a shell window showing a red PR is nobody to ask.
+    expect(counts([pane("a", { state: "working", api_error: true })])).toEqual({});
+    expect(counts([pane("b", { state: "working", ...red })])).toEqual({});
+    expect(counts([pane("c", { agent: null, state: "shell", ...red })])).toEqual({});
+    // One pane, one duty: broken outranks done, and asking outranks both.
+    expect(counts([pane("d", { state: "done", completed_at: NOW - 60, ...red })])).toEqual({ ci: 1 });
+    expect(counts([pane("e", { state: "done", completed_at: NOW - 60, api_error: true })])).toEqual({ api: 1 });
+    expect(counts([pane("f", { state: "done", completed_at: NOW - 60 })],
+      [{ id: 1, kind: "need_human", target: "s:f", ts: NOW - 120 }])).toEqual({ bell: 1 });
   });
 
   it("names a nearly-full window by its percent, and labels the bubble with the fullest", () => {

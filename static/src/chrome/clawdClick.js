@@ -8,8 +8,8 @@ import { openUpdatePopover } from "./UpdatePill.jsx";
 
 // Act on a duty item's target (clawdDuty.js). The pane is looked up by pid
 // now, not when the item was built, so a window renumbered since can't take
-// the click. A live NEEDS YOU / READY row is dismissed exactly as its rail row
-// would be; a party ends whether or not its pane is still there.
+// the click. A pane that asks or finished is dismissed exactly as its rail Next
+// card would be; a party ends whether or not its pane is still there.
 export function actOn(t) {
   const w = (t.pid != null && (windows.value || []).find((x) => String(x.pid) === String(t.pid))) || null;
   if (t.action === "update") return openUpdatePopover({ focus: true });

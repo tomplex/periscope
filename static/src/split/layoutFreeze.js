@@ -1,9 +1,11 @@
-// Holds the rail's attention-section membership still while you're aiming at it.
+// Holds the top of the rail still while you're aiming at it: the sonar
+// strip's lines and the Next queue under them.
 //
-// The sections sit above the tree and the same panes also appear in it, so one
-// pane going working→idle shifts everything below twice (leaves RUNNING, may
-// enter READY). RUNNING churns constantly, so this fires all the time and the
-// row you were about to click moves out from under the cursor.
+// The queue sits above the tree and the same panes also appear in it, so one
+// pane finishing or asking shifts everything below. That happens all the
+// time, and the row you were about to click moves out from under the cursor.
+// The strip sits above the queue, so a track gaining its first pane or losing
+// its last would move every card too.
 //
 // Animating the movement does NOT fix that — a smoothly-moving target is still
 // a moving target. The fix is to stop moving while the pointer is in the rail,
@@ -14,11 +16,45 @@
 // while frozen — freezing those would make the rail look hung.
 
 import { signal } from "@preact/signals";
+import { useEffect, useRef } from "preact/hooks";
 
-// True while the pointer is inside the rail. Set by <Rail>, read by the
-// attention sections. A signal rather than a prop so nothing between them has
-// to re-render to pass it down.
+// True while the pointer is inside the rail, and while keyboard focus is (a
+// card you've tabbed to mustn't move either). Set by <Rail>, read through
+// useFrozenRows. Signals rather than props so nothing between them has to
+// re-render to pass them down.
 export const railHovered = signal(false);
+export const railFocused = signal(false);
+
+// Bumped when you act on what Next lists, wherever from: opening an entry (its
+// card, ⌘J) or dismissing one (its ×, a banner's Mark seen). That is a user
+// action, so a held list lets its pending changes through at once rather than
+// keep showing the card you just acted on.
+export const freezeReleases = signal(0);
+export function releaseFreeze() {
+  freezeReleases.value += 1;
+}
+
+// freezeRows for a component: holds `liveRows`' membership while the pointer
+// or keyboard focus is in the rail, until it leaves or releaseFreeze.
+// { rows, stale }.
+export function useFrozenRows(liveRows, identity = (r) => r.key) {
+  const frozen = railHovered.value || railFocused.value;
+  const held = useRef(null);
+  const release = useRef(freezeReleases.value);
+  if (release.current !== freezeReleases.value) {
+    release.current = freezeReleases.value;
+    held.current = null;
+  }
+  // Capture the live set whenever we're thawed; that snapshot is what the next
+  // freeze holds. No dep array — cheap, and it must track every render.
+  useEffect(() => {
+    if (!frozen) held.current = liveRows;
+  });
+  return {
+    rows: freezeRows(liveRows, held.current, frozen, identity),
+    stale: isStale(liveRows, held.current, frozen, identity),
+  };
+}
 
 /**
  * Pick which rows to render given the live rows and whether we're frozen.

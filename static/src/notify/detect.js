@@ -8,7 +8,7 @@
 // GRACE_PASSES after that, so the state prunes itself.
 
 import { isStale, meterMood } from "../chrome/usageRules.js";
-import { buildNeedsYou } from "../split/attention.js";
+import { buildNeedsYou, prKey } from "../split/attention.js";
 
 // A key missing from a pass is kept this many passes. A pass is one applied
 // /api/state (feed.js), so about 1 s on the WS push (state_hub's tick), 3 s on
@@ -25,9 +25,6 @@ export const GRACE_PASSES = 120;
 // Long, unlike GRACE_PASSES: a merge while its pane was briefly gone still
 // needs the "open" it follows. A forgotten PR seen again is only recorded.
 export const PR_PASSES = 3600;
-
-// One PR, however many panes show it.
-export const prKey = (w) => `${w.repo_slug || w.repo_key || ""}#${w.pr}`;
 
 // One agent question, by what survives a server restart: the alert's id is
 // regenerated when channels rehydrates the feed, so keying on it re-announced
@@ -96,7 +93,7 @@ export function detect(prev, snap, nowSec) {
     if (a.kind === "need_human" && dismissedAlertIds.has(a.id)) keep(questionKey(a));
   }
 
-  // Done: each finished turn (completed_at), the rail's READY rule.
+  // Done: each finished turn (completed_at), the rail's done rule (buildReady).
   for (const w of windows) {
     if (w.state !== "done") continue;
     const key = `done:${w.pid}@${w.completed_at || 0}`;

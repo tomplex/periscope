@@ -227,16 +227,18 @@ differ only in hue.
 
 ### Status (the blips)
 - **Ping Orange** (`s-needs`, needs input): the most urgent state. It colours the pane's
-  stripe (which pulses), the NEEDS YOU section and permission prompts. The Claude ✻ glyph
-  shares this hue at slightly lower chroma (`oklch(0.74 0.12 38)`).
+  stripe and blip (both pulse), the Next count while something asks, and permission
+  prompts. The Claude ✻ glyph shares this hue at slightly lower chroma
+  (`oklch(0.74 0.12 38)`).
 - **Sweep Amber** (`s-working`, working): the stripe, running CI, and context usage above
   60%.
-- **Contact Green** (`s-done`, finished and not yet looked at): the stripe (which pulses) and
-  the READY section with its count badge.
+- **Contact Green** (`s-done`, finished and not yet looked at): the stripe and a ring blip,
+  both at 45% once the pane finished more than an hour ago. Done doesn't pulse.
 - **Static Grey** (`s-idle`, idle): the stripe at 50% opacity. Effectively silent.
 - **Shore Green** (`s-shell`, a shell pane): the `$` glyph and the stripe at 50%.
 - **Success** (`s-success`) and **Danger** (`s-danger`): CI passing or failing, context
-  above 80%, destructive buttons, errors.
+  above 80%, destructive buttons, errors, and a **broken** pane (an API error, or failing
+  CI on an open PR): its stripe and its square blip.
 - Each state has a matching `-bg` token: the same hue mixed at 14–16% into transparent. It
   drives tinted backgrounds and the pulse ring.
 
@@ -244,7 +246,7 @@ differ only in hue.
 - **Abyss** (`bg-0`): the page, the rail tray and the detail area.
 - **Hull** (`bg-1`): track cards, menus, the sidebar and the critter's screen.
 - **Hull, lit** (`bg-1-hi`): row hover and the selected pane.
-- **Raised** (`bg-2`): chips, keycaps, the omnibox input, toasts and the expanded pane card.
+- **Raised** (`bg-2`): chips, keycaps, the omnibox input and toasts.
 - **Rim** (`bg-3`): chip hover, scrollbar thumbs and the critter's bezel border.
 - **Console** (`bg-modal`): modal and dialog cards, slightly lifted off the page.
 - **Terminal** (`bg-term`): the xterm canvas background. Anything that frames a terminal
@@ -266,7 +268,7 @@ differ only in hue.
 
 **The Same-Brightness Rule.** Status hues sit at lightness 0.74–0.80 and chroma 0.13–0.17,
 and differ only in hue. No state wins by being brighter. Urgency comes from the pulse and
-from position (NEEDS YOU sits at the top of the rail).
+from position (the sonar strip and the Next queue sit at the top of the rail).
 
 **The One Glass Rule.** Periscope Glass is the only interactive accent. Selection, focus,
 active and drop targets use it. Agent state never does.
@@ -275,9 +277,8 @@ active and drop targets use it. Agent state never does.
 (`color-mix(in oklch, <token> 16%, transparent)`), the way the `-bg` tokens are built. Transparent
 has no hue, so the token keeps its own. When the tint must be opaque, mix into the surface
 `in srgb` (as the drop-target wash does). Mixing into a grey surface `in oklch` swings the hue
-toward the grey's 250: the danger button's red mix comes out violet. The attention rows' tinted
-backgrounds (`#241316`, `#122019`, `#1d1a10`, `#161a14`) are still hard-coded hex near those
-mixes. Both are drift, not patterns to copy.
+toward the grey's 250: the danger button's red mix comes out violet. That is drift, not a
+pattern to copy.
 
 ## Typography
 
@@ -300,10 +301,10 @@ weight here must still read in any face on that list.
 - **Body** (400, 13px, line-height 1.5, +0.005em): rail rows, omnibox rows and dialog text.
 - **Body small** (400, 12px): filter buttons, menu items, the detail header, toasts and
   dialog secondary text.
-- **Meta** (400, 11px): narrator status lines, attention reasons, omnibox sub-paths and
-  footers.
-- **Label** (600, 10px, +0.07em to +0.09em, UPPERCASE): attention section headers
-  (NEEDS YOU, READY, RUNNING, PINNED), track labels and omnibox group labels.
+- **Meta** (400, 11px): narrator status lines, Next card reasons, row ages, omnibox
+  sub-paths and footers.
+- **Label** (600, 10px, +0.07em to +0.09em, UPPERCASE): rail section headers (NEXT, PINNED,
+  TRACKS, ACTIVITY), track labels and omnibox group labels.
 - **Ref** (mono, 10px): PR and ticket chips, keycaps and the cwd chip. Larger mono (12–13px)
   is used for paths in headers and for command input.
 
@@ -333,11 +334,13 @@ width breakpoint (1100px) hides the modal sidebar and the critter. This is a des
 and narrow widths are a degraded mode.
 
 The rail nests at most two levels deep:
-- A **track** is an uppercase magenta label with a hairline rule running to its rolled-up
-  status dot. It sits above a bordered **track card**.
+- A **track** is an uppercase magenta label with a hairline rule running to its + (a new
+  tab). It sits above a bordered **track card**. The sonar strip carries the track's state,
+  so the label has no status dot.
 - Inside the card, a **branch sub-cluster** is marked by a 2px violet left rule and a
-  shallow indent, rather than a second card.
-- **Pane rows** sit inside the card. Structural rows (track, branch, + New tab) get 3px of
+  shallow indent, rather than a second card. It exists only for a branch two or more panes
+  share; a pane alone on its branch shows the branch, in mono, on its selected card.
+- **Pane rows** sit inside the card. Structural rows (track, branch) get 3px of
   vertical padding; pane rows get 7px, because the cards are the content and the chrome
   stays tight.
 
@@ -355,14 +358,14 @@ makes their position depend on content length.
 
 Depth is a tonal stack: Abyss tray (`bg-0`) → Hull card (`bg-1`) → Raised card (`bg-2`).
 Each step is about +0.05 lightness at the same hue. Structure never uses shadows. Exactly
-one thing in the rail lifts: the pane card that is expanded because it is selected or needs
-you. It rises onto `bg-2` with a soft shadow, and when selected it moves to `bg-1-hi` with a
-1px Periscope Glass inset ring at 45%. Real shadows belong only to layers that float above
-the page.
+one thing in the rail lifts: the selected pane's card, which expands onto `bg-1-hi` with a
+soft shadow and a 1px Periscope Glass inset ring at 45%. A pane that needs you says so with
+its stripe, its blip and its Next card, not by expanding. Real shadows belong only to layers
+that float above the page.
 
 ### Shadow Vocabulary
-- **Pane lift** (`box-shadow: 0 1px 6px oklch(0 0 0 / .25)`): the expanded pane card.
-  Selected: `0 1px 8px oklch(0 0 0 / .3), inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent)`.
+- **Pane lift** (`box-shadow: 0 1px 8px oklch(0 0 0 / .3), inset 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent)`):
+  the selected, expanded pane card.
 - **Menu** (`box-shadow: 0 8px 24px oklch(0 0 0 / 0.35)`): toolbar dropdowns.
 - **Toast** (`box-shadow: 0 8px 20px oklch(0 0 0 / 0.4)`): the toast stack.
 - **Modal** (`box-shadow: 0 0 0 1px var(--line-strong), 0 30px 80px oklch(0 0 0 / 0.55)`):
@@ -390,7 +393,10 @@ Choice controls (filter buttons, launcher options) are full pills (999px). Statu
 with three small shapes:
 - the **state stripe**: a 2px rounded bar inset 3px from the pane card's left edge, running
   between 6px from the top and 6px from the bottom
-- the **dot**: a 7px circle
+- the **blip**: an 8px mark in a 13px hit area, whose shape says the state as well as its
+  colour, so it reads without colour too: asks is a filled circle, broken a 7px square, done
+  a 2px ring, working a three-quarter sweep in amber, idle a 5px dot and a shell a 7 × 2px
+  bar
 - the **pulse**: a 4px ring of the state's `-bg` colour
 
 Clawd's device is the one large rounded form: a 3px Rim bezel with 16px corners, or 20px at
@@ -433,9 +439,9 @@ forward on hover or selection.
   says what kind of ref it is: PR `fg-1`, ticket Ticket Purple, account Account Teal, CI in
   its status colour, and context % in `fg-3`, turning amber above 60% and red above 80%.
   A merged PR turns Worktree Violet; a closed one dims to `fg-3` with a strikethrough.
-- **Count badge** in a section header: a 9px-radius capsule, 10px/700. It fills with the
-  section's status colour (dark `#0d1117` text) for READY and RUNNING, and with alert red for
-  NEEDS YOU.
+- **Count badge** in a section header: a 9px-radius capsule, 10px/700. Next's fills with the
+  status colour of its most urgent card (dark `#0d1117` text); PINNED's and ACTIVITY's sit
+  on `bg-2`.
 
 ### Cards / Containers
 - **Track card**: `bg-1` with 10px corners, a 1px Track Magenta edge at 30%, 5px padding and
@@ -443,8 +449,9 @@ forward on hover or selection.
   dragged over it, the edge turns Periscope Glass and the fill takes an 8% wash. An empty
   card shows a dashed "drop a tab here" landing area.
 - **Pane card**: a 4px-cornered row at rest, which lifts on expansion (see Elevation). The
-  state stripe on its left edge carries the pane's state, and the pin and close actions fade
-  in over the top-right corner on hover, on a gradient so they read over the row's text.
+  state stripe on its left edge carries the pane's state. Its first line ends with the PR
+  chip and the row's age; on hover the pin and close actions fade in just left of them, on
+  a gradient over the name's tail, so the chip stays clickable and the age stays in view.
 - **Modal**: `bg-modal` with 10px corners and the Modal shadow. It fills most of the viewport
   (96vw × 94vh) and the user can resize it.
 
@@ -457,9 +464,14 @@ forward on hover or selection.
 ### Navigation
 - **Rail row**: 13px body text and a 14px glyph column with a 7px gap. Hover lifts the fill to
   `bg-1-hi`. Selection adds `bg-1-hi` and a 2px Periscope Glass left edge.
-- **Attention section header**: a 10px/600 uppercase label (+0.07em) in the section's status
-  colour, followed by its count badge. Its rows carry a faint background tint for the state,
-  with the reason right-aligned in 11px text.
+- **Sonar strip**: the top of the rail, sticky while the tree scrolls under it, on `bg-0`
+  with a `line-soft` rule below. One line per track (its magenta label, then one blip per
+  pane, then the count) and a 10px legend. A blip opens its pane; a track's label scopes the
+  tree to it, marked with the 18% Periscope Glass wash.
+- **Next card**: what wants you, under the strip. A `bg-1` card with 6px corners and the
+  pane's state stripe: name and age, then up to three lines of what the agent said (12px;
+  a command in mono on `bg-2`), then the track in magenta and the reason. Three show; the
+  rest fold into a "+N" row.
 - **Menu**: a `bg-1` panel with a 1px `line` edge, 6px corners and 4px padding. Items are
   12px, 6px × 10px, with 4px corners. Hover fills with `bg-2` and turns the text `fg-0`;
   the active item gets the 18% Periscope Glass wash.
@@ -485,14 +497,14 @@ gadget.
 
 ### Motion
 - **Hover:** 0.1–0.12s colour, background and edge transitions.
-- **Data-driven change:** 180ms `ease` on the colour, background and edge of stripes, dots,
+- **Data-driven change:** 180ms `ease` on the colour, background and edge of stripes, blips,
   chips and rows, so live state doesn't flicker as it updates.
 - **Row entry:** 140ms `ease-out`, fading in from 2px above. Rows animate in only; there is
   no exit animation.
-- **Pulse:** needs-input and done both pulse on a 1.6s `ease-in-out` loop, as a 4px ring in
-  their `-bg` colour. Nothing else in the work surface loops.
-- **Reduced motion:** `prefers-reduced-motion` stops the cursor blink, row entry and the
-  critters, and cuts every transition to near zero.
+- **Pulse:** only needs-input pulses (its stripe and its blip), on a 1.6s `ease-in-out`
+  loop, as a 4px ring of `s-needs-bg`. Nothing else in the work surface loops.
+- **Reduced motion:** `prefers-reduced-motion` stops the cursor blink, row entry, the
+  needs-input pulse and the critters, and cuts every transition to near zero.
 
 ## Do's and Don'ts
 
@@ -523,7 +535,7 @@ gadget.
   state.
 - **Don't** make one state louder than another by brightness. Urgency comes from the pulse
   and from position.
-- **Don't** pulse or loop anything in the work surface except needs-input and done.
+- **Don't** pulse or loop anything in the work surface except needs-input.
 - **Don't** put drop shadows on things that sit in the layout. Shadows are for menus,
   toasts, modals and the one lifted pane.
 - **Don't** add half-pixel type sizes or new hard-coded hex values. Both exist today as

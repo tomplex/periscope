@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { detect, GRACE_PASSES, PR_PASSES, prKey, questionKey } from "../detect.js";
+import { prKey } from "../../split/attention.js";
+import { detect, GRACE_PASSES, PR_PASSES, questionKey } from "../detect.js";
 
 const NOW = 1_000_000;
 const win = (over = {}) => ({
