@@ -356,6 +356,7 @@ button.res-line { font: inherit; color: inherit; background: none; border: 0; te
 .rail-mem { flex: 0 0 auto; font-size: 10px; cursor: help; }
 .rail-mem.mem-warn, .header-mem.mem-warn { color: var(--s-working); }
 .rail-mem.mem-bad, .header-mem.mem-bad { color: var(--s-danger); }
+.header-mem.mem-age { color: var(--fg-3); }
 /* A rail row's age (RailRows rowAge): how long it has waited for you, or how
    long since its last turn finished. An unanswered question ramps with age
    (attention.js waitTier) — a pane parked for an hour must not read like one

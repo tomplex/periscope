@@ -111,7 +111,8 @@ export function memHint(mem) {
   return {
     label: mem.trigger === "mem" ? `${mem.gb}G` : `${days}d`,
     title: `Claude is using ${mem.gb}GB after ${up} — consider exiting and resuming this session`,
-    cls: `mem-${mem.tier}`,
+    // Age alone is grey: it says nothing new, and amber means working.
+    cls: mem.trigger === "age" ? "mem-age" : `mem-${mem.tier}`,
   };
 }
 

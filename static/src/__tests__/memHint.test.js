@@ -16,9 +16,13 @@ describe("memHint", () => {
     expect(h.title).toContain("2d 5h");
   });
 
-  it("an age trip leads with uptime days", () => {
+  it("an age trip leads with uptime days, in grey: age alone says nothing new", () => {
     const h = memHint({ tier: "warn", trigger: "age", gb: 0.5, age_s: 3 * 86400 });
     expect(h.label).toBe("3d");
-    expect(h.cls).toBe("mem-warn");
+    expect(h.cls).toBe("mem-age");
+  });
+
+  it("a footprint trip below the bad line stays amber", () => {
+    expect(memHint({ tier: "warn", trigger: "mem", gb: 2.5, age_s: 3600 }).cls).toBe("mem-warn");
   });
 });
