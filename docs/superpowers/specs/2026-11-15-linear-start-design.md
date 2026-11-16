@@ -41,7 +41,7 @@ The route is `async`, as prepare is: `spawn_claude_with_prompt` awaits Claude's 
 Steps:
 
 1. **In-flight guard.** If a start for the same `(repo, branch)` is running, answer 409 "start already running". A double press in the caller makes this case.
-2. **Running Claude.** Look for the owner with `reviews.owner_for(windows, label, branch)`: a channel-attached Claude on that repo label and branch, read with `state_hub.current_windows()`: the last blob while a dashboard tab subscribes, else a fresh `build_state()`, because the hub computes nothing while no tab is open. If there is one, clear the recent-spawn record for the key (step 3) and answer `{"mode": "focused", "pid": <its pid>}`. Do not paste the prompt: that Claude can be busy.
+2. **Running Claude.** Look for the owner with `reviews.owner_for(windows, label, branch)`: a channel-attached Claude on that repo label and branch, read with `state_hub.current_windows()`: the last blob while a dashboard tab subscribes, else a fresh `build_state()`, because the hub computes nothing while no tab is open. If there is one, clear the recent-spawn record for the key (step 3) and answer `{"mode": "existing", "pid": <its pid>}`. Do not paste the prompt: that Claude can be busy.
 3. **Recent-spawn guard.** A spawned Claude shows as the owner only after its channel attaches and the next state lands, about 10 to 20 s after the spawn. If this route spawned a Claude for `(repo, branch)` less than 60 s ago and step 2 found no owner, answer 409 "a pane was spawned N s ago and hasn't attached yet". This copies `_recent_spawn` in `routes/reviews.py`.
 4. **Worktree.** `worktree_spawn.spawn_worktree(repo, branch)`. It forks a new branch from `origin/<default branch>`, checks out a branch that exists, and returns the worktree that is already on the branch (`reused: true`). A `ValueError` becomes 400 with its message.
 5. **Session.** `open_ops.resolve_worktree_session(path)`. `None` becomes 502 "<path> is not inside a git repo". At this point `spawn_worktree` has made the worktree, so `None` means git failed in periscope, not that the request is bad.
@@ -78,7 +78,7 @@ Body: `{"pid": "<@periscope_id>"}`.
 `tests/routes/test_linear.py`, with stubs for `spawn_worktree`, `spawn_claude_with_prompt`, `place_in_rail` and the windows, as `tests/routes/test_reviews.py` does for prepare:
 
 - Spawn path: calls each step in order, stamps `linked_linear` and `linked_linear_title`, answers `spawned` with the pid, path and `reused`.
-- Focused path: an attached Claude on the branch gives `focused` with its pid. Nothing is spawned and no prompt is sent. The answer clears the recent-spawn record.
+- Existing path: an attached Claude on the branch gives `existing` with its pid. Nothing is spawned and no prompt is sent. The answer clears the recent-spawn record.
 - A shell, or a pane without a channel, on the branch does not count as an owner.
 - A second start while one runs gives 409, and only one Claude spawns.
 - A start less than 60 s after a spawn, with no owner yet, gives 409.

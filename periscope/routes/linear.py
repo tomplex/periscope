@@ -2,7 +2,7 @@
 
 The steps are /api/reviews/prepare's spawn path: worktree, Claude with a prompt, rail placement,
 plus the Linear link on the new pane. A Claude already on the branch is only reported (mode
-"focused"): its prompt is never pasted into a session that may be busy. Selecting the pane is a
+"existing"): its prompt is never pasted into a session that may be busy. Selecting the pane is a
 separate request (POST /api/select), sent when the user asks for it.
 """
 
@@ -52,7 +52,7 @@ async def _start(body: StartBody, key: tuple[str, str]) -> dict:
     owner = reviews.owner_for(await state_hub.current_windows(), os.path.basename(repo), branch)
     if owner:
         _recent_spawn.pop(key, None)
-        return {"mode": "focused", "pid": owner["pid"]}
+        return {"mode": "existing", "pid": owner["pid"]}
     age = time.monotonic() - _recent_spawn.get(key, -RECENT_SPAWN_S)
     if age < RECENT_SPAWN_S:
         raise HTTPException(409, f"a pane was spawned {int(age)} s ago and hasn't attached yet")

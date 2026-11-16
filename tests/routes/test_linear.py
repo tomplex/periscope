@@ -87,7 +87,7 @@ def test_a_claude_on_the_branch_is_reported_not_prompted(client, windows, worktr
     windows.return_value = [_win()]
     route._recent_spawn[(os.path.realpath(BODY["repo"]), BODY["branch"])] = time.monotonic()
     r = client.post("/api/linear/start", json=BODY)
-    assert r.status_code == 200 and r.json() == {"mode": "focused", "pid": "p1"}
+    assert r.status_code == 200 and r.json() == {"mode": "existing", "pid": "p1"}
     assert route._recent_spawn == {}
     worktree.assert_not_called()
     spawn.assert_not_called()
