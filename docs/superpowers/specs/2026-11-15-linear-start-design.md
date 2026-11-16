@@ -74,7 +74,7 @@ Body: `{"pid": "<@periscope_id>"}`.
 - `periscope/channels.py`: the `spawn_claude` tool places its pane with `place_session_in_rail`. `spawn_claude_with_prompt` loads the prompt with `tmux.load_buffer`, and logs a cleanup kill that fails or times out.
 - `periscope/tmux.py`: `load_buffer`, which loads text over stdin and raises `RuntimeError` when tmux fails or times out. `spawn_claude_with_prompt`, `/api/send`, `/api/paste-image` and `deliver_input`'s large-paste path use it, so there is one load path. `_tmux_checked` raises the same `RuntimeError` for any tmux command. Each `paste-buffer` after a load goes through it. So do the `send-keys` of `deliver_input` and `/api/send`, and the Enter and the cleanup kill of `spawn_claude_with_prompt`.
 - `periscope/routes/send.py`: a paste or a key that tmux refuses or times out on is 500 with the tmux error, and nothing after it is sent.
-- `periscope/tmux_input.py`: the fork path logs the `RuntimeError` from `deliver_input`, so a failed or timed-out tmux call does not end `/ws/pane`'s drain task.
+- `periscope/tmux_input.py`: the fork path logs the `RuntimeError` from `deliver_input`, so a failed or timed-out tmux call does not end `/ws/pane`'s drain task. The input of that call is lost.
 - `periscope/routes/paste_image.py`: `/api/paste-image` loads `@<path> ` with `tmux.load_buffer`. A load or a paste that fails or times out is 500 with the tmux error, as in `/api/send`. After a failed load, nothing is pasted.
 - `periscope/routes/state.py`: `POST /api/select`, the in-memory request, and `select` in `build_state()`.
 - `static/src/select.js`: `selectToApply`.
