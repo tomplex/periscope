@@ -20,7 +20,6 @@ from pydantic import BaseModel
 
 from periscope import channels, git_pr, gitdiff, open_ops, projects, reviews, state_hub, store, tracks
 from periscope.log import log
-from periscope.panes import list_windows
 
 router = APIRouter()
 
@@ -269,13 +268,8 @@ async def _prepare(body: ReviewRef) -> dict:
         # fires, and a fork's worktree isn't flagged remote-gone on sight.
         store.set_window_fields(spawned["pid"], linked_pr=number, is_fork=prwt.is_fork)
 
-    # Same server-side rail placement as the spawn_claude tool's anchored path.
-    def place() -> None:
-        pane_pids = [w["pid_raw"] for w in list_windows() if w["session"] == session and w.get("pid_raw")]
-        open_ops.place_in_rail(session, project, pane_pids or [spawned["pid"]])
-
     try:
-        await asyncio.to_thread(place)
+        await asyncio.to_thread(open_ops.place_session_in_rail, session, project, spawned["pid"])
     except Exception:
         # Placement only orders the rail; the Claude exists, and a 500 would invite a retry that spawns a second one.
         log.warning("reviews: rail placement failed for %s %s", body.repo, body.branch, exc_info=True)

@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 
 from periscope import channels, open_ops, reviews, state_hub, store, tracks, worktree_spawn
 from periscope.log import log
-from periscope.panes import list_windows
 
 router = APIRouter()
 
@@ -73,13 +72,8 @@ async def _start(body: StartBody, key: tuple[str, str]) -> dict:
     _recent_spawn[key] = time.monotonic()
     store.set_window_fields(spawned["pid"], linked_linear=body.ticket, linked_linear_title=body.title or None)
 
-    # Same server-side rail placement as prepare's spawn.
-    def place() -> None:
-        pane_pids = [w["pid_raw"] for w in list_windows() if w["session"] == session and w.get("pid_raw")]
-        open_ops.place_in_rail(session, project, pane_pids or [spawned["pid"]])
-
     try:
-        await asyncio.to_thread(place)
+        await asyncio.to_thread(open_ops.place_session_in_rail, session, project, spawned["pid"])
     except Exception:
         # Placement only orders the rail; the Claude exists, and an error would invite a second spawn.
         log.warning("linear start: rail placement failed for %s %s", repo, branch, exc_info=True)

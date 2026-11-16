@@ -38,7 +38,7 @@ def _win(**over):
 @pytest.fixture
 def place(mocker):
     # Never the real rail write or a live tmux listing.
-    mocker.patch("periscope.routes.reviews.list_windows", return_value=[])
+    mocker.patch("periscope.open_ops.list_windows", return_value=[])
     return mocker.patch("periscope.routes.reviews.open_ops.place_in_rail")
 
 

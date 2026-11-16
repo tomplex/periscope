@@ -746,10 +746,10 @@ def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
     mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
-    # The commander path makes `anchored` truthy, so place_in_rail fires:
-    # stub list_windows + place_in_rail so it never touches real tmux/state.
+    # The commander path makes `anchored` truthy, so the rail placement fires:
+    # stub list_windows + place_session_in_rail so it never touches real tmux/state.
     mocker.patch("periscope.channels.list_windows", return_value=[])
-    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+    mocker.patch.object(open_ops, "place_session_in_rail", return_value=None)
 
     asyncio.run(channels._do_spawn_claude_tool(handle, {"prompt": "x", "cwd": "/r"}))
 
@@ -801,7 +801,7 @@ def test_spawn_with_branch_creates_worktree(fresh_activity_db, monkeypatch, mock
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
     mocker.patch("periscope.channels.list_windows", return_value=[])
-    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+    mocker.patch.object(open_ops, "place_session_in_rail", return_value=None)
 
     asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "go", "repo": "/r", "branch": "tc/x"}))
 
@@ -1024,7 +1024,7 @@ def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, 
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
     mocker.patch("periscope.channels.list_windows", return_value=[])
-    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+    mocker.patch.object(open_ops, "place_session_in_rail", return_value=None)
 
     res = _body(asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go", "cwd": "/r", "workspace": "new"})))
 

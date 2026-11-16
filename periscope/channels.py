@@ -777,12 +777,11 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
 
     # workspace="new": persist the rail placement now that the window is
     # stamped. The item already surfaces from live state (the project is
-    # registered, so the session groups under its repo), but place_in_rail
+    # registered, so the session groups under its repo), but the placement
     # records the ordering — same server-side placement the unified-open
-    # route does. pid_raw is the just-stamped @periscope_id.
+    # route does.
     if anchored:
-        pane_pids = [w["pid_raw"] for w in list_windows() if w["session"] == session and w.get("pid_raw")]
-        open_ops.place_in_rail(session, project, pane_pids or [pid])
+        open_ops.place_session_in_rail(session, project, pid)
 
     # Tag the spawned pane into a track (the grouping authority). Precedence:
     # an explicit workspace_id arg (a track id now) wins; else the anchored

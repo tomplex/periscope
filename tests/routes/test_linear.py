@@ -41,7 +41,7 @@ def _env(monkeypatch, mocker, windows):
     # A spawn in one test must not make the next test's start refuse to spawn.
     monkeypatch.setattr(route, "_recent_spawn", {})
     # Never a live tmux listing.
-    mocker.patch("periscope.routes.linear.list_windows", return_value=[])
+    mocker.patch("periscope.open_ops.list_windows", return_value=[])
     mocker.patch("periscope.tracks.repo_default_track", return_value="/repos/api")
     mocker.patch("periscope.open_ops.resolve_worktree_session", return_value=("api-wt", {"repo": "/repos/api"}))
 

@@ -186,6 +186,13 @@ def place_in_rail(tmux_session: str, project: projects.Project, pane_pids: list[
     return store.get_ui()
 
 
+def place_session_in_rail(session: str, project: projects.Project, pid: str) -> dict:
+    """`place_in_rail` with every stamped pane of `session`, or `pid` alone when none is.
+    list_windows() is a live listing, so a window stamped a moment ago is in it."""
+    pane_pids = [w["pid_raw"] for w in list_windows() if w["session"] == session and w["pid_raw"]]
+    return place_in_rail(session, project, pane_pids or [pid])
+
+
 def resolve_worktree_session(path: str) -> tuple[str, projects.Project] | None:
     """Resolve a cwd to the `(session_name, project)` a pane should spawn into
     to appear as its OWN rail item — registering the project if absent and
@@ -315,17 +322,13 @@ def _open_path(
     with open_lock(toplevel):
         project = ensure_project(toplevel, repo)
         session, agent_pid, created = ensure_session(project, toplevel, agent)
-    # Rebuild the full pane list from the now-live session. list_windows()
-    # is a live shell-out, so freshly-stamped windows are visible
-    # synchronously; pid_raw is the @periscope_id, "" for unmanaged.
-    pane_pids = [w["pid_raw"] for w in list_windows() if w["session"] == session and w["pid_raw"]]
     # Recover the claude window's tmux pane_id (%N) for the result payload —
     # the terminal WS targets panes by %N even though identity keys on the pid.
     agent_pane_id = next(
         (w["pane_id"] for w in list_windows() if w.get("pid_raw") == agent_pid and w.get("pane_id")),
         "",
     )
-    ui = place_in_rail(session, project, pane_pids or [agent_pid])
+    ui = place_session_in_rail(session, project, agent_pid)
     # Tag THIS open's panes into the repo's default track so grouping works off
     # track metadata (the rail groups purely by track_id). Scope is panes at
     # `toplevel` with no existing tag: the shared MANAGED_SESSION holds every
