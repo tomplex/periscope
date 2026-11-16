@@ -158,7 +158,9 @@ async function handleDetailPaste(e) {
         body: blob,
       });
       const d = await res.json();
-      if (!d.ok) writeTerminalLine(`\r\n\x1b[31m[periscope: image paste failed: ${d.error}]\x1b[0m`);
+      // A failure is FastAPI's {detail}, as apiCall reads it (util.js).
+      const err = d.error || d.detail || `HTTP ${res.status}`;
+      if (!d.ok) writeTerminalLine(`\r\n\x1b[31m[periscope: image paste failed: ${err}]\x1b[0m`);
     } catch (err) {
       writeTerminalLine(`\r\n\x1b[31m[periscope: image paste error: ${err.message}]\x1b[0m`);
     }
