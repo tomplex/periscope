@@ -25,6 +25,7 @@ def _win(**over):
         "pane_id": "%1",
         "session": "s",
         "index": 1,
+        "repo_key": "/repos/api",
         "repo_label": "api",
         "branch": "me/eng-1-fix-it",
         "agent": "claude",
@@ -94,9 +95,28 @@ def test_a_claude_on_the_branch_is_reported_not_prompted(client, windows, worktr
     place.assert_not_called()
 
 
-def test_a_shell_or_an_unattached_pane_on_the_branch_does_not_count(client, windows, worktree, spawn, place):
-    windows.return_value = [_win(agent=None), _win(pid="p2", channel_attached=False)]
+def test_a_claude_without_a_channel_on_the_branch_is_reported(client, windows, worktree, spawn):
+    # Started by hand, or spawned a moment ago: a second Claude would edit the same worktree.
+    windows.return_value = [_win(channel_attached=False)]
+    assert client.post("/api/linear/start", json=BODY).json() == {"mode": "existing", "pid": "p1"}
+    spawn.assert_not_called()
+
+
+def test_a_shell_on_the_branch_does_not_count(client, windows, worktree, spawn, place):
+    windows.return_value = [_win(agent=None)]
     assert client.post("/api/linear/start", json=BODY).json()["mode"] == "spawned"
+
+
+def test_a_claude_in_another_repo_with_the_same_folder_name_does_not_count(client, windows, worktree, spawn, place):
+    windows.return_value = [_win(repo_key="/oss/api")]
+    assert client.post("/api/linear/start", json=BODY).json()["mode"] == "spawned"
+
+
+def test_a_repo_path_with_a_trailing_slash_finds_the_claude(client, windows, worktree, spawn):
+    windows.return_value = [_win()]
+    r = client.post("/api/linear/start", json={**BODY, "repo": "/repos/api/"})
+    assert r.json() == {"mode": "existing", "pid": "p1"}
+    worktree.assert_not_called()
 
 
 def test_a_start_before_the_spawned_claude_attaches_is_refused(client, worktree, spawn, place):

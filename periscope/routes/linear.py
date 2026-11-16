@@ -36,7 +36,9 @@ async def linear_start(body: StartBody):
 
 async def _start(body: StartBody, key: tuple[str, str]) -> dict:
     repo, branch = key
-    owner = reviews.owner_for(await state_hub.current_windows(), os.path.basename(repo), branch)
+    # Any Claude counts, attached or not: the route only reports it, and /api/select needs only a live pane.
+    on_repo = [w for w in await state_hub.current_windows() if w.get("repo_key") == repo]
+    owner = reviews.claude_on_branch(on_repo, {branch})
     if owner:
         _spawns.forget_spawn(key)
         return {"mode": "existing", "pid": owner["pid"]}
