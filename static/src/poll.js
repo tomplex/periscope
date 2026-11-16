@@ -8,6 +8,9 @@
 // preserves the user's in-flight input. Connection-banner shows at ≥2
 // consecutive REST failures (≈6s); a WS drop alone doesn't trip it because the
 // REST fallback keeps data flowing.
+
+import { setLastSelected } from "./prefs.js";
+import { selectToApply } from "./select.js";
 import {
   accounts,
   alerts,
@@ -18,6 +21,7 @@ import {
   launchDefault,
   moveTargets,
   projects,
+  railSelection,
   resources,
   reviews,
   spawnAccount,
@@ -40,6 +44,9 @@ const WS_RETRY_MS = 2000;
 // Consecutive failed REST polls. Banner shows at ≥2 to avoid flicker on a
 // single transient hiccup.
 let consecutivePollFails = 0;
+
+// The `at` of the last select request this tab applied (select.js).
+let lastSelectAt = null;
 
 function bannerEl() {
   return document.getElementById("connection-banner");
@@ -78,6 +85,13 @@ function applyState(data) {
     walls.value = data.walls || null;
     wallSpans.value = data.wall_spans || [];
     editorSignal.value = data.editor || "";
+    // Another app asked for a pane (todo-hub's Show): select it as ⌘K does after an open.
+    const pid = selectToApply(data.select, lastSelectAt, Date.now());
+    if (pid) {
+      lastSelectAt = data.select.at;
+      railSelection.value = `pane:${pid}`;
+      setLastSelected({ kind: "pane", pid });
+    }
   } finally {
     stateSeq.value += 1;
   }
