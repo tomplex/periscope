@@ -2,7 +2,7 @@
 buttons. Each re-checks the pane when pressed; these tests pin every refusal,
 because a wrong yes approves a tool call nobody saw, and a wrong reply runs in
 a shell or picks a dialog option. Nothing here reaches tmux: capture and
-_send_to_target (or, to pin the tmux arguments, routes.send.tmux) are mocked,
+_send_to_target (or, to pin the tmux arguments, routes.send._tmux_checked) are mocked,
 and the rows are real ones in a per-test DB."""
 
 import re
@@ -687,11 +687,11 @@ def test_reply_409s_in_shell_mode(client, pane, idle, mocker, name):
 
 @pytest.fixture
 def tmux_calls(mocker, pane):
-    """The real _send_to_target over a mocked routes.send.tmux and load_buffer;
+    """The real _send_to_target over a mocked routes.send._tmux_checked and load_buffer;
     captures and tmux calls land in one ordered list."""
     calls = []
     mocker.patch.object(pane_actions, "_send_to_target", send._send_to_target)
-    mocker.patch.object(send, "tmux", side_effect=lambda *a: calls.append(a) or "")
+    mocker.patch.object(send, "_tmux_checked", side_effect=lambda *a: calls.append(a))
     mocker.patch.object(send, "load_buffer", side_effect=lambda *a: calls.append(("load-buffer", *a)))
     return calls
 

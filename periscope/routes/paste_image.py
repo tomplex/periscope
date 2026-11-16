@@ -17,7 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from periscope.panes import note_action, note_focus
-from periscope.tmux import load_buffer, tmux
+from periscope.tmux import _tmux_checked, load_buffer
 
 router = APIRouter()
 
@@ -69,9 +69,9 @@ async def paste_image(session: str, index: int, request: Request, deliver: bool 
         buf = f"wd-img-{uuid.uuid4().hex[:8]}"
         try:
             load_buffer(buf, f"@{path} ")
+            _tmux_checked("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
         except RuntimeError as e:
             raise HTTPException(500, str(e)) from e
-        tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
         note_focus(target)
         note_action(target)
     return {"ok": True, "path": str(path), "bytes": len(body)}

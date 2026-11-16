@@ -41,6 +41,12 @@ def load_buffer(mocker):
 
 
 @pytest.fixture(autouse=True)
+def tmux_checked(mocker):
+    """A spawn pastes its prompt and sends Enter: never into the developer's tmux server."""
+    return mocker.patch("periscope.channels._tmux_checked")
+
+
+@pytest.fixture(autouse=True)
 def reset_channel_state():
     """Clear the in-memory channel dicts between tests so each one starts
     from a clean slate."""
@@ -2031,13 +2037,13 @@ def test_spawn_claude_sets_the_model_the_chooser_picked(mocker):
     assert "ANTHROPIC_MODEL=opus[1m]" in args
 
 
-def test_spawn_claude_with_prompt_pastes_and_tags(mocker, load_buffer):
+def test_spawn_claude_with_prompt_pastes_and_tags(mocker, load_buffer, tmux_checked):
     from periscope import channels, usage
     from periscope.launch_policy import Launch
 
     mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
 
-    tmux_mock = mocker.patch("periscope.channels.tmux", return_value="%9")
+    mocker.patch("periscope.channels.tmux", return_value="%9")
     mocker.patch("periscope.channels._run", return_value=(0, ""))  # has-session ok
     mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
     mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
@@ -2053,39 +2059,58 @@ def test_spawn_claude_with_prompt_pastes_and_tags(mocker, load_buffer):
     assert out == {"target": "sess:4", "session": "sess", "index": 4, "pid": "kid42", "pane_id": "%9"}
     buf, text = load_buffer.call_args.args
     assert text == "do the thing"
-    paste = [c for c in tmux_mock.call_args_list if c.args[:1] == ("paste-buffer",)]
-    assert paste and paste[0].args == ("paste-buffer", "-d", "-p", "-b", buf, "-t", "sess:4")
+    assert [c.args for c in tmux_checked.call_args_list] == [
+        ("paste-buffer", "-d", "-p", "-b", buf, "-t", "sess:4"),
+        ("send-keys", "-t", "sess:4", "Enter"),
+    ]
     move.assert_called_once_with("kid42", "/dev/repo")
 
 
+_PROMPT_STEPS = ["load-buffer", "paste-buffer", "send-keys"]
+
+
 @pytest.mark.parametrize(
-    ("load", "error"),
+    ("failure", "error"),
     [
-        (subprocess.CompletedProcess([], 1, "", "no server running\n"), "no server running"),
-        (subprocess.TimeoutExpired(["tmux", "load-buffer"], 5), "timed out"),
+        (subprocess.CompletedProcess([], 1, "", "can't find window: 4\n"), "can't find window: 4"),
+        (subprocess.TimeoutExpired(["tmux"], 5), "timed out after 5 s"),
     ],
     ids=["exit", "timeout"],
 )
-def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_does_not_load(mocker, load_buffer, load, error):
-    # A Claude with an empty composer must not stay behind a spawn its caller reports as failed.
+@pytest.mark.parametrize("command", _PROMPT_STEPS)
+def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_is_not_delivered(
+    mocker, load_buffer, tmux_checked, command, failure, error
+):
+    # A Claude without its prompt must not stay behind a spawn its caller reports as failed.
     from periscope import channels, tmux, usage
     from periscope.launch_policy import Launch
 
     mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
-    tmux_mock = mocker.patch("periscope.channels.tmux", return_value="%9")
+    mocker.patch("periscope.channels.tmux", return_value="%9")
     mocker.patch("periscope.channels._run", return_value=(0, ""))
     mutate = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
     mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
     mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
     stamp = mocker.patch("periscope.channels.stamp_new_window")
-    # The real load, over a tmux that fails it: the only subprocess this path runs.
+    # The real load, paste and Enter, over a tmux that fails `command`.
     load_buffer.side_effect = tmux.load_buffer
-    mocker.patch("periscope.tmux.subprocess.run", side_effect=[load])
+    tmux_checked.side_effect = tmux._tmux_checked
+    ran = []
 
-    with pytest.raises(channels.SpawnFailed, match=error):
+    def run(argv, **kwargs):
+        ran.append(next(step for step in _PROMPT_STEPS if step in argv))
+        if command not in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    mocker.patch("periscope.tmux.subprocess.run", side_effect=run)
+
+    with pytest.raises(channels.SpawnFailed, match=f"tmux {command} failed: {error}"):
         asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
     assert mutate.call_args.args == ("kill-window", "-t", "sess:4")
-    assert not [c for c in tmux_mock.call_args_list if c.args[:1] == ("paste-buffer",)]
+    assert ran == _PROMPT_STEPS[: _PROMPT_STEPS.index(command) + 1]  # nothing after the failed step
     stamp.assert_not_called()
 
 

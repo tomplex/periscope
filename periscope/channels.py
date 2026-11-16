@@ -45,7 +45,7 @@ from periscope.pids import _attach_git_then_resolve_pids, stamp_new_window
 from periscope.pids import window_by_pid as _resolve_window_by_pid
 from periscope.store import get_window, set_window_fields
 from periscope.tabs import open_tab
-from periscope.tmux import _run, _tmux_mutate, load_buffer, tmux
+from periscope.tmux import _run, _tmux_checked, _tmux_mutate, load_buffer, tmux
 
 CHANNEL_INSTRUCTIONS = """\
 You are running inside periscope, a dashboard the user has open in their
@@ -627,8 +627,13 @@ async def spawn_claude_with_prompt(
     buf = f"spawn-{uuid.uuid4().hex[:8]}"
     try:
         load_buffer(buf, prompt)
+        _tmux_checked("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+        # Same 100ms bracketed-paste delay as /api/send — without it the Enter
+        # can land before the paste applies, submitting empty input.
+        await asyncio.sleep(0.1)
+        _tmux_checked("send-keys", "-t", target, "Enter")
     except RuntimeError as e:
-        # The caller reports a failed spawn, so leave no Claude behind that never got its prompt.
+        # The caller reports a failed spawn, so leave no Claude behind whose prompt was not submitted.
         # A kill that fails only logs: the caller still needs SpawnFailed.
         try:
             killed, why = _tmux_mutate("kill-window", "-t", target)
@@ -637,11 +642,6 @@ async def spawn_claude_with_prompt(
         if not killed:
             log.warning("spawn: %s keeps a Claude with no prompt: tmux kill-window failed: %s", target, why)
         raise SpawnFailed(str(e)) from e
-    tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
-    # Same 100ms bracketed-paste delay as /api/send — without it the Enter
-    # can land before the paste applies, submitting empty input.
-    await asyncio.sleep(0.1)
-    tmux("send-keys", "-t", target, "Enter")
 
     note_focus(target)
     note_action(target)

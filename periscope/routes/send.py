@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from periscope.panes import note_action, note_focus
-from periscope.tmux import load_buffer, tmux
+from periscope.tmux import _tmux_checked, load_buffer
 
 router = APIRouter()
 
@@ -50,7 +50,7 @@ def _send_to_target(target: str, paste: str | None, keys: list[str], address: st
             # never trample each other.
             buf = f"wd-{uuid.uuid4().hex[:8]}"
             load_buffer(buf, paste)
-            tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", addr)
+            _tmux_checked("paste-buffer", "-d", "-p", "-b", buf, "-t", addr)
             # Give the receiving TUI (especially Claude Code) time to apply
             # state for the paste before the submit key arrives. Without this,
             # Enter can land before React renders and submits empty input,
@@ -58,7 +58,7 @@ def _send_to_target(target: str, paste: str | None, keys: list[str], address: st
             if keys:
                 time.sleep(0.10)
         if keys:
-            tmux("send-keys", "-t", addr, *keys)
+            _tmux_checked("send-keys", "-t", addr, *keys)
     except Exception as e:
         raise HTTPException(500, str(e)) from e
     note_focus(target)
