@@ -106,7 +106,11 @@ def _cmd(target: str, encoded: bytes) -> bytes:
 
 async def _fork_fallback(target: str, text: str) -> None:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, lambda: deliver_input(target, text))
+    try:
+        await loop.run_in_executor(None, lambda: deliver_input(target, text))
+    except RuntimeError as e:
+        # A paste tmux did not load is lost. A raise would also end /ws/pane's drain task, and every key after it.
+        log.warning("tmux input fork path: %s", e)
 
 
 async def send(target: str, text: str) -> None:

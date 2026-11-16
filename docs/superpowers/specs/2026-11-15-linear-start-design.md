@@ -72,7 +72,7 @@ Body: `{"pid": "<@periscope_id>"}`.
 - `periscope/reviews.py`: `claude_on_branch`, the agent-and-branch match. `owner_for` adds prepare's channel and repo-label filter to it.
 - `periscope/open_ops.py`: `place_session_in_rail(session, project, pid)` places every stamped pane of a session. The open (`_open_path`), the `spawn_claude` tool and `branch_spawn` use it.
 - `periscope/channels.py`: the `spawn_claude` tool places its pane with `place_session_in_rail`. `spawn_claude_with_prompt` loads the prompt with `tmux.load_buffer`.
-- `periscope/tmux.py`: `load_buffer`, which loads text over stdin and raises when tmux fails. `spawn_claude_with_prompt` and `/api/send` use it.
+- `periscope/tmux.py`: `load_buffer`, which loads text over stdin and raises when tmux fails. `spawn_claude_with_prompt`, `/api/send` and `deliver_input`'s large-paste path use it.
 - `periscope/routes/state.py`: `POST /api/select`, the in-memory request, and `select` in `build_state()`.
 - `static/src/select.js`: `selectToApply`.
 - `static/src/poll.js`: its use in `applyState`.

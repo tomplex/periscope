@@ -7,6 +7,7 @@ the control client actually delivers bytes into a real pane.
 """
 
 import asyncio
+import logging
 import shutil
 import subprocess
 import uuid
@@ -40,6 +41,17 @@ def test_disabled_falls_back_to_fork(monkeypatch):
     monkeypatch.setattr(tmux_input, "_fork_fallback", fake_fork)
     asyncio.run(tmux_input.send("sess:1.0", "x"))
     assert seen == {"target": "sess:1.0", "text": "x"}
+
+
+def test_a_paste_that_does_not_load_is_logged_not_raised(monkeypatch, caplog):
+    # A raise would end /ws/pane's drain task, and every key typed after it.
+    def fail(target, text):
+        raise RuntimeError("tmux load-buffer failed: no server running")
+
+    monkeypatch.setattr(tmux_input, "deliver_input", fail)
+    with caplog.at_level(logging.WARNING, logger="periscope"):
+        asyncio.run(tmux_input.send("sess:1.0", "x" * (tmux_input._SEND_KEYS_H_MAX + 1)))
+    assert "load-buffer failed: no server running" in caplog.text
 
 
 # Dedicated server, unique per run (test_tmux_mirror's TEST_SOCKET pattern):

@@ -307,27 +307,22 @@ def deliver_input(target: str, text: str) -> None:
 
     Fallback (inputs above `_SEND_KEYS_H_MAX`): load-buffer + paste-buffer
     over stdin. Slower (two subprocesses) but unbounded in size — needed
-    for multi-KB pastes that would otherwise overflow ARG_MAX.
+    for multi-KB pastes that would otherwise overflow ARG_MAX. Raises
+    RuntimeError when the load fails.
     """
     encoded = text.encode("utf-8")
     if len(encoded) <= _SEND_KEYS_H_MAX:
         hexes = [f"{b:02x}" for b in encoded]
         subprocess.run(
-            ["tmux", "send-keys", "-t", target, "-H", *hexes],
+            _tmux_argv("send-keys", "-t", target, "-H", *hexes),
             check=False,
             timeout=5,
         )
         return
     buf = f"wd-in-{uuid.uuid4().hex[:8]}"
+    load_buffer(buf, text)
     subprocess.run(
-        ["tmux", "load-buffer", "-b", buf, "-"],
-        input=text,
-        text=True,
-        check=False,
-        timeout=5,
-    )
-    subprocess.run(
-        ["tmux", "paste-buffer", "-d", "-b", buf, "-t", target],
+        _tmux_argv("paste-buffer", "-d", "-b", buf, "-t", target),
         check=False,
         timeout=5,
     )

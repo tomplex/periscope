@@ -227,6 +227,24 @@ def test_deliver_input_large_falls_back_to_paste_buffer(mocker):
     assert "foo:0" in second_call.args[0]
 
 
+@pytest.mark.parametrize(("text", "commands"), [("a", ["send-keys"]), ("x" * 5000, ["load-buffer", "paste-buffer"])])
+def test_deliver_input_uses_the_tmux_socket(mocker, monkeypatch, text, commands):
+    # The paste must read the buffer from the server the load wrote it to.
+    monkeypatch.setenv("PERISCOPE_TMUX_SOCKET", "t1")
+    mock_run = mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", ""))
+    deliver_input("foo:0", text)
+    assert [c.args[0][:4] for c in mock_run.call_args_list] == [["tmux", "-L", "t1", cmd] for cmd in commands]
+
+
+def test_deliver_input_raises_and_does_not_paste_when_the_load_fails(mocker):
+    mock_run = mocker.patch(
+        "subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "no server running\n")
+    )
+    with pytest.raises(RuntimeError, match="load-buffer failed"):
+        deliver_input("foo:0", "x" * 5000)
+    assert mock_run.call_count == 1
+
+
 def test_env_args_empty_for_default_account():
     assert env_args("") == []
     assert env_args(None) == []
