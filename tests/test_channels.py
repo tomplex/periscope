@@ -6,6 +6,8 @@ sibling `channel_server.py` and by per-peel manual smoke. These pytest
 tests cover the pure-logic surface that the listener dispatches into.
 """
 
+import subprocess
+
 import pytest
 
 from periscope.channels import (
@@ -30,6 +32,18 @@ _WINDOW = {
     "name": "win",
     "cwd": "/tmp",
 }
+
+
+@pytest.fixture(autouse=True)
+def bracketed_paste(mocker):
+    """A spawn pastes its prompt: never into the developer's tmux server."""
+    return mocker.patch("periscope.channels.bracketed_paste")
+
+
+@pytest.fixture(autouse=True)
+def tmux_checked(mocker):
+    """A spawn sends Enter: never into the developer's tmux server."""
+    return mocker.patch("periscope.channels._tmux_checked")
 
 
 @pytest.fixture(autouse=True)
@@ -746,10 +760,10 @@ def test_spawn_commander_anchors_on_cwd(fresh_activity_db, monkeypatch, mocker):
     mocker.patch("periscope.channels.stamp_new_window", return_value="child99")
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
-    # The commander path makes `anchored` truthy, so place_in_rail fires:
-    # stub list_windows + place_in_rail so it never touches real tmux/state.
+    # The commander path makes `anchored` truthy, so the rail placement fires:
+    # stub list_windows + place_session_in_rail so it never touches real tmux/state.
     mocker.patch("periscope.channels.list_windows", return_value=[])
-    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+    mocker.patch.object(open_ops, "place_session_in_rail", return_value=None)
 
     asyncio.run(channels._do_spawn_claude_tool(handle, {"prompt": "x", "cwd": "/r"}))
 
@@ -801,7 +815,7 @@ def test_spawn_with_branch_creates_worktree(fresh_activity_db, monkeypatch, mock
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
     mocker.patch("periscope.channels.list_windows", return_value=[])
-    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+    mocker.patch.object(open_ops, "place_session_in_rail", return_value=None)
 
     asyncio.run(channels._do_spawn_claude_tool("%C", {"prompt": "go", "repo": "/r", "branch": "tc/x"}))
 
@@ -1024,11 +1038,13 @@ def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, 
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
     mocker.patch("periscope.channels.list_windows", return_value=[])
-    mocker.patch.object(open_ops, "place_in_rail", return_value=None)
+    place = mocker.patch.object(open_ops, "place_session_in_rail", return_value=None)
 
     res = _body(asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go", "cwd": "/r", "workspace": "new"})))
 
     assert res["ok"] is True
+    # The spawned pane's session and pid, never the caller's.
+    place.assert_called_once_with("proj-sess", {"repo": "/r"}, "child99")
     # repo_default_track keys the track id on the repo path; the tag keys on
     # the stamped @periscope_id.
     assert activity.get_pane_track("child99") == tracks.repo_default_track("/r")
@@ -1058,9 +1074,10 @@ def test_spawn_same_inherits_callers_track_by_pid(mocker):
     """The "same" branch resolves the CALLER's track by its resolved pid (the
     re-keyed input contract — never the %N pane id) and tags the SPAWNED
     window's stamped pid into the result."""
-    from periscope import channels
+    from periscope import channels, open_ops
 
     resolve, move = _mock_same_mode_spawn(mocker)
+    place = mocker.patch.object(open_ops, "place_session_in_rail")
 
     res = asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
@@ -1069,6 +1086,8 @@ def test_spawn_same_inherits_callers_track_by_pid(mocker):
     assert resolve.call_args_list[0].args == ({"pid": "parent11", "cwd": "/home/tom"},)
     move.assert_called_once_with("child99", "tk_caller")
     assert _body(res)["track"]["id"] == "tk_caller"
+    # A spawn into the caller's session nests under the caller's rail item: nothing to place.
+    place.assert_not_called()
 
 
 def test_spawn_same_vanished_caller_falls_to_cwd_default(mocker, caplog):
@@ -2018,13 +2037,13 @@ def test_spawn_claude_sets_the_model_the_chooser_picked(mocker):
     assert "ANTHROPIC_MODEL=opus[1m]" in args
 
 
-def test_spawn_claude_with_prompt_pastes_and_tags(mocker):
+def test_spawn_claude_with_prompt_pastes_and_tags(mocker, bracketed_paste, tmux_checked):
     from periscope import channels, usage
     from periscope.launch_policy import Launch
 
     mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
 
-    tmux_mock = mocker.patch("periscope.channels.tmux", return_value="%9")
+    mocker.patch("periscope.channels.tmux", return_value="%9")
     mocker.patch("periscope.channels._run", return_value=(0, ""))  # has-session ok
     mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
     mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
@@ -2038,11 +2057,91 @@ def test_spawn_claude_with_prompt_pastes_and_tags(mocker):
     out = asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", "/dev/repo", "do the thing", session="sess"))
 
     assert out == {"target": "sess:4", "session": "sess", "index": 4, "pid": "kid42", "pane_id": "%9"}
-    set_buffer = [c for c in tmux_mock.call_args_list if c.args[:1] == ("set-buffer",)]
-    assert set_buffer and set_buffer[0].args[-1] == "do the thing"
-    paste = [c for c in tmux_mock.call_args_list if c.args[:1] == ("paste-buffer",)]
-    assert paste and paste[0].args[-1] == "sess:4"
+    bracketed_paste.assert_called_once_with("sess:4", "do the thing")
+    assert [c.args for c in tmux_checked.call_args_list] == [("send-keys", "-t", "sess:4", "Enter")]
     move.assert_called_once_with("kid42", "/dev/repo")
+
+
+_PROMPT_STEPS = ["load-buffer", "paste-buffer", "send-keys"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (subprocess.CompletedProcess([], 1, "", "can't find window: 4\n"), "can't find window: 4"),
+        (subprocess.TimeoutExpired(["tmux"], 5), "timed out after 5 s"),
+    ],
+    ids=["exit", "timeout"],
+)
+@pytest.mark.parametrize("command", _PROMPT_STEPS)
+def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_is_not_delivered(
+    mocker, bracketed_paste, tmux_checked, command, failure, error
+):
+    # A Claude whose prompt was not submitted must not stay behind a spawn its caller reports as failed.
+    from periscope import channels, tmux, usage
+    from periscope.launch_policy import Launch
+
+    mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
+    mocker.patch("periscope.channels.tmux", return_value="%9")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    stamp = mocker.patch("periscope.channels.stamp_new_window")
+    # The real load, paste, Enter and kill, over a tmux that fails `command`.
+    bracketed_paste.side_effect = tmux.bracketed_paste
+    tmux_checked.side_effect = tmux._tmux_checked
+    ran = []
+
+    def run(argv, **kwargs):
+        ran.append(next(step for step in (*_PROMPT_STEPS, "kill-window") if step in argv))
+        if command not in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    mocker.patch("periscope.tmux.subprocess.run", side_effect=run)
+
+    with pytest.raises(channels.SpawnFailed, match=f"tmux {command} failed: {error}"):
+        asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
+    # Nothing between the failed step and the kill.
+    assert ran == [*_PROMPT_STEPS[: _PROMPT_STEPS.index(command) + 1], "kill-window"]
+    assert tmux_checked.call_args.args == ("kill-window", "-t", "sess:4")
+    stamp.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("kill", "why"),
+    [
+        (subprocess.CompletedProcess([], 1, "", "can't find window: 4\n"), "can't find window: 4"),
+        (subprocess.TimeoutExpired(["tmux", "kill-window"], 5), "timed out after 5 s"),
+    ],
+    ids=["exit", "timeout"],
+)
+def test_spawn_claude_with_prompt_raises_spawn_failed_when_the_kill_fails_too(
+    mocker, bracketed_paste, tmux_checked, caplog, kill, why
+):
+    # The route maps only SpawnFailed to 502: any other error is a bare 500.
+    import logging
+
+    from periscope import channels, tmux, usage
+    from periscope.launch_policy import Launch
+
+    mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
+    mocker.patch("periscope.channels.tmux", return_value="%9")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    bracketed_paste.side_effect = RuntimeError("tmux load-buffer failed: timed out after 5 s")
+    # The real kill, over a tmux that fails it: the only subprocess this path runs.
+    tmux_checked.side_effect = tmux._tmux_checked
+    mocker.patch("periscope.tmux.subprocess.run", side_effect=[kill])
+
+    with caplog.at_level(logging.WARNING, logger="periscope"), pytest.raises(channels.SpawnFailed, match="load-buffer"):
+        asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
+    assert f"sess:4 keeps a Claude after a failed prompt: tmux kill-window failed: {why}" in caplog.text
 
 
 def test_spawn_claude_with_prompt_skips_track_when_none(mocker):

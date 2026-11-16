@@ -2,8 +2,11 @@
 
 `tmux()` — read-only invocations; swallows stderr.
 `_tmux_mutate()` — side-effecting; surfaces stderr on failure.
+`_tmux_checked()` — side-effecting; raises RuntimeError when tmux fails or times out.
 `_run()` — generic subprocess wrapper used by git_pr and sessions routes.
 `capture()` — wraps `tmux capture-pane` with -e (SGR preserved).
+`load_buffer()` — loads text into a named paste buffer over stdin; raises on failure.
+`bracketed_paste()` — loads text and pastes it into a pane as a bracketed paste; raises on failure.
 `deliver_input()` — writes bytes into a pane. Small inputs (keystrokes
 and normal-size pastes) use a single `send-keys -H` subprocess; large
 inputs fall back to load-buffer + paste-buffer over stdin to dodge ARG_MAX.
@@ -158,6 +161,30 @@ def _run(
         return -1, ""
 
 
+def _tmux_checked(*args: str, stdin: str | None = None) -> None:
+    """Run a tmux command for its side effect. Raises RuntimeError when tmux fails or times out."""
+    try:
+        r = subprocess.run(_tmux_argv(*args), input=stdin, capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"tmux {args[0]} failed: timed out after {e.timeout:g} s") from e
+    if r.returncode != 0:
+        raise RuntimeError(f"tmux {args[0]} failed: {r.stderr.strip()}")
+
+
+def load_buffer(buf: str, text: str) -> None:
+    """Load `text` into the paste buffer `buf`. Over stdin, because as an argument tmux reads a
+    leading `-` as flags and refuses text over ~16 KB. Raises RuntimeError when tmux fails or times out."""
+    _tmux_checked("load-buffer", "-b", buf, "-", stdin=text)
+
+
+def bracketed_paste(target: str, text: str) -> None:
+    """Paste `text` into `target` as a bracketed paste. Each call loads its own buffer, so
+    concurrent pastes never share one. Raises RuntimeError when tmux fails or times out."""
+    buf = f"wd-{uuid.uuid4().hex[:8]}"
+    load_buffer(buf, text)
+    _tmux_checked("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+
+
 def _tmux_mutate(*args: str) -> tuple[bool, str]:
     """Run a tmux command for its side effects. Surfaces stderr on failure
     instead of swallowing it like `tmux()` does."""
@@ -294,26 +321,15 @@ def deliver_input(target: str, text: str) -> None:
     Fallback (inputs above `_SEND_KEYS_H_MAX`): load-buffer + paste-buffer
     over stdin. Slower (two subprocesses) but unbounded in size — needed
     for multi-KB pastes that would otherwise overflow ARG_MAX.
+
+    Raises RuntimeError when tmux fails or times out.
     """
     encoded = text.encode("utf-8")
     if len(encoded) <= _SEND_KEYS_H_MAX:
-        hexes = [f"{b:02x}" for b in encoded]
-        subprocess.run(
-            ["tmux", "send-keys", "-t", target, "-H", *hexes],
-            check=False,
-            timeout=5,
-        )
+        _tmux_checked("send-keys", "-t", target, "-H", *(f"{b:02x}" for b in encoded))
         return
+    # Not bracketed_paste: `text` is raw terminal input, as on the send-keys path above,
+    # and xterm.js already brackets a paste in it when the app asks for that.
     buf = f"wd-in-{uuid.uuid4().hex[:8]}"
-    subprocess.run(
-        ["tmux", "load-buffer", "-b", buf, "-"],
-        input=text,
-        text=True,
-        check=False,
-        timeout=5,
-    )
-    subprocess.run(
-        ["tmux", "paste-buffer", "-d", "-b", buf, "-t", target],
-        check=False,
-        timeout=5,
-    )
+    load_buffer(buf, text)
+    _tmux_checked("paste-buffer", "-d", "-b", buf, "-t", target)

@@ -2,7 +2,7 @@
 buttons. Each re-checks the pane when pressed; these tests pin every refusal,
 because a wrong yes approves a tool call nobody saw, and a wrong reply runs in
 a shell or picks a dialog option. Nothing here reaches tmux: capture and
-_send_to_target (or, to pin the tmux arguments, routes.send.tmux) are mocked,
+_send_to_target (or, to pin the tmux arguments, routes.send._tmux_checked) are mocked,
 and the rows are real ones in a per-test DB."""
 
 import re
@@ -687,11 +687,12 @@ def test_reply_409s_in_shell_mode(client, pane, idle, mocker, name):
 
 @pytest.fixture
 def tmux_calls(mocker, pane):
-    """The real _send_to_target over a mocked routes.send.tmux; captures and
-    tmux calls land in one ordered list."""
+    """The real _send_to_target over a mocked routes.send._tmux_checked and bracketed_paste;
+    captures and tmux calls land in one ordered list."""
     calls = []
     mocker.patch.object(pane_actions, "_send_to_target", send._send_to_target)
-    mocker.patch.object(send, "tmux", side_effect=lambda *a: calls.append(a) or "")
+    mocker.patch.object(send, "_tmux_checked", side_effect=lambda *a: calls.append(a))
+    mocker.patch.object(send, "bracketed_paste", side_effect=lambda *a: calls.append(("bracketed_paste", *a)))
     return calls
 
 
@@ -710,11 +711,9 @@ def test_reply_pastes_then_enters_at_the_pane_id(client, tmux_calls, mocker):
         pane_actions, "capture", side_effect=lambda p: tmux_calls.append(("capture", p)) or next(screens)
     )
     assert _reply(client).status_code == 200
-    assert tmux_calls[0] == ("capture", "%9")
-    assert tmux_calls[1][:3] == ("set-buffer", "-b", tmux_calls[1][2]) and tmux_calls[1][3] == _TEXT
-    buf = tmux_calls[1][2]
-    assert tmux_calls[2:] == [
-        ("paste-buffer", "-d", "-p", "-b", buf, "-t", "%9"),
+    assert tmux_calls == [
+        ("capture", "%9"),
+        ("bracketed_paste", "%9", _TEXT),
         ("capture", "%9"),
         ("send-keys", "-t", "%9", "Enter"),
     ]
@@ -729,7 +728,7 @@ def test_reply_text_cannot_break_out_of_the_bracketed_paste(client, tmux_calls, 
     _screens(mocker, _IDLE, _typed(_IDLE, "Fix it[201~!rm -rf x now please"))
     r = _reply(client, "Fix it\x1b[201~\r!rm -rf x\tnow\nplease\x7f\x9b")
     assert r.status_code == 200, r.text
-    pasted = next(c[3] for c in tmux_calls if c[0] == "set-buffer")
+    pasted = next(c[2] for c in tmux_calls if c[0] == "bracketed_paste")
     assert pasted == clean
     assert "\x1b" not in pasted and "\r" not in pasted
 

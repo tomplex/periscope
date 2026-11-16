@@ -29,6 +29,8 @@ _subscribers: set[asyncio.Queue[str]] = set()
 # Last computed blob (JSON text), handed to new subscribers immediately so a
 # fresh connection paints without waiting up to a full tick.
 _last_blob: str | None = None
+# When _last_blob was broadcast (time.monotonic()).
+_last_blob_at = 0.0
 # Set when an event source wants the loop to recompute now instead of waiting
 # out the rest of its sleep.
 _wake = asyncio.Event()
@@ -55,6 +57,25 @@ def unsubscribe(q: asyncio.Queue[str]) -> None:
     _subscribers.discard(q)
 
 
+def last_windows() -> list[dict]:
+    """The windows of the last computed blob ([] before the first tick). Fresh only while a tab
+    subscribes; a caller from outside the dashboard uses current_windows()."""
+    blob = _last_blob
+    return json.loads(blob).get("windows", []) if blob else []
+
+
+async def current_windows() -> list[dict]:
+    """The windows now: the last blob while it is fresh, else a fresh build_state()."""
+    # Fresh: younger than twice the hub's last gap between broadcasts (a build plus a tick; a loaded build
+    # takes 3-13 s), or two ticks when that is longer. With no tab the hub stops, so the blob ages out.
+    gap = max(_TICK_INTERVAL_S, forks._last_gap or 0.0)
+    if _last_blob is not None and time.monotonic() - _last_blob_at < 2 * gap:
+        return last_windows()
+    from periscope.routes.state import build_state  # routes.state imports state_hub
+
+    return (await asyncio.to_thread(build_state)).get("windows", [])
+
+
 def kick() -> None:
     """Request an immediate recompute. Thread-safe: callable from a route
     running in FastAPI's threadpool (e.g. via _tmux_mutate) as well as from
@@ -70,8 +91,9 @@ def kick() -> None:
 
 
 def _broadcast(text: str) -> None:
-    global _last_blob
+    global _last_blob, _last_blob_at
     _last_blob = text
+    _last_blob_at = time.monotonic()
     for q in list(_subscribers):
         if q.full():
             with contextlib.suppress(asyncio.QueueEmpty):

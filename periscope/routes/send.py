@@ -7,14 +7,13 @@ ThreadPoolExecutor.
 """
 
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from periscope.panes import note_action, note_focus
-from periscope.tmux import tmux
+from periscope.tmux import _tmux_checked, bracketed_paste
 
 router = APIRouter()
 
@@ -46,11 +45,7 @@ def _send_to_target(target: str, paste: str | None, keys: list[str], address: st
     addr = address or target
     try:
         if paste is not None and paste != "":
-            # Unique buffer name so concurrent calls (including bulk fan-out)
-            # never trample each other.
-            buf = f"wd-{uuid.uuid4().hex[:8]}"
-            tmux("set-buffer", "-b", buf, paste)
-            tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", addr)
+            bracketed_paste(addr, paste)
             # Give the receiving TUI (especially Claude Code) time to apply
             # state for the paste before the submit key arrives. Without this,
             # Enter can land before React renders and submits empty input,
@@ -58,7 +53,7 @@ def _send_to_target(target: str, paste: str | None, keys: list[str], address: st
             if keys:
                 time.sleep(0.10)
         if keys:
-            tmux("send-keys", "-t", addr, *keys)
+            _tmux_checked("send-keys", "-t", addr, *keys)
     except Exception as e:
         raise HTTPException(500, str(e)) from e
     note_focus(target)
@@ -89,9 +84,7 @@ def send_bulk(body: SendBulkBody):
     Each target is processed in its own thread so the per-pane 100ms
     bracketed-paste delay overlaps across panes — broadcasting `/reload-plugins`
     to 30 claudes finishes in ~100ms wall time instead of 3s sequential.
-
-    Buffer-name collisions are avoided by `_send_to_target` minting a fresh
-    uuid'd buf per call.
+    `bracketed_paste` loads a buffer of its own for each target.
     """
     if not body.targets:
         raise HTTPException(400, "no targets")

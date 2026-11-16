@@ -81,6 +81,8 @@ Invariants worth knowing before touching it:
   `prefs.js` drops `worktrees_by_repo`, never reads `panes_by_worktree`, and
   honours `repo_order` only as the fallback when `track_order` is unset.
   Writing them persisted nothing once the rail had saved an order once.
+  `place_session_in_rail` places every stamped pane of a session: the open,
+  the `spawn_claude` tool and `branch_spawn` (prepare, Linear start) use it.
 - **Placement is ordering, not visibility.** `mergeLiveAndPrefs` already
   appends live-new tracks and tabs on the next poll, so a genuinely-created
   window shows up regardless. Placement is what makes the order the user chose

@@ -644,6 +644,23 @@ def test_place_in_rail_is_idempotent(tmp_git_repo, clean_state):
     assert ui["tabs_by_track"][track_id] == ["p1", "p2"]  # p1 not duplicated
 
 
+def test_place_session_in_rail_places_the_sessions_stamped_panes(tmp_git_repo, clean_state, mocker):
+    repo = str(tmp_git_repo)
+    proj = open_ops.ensure_project(repo, repo)
+    rows = [
+        {"session": "s", "pid_raw": "p1"},
+        {"session": "s", "pid_raw": ""},
+        {"session": "other", "pid_raw": "p9"},
+        {"session": "s", "pid_raw": "p2"},
+    ]
+    listing = mocker.patch("periscope.open_ops.list_windows", return_value=rows)
+    track_id = tracks.repo_default_track(proj["repo"])
+    assert open_ops.place_session_in_rail("s", proj, "p2")["tabs_by_track"][track_id] == ["p1", "p2"]
+    # No stamped pane in the listing yet: the spawned pane alone.
+    listing.return_value = [{"session": "s", "pid_raw": ""}]
+    assert open_ops.place_session_in_rail("s", proj, "p3")["tabs_by_track"][track_id] == ["p1", "p2", "p3"]
+
+
 def test_build_catalog_lists_repo_and_main_worktree(tmp_git_repo, clean_state, monkeypatch):
     repo = str(tmp_git_repo)
     monkeypatch.setattr(open_ops, "discover_repos", lambda: {repo})

@@ -1,5 +1,7 @@
 """Tests for GET /api/state — the big aggregator."""
 
+import time
+
 
 def _patch(mocker, name, **kwargs):
     for prefix in (f"periscope.routes.state.{name}", f"server.{name}"):
@@ -501,3 +503,28 @@ def test_a_poll_slower_than_the_ttls_forks_ps_and_list_panes_once(client, mocker
     agent_processes.process_snapshot()
     tmux.panes_snapshot()
     assert (list_panes.call_count, ps.call_count) == (2, 2)
+
+
+def test_a_select_request_rides_the_state_blob(client, mocker, clean_state):
+    from periscope.routes import state as route
+
+    mocker.patch.object(route, "_select", None)
+    kick = mocker.patch("periscope.state_hub.kick")
+    _patch(mocker, "list_windows", return_value=[])
+    _patch(mocker, "update_focus_from_windows")
+    _patch(mocker, "_attach_git_then_resolve_pids")
+    _patch(mocker, "cached_claude_usage", return_value={})
+    _patch(mocker, "cached_plan_usage", return_value={})
+
+    assert client.get("/api/state").json()["select"] is None
+    assert client.post("/api/select", json={"pid": "a"}).json() == {"ok": True}
+    kick.assert_called_once()
+    first = client.get("/api/state").json()["select"]
+    assert first["pid"] == "a"
+    assert abs(first["at"] - time.time() * 1000) < 5_000
+    client.post("/api/select", json={"pid": "b"})
+    assert client.get("/api/state").json()["select"]["pid"] == "b"
+
+
+def test_select_needs_a_pid(client):
+    assert client.post("/api/select", json={"pid": ""}).status_code == 422

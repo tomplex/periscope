@@ -1,4 +1,5 @@
 """GET /api/state — the main dashboard poll endpoint.
+POST /api/select — ask the dashboard to select a pane; it rides the next state blobs.
 
 Fan-out + assembly: list_windows, then build_window_view per pane
 (in periscope.window_view), then batched stamp persistence + resume GC.
@@ -13,8 +14,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
-from periscope import agent_processes, forks, resources, store, tmux, updater, usage
+from periscope import agent_processes, forks, resources, state_hub, store, tmux, updater, usage
 from periscope.activity import pane_status_lines
 from periscope.agent_processes import process_snapshot
 from periscope.channels import _channel_gc
@@ -36,6 +38,10 @@ from periscope.usage import (
 from periscope.window_view import build_window_view
 
 router = APIRouter()
+
+# The last select request from another app (POST /api/select). It rides every
+# blob; each tab applies a request once, while it is fresh (static/src/select.js).
+_select: dict | None = None
 
 
 def _safe_build(w: dict, now_ts: int) -> tuple[dict, tuple[str, int, int, int] | None]:
@@ -219,6 +225,8 @@ def build_state() -> dict:
         # server / webview / panes / elsewhere / machine (resources.measure);
         # the header pill and its popover.
         "resources": measured.totals if measured else None,
+        # A pane another app asked the UI to select ({pid, at} in epoch ms), or None.
+        "select": _select,
     }
     forks.record_build(time.monotonic() - started)
     # What this poll cost and how often the hub pushes one (forks.py) — the
@@ -230,3 +238,16 @@ def build_state() -> dict:
 @router.get("/api/state")
 def state():
     return build_state()
+
+
+class SelectBody(BaseModel):
+    pid: str = Field(min_length=1)
+
+
+@router.post("/api/select")
+def select(body: SelectBody):
+    """Ask every open tab to select the pane `pid`. A new request replaces the old one."""
+    global _select
+    _select = {"pid": body.pid, "at": int(time.time() * 1000)}
+    state_hub.kick()  # push it now, not on the next tick
+    return {"ok": True}

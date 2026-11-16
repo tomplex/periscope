@@ -7,6 +7,7 @@ the control client actually delivers bytes into a real pane.
 """
 
 import asyncio
+import logging
 import shutil
 import subprocess
 import uuid
@@ -40,6 +41,29 @@ def test_disabled_falls_back_to_fork(monkeypatch):
     monkeypatch.setattr(tmux_input, "_fork_fallback", fake_fork)
     asyncio.run(tmux_input.send("sess:1.0", "x"))
     assert seen == {"target": "sess:1.0", "text": "x"}
+
+
+_PASTE = "x" * (tmux_input._SEND_KEYS_H_MAX + 1)
+
+
+@pytest.mark.parametrize(
+    ("disabled", "text", "command"),
+    [(False, _PASTE, "load-buffer"), (False, _PASTE, "paste-buffer"), (True, "x", "send-keys")],
+    ids=["load-buffer", "paste-buffer", "send-keys"],
+)
+def test_a_fork_path_tmux_timeout_is_logged_not_raised(mocker, monkeypatch, caplog, disabled, text, command):
+    # A raise would end /ws/pane's drain task, and every key typed after it.
+    monkeypatch.setattr(tmux_input, "_disabled", disabled)
+
+    def run(argv, **kwargs):
+        if command in argv:
+            raise subprocess.TimeoutExpired(argv, 5)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    mocker.patch("periscope.tmux.subprocess.run", side_effect=run)
+    with caplog.at_level(logging.WARNING, logger="periscope"):
+        asyncio.run(tmux_input.send("sess:1.0", text))
+    assert f"tmux {command} failed: timed out after 5 s" in caplog.text
 
 
 # Dedicated server, unique per run (test_tmux_mirror's TEST_SOCKET pattern):

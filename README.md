@@ -52,6 +52,12 @@ if a pane is already sitting in that directory, you go there instead. Each
 track also has a **+ New tab** launcher: pick a branch, then what to run
 (Claude, Codex or your own commands), then the account, model and effort.
 
+Another app on this Mac can start work too. `POST /api/linear/start` takes a
+repo, a branch, a Linear issue and a prompt: periscope makes the worktree,
+starts Claude, sends it the prompt and links the issue to the card. If a
+Claude is already on that branch, it reports that pane and starts nothing.
+`POST /api/select` with a pane's `pid` makes the dashboard select it.
+
 Free text in ⌘K becomes a background command, a headless Claude that hands
 the work to new or resumed sessions. **⋯ → cleanup** archives worktrees whose
 PRs merged or that have sat idle.

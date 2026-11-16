@@ -13,10 +13,10 @@ The control client attaches to a dedicated, hidden session
 window size, and so it survives any user session being killed. That session
 is filtered out of `list_windows` alongside the /usage scraper's.
 
-Every failure mode degrades to the fork path so input never silently drops:
-a spawn failure disables control mode for the process lifetime (a tmux that
-can't do `-C` won't start to); a dead client (tmux restart) is respawned on
-the next keystroke.
+Every control-mode failure degrades to the fork path: a spawn failure
+disables control mode for the process lifetime (a tmux that can't do `-C`
+won't start to); a dead client (tmux restart) is respawned on the next
+keystroke. Input that the fork path cannot deliver is logged and lost.
 """
 
 import asyncio
@@ -106,13 +106,18 @@ def _cmd(target: str, encoded: bytes) -> bytes:
 
 async def _fork_fallback(target: str, text: str) -> None:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, lambda: deliver_input(target, text))
+    try:
+        await loop.run_in_executor(None, lambda: deliver_input(target, text))
+    except RuntimeError as e:
+        # Input that tmux refused or timed out on is lost.
+        # A raise would also end /ws/pane's drain task, and every key after it.
+        log.warning("tmux input fork path: %s", e)
 
 
 async def send(target: str, text: str) -> None:
     """Deliver keystrokes to a pane. Fast path goes through the persistent
     control client; large pastes and any control-mode failure fall back to
-    the fork path so input is never dropped."""
+    the fork path, which logs and drops input that tmux refused or timed out on."""
     encoded = text.encode("utf-8")
     if _disabled or len(encoded) > _SEND_KEYS_H_MAX:
         await _fork_fallback(target, text)

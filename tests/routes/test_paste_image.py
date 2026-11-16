@@ -1,5 +1,9 @@
 """Tests for /api/paste-image."""
 
+import subprocess
+
+import pytest
+
 
 def test_paste_image_writes_file_and_pastes(client, mocker, tmp_path):
     # Redirect the temp-image dir into a tmpdir so the test doesn't litter /tmp.
@@ -11,15 +15,7 @@ def test_paste_image_writes_file_and_pastes(client, mocker, tmp_path):
         except (ImportError, AttributeError):
             continue
 
-    # Capture tmux invocations so we can assert paste-buffer was called.
-    tmux_mock = mocker.MagicMock(return_value="")
-    for path in ("periscope.routes.paste_image.tmux", "server.tmux"):
-        try:
-            mocker.patch(path, tmux_mock)
-            break
-        except (AttributeError, ModuleNotFoundError):
-            continue
-
+    paste = mocker.patch("periscope.routes.paste_image.bracketed_paste")
     mocker.patch("periscope.panes.note_focus")
     mocker.patch("periscope.panes.note_action")
 
@@ -33,10 +29,7 @@ def test_paste_image_writes_file_and_pastes(client, mocker, tmp_path):
     assert body["ok"] is True
     assert body["bytes"] == len(b"\x89PNG\r\n\x1a\nfakebytes")
     assert body["path"].endswith(".png")
-    # tmux set-buffer + paste-buffer must have been invoked.
-    cmds = [call.args[0] for call in tmux_mock.call_args_list]
-    assert "set-buffer" in cmds
-    assert "paste-buffer" in cmds
+    paste.assert_called_once_with("main:0", f"@{body['path']} ")
 
 
 def test_paste_image_deliver_false_skips_pane_paste(client, mocker, tmp_path):
@@ -51,13 +44,7 @@ def test_paste_image_deliver_false_skips_pane_paste(client, mocker, tmp_path):
         except (ImportError, AttributeError):
             continue
 
-    tmux_mock = mocker.MagicMock(return_value="")
-    for path in ("periscope.routes.paste_image.tmux", "server.tmux"):
-        try:
-            mocker.patch(path, tmux_mock)
-            break
-        except (AttributeError, ModuleNotFoundError):
-            continue
+    paste = mocker.patch("periscope.routes.paste_image.bracketed_paste")
 
     r = client.post(
         "/api/paste-image?session=main&index=0&deliver=false",
@@ -67,20 +54,46 @@ def test_paste_image_deliver_false_skips_pane_paste(client, mocker, tmp_path):
     assert r.status_code == 200
     assert r.json()["ok"] is True
     assert r.json()["path"].endswith(".png")
-    tmux_mock.assert_not_called()  # no set-buffer / paste-buffer into the pane
+    paste.assert_not_called()
 
 
 def test_paste_image_rejects_empty_body(client, mocker):
     # Even though body is empty, tmux must not be invoked.
-    tmux_mock = mocker.MagicMock(return_value="")
-    for path in ("periscope.routes.paste_image.tmux", "server.tmux"):
-        try:
-            mocker.patch(path, tmux_mock)
-            break
-        except (AttributeError, ModuleNotFoundError):
-            continue
+    paste = mocker.patch("periscope.routes.paste_image.bracketed_paste")
 
     r = client.post("/api/paste-image?session=main&index=0", content=b"")
     assert r.status_code == 400
     assert "empty" in r.json()["detail"]
-    tmux_mock.assert_not_called()
+    paste.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (subprocess.CompletedProcess([], 1, "", "can't find window: 0\n"), "can't find window: 0"),
+        (subprocess.TimeoutExpired(["tmux"], 5), "timed out after 5 s"),
+    ],
+    ids=["exit", "timeout"],
+)
+@pytest.mark.parametrize("command", ["load-buffer", "paste-buffer"])
+def test_paste_image_answers_500_when_the_paste_fails(client, mocker, tmp_path, command, failure, error):
+    # A paste that never reaches the pane must not answer ok.
+    mocker.patch("periscope.routes.paste_image._PASTE_IMG_DIR", tmp_path)
+    focus = mocker.patch("periscope.routes.paste_image.note_focus")
+
+    def run(argv, **kwargs):
+        if command not in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    mocker.patch("periscope.tmux.subprocess.run", side_effect=run)
+    r = client.post(
+        "/api/paste-image?session=main&index=0",
+        content=b"\x89PNG\r\n\x1a\nfakebytes",
+        headers={"content-type": "image/png"},
+    )
+    assert r.status_code == 500
+    assert r.json()["detail"] == f"tmux {command} failed: {error}"
+    focus.assert_not_called()

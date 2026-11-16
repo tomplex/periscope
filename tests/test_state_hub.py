@@ -4,20 +4,25 @@ broke every _tmux_mutate test) and the subscriber fan-out / drop-oldest."""
 
 import asyncio
 import contextlib
+import json
+import time
 
 import pytest
 
-from periscope import state_hub
+from periscope import forks, state_hub
 
 
 @pytest.fixture(autouse=True)
-def _reset_hub():
+def _reset_hub(monkeypatch):
+    monkeypatch.setattr(forks, "_last_gap", None)
     state_hub._subscribers.clear()
     state_hub._last_blob = None
+    state_hub._last_blob_at = 0.0
     state_hub._loop = None
     yield
     state_hub._subscribers.clear()
     state_hub._last_blob = None
+    state_hub._last_blob_at = 0.0
     state_hub._loop = None
 
 
@@ -90,3 +95,41 @@ def test_run_loop_records_gaps_between_broadcasts_but_not_across_idle(monkeypatc
     recorded = [c.args[0] for c in gaps.call_args_list]
     assert len(recorded) >= 3
     assert all(0 < g < 0.4 for g in recorded)
+
+
+def test_last_windows_reads_the_last_blob():
+    assert state_hub.last_windows() == []
+    state_hub._last_blob = json.dumps({"windows": [{"pid": "a"}], "ts": 1})
+    assert state_hub.last_windows() == [{"pid": "a"}]
+
+
+def test_current_windows_reads_a_fresh_blob_with_no_tab_subscribed(mocker):
+    # The last tab left a moment ago: the blob is as fresh as a tab's.
+    build = mocker.patch("periscope.routes.state.build_state")
+    state_hub._broadcast(json.dumps({"windows": [{"pid": "a"}]}))
+    assert asyncio.run(state_hub.current_windows()) == [{"pid": "a"}]
+    build.assert_not_called()
+
+
+def test_current_windows_builds_fresh_when_a_tab_subscribes_again_after_an_idle_stretch(mocker):
+    # The loop's first build after the idle stretch has not landed: the blob is from before it.
+    mocker.patch("periscope.routes.state.build_state", return_value={"windows": [{"pid": "fresh"}]})
+    state_hub._broadcast(json.dumps({"windows": [{"pid": "stale"}]}))
+    state_hub._last_blob_at = time.monotonic() - 3600
+    state_hub.subscribe()
+    assert asyncio.run(state_hub.current_windows()) == [{"pid": "fresh"}]
+
+
+@pytest.mark.parametrize(
+    ("gap", "age", "pid"),
+    [(None, 1.5, "blob"), (0.2, 1.5, "blob"), (None, 5, "fresh"), (7.0, 5, "blob"), (7.0, 15, "fresh")],
+    ids=["no gap yet", "fast hub", "past two ticks", "slow builds", "past two slow gaps"],
+)
+def test_current_windows_trusts_a_blob_for_two_hub_gaps_and_at_least_two_ticks(monkeypatch, mocker, gap, age, pid):
+    # With 6 s builds a broadcast lands every ~7 s: a blob 5 s old is the hub's latest, not a stale one.
+    mocker.patch("periscope.routes.state.build_state", return_value={"windows": [{"pid": "fresh"}]})
+    monkeypatch.setattr(forks, "_last_gap", gap)
+    state_hub._broadcast(json.dumps({"windows": [{"pid": "blob"}]}))
+    state_hub._last_blob_at = time.monotonic() - age
+    state_hub.subscribe()
+    assert asyncio.run(state_hub.current_windows()) == [{"pid": pid}]

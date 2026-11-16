@@ -44,7 +44,7 @@ from periscope.pids import _attach_git_then_resolve_pids, stamp_new_window
 from periscope.pids import window_by_pid as _resolve_window_by_pid
 from periscope.store import get_window, set_window_fields
 from periscope.tabs import open_tab
-from periscope.tmux import _run, _tmux_mutate, tmux
+from periscope.tmux import _run, _tmux_checked, _tmux_mutate, bracketed_paste, tmux
 
 CHANNEL_INSTRUCTIONS = """\
 You are running inside periscope, a dashboard the user has open in their
@@ -510,7 +510,8 @@ def _spawner_label(parent_pid: str) -> str:
 
 
 class SpawnFailed(Exception):
-    """tmux refused to create the window, or returned an unparseable index."""
+    """tmux refused to create the window, returned an unparseable index, or refused or timed out
+    on loading, pasting or submitting the prompt."""
 
 
 class Spawned(TypedDict):
@@ -534,7 +535,7 @@ async def spawn_claude_with_prompt(
     """Create a tmux window in `session` running `claude` in `cwd`, wait for
     its TUI, paste `prompt`, stamp a fresh @periscope_id, and (when given)
     tag the pane into `track_id`. Shared by the spawn_claude MCP tool and
-    the reviews prepare route; everything caller-specific (provenance,
+    branch_spawn (prepare, Linear start); everything caller-specific (provenance,
     rail placement, track precedence) stays with the caller.
 
     Async because Claude's TUI needs ~1.5s to mount before it can absorb a
@@ -620,16 +621,21 @@ async def spawn_claude_with_prompt(
             await asyncio.sleep(0.5)
             break
 
-    # Deliver the prompt via paste-buffer because send-keys strips embedded
-    # newlines (see CLAUDE.md key invariant 5). Same buffer-name uuid trick
-    # as `_send_to_target` so concurrent spawns don't trample each other.
-    buf = f"spawn-{uuid.uuid4().hex[:8]}"
-    tmux("set-buffer", "-b", buf, prompt)
-    tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
-    # Same 100ms bracketed-paste delay as /api/send — without it the Enter
-    # can land before the paste applies, submitting empty input.
-    await asyncio.sleep(0.1)
-    tmux("send-keys", "-t", target, "Enter")
+    # Paste the prompt, because send-keys strips embedded newlines (docs/invariants.md, invariant 5).
+    try:
+        bracketed_paste(target, prompt)
+        # Same 100ms bracketed-paste delay as /api/send — without it the Enter
+        # can land before the paste applies, submitting empty input.
+        await asyncio.sleep(0.1)
+        _tmux_checked("send-keys", "-t", target, "Enter")
+    except RuntimeError as e:
+        # The caller reports a failed spawn, so leave no Claude behind whose prompt was not submitted.
+        # A kill that fails only logs: the caller still needs SpawnFailed.
+        try:
+            _tmux_checked("kill-window", "-t", target)
+        except RuntimeError as kill_error:
+            log.warning("spawn: %s keeps a Claude after a failed prompt: %s", target, kill_error)
+        raise SpawnFailed(str(e)) from e
 
     note_focus(target)
     note_action(target)
@@ -777,12 +783,11 @@ async def _do_spawn_claude_tool(pane: str, arguments: dict):
 
     # workspace="new": persist the rail placement now that the window is
     # stamped. The item already surfaces from live state (the project is
-    # registered, so the session groups under its repo), but place_in_rail
+    # registered, so the session groups under its repo), but the placement
     # records the ordering — same server-side placement the unified-open
-    # route does. pid_raw is the just-stamped @periscope_id.
+    # route does.
     if anchored:
-        pane_pids = [w["pid_raw"] for w in list_windows() if w["session"] == session and w.get("pid_raw")]
-        open_ops.place_in_rail(session, project, pane_pids or [pid])
+        open_ops.place_session_in_rail(session, project, pid)
 
     # Tag the spawned pane into a track (the grouping authority). Precedence:
     # an explicit workspace_id arg (a track id now) wins; else the anchored

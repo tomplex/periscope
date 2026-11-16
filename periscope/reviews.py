@@ -19,6 +19,7 @@ import re
 import shutil
 import threading
 import time
+from collections.abc import Collection
 from pathlib import Path
 from typing import TypedDict
 
@@ -278,24 +279,20 @@ class ReviewRow(git_pr.TicketFields):
     worktree: str | None
 
 
+def claude_on_branch(windows: list[dict], branches: Collection[str]) -> dict | None:
+    """The Claude window on one of `branches`; the most recently active when several."""
+    cands = [w for w in windows if w.get("branch") in branches and w.get("agent") == "claude"]
+    return max(cands, key=lambda w: w.get("activity") or 0, default=None)
+
+
 def owner_for(windows: list[dict], repo: str, branch: str, aliases: set[str] | None = None) -> dict | None:
     """The live window that owns a review: a channel-attached Claude on that
     (repo, branch); the most recently active when several. Keyed on repo +
     branch, never track — a repo-default track holds every branch. `aliases`
     are other local branch names for the same review (a PR checked out as
     `pr-<N>`)."""
-    names = {branch, *(aliases or ())}
-    cands = [
-        w
-        for w in windows
-        if w.get("repo_label") == repo
-        and w.get("branch") in names
-        and w.get("agent") == "claude"
-        and w.get("channel_attached")
-    ]
-    if not cands:
-        return None
-    return max(cands, key=lambda w: w.get("activity") or 0)
+    attached = [w for w in windows if w.get("repo_label") == repo and w.get("channel_attached")]
+    return claude_on_branch(attached, {branch, *(aliases or ())})
 
 
 def _repo_root(windows: list[dict], repo: str, roots: dict[str, str] | None = None) -> str | None:
