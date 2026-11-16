@@ -3,9 +3,9 @@
 // fresh, so a tab opened later does not jump to a pane someone asked for minutes ago.
 export const SELECT_FRESH_MS = 30_000;
 
-/** The pid to select now, or null. `lastAt` is the `at` of the request this tab applied last. */
-export function selectToApply(select, lastAt, nowMs) {
+/** The live window to select now, or null. `lastAt` is the `at` of the request this tab applied last. */
+export function selectToApply(select, lastAt, nowMs, windows) {
   if (!select?.pid || select.at === lastAt) return null;
   if (nowMs - select.at > SELECT_FRESH_MS) return null;
-  return select.pid;
+  return windows.find((w) => w.pid === select.pid) ?? null;
 }

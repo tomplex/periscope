@@ -3,14 +3,15 @@
 // to every tab). The REST /api/state endpoint stays as the fallback when the
 // socket is down and as the one-shot forced refresh `poll()`.
 //
-// Writes the transient signals (`windows`, `projects`, `usage`); never commits
+// Writes the transient signals (`windows`, `projects`, `usage`) and selects the pane
+// another app asks for (POST /api/select); never commits
 // while a rename or drag is in flight (`editingTarget` / `dragState`) — that
 // preserves the user's in-flight input. Connection-banner shows at ≥2
 // consecutive REST failures (≈6s); a WS drop alone doesn't trip it because the
 // REST fallback keeps data flowing.
 
-import { setLastSelected } from "./prefs.js";
 import { selectToApply } from "./select.js";
+import { selectPane } from "./split/alertFeed.js";
 import {
   accounts,
   alerts,
@@ -21,7 +22,6 @@ import {
   launchDefault,
   moveTargets,
   projects,
-  railSelection,
   resources,
   reviews,
   spawnAccount,
@@ -85,12 +85,11 @@ function applyState(data) {
     walls.value = data.walls || null;
     wallSpans.value = data.wall_spans || [];
     editorSignal.value = data.editor || "";
-    // Another app asked for a pane (todo-hub's Show): select it as ⌘K does after an open.
-    const pid = selectToApply(data.select, lastSelectAt, Date.now());
-    if (pid) {
+    // Another app asked for a pane (todo-hub's Show): select it as a rail click does.
+    const w = selectToApply(data.select, lastSelectAt, Date.now(), windows.value);
+    if (w) {
       lastSelectAt = data.select.at;
-      railSelection.value = `pane:${pid}`;
-      setLastSelected({ kind: "pane", pid });
+      selectPane(w);
     }
   } finally {
     stateSeq.value += 1;

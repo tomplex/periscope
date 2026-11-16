@@ -1,5 +1,7 @@
 """Tests for GET /api/state — the big aggregator."""
 
+import time
+
 
 def _patch(mocker, name, **kwargs):
     for prefix in (f"periscope.routes.state.{name}", f"server.{name}"):
@@ -518,7 +520,8 @@ def test_a_select_request_rides_the_state_blob(client, mocker, clean_state):
     assert client.post("/api/select", json={"pid": "a"}).json() == {"ok": True}
     kick.assert_called_once()
     first = client.get("/api/state").json()["select"]
-    assert first["pid"] == "a" and isinstance(first["at"], int)
+    assert first["pid"] == "a"
+    assert abs(first["at"] - time.time() * 1000) < 5_000
     client.post("/api/select", json={"pid": "b"})
     assert client.get("/api/state").json()["select"]["pid"] == "b"
 

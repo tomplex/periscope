@@ -1,4 +1,5 @@
 """GET /api/state — the main dashboard poll endpoint.
+POST /api/select — ask the dashboard to select a pane; it rides the next state blobs.
 
 Fan-out + assembly: list_windows, then build_window_view per pane
 (in periscope.window_view), then batched stamp persistence + resume GC.
@@ -38,7 +39,7 @@ from periscope.window_view import build_window_view
 
 router = APIRouter()
 
-# The one pending "select this pane" request from another app (POST /api/select). It rides every
+# The last select request from another app (POST /api/select). It rides every
 # blob; each tab applies a request once, while it is fresh (static/src/select.js).
 _select: dict | None = None
 
