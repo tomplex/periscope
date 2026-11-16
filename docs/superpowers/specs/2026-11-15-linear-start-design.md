@@ -93,7 +93,7 @@ Body: `{"pid": "<@periscope_id>"}`.
 - A second start while one runs gives 409, and only one Claude spawns.
 - A start less than 60 s after a spawn, with no Claude in the windows yet, gives 409.
 - A prepare right after a start on the same repo label and branch gives 409. It still does after a second start saw the new Claude before its channel attached.
-- `spawn_worktree` raising `ValueError` gives 400. `SpawnFailed` gives 502. A session that git cannot resolve gives 502.
+- `spawn_worktree` raising `ValueError` gives 400. `SpawnFailed` gives 502, and a retry right after it spawns: a failed spawn leaves no recent-spawn record. A session that git cannot resolve gives 502.
 - A `place_in_rail` failure still answers `spawned`.
 - An empty title stamps only the ticket.
 

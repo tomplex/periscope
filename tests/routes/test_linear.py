@@ -207,6 +207,16 @@ def test_a_failed_spawn_is_502(client, worktree, spawn, place):
     place.assert_not_called()
 
 
+def test_a_retry_right_after_a_failed_spawn_spawns(client, worktree, spawn, place):
+    # The failed spawn left no Claude: a record of it would answer every retry 409 for 60 s.
+    spawn.side_effect = channels.SpawnFailed("no server")
+    assert client.post("/api/linear/start", json=BODY).status_code == 502
+    assert branch_spawn._recent_spawn == {} and branch_spawn._in_flight == set()
+    spawn.side_effect = None
+    r = client.post("/api/linear/start", json=BODY)
+    assert r.status_code == 200 and r.json()["mode"] == "spawned" and spawn.call_count == 2
+
+
 def test_a_rail_placement_failure_still_answers_spawned(client, worktree, spawn, place):
     place.side_effect = RuntimeError("store busy")
     r = client.post("/api/linear/start", json=BODY)
