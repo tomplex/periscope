@@ -49,7 +49,7 @@ async def linear_start(body: StartBody):
 
 async def _start(body: StartBody, key: tuple[str, str]) -> dict:
     repo, branch = key
-    owner = reviews.owner_for(state_hub.last_windows(), os.path.basename(repo.rstrip("/")), branch)
+    owner = reviews.owner_for(state_hub.last_windows(), os.path.basename(repo), branch)
     if owner:
         _recent_spawn.pop(key, None)
         return {"mode": "focused", "pid": owner["pid"]}
@@ -62,7 +62,7 @@ async def _start(body: StartBody, key: tuple[str, str]) -> dict:
         raise HTTPException(400, str(e)) from e
     anchored = await asyncio.to_thread(open_ops.resolve_worktree_session, wt["path"])
     if not anchored:
-        raise HTTPException(400, f"{wt['path']} is not inside a git repo")
+        raise HTTPException(502, f"{wt['path']} is not inside a git repo")
     session, project = anchored
     try:
         spawned = await channels.spawn_claude_with_prompt(
@@ -71,11 +71,6 @@ async def _start(body: StartBody, key: tuple[str, str]) -> dict:
     except channels.SpawnFailed as e:
         raise HTTPException(502, f"spawn failed: {e}") from e
     _recent_spawn[key] = time.monotonic()
-    result = {"mode": "spawned", "pid": spawned["pid"] or None, "path": wt["path"], "reused": wt["reused"]}
-    if not spawned["pid"]:
-        # Claude is running with the prompt pasted; an error would invite a retry that spawns a second one.
-        log.warning("linear start: spawned but pane id unknown for %s %s", repo, branch)
-        return result
     store.set_window_fields(spawned["pid"], linked_linear=body.ticket, linked_linear_title=body.title or None)
 
     # Same server-side rail placement as prepare's spawn.
@@ -88,4 +83,4 @@ async def _start(body: StartBody, key: tuple[str, str]) -> dict:
     except Exception:
         # Placement only orders the rail; the Claude exists, and an error would invite a second spawn.
         log.warning("linear start: rail placement failed for %s %s", repo, branch, exc_info=True)
-    return result
+    return {"mode": "spawned", "pid": spawned["pid"], "path": wt["path"], "reused": wt["reused"]}

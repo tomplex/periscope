@@ -2,6 +2,8 @@
 Windows come from a patched state_hub._last_blob and the spawn is an AsyncMock (docs/testing.md)."""
 
 import json
+import os
+import time
 from unittest.mock import AsyncMock
 
 import pytest
@@ -76,9 +78,13 @@ def test_start_spawns_claude_in_the_worktree(client, worktree, spawn, place):
 
 
 def test_a_claude_on_the_branch_is_reported_not_prompted(client, monkeypatch, worktree, spawn, place):
+    from periscope.routes import linear as route
+
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": [_win()]}))
+    route._recent_spawn[(os.path.realpath(BODY["repo"]), BODY["branch"])] = time.monotonic()
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 200 and r.json() == {"mode": "focused", "pid": "p1"}
+    assert route._recent_spawn == {}
     worktree.assert_not_called()
     spawn.assert_not_called()
     place.assert_not_called()
@@ -90,15 +96,13 @@ def test_a_shell_or_an_unattached_pane_on_the_branch_does_not_count(client, monk
     assert client.post("/api/linear/start", json=BODY).json()["mode"] == "spawned"
 
 
-def test_a_start_before_the_spawned_claude_attaches_is_refused(client, mocker, worktree, spawn, place):
+def test_a_start_before_the_spawned_claude_attaches_is_refused(client, worktree, spawn, place):
     from periscope.routes import linear as route
 
-    clock = mocker.patch("periscope.routes.linear.time.monotonic", return_value=1000.0)
     assert client.post("/api/linear/start", json=BODY).status_code == 200
-    clock.return_value = 1000.0 + route.RECENT_SPAWN_S - 1
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 409 and "attached" in r.json()["detail"] and spawn.call_count == 1
-    clock.return_value = 1000.0 + route.RECENT_SPAWN_S
+    route._recent_spawn[(os.path.realpath(BODY["repo"]), BODY["branch"])] = time.monotonic() - route.RECENT_SPAWN_S
     assert client.post("/api/linear/start", json=BODY).status_code == 200 and spawn.call_count == 2
 
 
@@ -120,7 +124,7 @@ def test_concurrent_starts_spawn_once(mocker, worktree, place):
         spawn = mocker.patch("periscope.channels.spawn_claude_with_prompt", new=AsyncMock(side_effect=slow_spawn))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_mod.app), base_url="http://t") as c:
             first = asyncio.create_task(c.post("/api/linear/start", json=BODY))
-            while not spawn.call_count:
+            while not spawn.call_count and not first.done():
                 await asyncio.sleep(0.01)
             second = await c.post("/api/linear/start", json=BODY)
             gate.set()
@@ -131,16 +135,16 @@ def test_concurrent_starts_spawn_once(mocker, worktree, place):
 
 
 def test_a_bad_branch_is_400(client, worktree, spawn):
-    worktree.side_effect = ValueError("branch name must not start with '-'")
+    worktree.side_effect = ValueError("branch name cannot start with '-': '-x'")
     r = client.post("/api/linear/start", json={**BODY, "branch": "-x"})
-    assert r.status_code == 400 and "must not start" in r.json()["detail"]
+    assert r.status_code == 400 and "cannot start" in r.json()["detail"]
     spawn.assert_not_called()
 
 
-def test_a_worktree_outside_git_is_400(client, mocker, worktree, spawn):
+def test_a_worktree_git_cannot_read_is_502(client, mocker, worktree, spawn):
     mocker.patch("periscope.open_ops.resolve_worktree_session", return_value=None)
     r = client.post("/api/linear/start", json=BODY)
-    assert r.status_code == 400 and "not inside a git repo" in r.json()["detail"]
+    assert r.status_code == 502 and "not inside a git repo" in r.json()["detail"]
     spawn.assert_not_called()
 
 
@@ -155,13 +159,6 @@ def test_a_rail_placement_failure_still_answers_spawned(client, worktree, spawn,
     place.side_effect = RuntimeError("store busy")
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 200 and r.json()["pid"] == "k"
-
-
-def test_a_spawn_without_a_pid_still_answers_spawned(client, worktree, spawn, place):
-    spawn.return_value = {**SPAWNED, "pid": ""}
-    r = client.post("/api/linear/start", json=BODY)
-    assert r.status_code == 200 and r.json()["pid"] is None
-    place.assert_not_called()
 
 
 def test_no_title_stamps_only_the_ticket(client, worktree, spawn, place):
