@@ -3,9 +3,11 @@
 // fresh, so a tab opened later does not jump to a pane someone asked for minutes ago.
 export const SELECT_FRESH_MS = 30_000;
 
-/** The live window to select now, or null. `lastAt` is the `at` of the request this tab applied last. */
+/** `window`: the live window to select now, or null. `lastAt`: the `at` of the request this tab
+ * applied last, moved on only when a window is returned, so a request whose pane appears on a later
+ * state still applies then. */
 export function selectToApply(select, lastAt, nowMs, windows) {
-  if (!select?.pid || select.at === lastAt) return null;
-  if (nowMs - select.at > SELECT_FRESH_MS) return null;
-  return windows.find((w) => w.pid === select.pid) ?? null;
+  const fresh = select?.pid && select.at !== lastAt && nowMs - select.at <= SELECT_FRESH_MS;
+  const w = fresh ? windows.find((x) => x.pid === select.pid) : null;
+  return w ? { window: w, lastAt: select.at } : { window: null, lastAt };
 }

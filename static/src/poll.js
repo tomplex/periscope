@@ -86,11 +86,9 @@ function applyState(data) {
     wallSpans.value = data.wall_spans || [];
     editorSignal.value = data.editor || "";
     // Another app asked for a pane (POST /api/select): select it as a rail click does.
-    const w = selectToApply(data.select, lastSelectAt, Date.now(), windows.value);
-    if (w) {
-      lastSelectAt = data.select.at;
-      selectPane(w);
-    }
+    const pick = selectToApply(data.select, lastSelectAt, Date.now(), windows.value);
+    lastSelectAt = pick.lastAt;
+    if (pick.window) selectPane(pick.window);
   } finally {
     stateSeq.value += 1;
   }
