@@ -163,6 +163,7 @@ def test_a_rail_placement_failure_still_answers_spawned(client, worktree, spawn,
     place.side_effect = RuntimeError("store busy")
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 200 and r.json()["pid"] == "k"
+    assert store.get_window("k") == {"linked_linear": "ENG-1", "linked_linear_title": "Fix it"}
 
 
 def test_no_title_stamps_only_the_ticket(client, worktree, spawn, place):

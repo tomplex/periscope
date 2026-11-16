@@ -65,5 +65,6 @@ class BranchSpawns:
             await asyncio.to_thread(open_ops.place_session_in_rail, session, project, spawned["pid"])
         except Exception:
             # Placement only orders the rail; the Claude exists, and an error would invite a retry that spawns a twin.
-            log.warning("%s: rail placement failed for %s %s", self.name, *key, exc_info=True)
+            repo, branch = key
+            log.warning("branch_spawn %s: rail placement failed for %s %s", self.name, repo, branch, exc_info=True)
         return spawned

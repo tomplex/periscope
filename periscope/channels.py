@@ -534,7 +534,7 @@ async def spawn_claude_with_prompt(
     """Create a tmux window in `session` running `claude` in `cwd`, wait for
     its TUI, paste `prompt`, stamp a fresh @periscope_id, and (when given)
     tag the pane into `track_id`. Shared by the spawn_claude MCP tool and
-    the reviews prepare route; everything caller-specific (provenance,
+    branch_spawn (prepare, Linear start); everything caller-specific (provenance,
     rail placement, track precedence) stays with the caller.
 
     Async because Claude's TUI needs ~1.5s to mount before it can absorb a
