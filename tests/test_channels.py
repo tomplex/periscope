@@ -1030,11 +1030,13 @@ def test_spawn_anchored_tags_repo_default_track(fresh_activity_db, monkeypatch, 
     mocker.patch("periscope.channels._resolve_pid_for_pane", return_value="parent11")
     mocker.patch("periscope.channels.set_window_fields")
     mocker.patch("periscope.channels.list_windows", return_value=[])
-    mocker.patch.object(open_ops, "place_session_in_rail", return_value=None)
+    place = mocker.patch.object(open_ops, "place_session_in_rail", return_value=None)
 
     res = _body(asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go", "cwd": "/r", "workspace": "new"})))
 
     assert res["ok"] is True
+    # The spawned pane's session and pid, never the caller's.
+    place.assert_called_once_with("proj-sess", {"repo": "/r"}, "child99")
     # repo_default_track keys the track id on the repo path; the tag keys on
     # the stamped @periscope_id.
     assert activity.get_pane_track("child99") == tracks.repo_default_track("/r")
@@ -1064,9 +1066,10 @@ def test_spawn_same_inherits_callers_track_by_pid(mocker):
     """The "same" branch resolves the CALLER's track by its resolved pid (the
     re-keyed input contract — never the %N pane id) and tags the SPAWNED
     window's stamped pid into the result."""
-    from periscope import channels
+    from periscope import channels, open_ops
 
     resolve, move = _mock_same_mode_spawn(mocker)
+    place = mocker.patch.object(open_ops, "place_session_in_rail")
 
     res = asyncio.run(channels._do_spawn_claude_tool("%1", {"prompt": "go"}))
 
@@ -1075,6 +1078,8 @@ def test_spawn_same_inherits_callers_track_by_pid(mocker):
     assert resolve.call_args_list[0].args == ({"pid": "parent11", "cwd": "/home/tom"},)
     move.assert_called_once_with("child99", "tk_caller")
     assert _body(res)["track"]["id"] == "tk_caller"
+    # A spawn into the caller's session nests under the caller's rail item: nothing to place.
+    place.assert_not_called()
 
 
 def test_spawn_same_vanished_caller_falls_to_cwd_default(mocker, caplog):
