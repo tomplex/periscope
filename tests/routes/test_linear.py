@@ -1,13 +1,13 @@
 """POST /api/linear/start — worktree, Claude with a prompt, the Linear link, rail placement.
 Windows come from a patched state_hub.current_windows and the spawn is an AsyncMock (docs/testing.md)."""
 
-import os
+import json
 import time
 from unittest.mock import AsyncMock
 
 import pytest
 
-from periscope import branch_spawn, channels, store
+from periscope import branch_spawn, channels, state_hub, store
 
 BODY = {
     "repo": "/repos/api",
@@ -17,6 +17,8 @@ BODY = {
     "prompt": "Read Linear ticket ENG-1.",
 }
 SPAWNED = {"target": "api-wt:2", "session": "api-wt", "index": 2, "pid": "k", "pane_id": "%5"}
+# The guard's key: prepare knows a repo only by its label, and both routes share the guard.
+KEY = ("api", BODY["branch"])
 
 
 def _win(**over):
@@ -37,10 +39,8 @@ def _win(**over):
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, mocker, windows):
-    from periscope.routes import linear as route
-
     # A spawn in one test must not make the next test's start refuse to spawn.
-    monkeypatch.setattr(route._spawns, "recent_spawn", {})
+    monkeypatch.setattr(branch_spawn, "_recent_spawn", {})
     # Never a live tmux listing.
     mocker.patch("periscope.open_ops.list_windows", return_value=[])
     mocker.patch("periscope.tracks.repo_default_track", return_value="/repos/api")
@@ -71,6 +71,23 @@ def place(mocker):
     return mocker.patch("periscope.open_ops.place_in_rail")
 
 
+@pytest.fixture
+def prepare(client, monkeypatch, mocker, tmp_path):
+    """POST /api/reviews/prepare on the same repo label and branch, with `wins` as the last blob."""
+    from periscope import reviews
+
+    monkeypatch.setattr(reviews, "REVIEWS_DIR", tmp_path)
+    mocker.patch("periscope.open_ops.discover_repos", return_value=["/repos/api"])
+    # Not refused, prepare would spawn into the branch's worktree.
+    mocker.patch("periscope.worktrees.for_branch", return_value="/repos/api-wt")
+
+    def post(wins):
+        monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": wins}))
+        return client.post("/api/reviews/prepare", json={"repo": "api", "branch": BODY["branch"]})
+
+    return post
+
+
 def test_start_spawns_claude_in_the_worktree(client, worktree, spawn, place):
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 200
@@ -83,13 +100,11 @@ def test_start_spawns_claude_in_the_worktree(client, worktree, spawn, place):
 
 
 def test_a_claude_on_the_branch_is_reported_not_prompted(client, windows, worktree, spawn, place):
-    from periscope.routes import linear as route
-
     windows.return_value = [_win()]
-    route._spawns.recent_spawn[(os.path.realpath(BODY["repo"]), BODY["branch"])] = time.monotonic()
+    branch_spawn._recent_spawn[KEY] = time.monotonic()
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 200 and r.json() == {"mode": "existing", "pid": "p1"}
-    assert route._spawns.recent_spawn == {}
+    assert branch_spawn._recent_spawn == {}
     worktree.assert_not_called()
     spawn.assert_not_called()
     place.assert_not_called()
@@ -119,15 +134,29 @@ def test_a_repo_path_with_a_trailing_slash_finds_the_claude(client, windows, wor
     worktree.assert_not_called()
 
 
-def test_a_start_before_the_spawned_claude_attaches_is_refused(client, worktree, spawn, place):
-    from periscope.routes import linear as route
-
+def test_a_start_before_the_spawned_claude_shows_is_refused(client, worktree, spawn, place):
     assert client.post("/api/linear/start", json=BODY).status_code == 200
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 409 and "attached" in r.json()["detail"] and spawn.call_count == 1
-    key = (os.path.realpath(BODY["repo"]), BODY["branch"])
-    route._spawns.recent_spawn[key] = time.monotonic() - branch_spawn.RECENT_SPAWN_S
+    branch_spawn._recent_spawn[KEY] = time.monotonic() - branch_spawn.RECENT_SPAWN_S
     assert client.post("/api/linear/start", json=BODY).status_code == 200 and spawn.call_count == 2
+
+
+def test_a_prepare_right_after_a_start_on_the_branch_is_refused(client, worktree, spawn, place, prepare):
+    assert client.post("/api/linear/start", json=BODY).json()["mode"] == "spawned"
+    r = prepare([])
+    assert r.status_code == 409 and "attached" in r.json()["detail"] and spawn.call_count == 1
+
+
+def test_a_start_that_sees_its_claude_before_it_attaches_keeps_the_record(
+    client, windows, worktree, spawn, place, prepare
+):
+    # Clearing it there would let a prepare, which needs an attached Claude, spawn a twin.
+    assert client.post("/api/linear/start", json=BODY).json()["mode"] == "spawned"
+    windows.return_value = [_win(pid="k", channel_attached=False)]
+    assert client.post("/api/linear/start", json=BODY).json() == {"mode": "existing", "pid": "k"}
+    r = prepare([_win(pid="k", channel_attached=False)])
+    assert r.status_code == 409 and "attached" in r.json()["detail"] and spawn.call_count == 1
 
 
 def test_concurrent_starts_spawn_once(mocker, worktree, place):
@@ -136,7 +165,6 @@ def test_concurrent_starts_spawn_once(mocker, worktree, place):
     import httpx
 
     from periscope import app as app_mod
-    from periscope.routes import linear as route
 
     async def run():
         gate = asyncio.Event()
@@ -155,7 +183,7 @@ def test_concurrent_starts_spawn_once(mocker, worktree, place):
             return (await first).status_code, second.status_code, spawn.call_count
 
     assert asyncio.run(run()) == (200, 409, 1)
-    assert route._spawns.in_flight == set()
+    assert branch_spawn._in_flight == set()
 
 
 def test_a_bad_branch_is_400(client, worktree, spawn):

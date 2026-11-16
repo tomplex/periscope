@@ -134,7 +134,7 @@ would double-load every global.
 | `git_pr.py` / `usage.py` / `launch_policy.py` / `cost_pressure.py` | Git state + PR cache / plan usage + `choose_launch` shell / pure account-and-model routing policy / per-pane context-cost pressure |
 | `narrator.py` / `rename_ai.py` | Per-pane AI status lines + divergence renames / Anthropic SDK plumbing |
 | `open_ops.py` | Unified-open core (path/branch/PR descriptors → create-or-focus → rail placement); no HTTP |
-| `branch_spawn.py` | Claude with a prompt in a branch's worktree, once per (repo, branch): the spawn path of `/api/reviews/prepare` and `/api/linear/start` |
+| `branch_spawn.py` | Claude with a prompt in a branch's worktree, once per (repo, branch): the spawn path and the one guard that `/api/reviews/prepare` and `/api/linear/start` share |
 | `updater.py` | Self-update: newest-release check (counts + changelog notes) + detached spawn of `bin/periscope update` |
 | `reviews.py` | Review walkthroughs: on-disk convention under `~/.claude/reviews/<repo>/<slug>`, GitHub-sourced queue (my PRs + review-requested, panes joined on), staleness, comments |
 | `routes/*.py` | One APIRouter per file |

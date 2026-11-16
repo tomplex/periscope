@@ -16,8 +16,6 @@ from periscope import branch_spawn, reviews, state_hub, store, worktree_spawn
 
 router = APIRouter()
 
-_spawns = branch_spawn.BranchSpawns("start")
-
 
 class StartBody(BaseModel):
     repo: str = Field(min_length=1)  # a main checkout, as GET /api/open/catalog lists it
@@ -29,24 +27,24 @@ class StartBody(BaseModel):
 
 @router.post("/api/linear/start")
 async def linear_start(body: StartBody):
-    key = (os.path.realpath(body.repo), body.branch)
-    with _spawns.one_at_a_time(key):
-        return await _start(body, key)
+    repo = os.path.realpath(body.repo)
+    # Keyed on the label, as prepare is: it knows a repo only by its label, and the guard is shared.
+    key = (os.path.basename(repo), body.branch)
+    with branch_spawn.one_at_a_time(key):
+        return await _start(body, repo, key)
 
 
-async def _start(body: StartBody, key: tuple[str, str]) -> dict:
-    repo, branch = key
+async def _start(body: StartBody, repo: str, key: tuple[str, str]) -> dict:
     # Any Claude counts, attached or not: the route only reports it, and /api/select needs only a live pane.
     on_repo = [w for w in await state_hub.current_windows() if w.get("repo_key") == repo]
-    owner = reviews.claude_on_branch(on_repo, {branch})
+    owner = reviews.claude_on_branch(on_repo, {body.branch})
+    branch_spawn.refuse_recent_spawn(key, owner)
     if owner:
-        _spawns.forget_spawn(key)
         return {"mode": "existing", "pid": owner["pid"]}
-    _spawns.refuse_recent_spawn(key)
     try:
-        wt = await asyncio.to_thread(worktree_spawn.spawn_worktree, repo, branch)
+        wt = await asyncio.to_thread(worktree_spawn.spawn_worktree, repo, body.branch)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    spawned = await _spawns.spawn(key, wt["path"], body.prompt)
+    spawned = await branch_spawn.spawn(key, wt["path"], body.prompt)
     store.set_window_fields(spawned["pid"], linked_linear=body.ticket, linked_linear_title=body.title or None)
     return {"mode": "spawned", "pid": spawned["pid"], "path": wt["path"], "reused": wt["reused"]}

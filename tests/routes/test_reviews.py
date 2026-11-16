@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from periscope import reviews, state_hub
+from periscope import branch_spawn, reviews, state_hub
 
 WT = "# T\n\n> branch: feat/x · head: abc\n\nProblem.\n\n## Stop A\n> kind: reuse · refs: a.py:1-3\n\nbody\n"
 
@@ -53,9 +53,7 @@ def _env(tmp_path, monkeypatch, mocker, place):
     mocker.patch("periscope.reviews.cached_open_prs", return_value=[])
     mocker.patch("periscope.open_ops.discover_repos", return_value=["/dev/fdy"])
     # A spawn in one test must not make the next test's prepare refuse to spawn.
-    from periscope.routes import reviews as route
-
-    monkeypatch.setattr(route._spawns, "recent_spawn", {})
+    monkeypatch.setattr(branch_spawn, "_recent_spawn", {})
     yield
 
 
@@ -242,7 +240,6 @@ def test_concurrent_prepare_spawns_once(mocker, monkeypatch, place):
     import httpx
 
     from periscope import app as app_mod
-    from periscope.routes import reviews as route
 
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
@@ -267,7 +264,7 @@ def test_concurrent_prepare_spawns_once(mocker, monkeypatch, place):
             return (await first).status_code, second.status_code, spawn.call_count
 
     assert asyncio.run(run()) == (200, 409, 1)
-    assert route._spawns.in_flight == set()
+    assert branch_spawn._in_flight == set()
 
 
 def test_prepare_survives_rail_placement_failure(client, mocker, monkeypatch, place):
@@ -347,8 +344,6 @@ def test_walkthrough_finds_pr_alias_worktree_for_diff(client, mocker, monkeypatc
 
 
 def test_prepare_refuses_until_spawned_pane_attaches(client, mocker, monkeypatch, place):
-    from periscope.routes import reviews as route
-
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
     mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
@@ -368,15 +363,12 @@ def test_prepare_refuses_until_spawned_pane_attaches(client, mocker, monkeypatch
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": [_win(branch="feat/x")]}))
     deliver = mocker.patch("periscope.channels._deliver", new=AsyncMock(return_value={"ok": True}))
     assert client.post("/api/reviews/prepare", json=body).json()["mode"] == "delivered"
-    assert deliver.call_count == 1 and route._spawns.recent_spawn == {}
+    assert deliver.call_count == 1 and branch_spawn._recent_spawn == {}
 
 
 def test_prepare_spawns_once_the_guard_expires(client, mocker, monkeypatch, place):
     """A spawned pane that never attaches (it died) must not block the branch forever."""
     import time
-
-    from periscope import branch_spawn
-    from periscope.routes import reviews as route
 
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
@@ -389,9 +381,9 @@ def test_prepare_spawns_once_the_guard_expires(client, mocker, monkeypatch, plac
         ),
     )
     body = {"repo": "fdy", "branch": "feat/x"}
-    route._spawns.recent_spawn[("fdy", "feat/x")] = time.monotonic() - branch_spawn.RECENT_SPAWN_S + 1
+    branch_spawn._recent_spawn[("fdy", "feat/x")] = time.monotonic() - branch_spawn.RECENT_SPAWN_S + 1
     assert client.post("/api/reviews/prepare", json=body).status_code == 409
-    route._spawns.recent_spawn[("fdy", "feat/x")] = time.monotonic() - branch_spawn.RECENT_SPAWN_S
+    branch_spawn._recent_spawn[("fdy", "feat/x")] = time.monotonic() - branch_spawn.RECENT_SPAWN_S
     assert client.post("/api/reviews/prepare", json=body).status_code == 200 and spawn.call_count == 1
 
 

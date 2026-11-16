@@ -189,13 +189,10 @@ def _prepare_prompt(repo: str, branch: str) -> str:
     )
 
 
-_spawns = branch_spawn.BranchSpawns("prepare")
-
-
 @router.post("/api/reviews/prepare")
 async def reviews_prepare(body: ReviewRef):
     _check(body.repo, body.branch)
-    with _spawns.one_at_a_time((body.repo, body.branch)):
+    with branch_spawn.one_at_a_time((body.repo, body.branch)):
         return await _prepare(body)
 
 
@@ -205,11 +202,10 @@ async def _prepare(body: ReviewRef) -> dict:
     owner = reviews.owner_for(wins, body.repo, body.branch, aliases)
     prompt = _prepare_prompt(body.repo, body.branch)
     key = (body.repo, body.branch)
+    branch_spawn.refuse_recent_spawn(key, owner)
     if owner:
-        _spawns.forget_spawn(key)
         await _deliver_or_409(owner, prompt)
         return {"ok": True, "mode": "delivered"}
-    _spawns.refuse_recent_spawn(key)
     roots = await asyncio.to_thread(_roots)
     worktree = await asyncio.to_thread(
         lambda: reviews.worktree_for(wins, body.repo, body.branch, fresh=True, roots=roots, aliases=aliases)
@@ -229,7 +225,7 @@ async def _prepare(body: ReviewRef) -> dict:
             )
         prwt = await asyncio.to_thread(projects.fetch_pr_into_worktree, root, number)
         worktree = prwt.path
-    spawned = await _spawns.spawn(key, worktree, prompt)
+    spawned = await branch_spawn.spawn(key, worktree, prompt)
     if prwt is not None:
         # What ⌘K's PR open stamps: the card shows the PR, merged/closed cleanup
         # fires, and a fork's worktree isn't flagged remote-gone on sight.
