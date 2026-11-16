@@ -72,8 +72,9 @@ Body: `{"pid": "<@periscope_id>"}`.
 - `periscope/reviews.py`: `claude_on_branch`, the agent-and-branch match. `owner_for` adds prepare's channel and repo-label filter to it.
 - `periscope/open_ops.py`: `place_session_in_rail(session, project, pid)` places every stamped pane of a session. The open (`_open_path`), the `spawn_claude` tool and `branch_spawn` use it.
 - `periscope/channels.py`: the `spawn_claude` tool places its pane with `place_session_in_rail`. `spawn_claude_with_prompt` loads the prompt with `tmux.load_buffer`, and logs a cleanup kill that fails or times out.
-- `periscope/tmux.py`: `load_buffer`, which loads text over stdin and raises `RuntimeError` when tmux fails or times out. `spawn_claude_with_prompt`, `/api/send` and `deliver_input`'s large-paste path use it. `deliver_input`'s `send-keys` and `paste-buffer` raise the same `RuntimeError` (`_tmux_checked`).
+- `periscope/tmux.py`: `load_buffer`, which loads text over stdin and raises `RuntimeError` when tmux fails or times out. `spawn_claude_with_prompt`, `/api/send`, `/api/paste-image` and `deliver_input`'s large-paste path use it, so there is one load path. `deliver_input`'s `send-keys` and `paste-buffer` raise the same `RuntimeError` (`_tmux_checked`).
 - `periscope/tmux_input.py`: the fork path logs the `RuntimeError` from `deliver_input`, so a failed or timed-out tmux call does not end `/ws/pane`'s drain task.
+- `periscope/routes/paste_image.py`: `/api/paste-image` loads `@<path> ` with `tmux.load_buffer`. A failed or timed-out load is 500 with the tmux error, as in `/api/send`, and nothing is pasted.
 - `periscope/routes/state.py`: `POST /api/select`, the in-memory request, and `select` in `build_state()`.
 - `static/src/select.js`: `selectToApply`.
 - `static/src/poll.js`: its use in `applyState`.
@@ -100,7 +101,7 @@ Body: `{"pid": "<@periscope_id>"}`.
 
 `tests/test_state_hub.py`: `current_windows` returns a fresh blob and does not build, also with no tab subscribed. A blob older than two hub gaps, or two ticks while no gap is measured, gives a fresh build, also with a tab subscribed. With slow builds (a 7 s gap), a blob 5 s old is still used.
 
-`tests/test_tmux.py`: `load_buffer` sends a prompt that starts with `-` and a 20 KB prompt over stdin, and raises `RuntimeError` on a non-zero exit or a timeout. `deliver_input` raises `RuntimeError` when its `send-keys` or `paste-buffer` fails or times out. `tests/test_channels.py`: a failed or timed-out load raises `SpawnFailed` and kills the new window. A kill that then fails or times out is logged, and the spawn still raises `SpawnFailed`. `tests/test_tmux_input.py`: a timed-out `load-buffer`, `paste-buffer` or `send-keys` on the fork path is logged and does not raise.
+`tests/test_tmux.py`: `load_buffer` sends a prompt that starts with `-` and a 20 KB prompt over stdin, and raises `RuntimeError` on a non-zero exit or a timeout. `deliver_input` raises `RuntimeError` when its `send-keys` or `paste-buffer` fails or times out. `tests/test_channels.py`: a failed or timed-out load raises `SpawnFailed` and kills the new window. A kill that then fails or times out is logged, and the spawn still raises `SpawnFailed`. `tests/test_tmux_input.py`: a timed-out `load-buffer`, `paste-buffer` or `send-keys` on the fork path is logged and does not raise. `tests/routes/test_paste_image.py`: the image's `@<path> ` goes through `load_buffer`, and a failed load gives 500 and no paste.
 
 `tests/routes/test_state.py`: after `POST /api/select`, `build_state()` carries `select` with the pid. The test checks that `at` is in epoch ms. A second request replaces the first. An empty pid gives 422.
 

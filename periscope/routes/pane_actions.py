@@ -80,7 +80,7 @@ _CONTROLS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 # A reply goes in as two steps with a look in between: the paste, then the
 # Enter only once a fresh capture shows the paste in the composer and no
-# dialog. One look before the paste left ~150 ms (set-buffer, paste, settle)
+# dialog. One look before the paste left ~150 ms (load-buffer, paste, settle)
 # for a permission dialog to render, take focus and be confirmed (`1. Yes`)
 # by the Enter, and "Ask agent to fix" goes to working agents, the panes
 # that raise them. The paste gets _PASTE_SETTLE_S to show before each look,
