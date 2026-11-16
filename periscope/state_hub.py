@@ -65,10 +65,11 @@ def last_windows() -> list[dict]:
 
 
 async def current_windows() -> list[dict]:
-    """The windows now: the last blob while a tab subscribes and the blob is under two ticks old.
-    Else build a fresh state: with no tab the loop computes nothing, and after an idle stretch the
-    last blob stays hours old until the first new build ends."""
-    if _subscribers and _last_blob is not None and time.monotonic() - _last_blob_at < 2 * _TICK_INTERVAL_S:
+    """The windows now: the last blob while it is fresh, else a fresh build_state()."""
+    # Fresh: younger than twice the hub's last gap between broadcasts (a build plus a tick; a loaded build
+    # takes 3-13 s), or two ticks when that is longer. With no tab the hub stops, so the blob ages out.
+    gap = max(_TICK_INTERVAL_S, forks._last_gap or 0.0)
+    if _last_blob is not None and time.monotonic() - _last_blob_at < 2 * gap:
         return last_windows()
     from periscope.routes.state import build_state  # routes.state imports state_hub
 
