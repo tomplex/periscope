@@ -9,6 +9,8 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import pytest
+
 import periscope.tmux as tmux_mod
 from periscope import config
 from periscope.tmux import (
@@ -71,6 +73,22 @@ def test_tmux_mutate_surfaces_stderr_on_failure(mocker):
     ok, msg = _tmux_mutate("rename-window", "-t", "missing:0", "bar")
     assert ok is False
     assert msg == "no such window"
+
+
+@pytest.mark.parametrize("text", ["- Read FDY-12", "-x foo", "x" * 20_000], ids=["dash", "flag", "20KB"])
+def test_load_buffer_sends_the_text_over_stdin(mocker, text):
+    # As an argument, tmux reads a leading `-` as flags and refuses ~16 KB: the buffer stays empty.
+    mock_run = mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", ""))
+    tmux_mod.load_buffer("b1", text)
+    args, kwargs = mock_run.call_args
+    assert args[0] == ["tmux", "load-buffer", "-b", "b1", "-"]
+    assert kwargs["input"] == text
+
+
+def test_load_buffer_raises_when_tmux_fails(mocker):
+    mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "no server running\n"))
+    with pytest.raises(RuntimeError, match="load-buffer failed: no server running"):
+        tmux_mod.load_buffer("b1", "go")
 
 
 def test_tmux_mutate_falls_back_to_generic_error(mocker):

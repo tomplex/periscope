@@ -33,6 +33,12 @@ _WINDOW = {
 
 
 @pytest.fixture(autouse=True)
+def load_buffer(mocker):
+    """A spawn loads its prompt into a tmux buffer: never the developer's tmux server."""
+    return mocker.patch("periscope.channels.load_buffer")
+
+
+@pytest.fixture(autouse=True)
 def reset_channel_state():
     """Clear the in-memory channel dicts between tests so each one starts
     from a clean slate."""
@@ -2018,7 +2024,7 @@ def test_spawn_claude_sets_the_model_the_chooser_picked(mocker):
     assert "ANTHROPIC_MODEL=opus[1m]" in args
 
 
-def test_spawn_claude_with_prompt_pastes_and_tags(mocker):
+def test_spawn_claude_with_prompt_pastes_and_tags(mocker, load_buffer):
     from periscope import channels, usage
     from periscope.launch_policy import Launch
 
@@ -2038,11 +2044,32 @@ def test_spawn_claude_with_prompt_pastes_and_tags(mocker):
     out = asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", "/dev/repo", "do the thing", session="sess"))
 
     assert out == {"target": "sess:4", "session": "sess", "index": 4, "pid": "kid42", "pane_id": "%9"}
-    set_buffer = [c for c in tmux_mock.call_args_list if c.args[:1] == ("set-buffer",)]
-    assert set_buffer and set_buffer[0].args[-1] == "do the thing"
+    buf, text = load_buffer.call_args.args
+    assert text == "do the thing"
     paste = [c for c in tmux_mock.call_args_list if c.args[:1] == ("paste-buffer",)]
-    assert paste and paste[0].args[-1] == "sess:4"
+    assert paste and paste[0].args == ("paste-buffer", "-d", "-p", "-b", buf, "-t", "sess:4")
     move.assert_called_once_with("kid42", "/dev/repo")
+
+
+def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_does_not_load(mocker, load_buffer):
+    # A Claude with an empty composer must not stay behind a spawn its caller reports as failed.
+    from periscope import channels, usage
+    from periscope.launch_policy import Launch
+
+    mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
+    tmux_mock = mocker.patch("periscope.channels.tmux", return_value="%9")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mutate = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    stamp = mocker.patch("periscope.channels.stamp_new_window")
+    load_buffer.side_effect = RuntimeError("tmux load-buffer failed: no server running")
+
+    with pytest.raises(channels.SpawnFailed, match="no server running"):
+        asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
+    assert mutate.call_args.args == ("kill-window", "-t", "sess:4")
+    assert not [c for c in tmux_mock.call_args_list if c.args[:1] == ("paste-buffer",)]
+    stamp.assert_not_called()
 
 
 def test_spawn_claude_with_prompt_skips_track_when_none(mocker):

@@ -4,6 +4,7 @@
 `_tmux_mutate()` — side-effecting; surfaces stderr on failure.
 `_run()` — generic subprocess wrapper used by git_pr and sessions routes.
 `capture()` — wraps `tmux capture-pane` with -e (SGR preserved).
+`load_buffer()` — loads text into a named paste buffer over stdin; raises on failure.
 `deliver_input()` — writes bytes into a pane. Small inputs (keystrokes
 and normal-size pastes) use a single `send-keys -H` subprocess; large
 inputs fall back to load-buffer + paste-buffer over stdin to dodge ARG_MAX.
@@ -156,6 +157,14 @@ def _run(
         return r.returncode, r.stdout.strip()
     except Exception:
         return -1, ""
+
+
+def load_buffer(buf: str, text: str) -> None:
+    """Load `text` into the paste buffer `buf`. Over stdin, because as an argument tmux reads a
+    leading `-` as flags and refuses text over ~16 KB. Raises RuntimeError when tmux fails."""
+    r = subprocess.run(_tmux_argv("load-buffer", "-b", buf, "-"), input=text, capture_output=True, text=True, timeout=5)
+    if r.returncode != 0:
+        raise RuntimeError(f"tmux load-buffer failed: {r.stderr.strip()}")
 
 
 def _tmux_mutate(*args: str) -> tuple[bool, str]:

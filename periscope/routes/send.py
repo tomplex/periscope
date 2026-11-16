@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from periscope.panes import note_action, note_focus
-from periscope.tmux import tmux
+from periscope.tmux import load_buffer, tmux
 
 router = APIRouter()
 
@@ -49,7 +49,7 @@ def _send_to_target(target: str, paste: str | None, keys: list[str], address: st
             # Unique buffer name so concurrent calls (including bulk fan-out)
             # never trample each other.
             buf = f"wd-{uuid.uuid4().hex[:8]}"
-            tmux("set-buffer", "-b", buf, paste)
+            load_buffer(buf, paste)
             tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", addr)
             # Give the receiving TUI (especially Claude Code) time to apply
             # state for the paste before the submit key arrives. Without this,

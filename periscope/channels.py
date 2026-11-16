@@ -44,7 +44,7 @@ from periscope.pids import _attach_git_then_resolve_pids, stamp_new_window
 from periscope.pids import window_by_pid as _resolve_window_by_pid
 from periscope.store import get_window, set_window_fields
 from periscope.tabs import open_tab
-from periscope.tmux import _run, _tmux_mutate, tmux
+from periscope.tmux import _run, _tmux_mutate, load_buffer, tmux
 
 CHANNEL_INSTRUCTIONS = """\
 You are running inside periscope, a dashboard the user has open in their
@@ -510,7 +510,7 @@ def _spawner_label(parent_pid: str) -> str:
 
 
 class SpawnFailed(Exception):
-    """tmux refused to create the window, or returned an unparseable index."""
+    """tmux refused to create the window or to load the prompt, or returned an unparseable index."""
 
 
 class Spawned(TypedDict):
@@ -624,7 +624,12 @@ async def spawn_claude_with_prompt(
     # newlines (see CLAUDE.md key invariant 5). Same buffer-name uuid trick
     # as `_send_to_target` so concurrent spawns don't trample each other.
     buf = f"spawn-{uuid.uuid4().hex[:8]}"
-    tmux("set-buffer", "-b", buf, prompt)
+    try:
+        load_buffer(buf, prompt)
+    except RuntimeError as e:
+        # The caller reports a failed spawn, so leave no Claude behind that never got its prompt.
+        _tmux_mutate("kill-window", "-t", target)
+        raise SpawnFailed(str(e)) from e
     tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
     # Same 100ms bracketed-paste delay as /api/send — without it the Enter
     # can land before the paste applies, submitting empty input.
