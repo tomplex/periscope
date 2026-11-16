@@ -5,6 +5,7 @@ broke every _tmux_mutate test) and the subscriber fan-out / drop-oldest."""
 import asyncio
 import contextlib
 import json
+import time
 
 import pytest
 
@@ -15,10 +16,12 @@ from periscope import state_hub
 def _reset_hub():
     state_hub._subscribers.clear()
     state_hub._last_blob = None
+    state_hub._last_blob_at = 0.0
     state_hub._loop = None
     yield
     state_hub._subscribers.clear()
     state_hub._last_blob = None
+    state_hub._last_blob_at = 0.0
     state_hub._loop = None
 
 
@@ -101,10 +104,19 @@ def test_last_windows_reads_the_last_blob():
 
 def test_current_windows_reads_the_blob_while_a_tab_subscribes(mocker):
     build = mocker.patch("periscope.routes.state.build_state")
-    state_hub._last_blob = json.dumps({"windows": [{"pid": "a"}]})
+    state_hub._broadcast(json.dumps({"windows": [{"pid": "a"}]}))
     state_hub.subscribe()
     assert asyncio.run(state_hub.current_windows()) == [{"pid": "a"}]
     build.assert_not_called()
+
+
+def test_current_windows_builds_fresh_when_a_tab_subscribes_again_after_an_idle_stretch(mocker):
+    # The loop's first build after the idle stretch has not landed: the blob is from before it.
+    mocker.patch("periscope.routes.state.build_state", return_value={"windows": [{"pid": "fresh"}]})
+    state_hub._broadcast(json.dumps({"windows": [{"pid": "stale"}]}))
+    state_hub._last_blob_at = time.monotonic() - 3600
+    state_hub.subscribe()
+    assert asyncio.run(state_hub.current_windows()) == [{"pid": "fresh"}]
 
 
 def test_current_windows_builds_fresh_with_no_subscriber(mocker):

@@ -29,6 +29,8 @@ _subscribers: set[asyncio.Queue[str]] = set()
 # Last computed blob (JSON text), handed to new subscribers immediately so a
 # fresh connection paints without waiting up to a full tick.
 _last_blob: str | None = None
+# When _last_blob was broadcast (time.monotonic()).
+_last_blob_at = 0.0
 # Set when an event source wants the loop to recompute now instead of waiting
 # out the rest of its sleep.
 _wake = asyncio.Event()
@@ -63,9 +65,10 @@ def last_windows() -> list[dict]:
 
 
 async def current_windows() -> list[dict]:
-    """The windows now. While a tab subscribes, the last blob is at most one tick old. With none,
-    the loop computes nothing and the last blob can be stale, so build a fresh state."""
-    if _subscribers and _last_blob is not None:
+    """The windows now: the last blob while a tab subscribes and the blob is under two ticks old.
+    Else build a fresh state: with no tab the loop computes nothing, and after an idle stretch the
+    last blob stays hours old until the first new build ends."""
+    if _subscribers and _last_blob is not None and time.monotonic() - _last_blob_at < 2 * _TICK_INTERVAL_S:
         return last_windows()
     from periscope.routes.state import build_state  # routes.state imports state_hub
 
@@ -87,8 +90,9 @@ def kick() -> None:
 
 
 def _broadcast(text: str) -> None:
-    global _last_blob
+    global _last_blob, _last_blob_at
     _last_blob = text
+    _last_blob_at = time.monotonic()
     for q in list(_subscribers):
         if q.full():
             with contextlib.suppress(asyncio.QueueEmpty):
