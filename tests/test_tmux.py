@@ -100,6 +100,49 @@ def test_load_buffer_raises_when_tmux_fails(mocker, run, error):
         tmux_mod.load_buffer("b1", "go")
 
 
+def test_bracketed_paste_pastes_the_loaded_buffer_bracketed(mocker):
+    mock_run = mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", ""))
+    tmux_mod.bracketed_paste("foo:0", "- a list")
+    tmux_mod.bracketed_paste("foo:1", "more")
+    load, paste, second_load, _ = [c.args[0] for c in mock_run.call_args_list]
+    buf = load[3]
+    assert load == ["tmux", "load-buffer", "-b", buf, "-"]
+    assert mock_run.call_args_list[0].kwargs["input"] == "- a list"
+    assert paste == ["tmux", "paste-buffer", "-d", "-p", "-b", buf, "-t", "foo:0"]
+    # Concurrent pastes (send-bulk, two spawns) never share a buffer.
+    assert second_load[3] != buf
+
+
+_PASTE_STEPS = ["load-buffer", "paste-buffer"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (subprocess.CompletedProcess([], 1, "", "can't find window: 0\n"), "can't find window: 0"),
+        (subprocess.TimeoutExpired(["tmux"], 5), "timed out after 5 s"),
+    ],
+    ids=["exit", "timeout"],
+)
+@pytest.mark.parametrize("command", _PASTE_STEPS)
+def test_bracketed_paste_raises_and_runs_nothing_after_a_failed_step(mocker, command, failure, error):
+    # The callers handle RuntimeError: a spawn kills its window, /api/send and /api/paste-image answer 500.
+    ran = []
+
+    def run(argv, **kwargs):
+        ran.append(next(step for step in _PASTE_STEPS if step in argv))
+        if command not in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    mocker.patch("subprocess.run", side_effect=run)
+    with pytest.raises(RuntimeError, match=f"tmux {command} failed: {error}"):
+        tmux_mod.bracketed_paste("foo:0", "go")
+    assert ran == _PASTE_STEPS[: _PASTE_STEPS.index(command) + 1]
+
+
 def test_tmux_mutate_falls_back_to_generic_error(mocker):
     mocker.patch(
         "subprocess.run",

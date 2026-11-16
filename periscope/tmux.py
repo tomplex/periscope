@@ -6,6 +6,7 @@
 `_run()` — generic subprocess wrapper used by git_pr and sessions routes.
 `capture()` — wraps `tmux capture-pane` with -e (SGR preserved).
 `load_buffer()` — loads text into a named paste buffer over stdin; raises on failure.
+`bracketed_paste()` — loads text and pastes it into a pane as a bracketed paste; raises on failure.
 `deliver_input()` — writes bytes into a pane. Small inputs (keystrokes
 and normal-size pastes) use a single `send-keys -H` subprocess; large
 inputs fall back to load-buffer + paste-buffer over stdin to dodge ARG_MAX.
@@ -176,6 +177,14 @@ def load_buffer(buf: str, text: str) -> None:
     _tmux_checked("load-buffer", "-b", buf, "-", stdin=text)
 
 
+def bracketed_paste(target: str, text: str) -> None:
+    """Paste `text` into `target` as a bracketed paste. Each call loads its own buffer, so
+    concurrent pastes never share one. Raises RuntimeError when tmux fails or times out."""
+    buf = f"wd-{uuid.uuid4().hex[:8]}"
+    load_buffer(buf, text)
+    _tmux_checked("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+
+
 def _tmux_mutate(*args: str) -> tuple[bool, str]:
     """Run a tmux command for its side effects. Surfaces stderr on failure
     instead of swallowing it like `tmux()` does."""
@@ -319,6 +328,8 @@ def deliver_input(target: str, text: str) -> None:
     if len(encoded) <= _SEND_KEYS_H_MAX:
         _tmux_checked("send-keys", "-t", target, "-H", *(f"{b:02x}" for b in encoded))
         return
+    # Not bracketed_paste: `text` is raw terminal input, as on the send-keys path above,
+    # and xterm.js already brackets a paste in it when the app asks for that.
     buf = f"wd-in-{uuid.uuid4().hex[:8]}"
     load_buffer(buf, text)
     _tmux_checked("paste-buffer", "-d", "-b", buf, "-t", target)

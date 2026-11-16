@@ -35,14 +35,14 @@ _WINDOW = {
 
 
 @pytest.fixture(autouse=True)
-def load_buffer(mocker):
-    """A spawn loads its prompt into a tmux buffer: never the developer's tmux server."""
-    return mocker.patch("periscope.channels.load_buffer")
+def bracketed_paste(mocker):
+    """A spawn pastes its prompt: never into the developer's tmux server."""
+    return mocker.patch("periscope.channels.bracketed_paste")
 
 
 @pytest.fixture(autouse=True)
 def tmux_checked(mocker):
-    """A spawn pastes its prompt and sends Enter: never into the developer's tmux server."""
+    """A spawn sends Enter: never into the developer's tmux server."""
     return mocker.patch("periscope.channels._tmux_checked")
 
 
@@ -2037,7 +2037,7 @@ def test_spawn_claude_sets_the_model_the_chooser_picked(mocker):
     assert "ANTHROPIC_MODEL=opus[1m]" in args
 
 
-def test_spawn_claude_with_prompt_pastes_and_tags(mocker, load_buffer, tmux_checked):
+def test_spawn_claude_with_prompt_pastes_and_tags(mocker, bracketed_paste, tmux_checked):
     from periscope import channels, usage
     from periscope.launch_policy import Launch
 
@@ -2057,12 +2057,8 @@ def test_spawn_claude_with_prompt_pastes_and_tags(mocker, load_buffer, tmux_chec
     out = asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", "/dev/repo", "do the thing", session="sess"))
 
     assert out == {"target": "sess:4", "session": "sess", "index": 4, "pid": "kid42", "pane_id": "%9"}
-    buf, text = load_buffer.call_args.args
-    assert text == "do the thing"
-    assert [c.args for c in tmux_checked.call_args_list] == [
-        ("paste-buffer", "-d", "-p", "-b", buf, "-t", "sess:4"),
-        ("send-keys", "-t", "sess:4", "Enter"),
-    ]
+    bracketed_paste.assert_called_once_with("sess:4", "do the thing")
+    assert [c.args for c in tmux_checked.call_args_list] == [("send-keys", "-t", "sess:4", "Enter")]
     move.assert_called_once_with("kid42", "/dev/repo")
 
 
@@ -2079,7 +2075,7 @@ _PROMPT_STEPS = ["load-buffer", "paste-buffer", "send-keys"]
 )
 @pytest.mark.parametrize("command", _PROMPT_STEPS)
 def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_is_not_delivered(
-    mocker, load_buffer, tmux_checked, command, failure, error
+    mocker, bracketed_paste, tmux_checked, command, failure, error
 ):
     # A Claude without its prompt must not stay behind a spawn its caller reports as failed.
     from periscope import channels, tmux, usage
@@ -2093,7 +2089,7 @@ def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_is_not_delive
     mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
     stamp = mocker.patch("periscope.channels.stamp_new_window")
     # The real load, paste, Enter and kill, over a tmux that fails `command`.
-    load_buffer.side_effect = tmux.load_buffer
+    bracketed_paste.side_effect = tmux.bracketed_paste
     tmux_checked.side_effect = tmux._tmux_checked
     ran = []
 
@@ -2124,7 +2120,7 @@ def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_is_not_delive
     ids=["exit", "timeout"],
 )
 def test_spawn_claude_with_prompt_raises_spawn_failed_when_the_kill_fails_too(
-    mocker, load_buffer, tmux_checked, caplog, kill, why
+    mocker, bracketed_paste, tmux_checked, caplog, kill, why
 ):
     # The route maps only SpawnFailed to 502: any other error is a bare 500.
     import logging
@@ -2138,7 +2134,7 @@ def test_spawn_claude_with_prompt_raises_spawn_failed_when_the_kill_fails_too(
     mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
     mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
     mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
-    load_buffer.side_effect = RuntimeError("tmux load-buffer failed: timed out after 5 s")
+    bracketed_paste.side_effect = RuntimeError("tmux load-buffer failed: timed out after 5 s")
     # The real kill, over a tmux that fails it: the only subprocess this path runs.
     tmux_checked.side_effect = tmux._tmux_checked
     mocker.patch("periscope.tmux.subprocess.run", side_effect=[kill])

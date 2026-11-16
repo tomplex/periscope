@@ -17,7 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from periscope.panes import note_action, note_focus
-from periscope.tmux import _tmux_checked, load_buffer
+from periscope.tmux import bracketed_paste
 
 router = APIRouter()
 
@@ -66,10 +66,8 @@ async def paste_image(session: str, index: int, request: Request, deliver: bool 
     if deliver:
         # Trailing space so Claude Code commits the @-reference (its file picker
         # closes on whitespace) and the user can keep typing immediately after.
-        buf = f"wd-img-{uuid.uuid4().hex[:8]}"
         try:
-            load_buffer(buf, f"@{path} ")
-            _tmux_checked("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+            bracketed_paste(target, f"@{path} ")
         except RuntimeError as e:
             raise HTTPException(500, str(e)) from e
         note_focus(target)

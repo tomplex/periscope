@@ -8,7 +8,7 @@ from periscope.routes import send
 
 
 def _patch_tmux(mocker):
-    mocker.patch("periscope.routes.send.load_buffer")
+    mocker.patch("periscope.routes.send.bracketed_paste")
     return mocker.patch("periscope.routes.send._tmux_checked")
 
 
@@ -29,19 +29,8 @@ def test_send_paste_and_keys(client, mocker):
     )
     assert r.status_code == 200
     assert r.json() == {"ok": True, "target": "main:0"}
-    assert send.load_buffer.call_args.args[1] == "hello world"
-    cmds = [c.args[0] for c in tmux_mock.call_args_list]
-    assert "paste-buffer" in cmds
-    assert "send-keys" in cmds
-
-
-def test_send_a_paste_tmux_cannot_load_is_500_and_sends_nothing(client, mocker):
-    # Pasting and pressing Enter anyway would submit whatever the composer holds.
-    tmux_mock = _patch_tmux(mocker)
-    mocker.patch("periscope.routes.send.load_buffer", side_effect=RuntimeError("tmux load-buffer failed: no server"))
-    r = client.post("/api/send?session=main&index=0", json={"paste": "- a list", "keys": ["Enter"]})
-    assert r.status_code == 500 and "load-buffer failed" in r.json()["detail"]
-    tmux_mock.assert_not_called()
+    send.bracketed_paste.assert_called_once_with("main:0", "hello world")
+    assert [c.args[0] for c in tmux_mock.call_args_list] == ["send-keys"]
 
 
 _SEND_STEPS = ["load-buffer", "paste-buffer", "send-keys"]
@@ -55,9 +44,10 @@ _SEND_STEPS = ["load-buffer", "paste-buffer", "send-keys"]
     ],
     ids=["exit", "timeout"],
 )
-@pytest.mark.parametrize("command", ["paste-buffer", "send-keys"])
+@pytest.mark.parametrize("command", _SEND_STEPS)
 def test_send_a_paste_or_key_tmux_fails_is_500_and_sends_nothing_after_it(client, mocker, command, failure, error):
-    # A paste or key that tmux refused answered ok, and nothing reached the pane.
+    # A step that tmux refuses or times out on is 500, and nothing after it reaches the pane:
+    # an Enter after a failed paste would submit whatever the composer holds.
     mocker.patch.object(send.time, "sleep")
     ran = []
 
@@ -119,14 +109,13 @@ def test_send_to_target_sends_to_the_address_and_notes_the_target(mocker):
     # pane_actions checks a pane by %id and must send to that pane, not to
     # whatever `session:index` resolves to by then; focus stays keyed by target.
     tmux_mock = mocker.patch.object(send, "_tmux_checked")
-    load = mocker.patch.object(send, "load_buffer")
+    paste = mocker.patch.object(send, "bracketed_paste")
     mocker.patch.object(send.time, "sleep")
     focus = mocker.patch.object(send, "note_focus")
     action = mocker.patch.object(send, "note_action")
     send._send_to_target("s:4", "hi", ["Enter"], address="%9")
-    calls = [c.args for c in tmux_mock.call_args_list]
-    assert calls[0] == ("paste-buffer", "-d", "-p", "-b", load.call_args.args[0], "-t", "%9")
-    assert calls[1] == ("send-keys", "-t", "%9", "Enter")
+    paste.assert_called_once_with("%9", "hi")
+    assert [c.args for c in tmux_mock.call_args_list] == [("send-keys", "-t", "%9", "Enter")]
     focus.assert_called_once_with("s:4")
     action.assert_called_once_with("s:4")
     tmux_mock.reset_mock()

@@ -44,7 +44,7 @@ from periscope.pids import _attach_git_then_resolve_pids, stamp_new_window
 from periscope.pids import window_by_pid as _resolve_window_by_pid
 from periscope.store import get_window, set_window_fields
 from periscope.tabs import open_tab
-from periscope.tmux import _run, _tmux_checked, _tmux_mutate, load_buffer, tmux
+from periscope.tmux import _run, _tmux_checked, _tmux_mutate, bracketed_paste, tmux
 
 CHANNEL_INSTRUCTIONS = """\
 You are running inside periscope, a dashboard the user has open in their
@@ -620,13 +620,9 @@ async def spawn_claude_with_prompt(
             await asyncio.sleep(0.5)
             break
 
-    # Deliver the prompt via paste-buffer because send-keys strips embedded
-    # newlines (see CLAUDE.md key invariant 5). Same buffer-name uuid trick
-    # as `_send_to_target` so concurrent spawns don't trample each other.
-    buf = f"spawn-{uuid.uuid4().hex[:8]}"
+    # Paste the prompt, because send-keys strips embedded newlines (docs/invariants.md, invariant 5).
     try:
-        load_buffer(buf, prompt)
-        _tmux_checked("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
+        bracketed_paste(target, prompt)
         # Same 100ms bracketed-paste delay as /api/send — without it the Enter
         # can land before the paste applies, submitting empty input.
         await asyncio.sleep(0.1)
