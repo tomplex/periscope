@@ -300,7 +300,7 @@ Expected: FAIL at collection or setup: `ModuleNotFoundError: No module named 'pe
 - [ ] **Step 3: Write `periscope/routes/linear.py`**
 
 ```python
-"""POST /api/linear/start — another app (todo-hub) starts Claude on a Linear issue's branch.
+"""POST /api/linear/start — another app on this Mac starts Claude on a Linear issue's branch.
 
 The steps are /api/reviews/prepare's spawn path: worktree, Claude with a prompt, rail placement,
 plus the Linear link on the new pane. A Claude already on the branch is only reported (mode
@@ -513,7 +513,7 @@ class SelectBody(BaseModel):
 
 @router.post("/api/select")
 def select(body: SelectBody):
-    """Ask every open tab to select the pane `pid` (todo-hub's Show). A new request replaces the old one."""
+    """Ask every open tab to select the pane `pid`. A new request replaces the old one."""
     global _select
     _select = {"pid": body.pid, "at": int(time.time() * 1000)}
     state_hub.kick()  # push it now, not on the next tick
@@ -628,7 +628,7 @@ let lastSelectAt = null;
 In `applyState`, after `editorSignal.value = data.editor || "";` (inside the `try`), add:
 
 ```js
-    // Another app asked for a pane (todo-hub's Show): select it as ⌘K does after an open.
+    // Another app asked for a pane (POST /api/select): select it as ⌘K does after an open.
     const pid = selectToApply(data.select, lastSelectAt, Date.now());
     if (pid) {
       lastSelectAt = data.select.at;
@@ -674,7 +674,6 @@ repo, a branch, a Linear issue and a prompt: periscope makes the worktree,
 starts Claude, sends it the prompt and links the issue to the card. If a
 Claude is already on that branch, it reports that pane and starts nothing.
 `POST /api/select` with a pane's `pid` makes the dashboard select it.
-TodoHub's **Start in periscope** uses both.
 ```
 
 - [ ] **Step 2: CLAUDE.md.** In the "Reference docs" table, change the first cell of the `docs/unified-open.md` row from

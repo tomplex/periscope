@@ -85,7 +85,7 @@ function applyState(data) {
     walls.value = data.walls || null;
     wallSpans.value = data.wall_spans || [];
     editorSignal.value = data.editor || "";
-    // Another app asked for a pane (todo-hub's Show): select it as a rail click does.
+    // Another app asked for a pane (POST /api/select): select it as a rail click does.
     const w = selectToApply(data.select, lastSelectAt, Date.now(), windows.value);
     if (w) {
       lastSelectAt = data.select.at;

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Let another local app (todo-hub) start work on a Linear issue in periscope in one call: make the worktree for the issue's branch, start Claude in it, send Claude a prompt, and link the issue to the pane. Then let that app ask periscope's UI to select the pane.
+Let another local app start work on a Linear issue in periscope in one call: make the worktree for the issue's branch, start Claude in it, send Claude a prompt, and link the issue to the pane. Then let that app ask periscope's UI to select the pane.
 
 Periscope already does each step for review walkthroughs (`POST /api/reviews/prepare`). This change gives the same steps a route of their own, for a branch and a Linear issue, and adds a way to select a pane from outside the UI.
 

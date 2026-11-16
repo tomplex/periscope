@@ -57,7 +57,6 @@ repo, a branch, a Linear issue and a prompt: periscope makes the worktree,
 starts Claude, sends it the prompt and links the issue to the card. If a
 Claude is already on that branch, it reports that pane and starts nothing.
 `POST /api/select` with a pane's `pid` makes the dashboard select it.
-TodoHub's **Start in periscope** uses both.
 
 Free text in ⌘K becomes a background command, a headless Claude that hands
 the work to new or resumed sessions. **⋯ → cleanup** archives worktrees whose

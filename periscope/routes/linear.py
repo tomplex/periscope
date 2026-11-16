@@ -1,4 +1,4 @@
-"""POST /api/linear/start — another app (todo-hub) starts Claude on a Linear issue's branch.
+"""POST /api/linear/start — another app on this Mac starts Claude on a Linear issue's branch.
 
 The route makes the worktree, spawns Claude with a prompt through branch_spawn (the spawn path of
 /api/reviews/prepare), and links the Linear issue to the new pane. A Claude already on the branch is

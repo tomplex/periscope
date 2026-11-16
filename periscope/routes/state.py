@@ -246,7 +246,7 @@ class SelectBody(BaseModel):
 
 @router.post("/api/select")
 def select(body: SelectBody):
-    """Ask every open tab to select the pane `pid` (todo-hub's Show). A new request replaces the old one."""
+    """Ask every open tab to select the pane `pid`. A new request replaces the old one."""
     global _select
     _select = {"pid": body.pid, "at": int(time.time() * 1000)}
     state_hub.kick()  # push it now, not on the next tick
