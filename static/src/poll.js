@@ -3,12 +3,12 @@
 // to every tab). The REST /api/state endpoint stays as the fallback when the
 // socket is down and as the one-shot forced refresh `poll()`.
 //
-// Writes the transient signals (`windows`, `projects`, `usage`) and selects the pane
-// another app asks for (POST /api/select); never commits
-// while a rename or drag is in flight (`editingTarget` / `dragState`) — that
-// preserves the user's in-flight input. Connection-banner shows at ≥2
-// consecutive REST failures (≈6s); a WS drop alone doesn't trip it because the
-// REST fallback keeps data flowing.
+// Writes the transient signals (`windows`, `projects`, `usage`) and selects the
+// pane another app asks for (POST /api/select); never commits while a rename or
+// drag is in flight (`editingTarget` / `dragState`) — that preserves the user's
+// in-flight input. Connection-banner shows at ≥2 consecutive REST failures
+// (≈6s); a WS drop alone doesn't trip it because the REST fallback keeps data
+// flowing.
 
 import { selectToApply } from "./select.js";
 import { selectPane } from "./split/alertFeed.js";

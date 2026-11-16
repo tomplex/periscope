@@ -49,7 +49,7 @@ async def linear_start(body: StartBody):
 
 async def _start(body: StartBody, key: tuple[str, str]) -> dict:
     repo, branch = key
-    owner = reviews.owner_for(state_hub.last_windows(), os.path.basename(repo), branch)
+    owner = reviews.owner_for(await state_hub.current_windows(), os.path.basename(repo), branch)
     if owner:
         _recent_spawn.pop(key, None)
         return {"mode": "focused", "pid": owner["pid"]}

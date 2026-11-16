@@ -97,3 +97,17 @@ def test_last_windows_reads_the_last_blob():
     assert state_hub.last_windows() == []
     state_hub._last_blob = json.dumps({"windows": [{"pid": "a"}], "ts": 1})
     assert state_hub.last_windows() == [{"pid": "a"}]
+
+
+def test_current_windows_reads_the_blob_while_a_tab_subscribes(mocker):
+    build = mocker.patch("periscope.routes.state.build_state")
+    state_hub._last_blob = json.dumps({"windows": [{"pid": "a"}]})
+    state_hub.subscribe()
+    assert asyncio.run(state_hub.current_windows()) == [{"pid": "a"}]
+    build.assert_not_called()
+
+
+def test_current_windows_builds_fresh_with_no_subscriber(mocker):
+    mocker.patch("periscope.routes.state.build_state", return_value={"windows": [{"pid": "fresh"}]})
+    state_hub._last_blob = json.dumps({"windows": [{"pid": "stale"}]})
+    assert asyncio.run(state_hub.current_windows()) == [{"pid": "fresh"}]

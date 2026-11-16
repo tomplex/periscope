@@ -41,7 +41,7 @@ The route is `async`, as prepare is: `spawn_claude_with_prompt` awaits Claude's 
 Steps:
 
 1. **In-flight guard.** If a start for the same `(repo, branch)` is running, answer 409 "start already running". A double press in the caller makes this case.
-2. **Running Claude.** Look for the owner with `reviews.owner_for(windows, label, branch)`: a channel-attached Claude on that repo label and branch, read with `state_hub.last_windows()`. If there is one, clear the recent-spawn record for the key (step 3) and answer `{"mode": "focused", "pid": <its pid>}`. Do not paste the prompt: that Claude can be busy.
+2. **Running Claude.** Look for the owner with `reviews.owner_for(windows, label, branch)`: a channel-attached Claude on that repo label and branch, read with `state_hub.current_windows()`: the last blob while a dashboard tab subscribes, else a fresh `build_state()`, because the hub computes nothing while no tab is open. If there is one, clear the recent-spawn record for the key (step 3) and answer `{"mode": "focused", "pid": <its pid>}`. Do not paste the prompt: that Claude can be busy.
 3. **Recent-spawn guard.** A spawned Claude shows as the owner only after its channel attaches and the next state lands, about 10 to 20 s after the spawn. If this route spawned a Claude for `(repo, branch)` less than 60 s ago and step 2 found no owner, answer 409 "a pane was spawned N s ago and hasn't attached yet". This copies `_recent_spawn` in `routes/reviews.py`.
 4. **Worktree.** `worktree_spawn.spawn_worktree(repo, branch)`. It forks a new branch from `origin/<default branch>`, checks out a branch that exists, and returns the worktree that is already on the branch (`reused: true`). A `ValueError` becomes 400 with its message.
 5. **Session.** `open_ops.resolve_worktree_session(path)`. `None` becomes 502 "<path> is not inside a git repo". At this point `spawn_worktree` has made the worktree, so `None` means git failed in periscope, not that the request is bad.
@@ -68,7 +68,7 @@ Body: `{"pid": "<@periscope_id>"}`.
 - `periscope/routes/state.py`: `POST /api/select`, the in-memory request, and `select` in `build_state()`.
 - `static/src/select.js`: `selectToApply`.
 - `static/src/poll.js`: its use in `applyState`.
-- `periscope/state_hub.py`: `last_windows()`, which `routes/reviews.py` now uses too.
+- `periscope/state_hub.py`: `last_windows()`, which `routes/reviews.py` now uses too, and `current_windows()`.
 - Rebuild and commit `static/dist/`.
 - `CLAUDE.md`: no new module rows are needed (routes are "one APIRouter per file"). Add `routes/linear.py` to the `docs/unified-open.md` row of the reference table, because it spawns worktrees.
 - `README.md`: the two routes, in "Opening work".
@@ -86,6 +86,8 @@ Body: `{"pid": "<@periscope_id>"}`.
 - A `place_in_rail` failure still answers `spawned`.
 - An empty title stamps only the ticket.
 
+`tests/test_state_hub.py`: `current_windows` returns the last blob while a tab subscribes and does not build. With no subscriber, it returns a fresh build, not the stale blob.
+
 `tests/routes/test_state.py`: after `POST /api/select`, `build_state()` carries `select` with the pid. The test checks that `at` is in epoch ms. A second request replaces the first. An empty pid gives 422.
 
 New `static/src/__tests__/select.test.js`: `selectToApply` applies a fresh request once and applies a newer request after an older one. It ignores the same `at`, a request older than 30 s, a pid that is not live, and `null`.
@@ -95,4 +97,5 @@ New `static/src/__tests__/select.test.js`: `selectToApply` applies a fresh reque
 - `reviews.owner_for` is the right test for "a Claude is already on this branch". It counts only channel-attached Claudes, which is why step 3 exists.
 - Only the last select request matters. Two quick requests from two apps keep only the last.
 - `state_hub.kick()` is safe to call from a sync route. It schedules the wake on the hub's loop with `call_soon_threadsafe` (read in `state_hub.py`).
+- `spawn_worktree` checks only local branches. A branch that exists only on origin (for example after cleanup deleted the local branch) is forked fresh from the default branch, and a later push is rejected. This is existing behavior.
 - The caller sends a branch that is safe for git. `spawn_worktree` already refuses a name that starts with `-`, and git refuses other bad names.

@@ -56,10 +56,20 @@ def unsubscribe(q: asyncio.Queue[str]) -> None:
 
 
 def last_windows() -> list[dict]:
-    """The windows of the last computed blob ([] before the first tick). Routes read this instead of
-    computing the blob, which costs a full tmux and git poll."""
+    """The windows of the last computed blob ([] before the first tick). Fresh only while a tab
+    subscribes; a caller from outside the dashboard uses current_windows()."""
     blob = _last_blob
     return json.loads(blob).get("windows", []) if blob else []
+
+
+async def current_windows() -> list[dict]:
+    """The windows now. While a tab subscribes, the last blob is at most one tick old. With none,
+    the loop computes nothing and the last blob can be stale, so build a fresh state."""
+    if _subscribers and _last_blob is not None:
+        return last_windows()
+    from periscope.routes.state import build_state  # routes.state imports state_hub
+
+    return (await asyncio.to_thread(build_state)).get("windows", [])
 
 
 def kick() -> None:

@@ -1,14 +1,13 @@
 """POST /api/linear/start — worktree, Claude with a prompt, the Linear link, rail placement.
-Windows come from a patched state_hub._last_blob and the spawn is an AsyncMock (docs/testing.md)."""
+Windows come from a patched state_hub.current_windows and the spawn is an AsyncMock (docs/testing.md)."""
 
-import json
 import os
 import time
 from unittest.mock import AsyncMock
 
 import pytest
 
-from periscope import channels, state_hub, store
+from periscope import channels, store
 
 BODY = {
     "repo": "/repos/api",
@@ -36,16 +35,21 @@ def _win(**over):
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch, mocker):
+def _env(monkeypatch, mocker, windows):
     from periscope.routes import linear as route
 
-    monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     # A spawn in one test must not make the next test's start refuse to spawn.
     monkeypatch.setattr(route, "_recent_spawn", {})
     # Never a live tmux listing.
     mocker.patch("periscope.routes.linear.list_windows", return_value=[])
     mocker.patch("periscope.tracks.repo_default_track", return_value="/repos/api")
     mocker.patch("periscope.open_ops.resolve_worktree_session", return_value=("api-wt", {"repo": "/repos/api"}))
+
+
+@pytest.fixture
+def windows(mocker):
+    """The windows the route reads; set .return_value in a test."""
+    return mocker.patch("periscope.state_hub.current_windows", new=AsyncMock(return_value=[]))
 
 
 @pytest.fixture
@@ -77,10 +81,10 @@ def test_start_spawns_claude_in_the_worktree(client, worktree, spawn, place):
     place.assert_called_once_with("api-wt", {"repo": "/repos/api"}, ["k"])
 
 
-def test_a_claude_on_the_branch_is_reported_not_prompted(client, monkeypatch, worktree, spawn, place):
+def test_a_claude_on_the_branch_is_reported_not_prompted(client, windows, worktree, spawn, place):
     from periscope.routes import linear as route
 
-    monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": [_win()]}))
+    windows.return_value = [_win()]
     route._recent_spawn[(os.path.realpath(BODY["repo"]), BODY["branch"])] = time.monotonic()
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 200 and r.json() == {"mode": "focused", "pid": "p1"}
@@ -90,9 +94,8 @@ def test_a_claude_on_the_branch_is_reported_not_prompted(client, monkeypatch, wo
     place.assert_not_called()
 
 
-def test_a_shell_or_an_unattached_pane_on_the_branch_does_not_count(client, monkeypatch, worktree, spawn, place):
-    wins = [_win(agent=None), _win(pid="p2", channel_attached=False)]
-    monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": wins}))
+def test_a_shell_or_an_unattached_pane_on_the_branch_does_not_count(client, windows, worktree, spawn, place):
+    windows.return_value = [_win(agent=None), _win(pid="p2", channel_attached=False)]
     assert client.post("/api/linear/start", json=BODY).json()["mode"] == "spawned"
 
 
@@ -126,7 +129,7 @@ def test_concurrent_starts_spawn_once(mocker, worktree, place):
             first = asyncio.create_task(c.post("/api/linear/start", json=BODY))
             while not spawn.call_count and not first.done():
                 await asyncio.sleep(0.01)
-            second = await c.post("/api/linear/start", json=BODY)
+            second = await asyncio.wait_for(c.post("/api/linear/start", json=BODY), 5)
             gate.set()
             return (await first).status_code, second.status_code, spawn.call_count
 
