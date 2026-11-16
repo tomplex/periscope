@@ -202,7 +202,7 @@ async def _prepare(body: ReviewRef) -> dict:
     owner = reviews.owner_for(wins, body.repo, body.branch, aliases)
     prompt = _prepare_prompt(body.repo, body.branch)
     key = (body.repo, body.branch)
-    branch_spawn.refuse_recent_spawn(key, owner)
+    branch_spawn.refuse_or_clear_recent_spawn(key, owner)
     if owner:
         await _deliver_or_409(owner, prompt)
         return {"ok": True, "mode": "delivered"}

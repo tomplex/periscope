@@ -37,10 +37,10 @@ async def linear_start(body: StartBody):
 async def _start(body: StartBody, repo: str, key: tuple[str, str]) -> dict:
     # Any Claude counts, attached or not: the route only reports it, and /api/select needs only a live pane.
     on_repo = [w for w in await state_hub.current_windows() if w.get("repo_key") == repo]
-    owner = reviews.claude_on_branch(on_repo, {body.branch})
-    branch_spawn.refuse_recent_spawn(key, owner)
-    if owner:
-        return {"mode": "existing", "pid": owner["pid"]}
+    claude = reviews.claude_on_branch(on_repo, {body.branch})
+    branch_spawn.refuse_or_clear_recent_spawn(key, claude)
+    if claude:
+        return {"mode": "existing", "pid": claude["pid"]}
     try:
         wt = await asyncio.to_thread(worktree_spawn.spawn_worktree, repo, body.branch)
     except ValueError as e:
