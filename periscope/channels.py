@@ -29,7 +29,6 @@ import contextlib
 import json
 import os
 import shlex
-import subprocess
 import threading
 import time
 import uuid
@@ -636,11 +635,9 @@ async def spawn_claude_with_prompt(
         # The caller reports a failed spawn, so leave no Claude behind whose prompt was not submitted.
         # A kill that fails only logs: the caller still needs SpawnFailed.
         try:
-            killed, why = _tmux_mutate("kill-window", "-t", target)
-        except subprocess.TimeoutExpired as timeout:
-            killed, why = False, f"timed out after {timeout.timeout:g} s"
-        if not killed:
-            log.warning("spawn: %s keeps a Claude with no prompt: tmux kill-window failed: %s", target, why)
+            _tmux_checked("kill-window", "-t", target)
+        except RuntimeError as kill_error:
+            log.warning("spawn: %s keeps a Claude with no prompt: %s", target, kill_error)
         raise SpawnFailed(str(e)) from e
 
     note_focus(target)

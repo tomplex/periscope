@@ -2088,17 +2088,17 @@ def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_is_not_delive
     mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
     mocker.patch("periscope.channels.tmux", return_value="%9")
     mocker.patch("periscope.channels._run", return_value=(0, ""))
-    mutate = mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
     mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
     mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
     stamp = mocker.patch("periscope.channels.stamp_new_window")
-    # The real load, paste and Enter, over a tmux that fails `command`.
+    # The real load, paste, Enter and kill, over a tmux that fails `command`.
     load_buffer.side_effect = tmux.load_buffer
     tmux_checked.side_effect = tmux._tmux_checked
     ran = []
 
     def run(argv, **kwargs):
-        ran.append(next(step for step in _PROMPT_STEPS if step in argv))
+        ran.append(next(step for step in (*_PROMPT_STEPS, "kill-window") if step in argv))
         if command not in argv:
             return subprocess.CompletedProcess(argv, 0, "", "")
         if isinstance(failure, Exception):
@@ -2109,33 +2109,39 @@ def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_is_not_delive
 
     with pytest.raises(channels.SpawnFailed, match=f"tmux {command} failed: {error}"):
         asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
-    assert mutate.call_args.args == ("kill-window", "-t", "sess:4")
-    assert ran == _PROMPT_STEPS[: _PROMPT_STEPS.index(command) + 1]  # nothing after the failed step
+    # Nothing between the failed step and the kill.
+    assert ran == [*_PROMPT_STEPS[: _PROMPT_STEPS.index(command) + 1], "kill-window"]
+    assert tmux_checked.call_args.args == ("kill-window", "-t", "sess:4")
     stamp.assert_not_called()
 
 
 @pytest.mark.parametrize(
     ("kill", "why"),
     [
-        ((False, "can't find window: 4"), "can't find window: 4"),
+        (subprocess.CompletedProcess([], 1, "", "can't find window: 4\n"), "can't find window: 4"),
         (subprocess.TimeoutExpired(["tmux", "kill-window"], 5), "timed out after 5 s"),
     ],
     ids=["exit", "timeout"],
 )
-def test_spawn_claude_with_prompt_raises_spawn_failed_when_the_kill_fails_too(mocker, load_buffer, caplog, kill, why):
+def test_spawn_claude_with_prompt_raises_spawn_failed_when_the_kill_fails_too(
+    mocker, load_buffer, tmux_checked, caplog, kill, why
+):
     # The route maps only SpawnFailed to 502: any other error is a bare 500.
     import logging
 
-    from periscope import channels, usage
+    from periscope import channels, tmux, usage
     from periscope.launch_policy import Launch
 
     mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
     mocker.patch("periscope.channels.tmux", return_value="%9")
     mocker.patch("periscope.channels._run", return_value=(0, ""))
-    mocker.patch("periscope.channels._tmux_mutate", side_effect=[(True, "4"), kill])
+    mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
     mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
     mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
     load_buffer.side_effect = RuntimeError("tmux load-buffer failed: timed out after 5 s")
+    # The real kill, over a tmux that fails it: the only subprocess this path runs.
+    tmux_checked.side_effect = tmux._tmux_checked
+    mocker.patch("periscope.tmux.subprocess.run", side_effect=[kill])
 
     with caplog.at_level(logging.WARNING, logger="periscope"), pytest.raises(channels.SpawnFailed, match="load-buffer"):
         asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
