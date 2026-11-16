@@ -6,6 +6,8 @@ sibling `channel_server.py` and by per-peel manual smoke. These pytest
 tests cover the pure-logic surface that the listener dispatches into.
 """
 
+import subprocess
+
 import pytest
 
 from periscope.channels import (
@@ -2056,9 +2058,17 @@ def test_spawn_claude_with_prompt_pastes_and_tags(mocker, load_buffer):
     move.assert_called_once_with("kid42", "/dev/repo")
 
 
-def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_does_not_load(mocker, load_buffer):
+@pytest.mark.parametrize(
+    ("load", "error"),
+    [
+        (subprocess.CompletedProcess([], 1, "", "no server running\n"), "no server running"),
+        (subprocess.TimeoutExpired(["tmux", "load-buffer"], 5), "timed out"),
+    ],
+    ids=["exit", "timeout"],
+)
+def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_does_not_load(mocker, load_buffer, load, error):
     # A Claude with an empty composer must not stay behind a spawn its caller reports as failed.
-    from periscope import channels, usage
+    from periscope import channels, tmux, usage
     from periscope.launch_policy import Launch
 
     mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
@@ -2068,9 +2078,11 @@ def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_does_not_load
     mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
     mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
     stamp = mocker.patch("periscope.channels.stamp_new_window")
-    load_buffer.side_effect = RuntimeError("tmux load-buffer failed: no server running")
+    # The real load, over a tmux that fails it: the only subprocess this path runs.
+    load_buffer.side_effect = tmux.load_buffer
+    mocker.patch("periscope.tmux.subprocess.run", side_effect=[load])
 
-    with pytest.raises(channels.SpawnFailed, match="no server running"):
+    with pytest.raises(channels.SpawnFailed, match=error):
         asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
     assert mutate.call_args.args == ("kill-window", "-t", "sess:4")
     assert not [c for c in tmux_mock.call_args_list if c.args[:1] == ("paste-buffer",)]

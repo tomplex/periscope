@@ -85,9 +85,18 @@ def test_load_buffer_sends_the_text_over_stdin(mocker, text):
     assert kwargs["input"] == text
 
 
-def test_load_buffer_raises_when_tmux_fails(mocker):
-    mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "no server running\n"))
-    with pytest.raises(RuntimeError, match="load-buffer failed: no server running"):
+@pytest.mark.parametrize(
+    ("run", "error"),
+    [
+        (subprocess.CompletedProcess([], 1, "", "no server running\n"), "load-buffer failed: no server running"),
+        (subprocess.TimeoutExpired(["tmux", "load-buffer"], 5), "load-buffer failed: timed out after 5 s"),
+    ],
+    ids=["exit", "timeout"],
+)
+def test_load_buffer_raises_when_tmux_fails(mocker, run, error):
+    # The callers handle RuntimeError: a spawn kills its window, /api/send answers 500.
+    mocker.patch("subprocess.run", side_effect=[run])
+    with pytest.raises(RuntimeError, match=error):
         tmux_mod.load_buffer("b1", "go")
 
 

@@ -161,8 +161,13 @@ def _run(
 
 def load_buffer(buf: str, text: str) -> None:
     """Load `text` into the paste buffer `buf`. Over stdin, because as an argument tmux reads a
-    leading `-` as flags and refuses text over ~16 KB. Raises RuntimeError when tmux fails."""
-    r = subprocess.run(_tmux_argv("load-buffer", "-b", buf, "-"), input=text, capture_output=True, text=True, timeout=5)
+    leading `-` as flags and refuses text over ~16 KB. Raises RuntimeError when tmux fails or times out."""
+    try:
+        r = subprocess.run(
+            _tmux_argv("load-buffer", "-b", buf, "-"), input=text, capture_output=True, text=True, timeout=5
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"tmux load-buffer failed: timed out after {e.timeout:g} s") from e
     if r.returncode != 0:
         raise RuntimeError(f"tmux load-buffer failed: {r.stderr.strip()}")
 
