@@ -27,7 +27,7 @@ applies. Read the relevant doc before editing, not after the tests go red.
 |---|---|
 | `pids.py`, `panes.py`, `tmux_mirror.py`, `routes/ws.py`, `tmux.py`, `store.py`, `channels.py`, `tracks.py`, `routes/send.py`, `routes/pane_actions.py` | `docs/invariants.md` — 20 numbered invariants, each citing the incident (cursor-before-body, `-N` on capture-pane, `@periscope_id` by window id, rebind TTLs, session-id-first identity, `report` always lands, a remote key press re-checked against the screen and sent by `%id`, …) |
 | `app.py`, `server.py`, `periscope/__init__`, anything importing `server` | `docs/architecture-notes.md` — the `server.py`/`periscope/` split invariants (no `from server import`), `_STATE` rebind, frontend migration notes |
-| `open_ops.py`, `routes/open.py`, `routes/linear.py`, `OpenOmnibox`, `LauncherModal`, `worktree_spawn.py` | `docs/unified-open.md` — the two open surfaces, cwd-based create-or-focus, server-side rail placement |
+| `open_ops.py`, `routes/open.py`, `routes/linear.py`, `branch_spawn.py`, `OpenOmnibox`, `LauncherModal`, `worktree_spawn.py` | `docs/unified-open.md` — the two open surfaces, cwd-based create-or-focus, server-side rail placement |
 | the `claude` zsh wrapper, `CLAUDE_WRAPPER_PROFILE`, `ANTHROPIC_MODEL`, `--effort`, `session_status.py`, `resurrect.py` | `docs/wrapper-profiles.md` — profile/account/model are env-carried, never argv; effort is the one flag (the env var locks `/effort`) |
 | `resurrect.py`, `tmux_persist.py`, `bin/periscope install-tmux` | `docs/tmux-persistence.md` — save-file rewrite, periscope-driven continuum save, healthz `resurrect` block |
 | `channels.py`, `channel_shim.py`, `turns.py`, `pane_session_hook.py`, `codex_pane_session_hook.py`, `pane_permission_hook.py` | `docs/channels.md` — MCP tools, shim reconnect protocol, pane→session mapping (live sid first, `pane_sessions` fallback), the `PermissionRequest` recorder behind a banner's Allow / Deny (its match key; prints nothing, fails open) |
@@ -134,6 +134,7 @@ would double-load every global.
 | `git_pr.py` / `usage.py` / `launch_policy.py` / `cost_pressure.py` | Git state + PR cache / plan usage + `choose_launch` shell / pure account-and-model routing policy / per-pane context-cost pressure |
 | `narrator.py` / `rename_ai.py` | Per-pane AI status lines + divergence renames / Anthropic SDK plumbing |
 | `open_ops.py` | Unified-open core (path/branch/PR descriptors → create-or-focus → rail placement); no HTTP |
+| `branch_spawn.py` | Claude with a prompt in a branch's worktree, once per (repo, branch): the spawn path of `/api/reviews/prepare` and `/api/linear/start` |
 | `updater.py` | Self-update: newest-release check (counts + changelog notes) + detached spawn of `bin/periscope update` |
 | `reviews.py` | Review walkthroughs: on-disk convention under `~/.claude/reviews/<repo>/<slug>`, GitHub-sourced queue (my PRs + review-requested, panes joined on), staleness, comments |
 | `routes/*.py` | One APIRouter per file |

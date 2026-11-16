@@ -12,14 +12,12 @@ mirror, every MCP connection) never stalls.
 import asyncio
 import os
 import re
-import time
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from periscope import channels, git_pr, gitdiff, open_ops, projects, reviews, state_hub, store, tracks
-from periscope.log import log
+from periscope import branch_spawn, channels, git_pr, gitdiff, open_ops, projects, reviews, state_hub, store
 
 router = APIRouter()
 
@@ -191,28 +189,14 @@ def _prepare_prompt(repo: str, branch: str) -> str:
     )
 
 
-# state_hub._last_blob refreshes on the next tick, but a spawn awaits ~10 s: a
-# second prepare in that window would see no owner and spawn a second Claude
-# writing the same walkthrough.md.
-_preparing: set[tuple[str, str]] = set()
-# A spawned pane shows no owner until its channel attaches and the next poll
-# lands (~10-20 s after the request returns); a prepare in that window is
-# refused rather than spawning a twin. An attached owner clears the entry.
-_recent_spawn: dict[tuple[str, str], float] = {}
-RECENT_SPAWN_S = 60.0
+_spawns = branch_spawn.BranchSpawns("prepare")
 
 
 @router.post("/api/reviews/prepare")
 async def reviews_prepare(body: ReviewRef):
     _check(body.repo, body.branch)
-    key = (body.repo, body.branch)
-    if key in _preparing:
-        raise HTTPException(409, "prepare already running")
-    _preparing.add(key)
-    try:
+    with _spawns.one_at_a_time((body.repo, body.branch)):
         return await _prepare(body)
-    finally:
-        _preparing.discard(key)
 
 
 async def _prepare(body: ReviewRef) -> dict:
@@ -222,12 +206,10 @@ async def _prepare(body: ReviewRef) -> dict:
     prompt = _prepare_prompt(body.repo, body.branch)
     key = (body.repo, body.branch)
     if owner:
-        _recent_spawn.pop(key, None)
+        _spawns.forget_spawn(key)
         await _deliver_or_409(owner, prompt)
         return {"ok": True, "mode": "delivered"}
-    age = time.monotonic() - _recent_spawn.get(key, -RECENT_SPAWN_S)
-    if age < RECENT_SPAWN_S:
-        raise HTTPException(409, f"a pane was spawned {int(age)} s ago and hasn't attached yet")
+    _spawns.refuse_recent_spawn(key)
     roots = await asyncio.to_thread(_roots)
     worktree = await asyncio.to_thread(
         lambda: reviews.worktree_for(wins, body.repo, body.branch, fresh=True, roots=roots, aliases=aliases)
@@ -247,33 +229,12 @@ async def _prepare(body: ReviewRef) -> dict:
             )
         prwt = await asyncio.to_thread(projects.fetch_pr_into_worktree, root, number)
         worktree = prwt.path
-    checked_out = prwt is not None
-    anchored = await asyncio.to_thread(open_ops.resolve_worktree_session, worktree)
-    if not anchored:
-        raise HTTPException(409, f"{worktree} is not inside a git repo")
-    session, project = anchored
-    try:
-        spawned = await channels.spawn_claude_with_prompt(
-            worktree, tracks.repo_default_track(project["repo"]), prompt, session=session
-        )
-    except channels.SpawnFailed as e:
-        raise HTTPException(502, f"spawn failed: {e}") from e
-    _recent_spawn[key] = time.monotonic()
-    if not spawned["pid"]:
-        # The Claude is already running with the prompt pasted; a 500 would invite a retry that spawns a second one.
-        log.warning("reviews: spawned but pane id unknown for %s %s", body.repo, body.branch)
-        return {"ok": True, "mode": "spawned", "checked_out": checked_out, **spawned, "pane_id": None}
+    spawned = await _spawns.spawn(key, worktree, prompt)
     if prwt is not None:
         # What ⌘K's PR open stamps: the card shows the PR, merged/closed cleanup
         # fires, and a fork's worktree isn't flagged remote-gone on sight.
         store.set_window_fields(spawned["pid"], linked_pr=number, is_fork=prwt.is_fork)
-
-    try:
-        await asyncio.to_thread(open_ops.place_session_in_rail, session, project, spawned["pid"])
-    except Exception:
-        # Placement only orders the rail; the Claude exists, and a 500 would invite a retry that spawns a second one.
-        log.warning("reviews: rail placement failed for %s %s", body.repo, body.branch, exc_info=True)
-    return {"ok": True, "mode": "spawned", "checked_out": checked_out, **spawned}
+    return {"ok": True, "mode": "spawned", "checked_out": prwt is not None, **spawned}
 
 
 def _open_pr_number(root: str, repo: str, branch: str) -> int | None:

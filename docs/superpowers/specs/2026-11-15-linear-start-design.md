@@ -38,16 +38,18 @@ Body:
 
 The route is `async`, as prepare is: `spawn_claude_with_prompt` awaits Claude's screen, and the git steps run in `asyncio.to_thread`.
 
+Steps 1, 3, 5, 6 and 7 are in `periscope/branch_spawn.py`. `/api/reviews/prepare` uses the same code, with its own owner step and worktree step.
+
 Steps:
 
 1. **In-flight guard.** If a start for the same `(repo, branch)` is running, answer 409 "start already running". A double press in the caller makes this case.
 2. **Running Claude.** Look for the owner with `reviews.owner_for(windows, label, branch)`: a channel-attached Claude on that repo label and branch, read with `state_hub.current_windows()`: the last blob while a dashboard tab subscribes, else a fresh `build_state()`, because the hub computes nothing while no tab is open. If there is one, clear the recent-spawn record for the key (step 3) and answer `{"mode": "existing", "pid": <its pid>}`. Do not paste the prompt: that Claude can be busy.
-3. **Recent-spawn guard.** A spawned Claude shows as the owner only after its channel attaches and the next state lands, about 10 to 20 s after the spawn. If this route spawned a Claude for `(repo, branch)` less than 60 s ago and step 2 found no owner, answer 409 "a pane was spawned N s ago and hasn't attached yet". This copies `_recent_spawn` in `routes/reviews.py`.
+3. **Recent-spawn guard.** A spawned Claude shows as the owner only after its channel attaches and the next state lands, about 10 to 20 s after the spawn. If this route spawned a Claude for `(repo, branch)` less than 60 s ago and step 2 found no owner, answer 409 "a pane was spawned N s ago and hasn't attached yet".
 4. **Worktree.** `worktree_spawn.spawn_worktree(repo, branch)`. It forks a new branch from `origin/<default branch>`, checks out a branch that exists, and returns the worktree that is already on the branch (`reused: true`). A `ValueError` becomes 400 with its message.
 5. **Session.** `open_ops.resolve_worktree_session(path)`. `None` becomes 502 "<path> is not inside a git repo". At this point `spawn_worktree` has made the worktree, so `None` means git failed in periscope, not that the request is bad.
 6. **Claude.** `channels.spawn_claude_with_prompt(path, tracks.repo_default_track(project["repo"]), prompt, session=session)`. `SpawnFailed` becomes 502 "spawn failed: …". Record the spawn time for step 3.
-7. **Link.** `store.set_window_fields(pid, linked_linear=ticket, linked_linear_title=title)`. An empty title is stored as `None`. The card shows the issue at once. Without this, it shows only the ID that `git_pr.linear_ticket_for` reads from the branch name.
-8. **Rail.** `open_ops.place_in_rail(session, project, pane_pids)`, as prepare does. A failure here logs a warning and does not fail the route: the Claude exists, and an error would invite a retry that spawns a second one.
+7. **Rail.** `open_ops.place_session_in_rail(session, project, pid)`. A failure here logs a warning and does not fail the route: the Claude exists, and an error would invite a retry that spawns a second one.
+8. **Link.** `store.set_window_fields(pid, linked_linear=ticket, linked_linear_title=title)`. An empty title is stored as `None`. The card shows the issue at once. Without this, it shows only the ID that `git_pr.linear_ticket_for` reads from the branch name.
 9. Answer `{"mode": "spawned", "pid", "path", "reused"}`. `spawn_claude_with_prompt` always returns a pid, because `pids.stamp_new_window` mints one.
 
 The route does not select the pane. The caller asks for that with `POST /api/select` when the user wants it.
@@ -65,6 +67,7 @@ Body: `{"pid": "<@periscope_id>"}`.
 ## Changes
 
 - New `periscope/routes/linear.py`, registered in `app.py` with the other routers.
+- New `periscope/branch_spawn.py`: steps 1, 3, 5, 6 and 7, for this route and `/api/reviews/prepare`.
 - `periscope/routes/state.py`: `POST /api/select`, the in-memory request, and `select` in `build_state()`.
 - `static/src/select.js`: `selectToApply`.
 - `static/src/poll.js`: its use in `applyState`.

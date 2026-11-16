@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from periscope import channels, store
+from periscope import branch_spawn, channels, store
 
 BODY = {
     "repo": "/repos/api",
@@ -39,7 +39,7 @@ def _env(monkeypatch, mocker, windows):
     from periscope.routes import linear as route
 
     # A spawn in one test must not make the next test's start refuse to spawn.
-    monkeypatch.setattr(route, "_recent_spawn", {})
+    monkeypatch.setattr(route._spawns, "recent_spawn", {})
     # Never a live tmux listing.
     mocker.patch("periscope.open_ops.list_windows", return_value=[])
     mocker.patch("periscope.tracks.repo_default_track", return_value="/repos/api")
@@ -85,10 +85,10 @@ def test_a_claude_on_the_branch_is_reported_not_prompted(client, windows, worktr
     from periscope.routes import linear as route
 
     windows.return_value = [_win()]
-    route._recent_spawn[(os.path.realpath(BODY["repo"]), BODY["branch"])] = time.monotonic()
+    route._spawns.recent_spawn[(os.path.realpath(BODY["repo"]), BODY["branch"])] = time.monotonic()
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 200 and r.json() == {"mode": "existing", "pid": "p1"}
-    assert route._recent_spawn == {}
+    assert route._spawns.recent_spawn == {}
     worktree.assert_not_called()
     spawn.assert_not_called()
     place.assert_not_called()
@@ -105,7 +105,8 @@ def test_a_start_before_the_spawned_claude_attaches_is_refused(client, worktree,
     assert client.post("/api/linear/start", json=BODY).status_code == 200
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 409 and "attached" in r.json()["detail"] and spawn.call_count == 1
-    route._recent_spawn[(os.path.realpath(BODY["repo"]), BODY["branch"])] = time.monotonic() - route.RECENT_SPAWN_S
+    key = (os.path.realpath(BODY["repo"]), BODY["branch"])
+    route._spawns.recent_spawn[key] = time.monotonic() - branch_spawn.RECENT_SPAWN_S
     assert client.post("/api/linear/start", json=BODY).status_code == 200 and spawn.call_count == 2
 
 
@@ -134,7 +135,7 @@ def test_concurrent_starts_spawn_once(mocker, worktree, place):
             return (await first).status_code, second.status_code, spawn.call_count
 
     assert asyncio.run(run()) == (200, 409, 1)
-    assert route._starting == set()
+    assert route._spawns.in_flight == set()
 
 
 def test_a_bad_branch_is_400(client, worktree, spawn):

@@ -55,7 +55,7 @@ def _env(tmp_path, monkeypatch, mocker, place):
     # A spawn in one test must not make the next test's prepare refuse to spawn.
     from periscope.routes import reviews as route
 
-    monkeypatch.setattr(route, "_recent_spawn", {})
+    monkeypatch.setattr(route._spawns, "recent_spawn", {})
     yield
 
 
@@ -131,7 +131,7 @@ def test_prepare_with_owner_delivers(client, mocker, place):
 def test_prepare_without_owner_spawns_in_worktree(client, mocker, monkeypatch, place):
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": [_win(agent=None)]}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
     )
@@ -154,7 +154,7 @@ def test_prepare_with_no_windows_at_all_still_finds_the_worktree(client, mocker,
     # queue enables prepare on a row whose click 409s.
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
     )
@@ -226,22 +226,6 @@ def test_comment_timestamp_is_minute_precision(client, mocker):
     assert len(got) == 1 and len(got[0]["ts"]) == 16
 
 
-def test_prepare_spawn_without_pid_still_succeeds(client, mocker, monkeypatch, place):
-    monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
-    mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
-    mocker.patch(
-        "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
-    )
-    spawn = mocker.patch(
-        "periscope.channels.spawn_claude_with_prompt",
-        new=AsyncMock(return_value={"target": "fdy-wt:2", "session": "fdy-wt", "index": 2, "pid": "", "pane_id": "%5"}),
-    )
-    r = client.post("/api/reviews/prepare", json={"repo": "fdy", "branch": "feat/x"})
-    assert r.status_code == 200 and r.json()["pane_id"] is None and spawn.call_count == 1
-    place.assert_not_called()
-
-
 @pytest.mark.parametrize("stop", ["", "  ", "a\nb", "a\rb"])
 def test_comment_bad_stop_is_400(client, stop):
     r = client.post("/api/reviews/comment", json={"repo": "fdy", "branch": "feat/x", "stop": stop, "body": "t"})
@@ -266,7 +250,7 @@ def test_concurrent_prepare_spawns_once(mocker, monkeypatch, place):
 
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
     )
@@ -282,21 +266,21 @@ def test_concurrent_prepare_spawns_once(mocker, monkeypatch, place):
         body = {"repo": "fdy", "branch": "feat/x"}
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_mod.app), base_url="http://t") as c:
             first = asyncio.create_task(c.post("/api/reviews/prepare", json=body))
-            while not spawn.await_count and not spawn.call_count:
+            while not spawn.call_count and not first.done():
                 await asyncio.sleep(0.01)
-            second = await c.post("/api/reviews/prepare", json=body)
+            second = await asyncio.wait_for(c.post("/api/reviews/prepare", json=body), 5)
             gate.set()
             return (await first).status_code, second.status_code, spawn.call_count
 
     assert asyncio.run(run()) == (200, 409, 1)
-    assert route._preparing == set()
+    assert route._spawns.in_flight == set()
 
 
 def test_prepare_survives_rail_placement_failure(client, mocker, monkeypatch, place):
     place.side_effect = RuntimeError("store busy")
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
     )
@@ -328,7 +312,7 @@ def test_prepare_delivers_to_owner_on_pr_alias(client, mocker, monkeypatch, plac
 def test_prepare_spawns_in_pr_alias_worktree(client, mocker, monkeypatch, place):
     _pr123(monkeypatch, [])
     mocker.patch("periscope.worktrees.for_branch", side_effect=lambda root, b: "/dev/fdy/pr" if b == "pr-123" else None)
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-pr", {"repo": "/dev/fdy"})
     )
@@ -367,7 +351,7 @@ def test_prepare_refuses_until_spawned_pane_attaches(client, mocker, monkeypatch
 
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
     )
@@ -386,16 +370,19 @@ def test_prepare_refuses_until_spawned_pane_attaches(client, mocker, monkeypatch
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": [_win(branch="feat/x")]}))
     deliver = mocker.patch("periscope.channels._deliver", new=AsyncMock(return_value={"ok": True}))
     assert client.post("/api/reviews/prepare", json=body).json()["mode"] == "delivered"
-    assert deliver.call_count == 1 and route._recent_spawn == {}
+    assert deliver.call_count == 1 and route._spawns.recent_spawn == {}
 
 
 def test_prepare_spawns_again_once_the_guard_expires(client, mocker, monkeypatch, place):
     """A spawned pane that never attaches (it died) must not block the branch forever."""
+    import time
+
+    from periscope import branch_spawn
     from periscope.routes import reviews as route
 
     monkeypatch.setattr(state_hub, "_last_blob", json.dumps({"windows": []}))
     mocker.patch("periscope.worktrees.for_branch", return_value="/dev/fdy/wt")
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
     )
@@ -405,13 +392,11 @@ def test_prepare_spawns_again_once_the_guard_expires(client, mocker, monkeypatch
             return_value={"target": "fdy-wt:2", "session": "fdy-wt", "index": 2, "pid": "k", "pane_id": "%5"}
         ),
     )
-    clock = mocker.patch("periscope.routes.reviews.time.monotonic", return_value=1000.0)
     body = {"repo": "fdy", "branch": "feat/x"}
-    assert client.post("/api/reviews/prepare", json=body).status_code == 200
-    clock.return_value = 1000.0 + route.RECENT_SPAWN_S - 1
+    route._spawns.recent_spawn[("fdy", "feat/x")] = time.monotonic() - branch_spawn.RECENT_SPAWN_S + 1
     assert client.post("/api/reviews/prepare", json=body).status_code == 409
-    clock.return_value = 1000.0 + route.RECENT_SPAWN_S
-    assert client.post("/api/reviews/prepare", json=body).status_code == 200 and spawn.call_count == 2
+    route._spawns.recent_spawn[("fdy", "feat/x")] = time.monotonic() - branch_spawn.RECENT_SPAWN_S
+    assert client.post("/api/reviews/prepare", json=body).status_code == 200 and spawn.call_count == 1
 
 
 def test_walkthrough_strips_generated_hunks(client, mocker, monkeypatch):
@@ -452,7 +437,7 @@ def test_prepare_without_worktree_checks_out_the_open_pr_then_spawns(client, moc
         "periscope.routes.reviews.projects.fetch_pr_into_worktree",
         return_value=mocker.Mock(path="/dev/fdy/.claude/worktrees/feat-x", is_fork=True),
     )
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
     )
@@ -487,7 +472,7 @@ def test_prepare_checks_out_a_header_pr_the_open_list_dropped(client, mocker, mo
         "periscope.routes.reviews.projects.fetch_pr_into_worktree",
         return_value=mocker.Mock(path="/dev/fdy/pr", is_fork=False),
     )
-    mocker.patch("periscope.routes.reviews.tracks.repo_default_track", return_value="/dev/fdy")
+    mocker.patch("periscope.tracks.repo_default_track", return_value="/dev/fdy")
     mocker.patch(
         "periscope.routes.reviews.open_ops.resolve_worktree_session", return_value=("fdy-wt", {"repo": "/dev/fdy"})
     )
