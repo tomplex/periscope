@@ -29,6 +29,7 @@ import contextlib
 import json
 import os
 import shlex
+import subprocess
 import threading
 import time
 import uuid
@@ -628,7 +629,13 @@ async def spawn_claude_with_prompt(
         load_buffer(buf, prompt)
     except RuntimeError as e:
         # The caller reports a failed spawn, so leave no Claude behind that never got its prompt.
-        _tmux_mutate("kill-window", "-t", target)
+        # A kill that fails only logs: the caller still needs SpawnFailed.
+        try:
+            killed, why = _tmux_mutate("kill-window", "-t", target)
+        except subprocess.TimeoutExpired as timeout:
+            killed, why = False, f"timed out after {timeout.timeout:g} s"
+        if not killed:
+            log.warning("spawn: %s keeps a Claude with no prompt: tmux kill-window failed: %s", target, why)
         raise SpawnFailed(str(e)) from e
     tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", target)
     # Same 100ms bracketed-paste delay as /api/send — without it the Enter

@@ -109,7 +109,8 @@ async def _fork_fallback(target: str, text: str) -> None:
     try:
         await loop.run_in_executor(None, lambda: deliver_input(target, text))
     except RuntimeError as e:
-        # A paste tmux did not load is lost. A raise would also end /ws/pane's drain task, and every key after it.
+        # Input that tmux refused or timed out on is lost.
+        # A raise would also end /ws/pane's drain task, and every key after it.
         log.warning("tmux input fork path: %s", e)
 
 

@@ -245,6 +245,31 @@ def test_deliver_input_raises_and_does_not_paste_when_the_load_fails(mocker):
     assert mock_run.call_count == 1
 
 
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (subprocess.CompletedProcess([], 1, "", "can't find pane: %5\n"), "failed: can't find pane: %5"),
+        (subprocess.TimeoutExpired(["tmux"], 5), "failed: timed out after 5 s"),
+    ],
+    ids=["exit", "timeout"],
+)
+@pytest.mark.parametrize(
+    ("text", "command"), [("a", "send-keys"), ("x" * 5000, "paste-buffer")], ids=["send-keys", "paste-buffer"]
+)
+def test_deliver_input_raises_runtime_error_when_tmux_fails(mocker, failure, error, text, command):
+    # tmux_input's fork path handles RuntimeError; anything else ends /ws/pane's drain task.
+    def run(argv, **kwargs):
+        if command not in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    mocker.patch("subprocess.run", side_effect=run)
+    with pytest.raises(RuntimeError, match=f"tmux {command} {error}"):
+        deliver_input("foo:0", text)
+
+
 def test_env_args_empty_for_default_account():
     assert env_args("") == []
     assert env_args(None) == []

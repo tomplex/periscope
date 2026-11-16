@@ -2089,6 +2089,34 @@ def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_does_not_load
     stamp.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("kill", "why"),
+    [
+        ((False, "can't find window: 4"), "can't find window: 4"),
+        (subprocess.TimeoutExpired(["tmux", "kill-window"], 5), "timed out after 5 s"),
+    ],
+    ids=["exit", "timeout"],
+)
+def test_spawn_claude_with_prompt_raises_spawn_failed_when_the_kill_fails_too(mocker, load_buffer, caplog, kill, why):
+    # The route maps only SpawnFailed to 502: any other error is a bare 500.
+    import logging
+
+    from periscope import channels, usage
+    from periscope.launch_policy import Launch
+
+    mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
+    mocker.patch("periscope.channels.tmux", return_value="%9")
+    mocker.patch("periscope.channels._run", return_value=(0, ""))
+    mocker.patch("periscope.channels._tmux_mutate", side_effect=[(True, "4"), kill])
+    mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
+    mocker.patch("periscope.channels._plain_pane_snapshot", return_value="auto mode on")
+    load_buffer.side_effect = RuntimeError("tmux load-buffer failed: timed out after 5 s")
+
+    with caplog.at_level(logging.WARNING, logger="periscope"), pytest.raises(channels.SpawnFailed, match="load-buffer"):
+        asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
+    assert f"sess:4 keeps a Claude with no prompt: tmux kill-window failed: {why}" in caplog.text
+
+
 def test_spawn_claude_with_prompt_skips_track_when_none(mocker):
     from periscope import channels, usage
     from periscope.launch_policy import Launch

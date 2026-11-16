@@ -2,6 +2,7 @@
 
 `tmux()` — read-only invocations; swallows stderr.
 `_tmux_mutate()` — side-effecting; surfaces stderr on failure.
+`_tmux_checked()` — side-effecting; raises RuntimeError when tmux fails or times out.
 `_run()` — generic subprocess wrapper used by git_pr and sessions routes.
 `capture()` — wraps `tmux capture-pane` with -e (SGR preserved).
 `load_buffer()` — loads text into a named paste buffer over stdin; raises on failure.
@@ -159,17 +160,20 @@ def _run(
         return -1, ""
 
 
+def _tmux_checked(*args: str, stdin: str | None = None) -> None:
+    """Run a tmux command for its side effect. Raises RuntimeError when tmux fails or times out."""
+    try:
+        r = subprocess.run(_tmux_argv(*args), input=stdin, capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"tmux {args[0]} failed: timed out after {e.timeout:g} s") from e
+    if r.returncode != 0:
+        raise RuntimeError(f"tmux {args[0]} failed: {r.stderr.strip()}")
+
+
 def load_buffer(buf: str, text: str) -> None:
     """Load `text` into the paste buffer `buf`. Over stdin, because as an argument tmux reads a
     leading `-` as flags and refuses text over ~16 KB. Raises RuntimeError when tmux fails or times out."""
-    try:
-        r = subprocess.run(
-            _tmux_argv("load-buffer", "-b", buf, "-"), input=text, capture_output=True, text=True, timeout=5
-        )
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"tmux load-buffer failed: timed out after {e.timeout:g} s") from e
-    if r.returncode != 0:
-        raise RuntimeError(f"tmux load-buffer failed: {r.stderr.strip()}")
+    _tmux_checked("load-buffer", "-b", buf, "-", stdin=text)
 
 
 def _tmux_mutate(*args: str) -> tuple[bool, str]:
@@ -307,22 +311,14 @@ def deliver_input(target: str, text: str) -> None:
 
     Fallback (inputs above `_SEND_KEYS_H_MAX`): load-buffer + paste-buffer
     over stdin. Slower (two subprocesses) but unbounded in size — needed
-    for multi-KB pastes that would otherwise overflow ARG_MAX. Raises
-    RuntimeError when the load fails.
+    for multi-KB pastes that would otherwise overflow ARG_MAX.
+
+    Raises RuntimeError when tmux fails or times out.
     """
     encoded = text.encode("utf-8")
     if len(encoded) <= _SEND_KEYS_H_MAX:
-        hexes = [f"{b:02x}" for b in encoded]
-        subprocess.run(
-            _tmux_argv("send-keys", "-t", target, "-H", *hexes),
-            check=False,
-            timeout=5,
-        )
+        _tmux_checked("send-keys", "-t", target, "-H", *(f"{b:02x}" for b in encoded))
         return
     buf = f"wd-in-{uuid.uuid4().hex[:8]}"
     load_buffer(buf, text)
-    subprocess.run(
-        _tmux_argv("paste-buffer", "-d", "-b", buf, "-t", target),
-        check=False,
-        timeout=5,
-    )
+    _tmux_checked("paste-buffer", "-d", "-b", buf, "-t", target)

@@ -43,15 +43,27 @@ def test_disabled_falls_back_to_fork(monkeypatch):
     assert seen == {"target": "sess:1.0", "text": "x"}
 
 
-def test_a_paste_that_does_not_load_is_logged_not_raised(monkeypatch, caplog):
-    # A raise would end /ws/pane's drain task, and every key typed after it.
-    def fail(target, text):
-        raise RuntimeError("tmux load-buffer failed: no server running")
+_PASTE = "x" * (tmux_input._SEND_KEYS_H_MAX + 1)
 
-    monkeypatch.setattr(tmux_input, "deliver_input", fail)
+
+@pytest.mark.parametrize(
+    ("disabled", "text", "command"),
+    [(False, _PASTE, "load-buffer"), (False, _PASTE, "paste-buffer"), (True, "x", "send-keys")],
+    ids=["load-buffer", "paste-buffer", "send-keys"],
+)
+def test_a_fork_path_tmux_timeout_is_logged_not_raised(mocker, monkeypatch, caplog, disabled, text, command):
+    # A raise would end /ws/pane's drain task, and every key typed after it.
+    monkeypatch.setattr(tmux_input, "_disabled", disabled)
+
+    def run(argv, **kwargs):
+        if command in argv:
+            raise subprocess.TimeoutExpired(argv, 5)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    mocker.patch("periscope.tmux.subprocess.run", side_effect=run)
     with caplog.at_level(logging.WARNING, logger="periscope"):
-        asyncio.run(tmux_input.send("sess:1.0", "x" * (tmux_input._SEND_KEYS_H_MAX + 1)))
-    assert "load-buffer failed: no server running" in caplog.text
+        asyncio.run(tmux_input.send("sess:1.0", text))
+    assert f"tmux {command} failed: timed out after 5 s" in caplog.text
 
 
 # Dedicated server, unique per run (test_tmux_mirror's TEST_SOCKET pattern):
