@@ -733,7 +733,7 @@ curl -s -X POST http://127.0.0.1:17375/api/select -H 'Content-Type: application/
 
 Expected: the dev UI at `http://127.0.0.1:5174/` selects that pane within about 1 s.
 
-Notes: the spawned Claude's channel attaches to the PROD periscope (dev never binds the MCP socket), so a second start on the same branch from the dev server answers 409 for 60 s, not `focused`. The `focused` path is covered by the tests.
+Notes: a second start on the same branch answers `existing` with the first pid once the new Claude shows in the windows (a tick or two), and 409 only before that. Any Claude counts, so this holds on the dev server too, where the channel attaches to the PROD periscope (dev never binds the MCP socket).
 
 - [ ] **Step 3: Clean up the check**
 
