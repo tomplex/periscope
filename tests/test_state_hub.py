@@ -4,6 +4,7 @@ broke every _tmux_mutate test) and the subscriber fan-out / drop-oldest."""
 
 import asyncio
 import contextlib
+import json
 
 import pytest
 
@@ -90,3 +91,9 @@ def test_run_loop_records_gaps_between_broadcasts_but_not_across_idle(monkeypatc
     recorded = [c.args[0] for c in gaps.call_args_list]
     assert len(recorded) >= 3
     assert all(0 < g < 0.4 for g in recorded)
+
+
+def test_last_windows_reads_the_last_blob():
+    assert state_hub.last_windows() == []
+    state_hub._last_blob = json.dumps({"windows": [{"pid": "a"}], "ts": 1})
+    assert state_hub.last_windows() == [{"pid": "a"}]

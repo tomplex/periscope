@@ -55,6 +55,13 @@ def unsubscribe(q: asyncio.Queue[str]) -> None:
     _subscribers.discard(q)
 
 
+def last_windows() -> list[dict]:
+    """The windows of the last computed blob ([] before the first tick). Routes read this instead of
+    computing the blob, which costs a full tmux and git poll."""
+    blob = _last_blob
+    return json.loads(blob).get("windows", []) if blob else []
+
+
 def kick() -> None:
     """Request an immediate recompute. Thread-safe: callable from a route
     running in FastAPI's threadpool (e.g. via _tmux_mutate) as well as from

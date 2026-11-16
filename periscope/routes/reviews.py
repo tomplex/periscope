@@ -10,7 +10,6 @@ mirror, every MCP connection) never stalls.
 """
 
 import asyncio
-import json
 import os
 import re
 import time
@@ -24,11 +23,6 @@ from periscope.log import log
 from periscope.panes import list_windows
 
 router = APIRouter()
-
-
-def _windows() -> list[dict]:
-    blob = state_hub._last_blob
-    return json.loads(blob).get("windows", []) if blob else []
 
 
 def _roots() -> dict[str, str]:
@@ -95,7 +89,7 @@ async def reviews_list():
     team_keys = store.linear_team_keys()
 
     def load():
-        return reviews.list_reviews(_windows(), sorted(open_ops.discover_repos()), team_keys)  # a set
+        return reviews.list_reviews(state_hub.last_windows(), sorted(open_ops.discover_repos()), team_keys)  # a set
 
     rows = await asyncio.to_thread(load)
     return {"rows": rows}
@@ -109,7 +103,7 @@ async def reviews_walkthrough(repo: str, branch: str):
         text = reviews._read(reviews.walkthrough_path(repo, branch))
         if not text:
             return None
-        wins = _windows()
+        wins = state_hub.last_windows()
         worktree = reviews.worktree_for(wins, repo, branch, roots=_roots(), aliases=_aliases(wins, repo, branch))
         header = reviews.parse_header(text)
         diff = None
@@ -154,7 +148,7 @@ async def reviews_comment(body: CommentBody):
     # Append BEFORE delivery: a comment with no pane to hear it is still kept,
     # and the next pane to prepare the branch is told to read the file.
     await asyncio.to_thread(reviews.append_comment, body.repo, body.branch, body.stop, body.body, ts)
-    wins = _windows()
+    wins = state_hub.last_windows()
     owner = reviews.owner_for(wins, body.repo, body.branch, _aliases(wins, body.repo, body.branch))
     msg = (
         f'Review comment on "{body.stop}" (branch {body.branch}; saved in '
@@ -223,7 +217,7 @@ async def reviews_prepare(body: ReviewRef):
 
 
 async def _prepare(body: ReviewRef) -> dict:
-    wins = _windows()
+    wins = state_hub.last_windows()
     aliases = _aliases(wins, body.repo, body.branch)
     owner = reviews.owner_for(wins, body.repo, body.branch, aliases)
     prompt = _prepare_prompt(body.repo, body.branch)
@@ -306,7 +300,7 @@ def _open_pr_number(root: str, repo: str, branch: str) -> int | None:
 @router.post("/api/reviews/merge")
 async def reviews_merge(body: ReviewRef):
     _check(body.repo, body.branch)
-    wins = _windows()
+    wins = state_hub.last_windows()
     owner = reviews.owner_for(wins, body.repo, body.branch, _aliases(wins, body.repo, body.branch))
     msg = (
         f"This branch (`{body.branch}`) has been reviewed in periscope and the comments in "
