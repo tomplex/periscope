@@ -510,7 +510,8 @@ def _spawner_label(parent_pid: str) -> str:
 
 
 class SpawnFailed(Exception):
-    """tmux refused to create the window or to load the prompt, or returned an unparseable index."""
+    """tmux refused to create the window, returned an unparseable index, or refused or timed out
+    on loading, pasting or submitting the prompt."""
 
 
 class Spawned(TypedDict):
@@ -633,7 +634,7 @@ async def spawn_claude_with_prompt(
         try:
             _tmux_checked("kill-window", "-t", target)
         except RuntimeError as kill_error:
-            log.warning("spawn: %s keeps a Claude with no prompt: %s", target, kill_error)
+            log.warning("spawn: %s keeps a Claude after a failed prompt: %s", target, kill_error)
         raise SpawnFailed(str(e)) from e
 
     note_focus(target)

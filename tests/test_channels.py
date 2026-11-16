@@ -2077,7 +2077,7 @@ _PROMPT_STEPS = ["load-buffer", "paste-buffer", "send-keys"]
 def test_spawn_claude_with_prompt_kills_the_window_when_the_prompt_is_not_delivered(
     mocker, bracketed_paste, tmux_checked, command, failure, error
 ):
-    # A Claude without its prompt must not stay behind a spawn its caller reports as failed.
+    # A Claude whose prompt was not submitted must not stay behind a spawn its caller reports as failed.
     from periscope import channels, tmux, usage
     from periscope.launch_policy import Launch
 
@@ -2141,7 +2141,7 @@ def test_spawn_claude_with_prompt_raises_spawn_failed_when_the_kill_fails_too(
 
     with caplog.at_level(logging.WARNING, logger="periscope"), pytest.raises(channels.SpawnFailed, match="load-buffer"):
         asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", None, "go", session="sess"))
-    assert f"sess:4 keeps a Claude with no prompt: tmux kill-window failed: {why}" in caplog.text
+    assert f"sess:4 keeps a Claude after a failed prompt: tmux kill-window failed: {why}" in caplog.text
 
 
 def test_spawn_claude_with_prompt_skips_track_when_none(mocker):
