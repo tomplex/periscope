@@ -46,8 +46,9 @@ def refuse_or_clear_recent_spawn(key: tuple[str, str], claude: dict | None) -> N
         _recent_spawn.pop(key, None)
 
 
-async def spawn(key: tuple[str, str], worktree: str, prompt: str) -> channels.Spawned:
-    """Spawn Claude in `worktree` with `prompt`, in the repo's default track, and place it in the rail."""
+async def spawn(key: tuple[str, str], worktree: str, prompt: str, name: str | None = None) -> channels.Spawned:
+    """Spawn Claude in `worktree` with `prompt`, in the repo's default track, and place it in the rail.
+    A `name` names the window and pins it against the narrator."""
     anchored = await asyncio.to_thread(open_ops.resolve_worktree_session, worktree)
     if not anchored:
         # The worktree exists, so this is git failing in periscope, not a bad request.
@@ -55,7 +56,7 @@ async def spawn(key: tuple[str, str], worktree: str, prompt: str) -> channels.Sp
     session, project = anchored
     try:
         spawned = await channels.spawn_claude_with_prompt(
-            worktree, tracks.repo_default_track(project["repo"]), prompt, session=session
+            worktree, tracks.repo_default_track(project["repo"]), prompt, session=session, name=name
         )
     except channels.SpawnFailed as e:
         raise HTTPException(502, f"spawn failed: {e}") from e

@@ -21,10 +21,11 @@ Invariants worth knowing before touching it:
   calls — the snapshot goes stale).
 - **A deliberate name is PINNED, not cooled down.** `windows[pid].name_pinned`
   (state.json, `_IMMUNITY_FIELDS`) makes `narrator.is_name_pinned` return the
-  `locked=True` that shuts `rename_decision` off entirely. Three writers:
+  `locked=True` that shuts `rename_decision` off entirely. Four writers:
   `/api/rename` (Tom typed it, including the rail's double-click), the
-  `set_name` MCP tool (a pane naming itself), and `spawn_claude(name=…)` (a
-  lead naming its worker). A cooldown was the wrong shape for all three —
+  `set_name` MCP tool (a pane naming itself), `spawn_claude(name=…)` (a
+  lead naming its worker), and `/api/linear/start`'s `name` (another app
+  naming the Claude it starts). A cooldown was the wrong shape for all of them —
   nothing re-asserts a deliberate name, so `RENAME_COOLDOWN_S` expiring
   unnoticed let the orchestrator pane drift through five generated names in
   one afternoon and put one worker on the orchestrator's own role name, so the
