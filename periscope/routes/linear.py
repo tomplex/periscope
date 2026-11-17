@@ -1,8 +1,9 @@
 """POST /api/linear/start — another app on this Mac starts Claude on a Linear issue's branch.
 
 The route makes the worktree, spawns Claude with a prompt through branch_spawn (the spawn path of
-/api/reviews/prepare), and links the Linear issue to the new pane. A Claude already on the branch is
-only reported (mode "existing"): its prompt is never pasted into a session that may be busy.
+/api/reviews/prepare), and links the Linear issue to the new pane. A `name` labels the new pane and
+pins the label. A Claude already on the branch is only reported (mode "existing"): its prompt is never
+pasted into a session that may be busy, and it keeps its name.
 Selecting the pane is a separate request (POST /api/select), sent when the user asks for it.
 """
 
@@ -23,6 +24,7 @@ class StartBody(BaseModel):
     ticket: str = Field(min_length=1)
     title: str = ""
     prompt: str = Field(min_length=1)
+    name: str = ""  # the new pane's rail label, pinned; empty lets the narrator name it
 
 
 @router.post("/api/linear/start")
@@ -45,6 +47,6 @@ async def _start(body: StartBody, repo: str, key: tuple[str, str]) -> dict:
         wt = await asyncio.to_thread(worktree_spawn.spawn_worktree, repo, body.branch)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    spawned = await branch_spawn.spawn(key, wt["path"], body.prompt)
+    spawned = await branch_spawn.spawn(key, wt["path"], body.prompt, body.name.strip() or None)
     store.set_window_fields(spawned["pid"], linked_linear=body.ticket, linked_linear_title=body.title or None)
     return {"mode": "spawned", "pid": spawned["pid"], "path": wt["path"], "reused": wt["reused"]}

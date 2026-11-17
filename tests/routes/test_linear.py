@@ -94,9 +94,16 @@ def test_start_spawns_claude_in_the_worktree(client, worktree, spawn, place):
     assert r.json() == {"mode": "spawned", "pid": "k", "path": "/repos/api-wt", "reused": False}
     worktree.assert_called_once_with("/repos/api", "me/eng-1-fix-it")
     args, kwargs = spawn.call_args
-    assert args == ("/repos/api-wt", "/repos/api", "Read Linear ticket ENG-1.") and kwargs == {"session": "api-wt"}
+    assert args == ("/repos/api-wt", "/repos/api", "Read Linear ticket ENG-1.")
+    assert kwargs == {"session": "api-wt", "name": None}
     assert store.get_window("k") == {"linked_linear": "ENG-1", "linked_linear_title": "Fix it"}
     place.assert_called_once_with("api-wt", {"repo": "/repos/api"}, ["k"])
+
+
+def test_a_name_goes_to_the_spawn(client, worktree, spawn, place):
+    # The spawn names the window and pins the name against the narrator.
+    assert client.post("/api/linear/start", json={**BODY, "name": " eng-1-fix-it "}).status_code == 200
+    assert spawn.call_args.kwargs == {"session": "api-wt", "name": "eng-1-fix-it"}
 
 
 def test_a_claude_on_the_branch_is_reported_not_prompted(client, windows, worktree, spawn, place):
