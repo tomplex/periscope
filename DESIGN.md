@@ -11,9 +11,9 @@ colors:
   tab-colour-rose: "oklch(0.72 0.10 2)"
   tab-colour-clay: "oklch(0.72 0.10 62)"
   tab-colour-moss: "oklch(0.72 0.10 125)"
-  tab-colour-teal: "oklch(0.72 0.10 196)"
-  tab-colour-iris: "oklch(0.72 0.10 272)"
-  tab-colour-plum: "oklch(0.72 0.10 325)"
+  tab-colour-sky: "oklch(0.72 0.10 210)"
+  tab-colour-iris: "oklch(0.72 0.10 255)"
+  tab-colour-plum: "oklch(0.72 0.10 312)"
   s-needs: "oklch(0.74 0.14 38)"
   s-needs-bg: "color-mix(in oklch, oklch(0.74 0.14 38) 16%, transparent)"
   s-working: "oklch(0.80 0.14 92)"
@@ -233,15 +233,19 @@ differ only in hue.
 
 ### Tab colours (the user's)
 Six colours the user gives a pane, to group sessions by their own meaning: Rose
-(`tab-colour-rose`, hue 2), Clay (62), Moss (125), Teal (196), Iris (272) and Plum (325).
-- They share lightness 0.72 and chroma 0.10, below every state's 0.13–0.17, and their hues
-  sit in the gaps between the state hues, so a tab colour reads quieter than any blip.
+(`tab-colour-rose`, hue 2), Clay (62), Moss (125), Sky (210), Iris (255) and Plum (312).
+- They share lightness 0.72 and chroma 0.10, below the blips' 0.13–0.17 (only Shore Green,
+  the shell state, also sits at 0.10), so a tab colour reads quieter than a blip.
+- Their hues keep clear of the state hues and of the kind hues around them (Account Teal,
+  Periscope Glass, Ticket Purple, Worktree Violet, Track Magenta): at least 0.040 apart in
+  OKLab, as far as Ticket Purple sits from Worktree Violet.
 - A colour tints the whole block a pane shows as: its tree card, its Next card and its
   PINNED row. The mix goes `in srgb` into the surface under it, at Settings → Tab colours'
   strength (`--tab-wash`: Quiet 9%, Default 13%, Strong 18%).
 - The selected card names its colour in a chip, in the colour, like the account chip. The
   user can rename each colour, for example Iris → "ci".
-- A swatch (the colour menu, the card's colour button) is a 14 × 9px bar with 2px corners.
+- A swatch is a bar with 2px corners: 14 × 9px in the colour menu, 12 × 8px on the card's
+  colour button.
 
 ### Status (the blips)
 - **Ping Orange** (`s-needs`, needs input): the most urgent state. It colours the pane's
@@ -501,9 +505,10 @@ forward on hover or selection.
 - **Menu**: a `bg-1` panel with a 1px `line` edge, 6px corners and 4px padding. Items are
   12px, 6px × 10px, with 4px corners. Hover fills with `bg-2` and turns the text `fg-0`;
   the active item gets the 18% Periscope Glass wash.
-- **Colour menu**: the Menu, 236px wide, headed "Colour for <pane>". One row per tab colour
-  (swatch, name, the count of tabs in it, a 1–6 keycap), then No colour (0) and Rename
-  colours… (R). The row under the pointer or the cursor previews on the card.
+- **Colour menu**: the Menu, fixed where it opened and 236px wide, headed "Colour for
+  <pane>". One row per tab colour (swatch, name, the count of tabs in it, a 1–6 keycap),
+  then No colour (0) and Rename colours… (R). The row under the pointer or the cursor
+  previews on the card. Tab, Escape or focus leaving it closes it.
 - **Omnibox row**: transparent at rest. The active row gets a 16% Periscope Glass wash and a
   2px Periscope Glass inset left edge, and its glyph turns Periscope Glass.
 
