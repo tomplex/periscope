@@ -54,8 +54,10 @@ track also has a **+ New tab** launcher: pick a branch, then what to run
 
 Another app on this Mac can start work too. `POST /api/linear/start` takes a
 repo, a branch, a Linear issue and a prompt: periscope makes the worktree,
-starts Claude, sends it the prompt and links the issue to the card. If a
-Claude is already on that branch, it reports that pane and starts nothing.
+starts Claude, sends it the prompt and links the issue to the card. It
+answers with the new Claude's `session_id` and its account's `email` (null
+when periscope cannot read it). If a Claude is already on that branch, it
+reports that pane and starts nothing.
 `POST /api/select` with a pane's `pid` makes the dashboard select it.
 
 Free text in ⌘K becomes a background command, a headless Claude that hands
@@ -77,6 +79,14 @@ Claude panes get an MCP server, `periscope`, whose tools act on the dashboard:
 
 That's what lets one Claude fan work out to others and hear back, and it's
 how a finished task lands in READY with a reason attached.
+
+A Claude that periscope starts with a prompt (a `spawn_claude` worker, a
+review pane, a Linear start) starts with `--session-id <uuid>`, and
+`/api/linear/start` answers with that ID. The command lands in the pane's
+shell history, and Claude refuses one `--session-id` twice: after the Claude
+exits, Up+Enter fails with "Session ID … is already in use". Run
+`claude --resume <uuid>` to continue that conversation, or `claude` to start a
+new one.
 
 ### Reviews
 

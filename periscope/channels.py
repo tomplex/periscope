@@ -605,6 +605,7 @@ async def spawn_claude_with_prompt(
     await asyncio.sleep(0.1)
     session_id = str(uuid.uuid4())
     claude_cmd = shlex.join(config.build_agent_command("claude", cwd=cwd, effort=launch.effort, session_id=session_id))
+    # The command lands in the shell history, where a re-run fails: Claude refuses one --session-id twice.
     tmux("send-keys", "-t", target, claude_cmd, "Enter")
 
     # Dismiss the consent dialog (see _dev_channels_consent_*).
