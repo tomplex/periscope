@@ -24,7 +24,7 @@ export function TamaPicker() {
       <legend>Tamagotchi</legend>
       <div class="tama-picker-options">
         {CRITTERS.map((c) => (
-          <label key={c.id} class="tama-picker-option">
+          <label key={c.id} class="settings-tile tama-picker-option">
             <input type="radio" name="tama-critter" value={c.id} checked={c.id === current}
                    onChange={() => setTamaCritter(c.id)} />
             <Preview critter={c} />

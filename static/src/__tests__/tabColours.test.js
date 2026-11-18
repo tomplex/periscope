@@ -1,58 +1,68 @@
-// Tab colours' pure helpers: what a key does in the colour menu, which names
-// are worth storing, and the tint a pref resolves to.
+// Tab colours' pure helpers: what a key does in the colour menu, what the card
+// previews at each row, and the tint a pref resolves to.
 import { describe, expect, it } from "vitest";
-import { cleanColourNames, colourMenuKey, NO_COLOUR_ROW, RENAME_ROW, tabTintById } from "../tabColours.js";
+import { colourMenuKey, NO_COLOUR_ROW, RENAME_ROW, rowPreview, tabTintById } from "../tabColours.js";
+
+const press = (key, cursor = -1, mods = {}) => colourMenuKey({ key, ...mods }, cursor);
 
 describe("colourMenuKey", () => {
   it("picks the colour at 1–6, in the menu's order", () => {
-    expect(colourMenuKey("1", -1)).toEqual({ pick: "rose" });
-    expect(colourMenuKey("4", -1)).toEqual({ pick: "teal" });
-    expect(colourMenuKey("6", 3)).toEqual({ pick: "plum" });
+    expect(press("1")).toEqual({ pick: "rose" });
+    expect(press("4")).toEqual({ pick: "sky" });
+    expect(press("6", 3)).toEqual({ pick: "plum" });
   });
 
   it("removes the colour at 0 and Backspace", () => {
-    expect(colourMenuKey("0", -1)).toEqual({ pick: null });
-    expect(colourMenuKey("Backspace", 2)).toEqual({ pick: null });
+    expect(press("0")).toEqual({ pick: null });
+    expect(press("Backspace", 2)).toEqual({ pick: null });
   });
 
   it("renames at R, either case", () => {
-    expect(colourMenuKey("r", -1)).toEqual({ rename: true });
-    expect(colourMenuKey("R", 0)).toEqual({ rename: true });
+    expect(press("r")).toEqual({ rename: true });
+    expect(press("R", 0)).toEqual({ rename: true });
+  });
+
+  it("closes at Tab, so focus can't wander out of an open menu", () => {
+    expect(press("Tab", 2)).toEqual({ close: true });
+    expect(press("Tab", -1, { shiftKey: true })).toEqual({ close: true });
   });
 
   it("moves the cursor with the arrows, wrapping at both ends", () => {
-    expect(colourMenuKey("ArrowDown", -1)).toEqual({ cursor: 0 });
-    expect(colourMenuKey("ArrowDown", RENAME_ROW)).toEqual({ cursor: 0 });
-    expect(colourMenuKey("ArrowUp", -1)).toEqual({ cursor: RENAME_ROW });
-    expect(colourMenuKey("ArrowUp", 0)).toEqual({ cursor: RENAME_ROW });
-    expect(colourMenuKey("ArrowUp", NO_COLOUR_ROW)).toEqual({ cursor: 5 });
+    expect(press("ArrowDown")).toEqual({ cursor: 0 });
+    expect(press("ArrowDown", RENAME_ROW)).toEqual({ cursor: 0 });
+    expect(press("ArrowUp")).toEqual({ cursor: RENAME_ROW });
+    expect(press("ArrowUp", 0)).toEqual({ cursor: RENAME_ROW });
+    expect(press("ArrowUp", NO_COLOUR_ROW)).toEqual({ cursor: 5 });
   });
 
   it("acts on the cursor's row at Enter, and does nothing before the first arrow", () => {
-    expect(colourMenuKey("Enter", 1)).toEqual({ pick: "clay" });
-    expect(colourMenuKey("Enter", NO_COLOUR_ROW)).toEqual({ pick: null });
-    expect(colourMenuKey("Enter", RENAME_ROW)).toEqual({ rename: true });
-    expect(colourMenuKey("Enter", -1)).toBeNull();
+    expect(press("Enter", 1)).toEqual({ pick: "clay" });
+    expect(press("Enter", NO_COLOUR_ROW)).toEqual({ pick: null });
+    expect(press("Enter", RENAME_ROW)).toEqual({ rename: true });
+    expect(press("Enter")).toBeNull();
+  });
+
+  it("leaves a chord to the browser and the app: ⌘R reloads, ⌘0 resets the zoom", () => {
+    expect(press("r", -1, { metaKey: true })).toBeNull();
+    expect(press("r", -1, { ctrlKey: true })).toBeNull();
+    expect(press("0", -1, { metaKey: true })).toBeNull();
+    expect(press("Backspace", -1, { metaKey: true })).toBeNull();
+    expect(press("3", -1, { altKey: true })).toBeNull();
   });
 
   it("leaves every other key alone", () => {
-    expect(colourMenuKey("7", -1)).toBeNull();
-    expect(colourMenuKey("a", 0)).toBeNull();
-    expect(colourMenuKey("Tab", 0)).toBeNull();
+    expect(press("7")).toBeNull();
+    expect(press("a", 0)).toBeNull();
   });
 });
 
-describe("cleanColourNames", () => {
-  it("trims names and drops the empty ones", () => {
-    expect(cleanColourNames({ iris: "  ci ", rose: "   ", teal: "" })).toEqual({ iris: "ci" });
-  });
-
-  it("drops a name that is the hue's own, in any case", () => {
-    expect(cleanColourNames({ moss: "moss", clay: "CLAY", plum: "plums" })).toEqual({ plum: "plums" });
-  });
-
-  it("drops names for colours it doesn't know", () => {
-    expect(cleanColourNames({ red: "urgent", teal: "ui" })).toEqual({ teal: "ui" });
+describe("rowPreview", () => {
+  it("previews a colour row's colour, no colour on its row, and nothing on Rename", () => {
+    expect(rowPreview(0)).toBe("rose");
+    expect(rowPreview(5)).toBe("plum");
+    expect(rowPreview(NO_COLOUR_ROW)).toBeNull();
+    expect(rowPreview(RENAME_ROW)).toBeUndefined();
+    expect(rowPreview(-1)).toBeUndefined();
   });
 });
 

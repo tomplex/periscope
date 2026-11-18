@@ -85,30 +85,42 @@ describe("notify prefs", () => {
 });
 
 describe("tab colours", () => {
-  it("saves a pane's colour on its annotation, and sends \"\" to remove it", async () => {
+  const echoColour = async (_label, _path, opts) => ({ ok: true, annotation: { colour: JSON.parse(opts.body).colour || null } });
+
+  it("shows a picked colour at once, saves it on the pane's annotation, and sends \"\" to remove it", async () => {
     await prefs.loadPrefs();
-    apiCall.mockImplementation(async (_label, _path, opts) => ({ ok: true, annotation: { colour: JSON.parse(opts.body).colour || null } }));
-    await prefs.setTabColour("p1", "teal");
+    apiCall.mockImplementation(echoColour);
+    const saving = prefs.setTabColour("p1", "sky");
+    // The card repaints before the PUT answers.
+    expect(prefs.getTabColour("p1")).toBe("sky");
+    await saving;
     const [, path, opts] = apiCall.mock.calls[0];
-    expect([path, opts.method, JSON.parse(opts.body)]).toEqual(["/api/prefs/windows/p1", "PUT", { colour: "teal" }]);
-    expect(prefs.getTabColour("p1")).toBe("teal");
+    expect([path, opts.method, JSON.parse(opts.body)]).toEqual(["/api/prefs/windows/p1", "PUT", { colour: "sky" }]);
     await prefs.setTabColour("p1", null);
     expect(JSON.parse(apiCall.mock.calls[1][2].body)).toEqual({ colour: "" });
     expect(prefs.getTabColour("p1")).toBeNull();
+  });
+
+  it("puts the colour back when the save fails", async () => {
+    await prefs.loadPrefs();
+    prefs.prefsSignal.value = { ...prefs.prefsSignal.value, windows: { p1: { colour: "rose" } } };
+    apiCall.mockResolvedValue(null);
+    expect(await prefs.setTabColour("p1", "moss")).toBe(false);
+    expect(prefs.getTabColour("p1")).toBe("rose");
   });
 
   it("names a colour by the user's name, else by its hue", async () => {
     server = { tab_colour_names: { iris: "ci" } };
     await prefs.loadPrefs();
     expect(prefs.getTabColourName("iris")).toBe("ci");
-    expect(prefs.getTabColourName("teal")).toBe("Teal");
+    expect(prefs.getTabColourName("sky")).toBe("Sky");
   });
 
-  it("writes the whole map of names, cleaned, so the server's top-level merge keeps none it dropped", async () => {
-    server = { tab_colour_names: { iris: "ci", teal: "ui" } };
+  it("sends the names as typed and keeps the server's cleaned reply", async () => {
     await prefs.loadPrefs();
-    await prefs.setTabColourNames({ iris: "  ci ", teal: "", moss: "Moss" });
-    expect(JSON.parse(apiCall.mock.calls[0][2].body)).toEqual({ tab_colour_names: { iris: "ci" } });
+    apiCall.mockResolvedValue({ ok: true, ui: { tab_colour_names: { iris: "ci" } } });
+    await prefs.setTabColourNames({ iris: "  ci ", sky: "", moss: "Moss" });
+    expect(JSON.parse(apiCall.mock.calls[0][2].body)).toEqual({ tab_colour_names: { iris: "  ci ", sky: "", moss: "Moss" } });
     expect(prefs.getTabColourNames()).toEqual({ iris: "ci" });
   });
 

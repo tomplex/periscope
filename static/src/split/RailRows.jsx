@@ -23,7 +23,7 @@ import { waitTier } from "./attention.js";
 import { ctxClass } from "./ctxBand.js";
 import { linearTicket } from "./linearTicket.js";
 import { canOpenInEditor, openInEditorTitle } from "./openInEditor.js";
-import { openTabColourMenu, shownTabColour, tabColourClass } from "./TabColourMenu.jsx";
+import { isTabColourMenuOpen, openTabColourMenu, shownTabColour, tabColourClass } from "./TabColourMenu.jsx";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
 // quiet) and the one-liner no longer reflects "now".
@@ -234,6 +234,8 @@ export function PaneRow({
       draggable
       onClick={() => onSelect(k)}
       onContextMenu={(e) => {
+        // A link and a text field keep the browser's own menu: Copy Link, Paste.
+        if (e.target.closest("a, input, textarea")) return;
         e.preventDefault();
         openTabColourMenu(w, { left: e.clientX, right: e.clientX, top: e.clientY, bottom: e.clientY });
       }}
@@ -262,18 +264,19 @@ export function PaneRow({
               they fade in just left of the PR chip and age, which stay
               readable and clickable on hover. */}
           <div class="pane-actions">
-            {/* Re-open this pane's session on another subscription. Labeled with
-                the destination, never the current account: "→ B" is unambiguous
-                where a bare "move" is not. Hover-only because it's a rare,
-                deliberate act — unlike the account chip, which is orientation. */}
             <button
               class="rail-colour"
               title={colour ? `colour: ${getTabColourName(colour)} — change it` : "colour this tab"}
               aria-haspopup="menu"
+              aria-expanded={isTabColourMenuOpen(w.pid)}
               onClick={(e) => { e.stopPropagation(); openTabColourMenu(w, e.currentTarget.getBoundingClientRect()); }}
             >
               <span class={`tab-colour-swatch${colour ? ` tab-colour-${colour}` : " is-empty"}`} aria-hidden="true"></span>
             </button>
+            {/* Re-open this pane's session on another subscription. Labeled with
+                the destination, never the current account: "→ B" is unambiguous
+                where a bare "move" is not. Hover-only because it's a rare,
+                deliberate act — unlike the account chip, which is orientation. */}
             {moveAcct && (
               <button
                 class="rail-move-acct"

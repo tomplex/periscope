@@ -6,7 +6,7 @@ import { getTabTint, setTabTint } from "../prefs.js";
 import { TAB_TINTS } from "../tabColours.js";
 
 const PREVIEW = [
-  { colour: "teal", blip: "working", name: "rail-member-cards" },
+  { colour: "sky", blip: "working", name: "rail-member-cards" },
   { colour: "clay", blip: "idle", name: "config-migration" },
   { colour: null, blip: "done", name: "tc-collision-demo" },
 ];
@@ -30,7 +30,7 @@ export function TabColourPicker() {
       <legend>Tab colours</legend>
       <div class="tab-tint-options">
         {TAB_TINTS.map((t) => (
-          <label key={t.id} class="tab-tint-option">
+          <label key={t.id} class="settings-tile tab-tint-option">
             <input type="radio" name="tab-tint" value={t.id} checked={t.id === current}
                    onChange={() => setTabTint(t.id)} />
             <Preview wash={t.wash} />

@@ -16,7 +16,7 @@
 import { signal } from "@preact/signals";
 import { critterById } from "./chrome/critters.js";
 import { fontById } from "./fonts.js";
-import { cleanColourNames, TAB_COLOURS, tabTintById } from "./tabColours.js";
+import { TAB_COLOURS, tabTintById } from "./tabColours.js";
 import { apiCall } from "./util.js";
 
 // The cache mirrors the server's state.json shape. `loaded` flips to true
@@ -210,9 +210,10 @@ export function togglePinnedFile(pid, path) {
 }
 
 // ── Tab colours (tabColours.js) ───────────────────────────────────────────
-// A pane's colour rides its annotation, so it lives and dies with the pane's
-// notes and tags. The colours' names and the tint are ui prefs, one set for
-// every pane. "" removes a pane's colour on the wire.
+// A pane's colour rides its window annotation, like its pinned files, so it
+// goes when that entry is reaped (30 days unseen, pids._gc_windows). The
+// colours' names and the tint are ui prefs, one set for every pane. "" removes
+// a pane's colour on the wire.
 
 export function getTabColour(pid) {
   return P().windows[pid]?.colour || null;
@@ -230,9 +231,10 @@ export function getTabColourNames() {
   return { ...(P().ui?.tab_colour_names || {}) };
 }
 
-// The whole map each time: update_ui merges only top-level keys.
+// The whole map, as typed: update_ui merges only top-level keys, and the
+// server cleans it; patchUI keeps the cleaned reply.
 export function setTabColourNames(names) {
-  return patchUI({ tab_colour_names: cleanColourNames(names) });
+  return patchUI({ tab_colour_names: names });
 }
 
 // Settings → Tab colours. Unset, or an id no longer in the list, is Default.

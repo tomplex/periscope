@@ -13,6 +13,7 @@ import {
 } from "../../store.js";
 import { prefsSignal } from "../../prefs.js";
 import { PaneHeader } from "../Detail.jsx";
+import { closeTabColourMenu, openTabColourMenu } from "../TabColourMenu.jsx";
 import { Rail } from "../Rail.jsx";
 
 const aff = (kind, label = null) => ({ kind, label });
@@ -554,14 +555,19 @@ describe("<Rail> tab colours", () => {
   };
   const withPrefs = (windowPrefs, ui = {}) => { prefsSignal.value = { ...prefsSignal.value, windows: windowPrefs, ui }; };
   const tinted = (html, cls) => html.match(new RegExp(`class="${cls}[^"]* tab-colour tab-colour-(\\w+)`, "g")) || [];
-  afterEach(() => { withPrefs({}); railSelection.value = null; });
+  afterEach(() => {
+    closeTabColourMenu({ refocus: false });
+    vi.unstubAllGlobals();
+    withPrefs({});
+    railSelection.value = null;
+  });
 
   it("tints a coloured pane's card and leaves the others plain", () => {
     twoPanes();
-    withPrefs({ p1: { colour: "teal" } });
+    withPrefs({ p1: { colour: "sky" } });
     const html = render(<Rail />);
     expect(tinted(html, "rail-row child-row pane-row")).toHaveLength(1);
-    expect(html).toContain('class="tab-colour-swatch tab-colour-teal"');
+    expect(html).toContain('class="tab-colour-swatch tab-colour-sky"');
     expect(html).toContain('class="tab-colour-swatch is-empty"');
     expect(html).toContain('title="colour this tab"');
   });
@@ -591,5 +597,18 @@ describe("<Rail> tab colours", () => {
     expect(tinted(html, "next-card pane-blip-asks")).toHaveLength(1);
     expect(tinted(html, "rail-row attn-row attn-pinned")).toHaveLength(1);
     expect(html).not.toMatch(/class="blip[^"]*tab-colour/);
+  });
+
+  it("opens the menu on the pane's colour, with each colour's name and count", () => {
+    twoPanes();
+    withPrefs({ p1: { colour: "iris" }, p2: { colour: "iris" } }, { tab_colour_names: { iris: "ci" } });
+    vi.stubGlobal("document", { activeElement: null });
+    openTabColourMenu(windows.value[0], { left: 10, right: 10, top: 10, bottom: 10 });
+    const html = render(<Rail />);
+    expect(html).toContain("Colour for <b>worker</b>");
+    expect(html).toMatch(/aria-checked="true"[^>]*class="tb-dd-item tab-colour-item active"[^>]*>.*?ci<span class="tab-colour-hue">Iris<\/span>/);
+    expect(html).toContain('title="2 tabs in this colour">2</span>');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html.match(/role="menuitemradio"/g)).toHaveLength(7);   // six colours + No colour
   });
 });
