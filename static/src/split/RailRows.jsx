@@ -14,7 +14,7 @@
 // <input>; Enter/blur commit, Escape cancels. A `settled` guard reproduces the
 // vanilla Enter-then-blur double-submit protection.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { accountLabel, moveAccountTarget, multiAccount } from "../accounts.js";
+import { accountLabel, multiAccount } from "../accounts.js";
 import { blipReason } from "../notify/copy.js";
 import { getTabColourName } from "../prefs.js";
 import { profileLabel } from "../profiles.js";
@@ -22,8 +22,7 @@ import { AGENT_META, memHint, paneLabel, prStateMeta, prUrl, relTime } from "../
 import { waitTier } from "./attention.js";
 import { ctxClass } from "./ctxBand.js";
 import { linearTicket } from "./linearTicket.js";
-import { canOpenInEditor, openInEditorTitle } from "./openInEditor.js";
-import { isTabColourMenuOpen, openTabColourMenu, shownTabColour, tabColourClass } from "./TabColourMenu.jsx";
+import { isPaneMenuOpen, openPaneMenu, shownTabColour, tabColourClass } from "./PaneMenu.jsx";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
 // quiet) and the one-liner no longer reflects "now".
@@ -153,11 +152,12 @@ function blipWhy(w, blip) {
 // pane's pulses. Lineage (↳ spawned-by) and git-dirty are deliberately NOT
 // here — both live in the detail header. `showBranch` is false inside a
 // branch cluster, whose header already names it. The user's tab colour tints
-// the whole card; its button and a right-click open the colour menu.
+// the whole card. Hover shows pin, ⋯ and kill; ⋯ and a right-click open the
+// pane menu (PaneMenu.jsx) with the rest.
 export function PaneRow({
   w, chip, blip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
   pinned, onTogglePin, waitingSince, showBranch,
-  onMoveAccount, onToggleNamePin, editor, onOpenInEditor,
+  onMoveAccount, onToggleNamePin, onOpenInEditor,
 }) {
   const k = `pane:${w.pid}`;
   const sel = k === selectedKey;
@@ -178,10 +178,8 @@ export function PaneRow({
   const why = blipWhy(w, blip);
   // A compact row shows context only once it's in a warning band.
   const ctxCls = ctxClass(w);
-  // Capacity pooling: one subscription runs out before the others, and the
-  // work stuck on the exhausted one has to keep going. null on shell panes and
-  // on an unrecognised config dir (see moveAccountTarget).
-  const moveAcct = moveAccountTarget(w);
+  const menuActions = { onTogglePin, onMoveAccount, onToggleNamePin, onOpenInEditor, onClose };
+  const menuOpen = isPaneMenuOpen(w.pid);
 
   // PR + Linear as clickable chips: PR on line 1 (compact) or the footer
   // (expanded), Linear on the bottom line or the footer. stop-prop so
@@ -229,7 +227,7 @@ export function PaneRow({
 
   return (
     <div
-      class={`rail-row child-row pane-row pane-blip-${blip}${expanded ? " pane-expanded" : ""}${sel ? " selected" : ""}${tabColourClass(colour)}${dimCls}${drop}`}
+      class={`rail-row child-row pane-row pane-blip-${blip}${expanded ? " pane-expanded" : ""}${sel ? " selected" : ""}${tabColourClass(colour)}${menuOpen ? " is-menu-open" : ""}${dimCls}${drop}`}
       data-drop-pos={dropPos || undefined}
       draggable
       onClick={() => onSelect(k)}
@@ -237,7 +235,7 @@ export function PaneRow({
         // A link and a text field keep the browser's own menu: Copy Link, Paste.
         if (e.target.closest("a, input, textarea")) return;
         e.preventDefault();
-        openTabColourMenu(w, { left: e.clientX, right: e.clientX, top: e.clientY, bottom: e.clientY });
+        openPaneMenu(w, { left: e.clientX, right: e.clientX, top: e.clientY, bottom: e.clientY }, menuActions);
       }}
       {...dragProps}
     >
@@ -247,9 +245,9 @@ export function PaneRow({
           ? <span class={`rail-icon ${agentMeta.className}`} title={agentMeta.label}>{agentMeta.glyph}</span>
           : <span class="rail-icon icon-shell">$</span>}
         <RailLabel label={label} kind="pane" renameable onCommit={onRename} />
-        {/* At-rest pinned flag — the hover actions take no width, so this keeps
-            the "this tab is pinned" signal visible without one. Hidden on hover
-            (the real toggle is in the action overlay). */}
+        {/* At-rest pinned flag: the hover actions take no width at rest, so
+            this keeps the "this tab is pinned" signal visible. Hidden on hover,
+            where the ★ toggle shows instead. */}
         {pinned && <span class="pane-pin-flag" title="pinned">★</span>}
         {expanded && model && <span class="pane-model" title={w.model}>{model}</span>}
         {mh && <span class={`rail-mem ${mh.cls}`} title={mh.title}>↻{mh.label}</span>}
@@ -260,57 +258,21 @@ export function PaneRow({
           >{ctxChipText(w)}</span>
         )}
         <div class="pane-row-end">
-          {/* Hover-only actions, zero footprint at rest (absolute + faded):
-              they fade in just left of the PR chip and age, which stay
-              readable and clickable on hover. */}
+          {/* Hover actions: pin, ⋯ (the pane menu) and kill. They take room
+              on the line on hover, so they never sit on the name. */}
           <div class="pane-actions">
-            <button
-              class="rail-colour"
-              title={colour ? `colour: ${getTabColourName(colour)} — change it` : "colour this tab"}
-              aria-haspopup="menu"
-              aria-expanded={isTabColourMenuOpen(w.pid)}
-              onClick={(e) => { e.stopPropagation(); openTabColourMenu(w, e.currentTarget.getBoundingClientRect()); }}
-            >
-              <span class={`tab-colour-swatch${colour ? ` tab-colour-${colour}` : " is-empty"}`} aria-hidden="true"></span>
-            </button>
-            {/* Re-open this pane's session on another subscription. Labeled with
-                the destination, never the current account: "→ B" is unambiguous
-                where a bare "move" is not. Hover-only because it's a rare,
-                deliberate act — unlike the account chip, which is orientation. */}
-            {moveAcct && (
-              <button
-                class="rail-move-acct"
-                title={`re-open this session on Claude account ${moveAcct.label} — spawns a resumed pane there and leaves this one running`}
-                onClick={(e) => { e.stopPropagation(); onMoveAccount?.(moveAcct.id); }}
-              >→ {moveAcct.label}</button>
-            )}
             <button
               class={`rail-pin${pinned ? " pinned" : ""}`}
               title={pinned ? "unpin" : "pin"}
               onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
             >{pinned ? "★" : "☆"}</button>
-            {/* Distinct from the ★ above: that pins the tab into the PINNED
-                section, this freezes its NAME against the narrator's auto-rename.
-                Renaming pins on its own, so the useful direction here is the
-                release — plus keeping a generated name you happen to like. */}
             <button
-              class={`rail-name-pin${w.name_pinned ? " pinned" : ""}`}
-              title={w.name_pinned
-                ? "name pinned — click to let periscope rename this tab again"
-                : "freeze this name — periscope won't rename this tab"}
-              onClick={(e) => { e.stopPropagation(); onToggleNamePin?.(); }}
-            >{w.name_pinned ? "🔒" : "🔓"}</button>
-            {/* Opens the pane's WORKTREE ROOT (the server resolves the git
-                toplevel), not its cwd — an editor treats the opened folder as the
-                project, so a pane sitting in a subdirectory would get a fragment
-                of the tree. Hidden entirely for panes outside a repo. */}
-            {canOpenInEditor(w, editor) && (
-              <button
-                class="rail-editor"
-                title={openInEditorTitle(w, editor)}
-                onClick={(e) => { e.stopPropagation(); onOpenInEditor?.(); }}
-              >↗</button>
-            )}
+              class="rail-more"
+              title="more: colour, move account, freeze name, editor"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onClick={(e) => { e.stopPropagation(); openPaneMenu(w, e.currentTarget.getBoundingClientRect(), menuActions); }}
+            >⋯</button>
             <button
               class="rail-close"
               title="kill this tab"

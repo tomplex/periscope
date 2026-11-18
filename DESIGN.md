@@ -244,8 +244,7 @@ Six colours the user gives a pane, to group sessions by their own meaning: Rose
   strength (`--tab-wash`: Quiet 9%, Default 13%, Strong 18%).
 - The selected card names its colour in a chip, in the colour, like the account chip. The
   user can rename each colour, for example Iris → "ci".
-- A swatch is a bar with 2px corners: 14 × 9px in the colour menu, 12 × 8px on the card's
-  colour button.
+- A swatch is a bar with 2px corners, 14 × 9px, in the pane menu's strip.
 
 ### Status (the blips)
 - **Ping Orange** (`s-needs`, needs input): the most urgent state. It colours the pane's
@@ -477,10 +476,11 @@ forward on hover or selection.
   card shows a dashed "drop a tab here" landing area.
 - **Pane card**: a 4px-cornered row at rest, which lifts on expansion (see Elevation). The
   state stripe on its left edge carries the pane's state. Its first line ends with the PR
-  chip and the row's age; on hover the pin and close actions fade in just left of them, on
-  a gradient over the name's tail, so the chip stays clickable and the age stays in view.
-  A tab colour tints the card (see Tab colours); its hover actions open with the colour
-  button, and a right-click on the card opens the same colour menu.
+  chip and the row's age. On hover, three 18px actions join the line just left of them:
+  ☆ pin, ⋯ more and × kill, in `fg-2`. They take real width and the name shortens to fit,
+  so no control sits on the name, the chip stays clickable and the age stays in view. ⋯
+  and a right-click on the card open the pane menu. A tab colour tints the card (see Tab
+  colours).
 - **Modal**: `bg-modal` with 10px corners and the Modal shadow. It fills most of the viewport
   (96vw × 94vh) and the user can resize it.
 
@@ -505,10 +505,20 @@ forward on hover or selection.
 - **Menu**: a `bg-1` panel with a 1px `line` edge, 6px corners and 4px padding. Items are
   12px, 6px × 10px, with 4px corners. Hover fills with `bg-2` and turns the text `fg-0`;
   the active item gets the 18% Periscope Glass wash.
-- **Colour menu**: the Menu, fixed where it opened and 236px wide, headed "Colour for
-  <pane>". One row per tab colour (swatch, name, the count of tabs in it, a 1–6 keycap),
-  then No colour (0) and Rename colours… (R). The row under the pointer or the cursor
-  previews on the card. Tab, Escape or focus leaving it closes it.
+- **Pane menu**: the Menu, fixed where it opened and 236px wide, headed "Actions for
+  <pane>". It holds what the card's hover leaves out:
+  - a strip of seven swatches (the six tab colours, then No colour; keys 1–6 and 0). The
+    one under the pointer or the cursor previews on the card. A readout under the strip
+    names it, with its hue when renamed and its count of tabs, because the strip has no
+    room for names.
+  - Rename colours… (R), then Pin tab (P), Move to account B (M), Freeze name (N, a
+    checkbox) and Open in the editor (E). Move and the editor show only when the pane can
+    take them.
+  - Kill tab, last and alone, red on hover. It has no key, so a stray key press can't close
+    a tab, and it still asks to confirm.
+
+  Up and Down move between the strip and the items, Left and Right along the strip. Tab,
+  Escape or focus leaving it closes it.
 - **Omnibox row**: transparent at rest. The active row gets a 16% Periscope Glass wash and a
   2px Periscope Glass inset left edge, and its glyph turns Periscope Glass.
 
@@ -565,6 +575,8 @@ gadget.
   thing, it doesn't ship.
 - **Don't** put a tab colour on a stripe, glyph or blip, or draw its swatch as a square or a
   dot. Those shapes carry state.
+- **Don't** lay a control over text. A hover action takes its own room and the text
+  shortens; past three on a line, the rest go in a menu.
 - **Don't** reach for SaaS analytics vocabulary: KPI tiles, decorative charts, gradient hero
   cards, generous empty spacing around a few numbers.
 - **Don't** go neon hacker terminal: no green on black, glow, scanlines or "cyber" styling.

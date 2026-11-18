@@ -13,7 +13,7 @@ import {
 } from "../../store.js";
 import { prefsSignal } from "../../prefs.js";
 import { PaneHeader } from "../Detail.jsx";
-import { closeTabColourMenu, openTabColourMenu } from "../TabColourMenu.jsx";
+import { closePaneMenu, openPaneMenu } from "../PaneMenu.jsx";
 import { Rail } from "../Rail.jsx";
 
 const aff = (kind, label = null) => ({ kind, label });
@@ -155,7 +155,7 @@ describe("<Rail> render smoke", () => {
     expect(html).toContain(">full</span>");
   });
 
-  it("offers the move-account action on Claude panes only, labeled with its destination", () => {
+  it("offers the move-account action in the pane menu, on Claude panes only, labeled with its destination", () => {
     projects.value = [];
     tracks.value = [];
     const pane = (over) => ({
@@ -173,11 +173,19 @@ describe("<Rail> render smoke", () => {
 
     accounts.value = TWO_ACCOUNTS;
     moveTargets.value = { default: "b", b: "default" };
-    const html = render(<Rail />);
+    const menuFor = (pid) => {
+      vi.stubGlobal("document", { activeElement: null });
+      openPaneMenu(windows.value.find((w) => w.pid === pid), { left: 0, right: 0, top: 0, bottom: 0 }, {});
+      const html = render(<Rail />);
+      closePaneMenu({ refocus: false });
+      vi.unstubAllGlobals();
+      return html;
+    };
 
-    expect(html.split("rail-move-acct").length - 1).toBe(2);  // not on the shell pane
-    expect(html).toContain("→ B");   // the A pane's destination
-    expect(html).toContain("→ A");   // the B pane's destination
+    expect(render(<Rail />)).not.toContain("Move to account");   // never on the card itself
+    expect(menuFor("onA")).toContain("Move to account B");       // the A pane's destination
+    expect(menuFor("onB")).toContain("Move to account A");       // the B pane's destination
+    expect(menuFor("sh")).not.toContain("Move to account");      // not on the shell pane
   });
 
   it("renders an EMPTY goal track from the registry with its +", () => {
@@ -556,7 +564,7 @@ describe("<Rail> tab colours", () => {
   const withPrefs = (windowPrefs, ui = {}) => { prefsSignal.value = { ...prefsSignal.value, windows: windowPrefs, ui }; };
   const tinted = (html, cls) => html.match(new RegExp(`class="${cls}[^"]* tab-colour tab-colour-(\\w+)`, "g")) || [];
   afterEach(() => {
-    closeTabColourMenu({ refocus: false });
+    closePaneMenu({ refocus: false });
     vi.unstubAllGlobals();
     withPrefs({});
     railSelection.value = null;
@@ -567,9 +575,16 @@ describe("<Rail> tab colours", () => {
     withPrefs({ p1: { colour: "sky" } });
     const html = render(<Rail />);
     expect(tinted(html, "rail-row child-row pane-row")).toHaveLength(1);
-    expect(html).toContain('class="tab-colour-swatch tab-colour-sky"');
-    expect(html).toContain('class="tab-colour-swatch is-empty"');
-    expect(html).toContain('title="colour this tab"');
+  });
+
+  it("offers pin, more and kill on a card's hover, and the rest only in the pane menu", () => {
+    twoPanes();
+    const html = render(<Rail />);
+    const buttons = [...html.matchAll(/<div class="pane-actions">(.*?)<\/div>/g)]
+      .map((m) => [...m[1].matchAll(/<button class="([\w-]+)/g)].map((b) => b[1]));
+    expect(buttons).toEqual([["rail-pin", "rail-more", "rail-close"], ["rail-pin", "rail-more", "rail-close"]]);
+    expect(html).not.toContain("tab-colour-swatch");
+    expect(html).toContain('aria-haspopup="menu" aria-expanded="false"');
   });
 
   it("names the colour on the selected card, by the name the user gave it", () => {
@@ -578,7 +593,6 @@ describe("<Rail> tab colours", () => {
     withPrefs({ p1: { colour: "iris" } }, { tab_colour_names: { iris: "ci" } });
     let html = render(<Rail />);
     expect(html).toContain('<span class="pane-pill pane-pill-colour" title="this tab\'s colour">ci</span>');
-    expect(html).toContain('title="colour: ci — change it"');
     withPrefs({ p1: { colour: "iris" } });
     html = render(<Rail />);
     expect(html).toContain('title="this tab\'s colour">Iris</span>');
@@ -599,16 +613,18 @@ describe("<Rail> tab colours", () => {
     expect(html).not.toMatch(/class="blip[^"]*tab-colour/);
   });
 
-  it("opens the menu on the pane's colour, with each colour's name and count", () => {
+  it("opens the pane menu on the pane's colour, naming it with its count", () => {
     twoPanes();
     withPrefs({ p1: { colour: "iris" }, p2: { colour: "iris" } }, { tab_colour_names: { iris: "ci" } });
     vi.stubGlobal("document", { activeElement: null });
-    openTabColourMenu(windows.value[0], { left: 10, right: 10, top: 10, bottom: 10 });
+    openPaneMenu(windows.value[0], { left: 10, right: 10, top: 10, bottom: 10 }, {});
     const html = render(<Rail />);
-    expect(html).toContain("Colour for <b>worker</b>");
-    expect(html).toMatch(/aria-checked="true"[^>]*class="tb-dd-item tab-colour-item active"[^>]*>.*?ci<span class="tab-colour-hue">Iris<\/span>/);
-    expect(html).toContain('title="2 tabs in this colour">2</span>');
+    expect(html).toContain("Actions for <b>worker</b>");
+    expect(html).toMatch(/aria-checked="true" aria-label="ci"[^>]*class="pane-menu-swatch active"/);
+    expect(html).toContain("<b>ci</b><span>Iris</span><span>· 2 tabs</span>");
     expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("rail-row child-row pane-row pane-blip-idle tab-colour tab-colour-iris is-menu-open");
     expect(html.match(/role="menuitemradio"/g)).toHaveLength(7);   // six colours + No colour
+    expect(html).toMatch(/role="menuitemcheckbox" aria-checked="false"><span class="pane-menu-label">Freeze name/);
   });
 });
