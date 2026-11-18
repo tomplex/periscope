@@ -14,6 +14,7 @@ import { alertItems, dismissalFor, markDoneCardsSeen, nextEntries, openNextEntry
 import { buildActivity, prunedStateDismissals, resolvePinned, waitTier } from "./attention.js";
 import { useFrozenRows } from "./layoutFreeze.js";
 import { SectionHeader } from "./SectionHeader.jsx";
+import { shownTabColour, tabColourClass } from "./TabColourMenu.jsx";
 
 // Cards shown before the rest fold into "+N".
 const NEXT_SHOWN = 3;
@@ -36,7 +37,7 @@ function NextCard({ e, blip, track, nowS, onOpen, onDismiss }) {
   const { lead, code, reason } = nextWords(e);
   const meta = AGENT_META[e.w?.agent] || AGENT_META.claude;
   return (
-    <div class={`next-card pane-blip-${blip}`} onClick={onOpen}>
+    <div class={`next-card pane-blip-${blip}${tabColourClass(e.w && shownTabColour(e.w.pid))}`} onClick={onOpen}>
       <span class="pane-stripe" aria-hidden="true"></span>
       <div class="next-head">
         <span class={`rail-icon ${meta.className}`} title={meta.label}>{meta.glyph}</span>
@@ -173,7 +174,7 @@ export function PinnedSection({ blipOf, trackOf }) {
         onToggle={() => toggle("sec:pinned", collapsed)}
       />
       {!collapsed && pinned.map((w) => (
-        <div key={`pin:${w.pid}`} class="rail-row attn-row attn-pinned" onClick={() => selectPane(w)}>
+        <div key={`pin:${w.pid}`} class={`rail-row attn-row attn-pinned${tabColourClass(shownTabColour(w.pid))}`} onClick={() => selectPane(w)}>
           <span class={`blip blip-${blipOf(w)}`} aria-hidden="true"></span>
           <span class="attn-label">{paneLabel(w)}</span>
           <span class="attn-reason">{trackOf(w)}</span>

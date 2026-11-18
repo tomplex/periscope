@@ -16,12 +16,14 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { accountLabel, moveAccountTarget, multiAccount } from "../accounts.js";
 import { blipReason } from "../notify/copy.js";
+import { getTabColourName } from "../prefs.js";
 import { profileLabel } from "../profiles.js";
 import { AGENT_META, memHint, paneLabel, prStateMeta, prUrl, relTime } from "../util.js";
 import { waitTier } from "./attention.js";
 import { ctxClass } from "./ctxBand.js";
 import { linearTicket } from "./linearTicket.js";
 import { canOpenInEditor, openInEditorTitle } from "./openInEditor.js";
+import { openTabColourMenu, shownTabColour, tabColourClass } from "./TabColourMenu.jsx";
 
 // Narrator status dims after 15 min: the work moved on (or the pane went
 // quiet) and the one-liner no longer reflects "now".
@@ -150,7 +152,8 @@ function blipWhy(w, blip) {
 // (attention.paneBlip) rides the left stripe at both sizes; only an asking
 // pane's pulses. Lineage (↳ spawned-by) and git-dirty are deliberately NOT
 // here — both live in the detail header. `showBranch` is false inside a
-// branch cluster, whose header already names it.
+// branch cluster, whose header already names it. The user's tab colour tints
+// the whole card; its button and a right-click open the colour menu.
 export function PaneRow({
   w, chip, blip, selectedKey, onSelect, onClose, onRename, dim, dragProps, dropPos,
   pinned, onTogglePin, waitingSince, showBranch,
@@ -219,13 +222,21 @@ export function PaneRow({
   const branchRef = showBranch && w.branch && (
     <span class="pane-branch" title={`branch ${w.branch}`}><span class="icon-worktree">⎇</span> {w.branch}</span>
   );
+  const colour = shownTabColour(w.pid);
+  const colourChip = colour && (
+    <span class="pane-pill pane-pill-colour" title="this tab's colour">{getTabColourName(colour)}</span>
+  );
 
   return (
     <div
-      class={`rail-row child-row pane-row pane-blip-${blip}${expanded ? " pane-expanded" : ""}${sel ? " selected" : ""}${dimCls}${drop}`}
+      class={`rail-row child-row pane-row pane-blip-${blip}${expanded ? " pane-expanded" : ""}${sel ? " selected" : ""}${tabColourClass(colour)}${dimCls}${drop}`}
       data-drop-pos={dropPos || undefined}
       draggable
       onClick={() => onSelect(k)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        openTabColourMenu(w, { left: e.clientX, right: e.clientX, top: e.clientY, bottom: e.clientY });
+      }}
       {...dragProps}
     >
       <span class="pane-stripe" aria-hidden="true"></span>
@@ -255,6 +266,14 @@ export function PaneRow({
                 the destination, never the current account: "→ B" is unambiguous
                 where a bare "move" is not. Hover-only because it's a rare,
                 deliberate act — unlike the account chip, which is orientation. */}
+            <button
+              class="rail-colour"
+              title={colour ? `colour: ${getTabColourName(colour)} — change it` : "colour this tab"}
+              aria-haspopup="menu"
+              onClick={(e) => { e.stopPropagation(); openTabColourMenu(w, e.currentTarget.getBoundingClientRect()); }}
+            >
+              <span class={`tab-colour-swatch${colour ? ` tab-colour-${colour}` : " is-empty"}`} aria-hidden="true"></span>
+            </button>
             {moveAcct && (
               <button
                 class="rail-move-acct"
@@ -316,8 +335,9 @@ export function PaneRow({
           )}
         </div>
       )}
-      {expanded && (branchRef || w.pr || lin || ctxChipText(w) != null || acctChip || profChip) && (
+      {expanded && (colourChip || branchRef || w.pr || lin || ctxChipText(w) != null || acctChip || profChip) && (
         <div class="pane-foot">
+          {colourChip}
           {branchRef}
           {prChip}
           {linChip}

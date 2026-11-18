@@ -14,6 +14,7 @@ import { track } from "../track.js";
 import { FontPicker } from "./FontPicker.jsx";
 import { modalRequest } from "./modalRequest.js";
 import { NotifySettings } from "./NotifySettings.jsx";
+import { TabColourPicker } from "./TabColourPicker.jsx";
 import { TamaPicker } from "./TamaPicker.jsx";
 
 const open = signal(false);
@@ -108,6 +109,7 @@ export function SettingsModal() {
         </header>
         <form id="settings-form" onSubmit={handleSubmit}>
           <FontPicker />
+          <TabColourPicker />
           <TamaPicker />
           <NotifySettings />
           <label>

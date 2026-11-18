@@ -8,7 +8,7 @@ import { startMemtest } from "./memtest.js";
 import { DialogHost } from "./overlays/Dialog.jsx";
 import { Overlays } from "./overlays/Overlays.jsx";
 import { Toaster } from "./overlays/Toast.jsx";
-import { getFont, getLastSelected, loadPrefs } from "./prefs.js";
+import { getFont, getLastSelected, getTabTint, loadPrefs } from "./prefs.js";
 import { Split } from "./split/Split.jsx";
 import { railSelection } from "./store.js";
 import { track } from "./track.js";
@@ -38,6 +38,11 @@ async function boot() {
     const root = document.documentElement.style;
     root.setProperty("--sans", getFont("ui").stack);
     root.setProperty("--mono", getFont("code").stack);
+  });
+
+  // Settings → Tab colours: how much of a tab's colour goes into its card.
+  effect(() => {
+    document.documentElement.style.setProperty("--tab-wash", `${getTabTint().wash}%`);
   });
 
   // Restore the persisted rail selection. last_selected is an OBJECT in prefs;

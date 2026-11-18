@@ -83,3 +83,39 @@ describe("notify prefs", () => {
     expect(prefs.getNotifyPrefs()).toMatchObject({ done: false, usage: false, ci_failed: true });
   });
 });
+
+describe("tab colours", () => {
+  it("saves a pane's colour on its annotation, and sends \"\" to remove it", async () => {
+    await prefs.loadPrefs();
+    apiCall.mockImplementation(async (_label, _path, opts) => ({ ok: true, annotation: { colour: JSON.parse(opts.body).colour || null } }));
+    await prefs.setTabColour("p1", "teal");
+    const [, path, opts] = apiCall.mock.calls[0];
+    expect([path, opts.method, JSON.parse(opts.body)]).toEqual(["/api/prefs/windows/p1", "PUT", { colour: "teal" }]);
+    expect(prefs.getTabColour("p1")).toBe("teal");
+    await prefs.setTabColour("p1", null);
+    expect(JSON.parse(apiCall.mock.calls[1][2].body)).toEqual({ colour: "" });
+    expect(prefs.getTabColour("p1")).toBeNull();
+  });
+
+  it("names a colour by the user's name, else by its hue", async () => {
+    server = { tab_colour_names: { iris: "ci" } };
+    await prefs.loadPrefs();
+    expect(prefs.getTabColourName("iris")).toBe("ci");
+    expect(prefs.getTabColourName("teal")).toBe("Teal");
+  });
+
+  it("writes the whole map of names, cleaned, so the server's top-level merge keeps none it dropped", async () => {
+    server = { tab_colour_names: { iris: "ci", teal: "ui" } };
+    await prefs.loadPrefs();
+    await prefs.setTabColourNames({ iris: "  ci ", teal: "", moss: "Moss" });
+    expect(JSON.parse(apiCall.mock.calls[0][2].body)).toEqual({ tab_colour_names: { iris: "ci" } });
+    expect(prefs.getTabColourNames()).toEqual({ iris: "ci" });
+  });
+
+  it("reads the tint as Default until one is picked", async () => {
+    await prefs.loadPrefs();
+    expect(prefs.getTabTint().id).toBe("default");
+    await prefs.setTabTint("quiet");
+    expect(prefs.getTabTint()).toEqual({ id: "quiet", name: "Quiet", wash: 9 });
+  });
+});
