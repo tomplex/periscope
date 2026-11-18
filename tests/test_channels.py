@@ -2038,12 +2038,14 @@ def test_spawn_claude_sets_the_model_the_chooser_picked(mocker):
 
 
 def test_spawn_claude_with_prompt_pastes_and_tags(mocker, bracketed_paste, tmux_checked):
+    import uuid
+
     from periscope import channels, usage
     from periscope.launch_policy import Launch
 
-    mocker.patch.object(usage, "choose_launch", return_value=Launch("default", None, ""))
+    mocker.patch.object(usage, "choose_launch", return_value=Launch("b", None, ""))
 
-    mocker.patch("periscope.channels.tmux", return_value="%9")
+    tmux = mocker.patch("periscope.channels.tmux", return_value="%9")
     mocker.patch("periscope.channels._run", return_value=(0, ""))  # has-session ok
     mocker.patch("periscope.channels._tmux_mutate", return_value=(True, "4"))
     mocker.patch("periscope.channels.asyncio.sleep", new=AsyncMock())
@@ -2056,7 +2058,19 @@ def test_spawn_claude_with_prompt_pastes_and_tags(mocker, bracketed_paste, tmux_
 
     out = asyncio.run(channels.spawn_claude_with_prompt("/tmp/wt", "/dev/repo", "do the thing", session="sess"))
 
-    assert out == {"target": "sess:4", "session": "sess", "index": 4, "pid": "kid42", "pane_id": "%9"}
+    sid = out.pop("session_id")
+    assert str(uuid.UUID(sid)) == sid
+    assert out == {
+        "target": "sess:4",
+        "session": "sess",
+        "index": 4,
+        "pid": "kid42",
+        "pane_id": "%9",
+        "account": "b",
+    }
+    # The claude command line starts the session the spawn reports.
+    claude_lines = [c.args[3] for c in tmux.call_args_list if c.args[0] == "send-keys" and len(c.args) == 5]
+    assert len(claude_lines) == 1 and f"--session-id {sid}" in claude_lines[0]
     bracketed_paste.assert_called_once_with("sess:4", "do the thing")
     assert [c.args for c in tmux_checked.call_args_list] == [("send-keys", "-t", "sess:4", "Enter")]
     move.assert_called_once_with("kid42", "/dev/repo")

@@ -516,10 +516,12 @@ class SpawnFailed(Exception):
 
 class Spawned(TypedDict):
     target: str
-    session: str
+    session: str  # the tmux session
     index: int
     pid: str
     pane_id: str
+    session_id: str  # the Claude session, started with --session-id
+    account: str  # the account id the Claude runs on
 
 
 async def spawn_claude_with_prompt(
@@ -534,7 +536,8 @@ async def spawn_claude_with_prompt(
 ) -> Spawned:
     """Create a tmux window in `session` running `claude` in `cwd`, wait for
     its TUI, paste `prompt`, stamp a fresh @periscope_id, and (when given)
-    tag the pane into `track_id`. Shared by the spawn_claude MCP tool and
+    tag the pane into `track_id`. Claude starts with a new --session-id, which
+    the answer reports with the account. Shared by the spawn_claude MCP tool and
     branch_spawn (prepare, Linear start); everything caller-specific (provenance,
     rail placement, track precedence) stays with the caller.
 
@@ -600,7 +603,8 @@ async def spawn_claude_with_prompt(
     # dev-channels flag is what makes the spawned Claude connect back to
     # periscope's MCP socket.
     await asyncio.sleep(0.1)
-    claude_cmd = shlex.join(config.build_agent_command("claude", cwd=cwd, effort=launch.effort))
+    session_id = str(uuid.uuid4())
+    claude_cmd = shlex.join(config.build_agent_command("claude", cwd=cwd, effort=launch.effort, session_id=session_id))
     tmux("send-keys", "-t", target, claude_cmd, "Enter")
 
     # Dismiss the consent dialog (see _dev_channels_consent_*).
@@ -658,7 +662,15 @@ async def spawn_claude_with_prompt(
         set_window_fields(pid, name_pinned=True)
     if pid and track_id:
         tracks.move_pane(pid, track_id)
-    return {"target": target, "session": session, "index": index, "pid": pid, "pane_id": pane_id}
+    return {
+        "target": target,
+        "session": session,
+        "index": index,
+        "pid": pid,
+        "pane_id": pane_id,
+        "session_id": session_id,
+        "account": launch.account,
+    }
 
 
 async def _do_spawn_claude_tool(pane: str, arguments: dict):
