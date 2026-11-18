@@ -16,7 +16,16 @@ BODY = {
     "title": "Fix it",
     "prompt": "Read Linear ticket ENG-1.",
 }
-SPAWNED = {"target": "api-wt:2", "session": "api-wt", "index": 2, "pid": "k", "pane_id": "%5"}
+SID = "3f2a9c1e-5b7d-4e2a-9f10-2c4d6e8a0b1c"
+SPAWNED = {
+    "target": "api-wt:2",
+    "session": "api-wt",
+    "index": 2,
+    "pid": "k",
+    "pane_id": "%5",
+    "session_id": SID,
+    "account": "b",
+}
 # The guard's key: prepare knows a repo only by its label, and both routes share the guard.
 KEY = ("api", BODY["branch"])
 
@@ -45,6 +54,12 @@ def _env(monkeypatch, mocker, windows):
     mocker.patch("periscope.open_ops.list_windows", return_value=[])
     mocker.patch("periscope.tracks.repo_default_track", return_value="/repos/api")
     mocker.patch("periscope.open_ops.resolve_worktree_session", return_value=("api-wt", {"repo": "/repos/api"}))
+
+
+@pytest.fixture(autouse=True)
+def email(mocker):
+    """The spawned Claude's account email; never the real ~/.claude.json."""
+    return mocker.patch("periscope.store.account_email", return_value="you@example.com")
 
 
 @pytest.fixture
@@ -88,10 +103,18 @@ def prepare(client, monkeypatch, mocker, tmp_path):
     return post
 
 
-def test_start_spawns_claude_in_the_worktree(client, worktree, spawn, place):
+def test_start_spawns_claude_in_the_worktree(client, worktree, spawn, place, email):
     r = client.post("/api/linear/start", json=BODY)
     assert r.status_code == 200
-    assert r.json() == {"mode": "spawned", "pid": "k", "path": "/repos/api-wt", "reused": False}
+    assert r.json() == {
+        "mode": "spawned",
+        "pid": "k",
+        "path": "/repos/api-wt",
+        "reused": False,
+        "session_id": SID,
+        "email": "you@example.com",
+    }
+    email.assert_called_once_with("b")
     worktree.assert_called_once_with("/repos/api", "me/eng-1-fix-it")
     args, kwargs = spawn.call_args
     assert args == ("/repos/api-wt", "/repos/api", "Read Linear ticket ENG-1.")
