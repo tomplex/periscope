@@ -43,6 +43,7 @@ import { BranchRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
 import { mergeLiveAndPrefs, paneChip, reviewRowsByTrack, trackKind, trackLabel } from "./railTree.js";
 import { SectionHeader } from "./SectionHeader.jsx";
 import { SonarStrip } from "./SonarStrip.jsx";
+import { TabColourMenu } from "./TabColourMenu.jsx";
 
 // Bridge to the launcher modal. A track header's + opens it via
 // window.__periscopeOpenLauncher; no-op if nothing is wired yet.
@@ -595,6 +596,7 @@ export function Rail() {
         );
       })}
       <ActivitySection />
+      <TabColourMenu />
     </aside>
   );
 }

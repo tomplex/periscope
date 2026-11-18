@@ -83,3 +83,51 @@ describe("notify prefs", () => {
     expect(prefs.getNotifyPrefs()).toMatchObject({ done: false, usage: false, ci_failed: true });
   });
 });
+
+describe("tab colours", () => {
+  const echoColour = async (_label, _path, opts) => ({ ok: true, annotation: { colour: JSON.parse(opts.body).colour || null } });
+
+  it("shows a picked colour at once, saves it on the pane's annotation, and sends \"\" to remove it", async () => {
+    await prefs.loadPrefs();
+    apiCall.mockImplementation(echoColour);
+    const saving = prefs.setTabColour("p1", "sky");
+    // The card repaints before the PUT answers.
+    expect(prefs.getTabColour("p1")).toBe("sky");
+    await saving;
+    const [, path, opts] = apiCall.mock.calls[0];
+    expect([path, opts.method, JSON.parse(opts.body)]).toEqual(["/api/prefs/windows/p1", "PUT", { colour: "sky" }]);
+    await prefs.setTabColour("p1", null);
+    expect(JSON.parse(apiCall.mock.calls[1][2].body)).toEqual({ colour: "" });
+    expect(prefs.getTabColour("p1")).toBeNull();
+  });
+
+  it("puts the colour back when the save fails", async () => {
+    await prefs.loadPrefs();
+    prefs.prefsSignal.value = { ...prefs.prefsSignal.value, windows: { p1: { colour: "rose" } } };
+    apiCall.mockResolvedValue(null);
+    expect(await prefs.setTabColour("p1", "moss")).toBe(false);
+    expect(prefs.getTabColour("p1")).toBe("rose");
+  });
+
+  it("names a colour by the user's name, else by its hue", async () => {
+    server = { tab_colour_names: { iris: "ci" } };
+    await prefs.loadPrefs();
+    expect(prefs.getTabColourName("iris")).toBe("ci");
+    expect(prefs.getTabColourName("sky")).toBe("Sky");
+  });
+
+  it("sends the names as typed and keeps the server's cleaned reply", async () => {
+    await prefs.loadPrefs();
+    apiCall.mockResolvedValue({ ok: true, ui: { tab_colour_names: { iris: "ci" } } });
+    await prefs.setTabColourNames({ iris: "  ci ", sky: "", moss: "Moss" });
+    expect(JSON.parse(apiCall.mock.calls[0][2].body)).toEqual({ tab_colour_names: { iris: "  ci ", sky: "", moss: "Moss" } });
+    expect(prefs.getTabColourNames()).toEqual({ iris: "ci" });
+  });
+
+  it("reads the tint as Default until one is picked", async () => {
+    await prefs.loadPrefs();
+    expect(prefs.getTabTint().id).toBe("default");
+    await prefs.setTabTint("quiet");
+    expect(prefs.getTabTint()).toEqual({ id: "quiet", name: "Quiet", wash: 9 });
+  });
+});

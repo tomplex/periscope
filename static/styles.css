@@ -1456,7 +1456,7 @@ body.modal-open { overflow: hidden; }
   /* Row-enter animations too — the transition clamp above doesn't cover
      keyframes, and enter motion is the one thing that would still move. Also
      stops the Settings critter previews (.critter-preview sits outside .tama). */
-  .attn-row, .rail-row, .next-card { animation: none !important; }
+  .attn-row, .rail-row, .next-card, .tab-colour-menu { animation: none !important; }
   /* The asking pulse: the stripe, its blip in the sonar strip, and the
      transcript's needs-input dot. */
   .pane-stripe, .blip::after, .transcript-status-dot { animation: none !important; }
@@ -2018,21 +2018,23 @@ body.modal-open { overflow: hidden; }
   padding: 0.5em 0.75em;
   margin-bottom: 0.75em;
 }
-/* Settings → Tamagotchi (overlays/TamaPicker.jsx): a row of tiles, each a
-   real radio — kept focusable but invisible over its tile — a 40px preview
-   and the name. ID-qualified to outrank #settings-form label / input, which
-   would make every radio a full-width block. */
-.tama-picker-options { display: flex; flex-wrap: wrap; gap: 6px; }
-#settings-form .tama-picker-option {
-  position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  margin: 0; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;
-  font-size: 0.8em; cursor: pointer;
+/* A Settings tile (TamaPicker, TabColourPicker): a real radio, kept focusable
+   but invisible over its tile. ID-qualified to outrank #settings-form label /
+   input, which would make every radio a full-width block. */
+#settings-form .settings-tile {
+  position: relative; margin: 0; border: 1px solid var(--line); border-radius: var(--r-md); cursor: pointer;
 }
-#settings-form .tama-picker-option input {
+#settings-form .settings-tile input {
   position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer;
 }
+#settings-form .settings-tile:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Settings → Tamagotchi (overlays/TamaPicker.jsx): a row of tiles, each a
+   40px preview and the name. */
+.tama-picker-options { display: flex; flex-wrap: wrap; gap: 6px; }
+#settings-form .tama-picker-option {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 6px; font-size: 0.8em;
+}
 #settings-form .tama-picker-option:has(input:checked) { border-color: var(--accent); background: color-mix(in oklch, var(--accent) 14%, transparent); }
-#settings-form .tama-picker-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .critter-preview { display: block; }
 /* Clawd's blink in the preview needs the fill-box that `.tama g` gives it in the header. */
 .critter-preview g, .critter-preview rect { transform-box: fill-box; }
@@ -3114,6 +3116,122 @@ button.blip:focus-visible { outline: 2px solid var(--accent); outline-offset: 0;
 .next-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .next-more-n { flex: 0 0 auto; color: var(--fg-1); }
 .next-more-list { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ───────────────────────────────────────────────────────────────────────
+   Tab colours (static/src/tabColours.js). The user's colour tints the whole
+   block a pane shows as: its tree card, its Next card and its PINNED row. It
+   never touches the stripe, the glyph or a blip, which carry state. Each
+   --tab-bg-* is the colour mixed `in srgb` into the surface under it
+   (DESIGN.md, Mixed-Tint Rule), so a lift keeps the colour and the hover
+   actions' gradient ends on the card's own fill. --tab-wash is Settings →
+   Tab colours (main.jsx). */
+:root {
+  --tab-colour-rose: oklch(0.72 0.10 2);
+  --tab-colour-clay: oklch(0.72 0.10 62);
+  --tab-colour-moss: oklch(0.72 0.10 125);
+  --tab-colour-sky: oklch(0.72 0.10 210);
+  --tab-colour-iris: oklch(0.72 0.10 255);
+  --tab-colour-plum: oklch(0.72 0.10 312);
+  --tab-wash: 13%;
+}
+.tab-colour-rose { --tab-colour: var(--tab-colour-rose); }
+.tab-colour-clay { --tab-colour: var(--tab-colour-clay); }
+.tab-colour-moss { --tab-colour: var(--tab-colour-moss); }
+.tab-colour-sky { --tab-colour: var(--tab-colour-sky); }
+.tab-colour-iris { --tab-colour: var(--tab-colour-iris); }
+.tab-colour-plum { --tab-colour: var(--tab-colour-plum); }
+.tab-colour {
+  --tab-bg-0: color-mix(in srgb, var(--tab-colour) var(--tab-wash), var(--bg-0));
+  --tab-bg-1: color-mix(in srgb, var(--tab-colour) var(--tab-wash), var(--bg-1));
+  --tab-bg-1-hi: color-mix(in srgb, var(--tab-colour) var(--tab-wash), var(--bg-1-hi));
+}
+#rail .pane-row.tab-colour { background: var(--tab-bg-1); }
+#rail .rail-group-body .pane-row.tab-colour:hover,
+#rail .rail-group-body .pane-row.tab-colour.pane-expanded { background: var(--tab-bg-1-hi); }
+.pane-row.tab-colour .pane-actions { background: linear-gradient(to right, transparent, var(--tab-bg-1-hi) 42%); }
+/* A tint lifts the surface toward the 11px secondary text, so on a tinted card
+   it starts from fg-1, with a little of the hue: 4.5:1 or better at every
+   strength. */
+.pane-row.tab-colour .rail-status,
+.next-card.tab-colour .next-meta { color: color-mix(in srgb, var(--tab-colour) 20%, var(--fg-1)); }
+.next-card.tab-colour { background: var(--tab-bg-1); }
+.next-card.tab-colour:hover { background: var(--tab-bg-1-hi); }
+#rail .attn-pinned.tab-colour { background: var(--tab-bg-0); }
+#rail .attn-pinned.tab-colour:hover { background: var(--tab-bg-1); }
+/* The selected card names its colour, in the colour, like the account chip. */
+.pane-pill-colour { color: var(--tab-colour); }
+
+/* A colour's swatch: a short bar, never a square or a dot — those are blips. */
+.tab-colour-swatch {
+  display: inline-block; flex: 0 0 auto; width: 14px; height: 9px;
+  border-radius: 2px; background: var(--tab-colour);
+}
+.tab-colour-swatch.is-empty { background: none; box-shadow: inset 0 0 0 1.5px var(--fg-3); }
+.tab-colour-swatch.is-rename { height: auto; background: none; font-size: 11px; line-height: 1; text-align: center; color: var(--fg-3); }
+#rail .pane-actions .rail-colour {
+  display: inline-flex; align-items: center; height: 18px; margin: 0; padding: 0 3px;
+  background: none; border: 0; border-radius: 3px; cursor: pointer;
+  opacity: .7; transition: opacity .12s;
+}
+#rail .pane-actions .rail-colour:hover { opacity: 1; }
+#rail .pane-actions .rail-colour .tab-colour-swatch { width: 12px; height: 8px; }
+#rail .pane-actions .rail-colour:hover .tab-colour-swatch.is-empty { box-shadow: inset 0 0 0 1.5px var(--fg-1); }
+
+/* The colour menu (split/TabColourMenu.jsx): the Menu (.tb-dd-menu /
+   .tb-dd-item), fixed where it opened (TabColourMenu sets top and left). */
+.tb-dd-menu.tab-colour-menu {
+  position: fixed; z-index: 40; width: 236px;
+  animation: tab-colour-menu-in 110ms cubic-bezier(.16, 1, .3, 1);
+}
+.tab-colour-menu:focus { outline: none; }
+@keyframes tab-colour-menu-in { from { opacity: 0; transform: translateY(-3px); } }
+.tab-colour-menu-head {
+  display: flex; align-items: baseline; gap: 5px; min-width: 0; padding: 5px 10px 6px;
+  font-size: 11px; color: var(--fg-2); white-space: nowrap;
+}
+.tab-colour-menu-head b { overflow: hidden; text-overflow: ellipsis; font-weight: 500; color: var(--fg-1); }
+.tab-colour-menu-hint { margin-left: auto; color: var(--fg-3); }
+.tab-colour-item { gap: 9px; }
+.tab-colour-item.is-cursor { color: var(--fg-0); background: var(--bg-2); }
+.tab-colour-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tab-colour-menu.is-renaming .tab-colour-item { cursor: default; }
+.tab-colour-menu.is-renaming .tab-colour-item:hover { background: none; }
+.tab-colour-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-colour-hue { margin-left: 6px; font-size: 11px; color: var(--fg-3); }
+.tab-colour-count { font-size: 11px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.tab-colour-item .ps-kbd { flex: 0 0 auto; min-width: 16px; }
+.tab-colour-sep { height: 1px; margin: 4px 6px; border: 0; background: var(--line-soft); }
+.tab-colour-input {
+  flex: 1; min-width: 0; height: 22px; padding: 1px 6px;
+  background: var(--bg-0); border: 1px solid var(--line); border-radius: var(--r-sm);
+  font: inherit; font-size: 12px; color: var(--fg-0);
+}
+.tab-colour-input:focus { outline: none; border-color: var(--accent); }
+.tab-colour-input::placeholder { color: var(--fg-3); }
+
+/* Settings → Tab colours (overlays/TabColourPicker.jsx): Settings tiles, each
+   a live preview and the name. The checked tile takes only the Glass edge: a
+   Glass wash would tint the preview it shows. */
+.tab-tint-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+#settings-form .tab-tint-option {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px;
+  font-size: 0.85em; color: var(--fg-2);
+  transition: border-color .12s, box-shadow .12s;
+}
+#settings-form .tab-tint-option:hover { border-color: var(--line-strong); }
+#settings-form .tab-tint-option:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--fg-0); }
+.tab-tint-preview {
+  display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+}
+.tab-tint-card {
+  position: relative; display: block; padding: 4px 6px 4px 11px; border-radius: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--fg-1);
+}
+.tab-tint-card.tab-colour { background: var(--tab-bg-1); }
+.tab-tint-card .pane-stripe { top: 4px; bottom: 4px; }
+.tab-tint-name { display: flex; justify-content: space-between; align-items: baseline; padding: 0 2px; }
+.tab-tint-name small { font-family: var(--mono); font-size: 11px; color: var(--fg-3); }
 
 /* ───────────────────────────────────────────────────────────────────────
    Segmented transcript — Claude turns (split-view detail).

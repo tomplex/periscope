@@ -8,6 +8,12 @@ colors:
   linear: "oklch(0.7 0.13 280)"
   account: "oklch(0.75 0.11 190)"
   pin-gold: "#d8b33a"
+  tab-colour-rose: "oklch(0.72 0.10 2)"
+  tab-colour-clay: "oklch(0.72 0.10 62)"
+  tab-colour-moss: "oklch(0.72 0.10 125)"
+  tab-colour-sky: "oklch(0.72 0.10 210)"
+  tab-colour-iris: "oklch(0.72 0.10 255)"
+  tab-colour-plum: "oklch(0.72 0.10 312)"
   s-needs: "oklch(0.74 0.14 38)"
   s-needs-bg: "color-mix(in oklch, oklch(0.74 0.14 38) 16%, transparent)"
   s-working: "oklch(0.80 0.14 92)"
@@ -225,6 +231,22 @@ differ only in hue.
 - **Pin Gold** (`pin-gold`): the ★ for a pinned pane. It is the one hex-only colour among
   the named ones.
 
+### Tab colours (the user's)
+Six colours the user gives a pane, to group sessions by their own meaning: Rose
+(`tab-colour-rose`, hue 2), Clay (62), Moss (125), Sky (210), Iris (255) and Plum (312).
+- They share lightness 0.72 and chroma 0.10, below the blips' 0.13–0.17 (only Shore Green,
+  the shell state, also sits at 0.10), so a tab colour reads quieter than a blip.
+- Their hues keep clear of the state hues and of the kind hues around them (Account Teal,
+  Periscope Glass, Ticket Purple, Worktree Violet, Track Magenta): at least 0.040 apart in
+  OKLab, as far as Ticket Purple sits from Worktree Violet.
+- A colour tints the whole block a pane shows as: its tree card, its Next card and its
+  PINNED row. The mix goes `in srgb` into the surface under it, at Settings → Tab colours'
+  strength (`--tab-wash`: Quiet 9%, Default 13%, Strong 18%).
+- The selected card names its colour in a chip, in the colour, like the account chip. The
+  user can rename each colour, for example Iris → "ci".
+- A swatch is a bar with 2px corners: 14 × 9px in the colour menu, 12 × 8px on the card's
+  colour button.
+
 ### Status (the blips)
 - **Ping Orange** (`s-needs`, needs input): the most urgent state. It colours the pane's
   stripe and blip (both pulse), the Next count while something asks, and permission
@@ -264,7 +286,12 @@ differ only in hue.
 
 ### Named Rules
 **The Blip Rule.** Colour on the field is a signal: either a state, or a kind of thing
-(repo, track, branch, ticket, account). A hue that reports nothing doesn't ship.
+(repo, track, branch, ticket, account, or a group the user names with a tab colour). A hue
+that reports nothing doesn't ship.
+
+**The Tint Rule.** A tab colour is a tint, never a mark. It fills a pane's card and never
+colours its stripe, its glyph or its blip. Its swatch is a bar, because a square and a dot
+are blips. Selection keeps the Periscope Glass ring on a coloured card.
 
 **The Same-Brightness Rule.** Status hues sit at lightness 0.74–0.80 and chroma 0.13–0.17,
 and differ only in hue. No state wins by being brighter. Urgency comes from the pulse and
@@ -452,6 +479,8 @@ forward on hover or selection.
   state stripe on its left edge carries the pane's state. Its first line ends with the PR
   chip and the row's age; on hover the pin and close actions fade in just left of them, on
   a gradient over the name's tail, so the chip stays clickable and the age stays in view.
+  A tab colour tints the card (see Tab colours); its hover actions open with the colour
+  button, and a right-click on the card opens the same colour menu.
 - **Modal**: `bg-modal` with 10px corners and the Modal shadow. It fills most of the viewport
   (96vw × 94vh) and the user can resize it.
 
@@ -476,6 +505,10 @@ forward on hover or selection.
 - **Menu**: a `bg-1` panel with a 1px `line` edge, 6px corners and 4px padding. Items are
   12px, 6px × 10px, with 4px corners. Hover fills with `bg-2` and turns the text `fg-0`;
   the active item gets the 18% Periscope Glass wash.
+- **Colour menu**: the Menu, fixed where it opened and 236px wide, headed "Colour for
+  <pane>". One row per tab colour (swatch, name, the count of tabs in it, a 1–6 keycap),
+  then No colour (0) and Rename colours… (R). The row under the pointer or the cursor
+  previews on the card. Tab, Escape or focus leaving it closes it.
 - **Omnibox row**: transparent at rest. The active row gets a 16% Periscope Glass wash and a
   2px Periscope Glass inset left edge, and its glyph turns Periscope Glass.
 
@@ -514,7 +547,8 @@ gadget.
   depth by stepping through `bg-0` → `bg-1` → `bg-2`.
 - **Do** give each hue a single meaning everywhere it appears: Periscope Glass for
   interaction, Track Magenta for tracks, Worktree Violet for branches, Ticket Purple for
-  tickets, Account Teal for accounts, and the sonar colours for state.
+  tickets, Account Teal for accounts, the tab colours for the user's groups, and the sonar
+  colours for state.
 - **Do** put any new status colour on the shared brightness (lightness 0.74–0.80, chroma
   0.13–0.17) and vary only its hue.
 - **Do** derive tints with `color-mix(in oklch, <token> N%, transparent)`, or `in srgb` when
@@ -529,6 +563,8 @@ gadget.
 ### Don't:
 - **Don't** use colour as decoration. If a hue isn't reporting a state or marking a kind of
   thing, it doesn't ship.
+- **Don't** put a tab colour on a stripe, glyph or blip, or draw its swatch as a square or a
+  dot. Those shapes carry state.
 - **Don't** reach for SaaS analytics vocabulary: KPI tiles, decorative charts, gradient hero
   cards, generous empty spacing around a few numbers.
 - **Don't** go neon hacker terminal: no green on black, glow, scanlines or "cyber" styling.

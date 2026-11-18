@@ -11,7 +11,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   accounts, alerts, dismissedAlertIds, dismissedNeedsPids, moveTargets, projects, railSelection, tracks, windows,
 } from "../../store.js";
+import { prefsSignal } from "../../prefs.js";
 import { PaneHeader } from "../Detail.jsx";
+import { closeTabColourMenu, openTabColourMenu } from "../TabColourMenu.jsx";
 import { Rail } from "../Rail.jsx";
 
 const aff = (kind, label = null) => ({ kind, label });
@@ -533,5 +535,80 @@ describe("ctxChipText", () => {
 
   it("returns null when there is nothing to show", () => {
     expect(ctxChipText({})).toBe(null);
+  });
+});
+
+describe("<Rail> tab colours", () => {
+  const paneWin = (over) => ({
+    session: "managed", agent: "claude", state: "idle", track_id: "t1", track_name: "fdy",
+    repo_key: "/dev/fdy", repo_label: "fdy", branch: "master", cwd: "/dev/fdy",
+    worktree_affiliation: aff("at-pin"), focused_at: 0, acted_at: 0, ...over,
+  });
+  const twoPanes = (over = {}) => {
+    projects.value = [];
+    tracks.value = [];
+    alerts.value = [];
+    windows.value = [
+      paneWin({ pid: "p1", index: 0, target: "managed:0", name: "worker", pane_id: "%1", ...over }),
+      paneWin({ pid: "p2", index: 1, target: "managed:1", name: "other", pane_id: "%2" }),
+    ];
+  };
+  const withPrefs = (windowPrefs, ui = {}) => { prefsSignal.value = { ...prefsSignal.value, windows: windowPrefs, ui }; };
+  const tinted = (html, cls) => html.match(new RegExp(`class="${cls}[^"]* tab-colour tab-colour-(\\w+)`, "g")) || [];
+  afterEach(() => {
+    closeTabColourMenu({ refocus: false });
+    vi.unstubAllGlobals();
+    withPrefs({});
+    railSelection.value = null;
+  });
+
+  it("tints a coloured pane's card and leaves the others plain", () => {
+    twoPanes();
+    withPrefs({ p1: { colour: "sky" } });
+    const html = render(<Rail />);
+    expect(tinted(html, "rail-row child-row pane-row")).toHaveLength(1);
+    expect(html).toContain('class="tab-colour-swatch tab-colour-sky"');
+    expect(html).toContain('class="tab-colour-swatch is-empty"');
+    expect(html).toContain('title="colour this tab"');
+  });
+
+  it("names the colour on the selected card, by the name the user gave it", () => {
+    twoPanes();
+    railSelection.value = "pane:p1";
+    withPrefs({ p1: { colour: "iris" } }, { tab_colour_names: { iris: "ci" } });
+    let html = render(<Rail />);
+    expect(html).toContain('<span class="pane-pill pane-pill-colour" title="this tab\'s colour">ci</span>');
+    expect(html).toContain('title="colour: ci — change it"');
+    withPrefs({ p1: { colour: "iris" } });
+    html = render(<Rail />);
+    expect(html).toContain('title="this tab\'s colour">Iris</span>');
+  });
+
+  it("names no colour on a plain selected card", () => {
+    twoPanes();
+    railSelection.value = "pane:p1";
+    expect(render(<Rail />)).not.toContain("pane-pill-colour");
+  });
+
+  it("tints the pane's Next card and its PINNED row, never its blip", () => {
+    twoPanes({ state: "needs-input", waiting_for: "question", needs_since: 1 });
+    withPrefs({ p1: { colour: "rose" } }, { pinned_pids: ["p1"] });
+    const html = render(<Rail />);
+    expect(tinted(html, "next-card pane-blip-asks")).toHaveLength(1);
+    expect(tinted(html, "rail-row attn-row attn-pinned")).toHaveLength(1);
+    expect(html).not.toMatch(/class="blip[^"]*tab-colour/);
+  });
+
+  it("opens the menu on the pane's colour, with each colour's name and count", () => {
+    twoPanes();
+    withPrefs({ p1: { colour: "iris" }, p2: { colour: "iris" } }, { tab_colour_names: { iris: "ci" } });
+    vi.stubGlobal("document", { activeElement: null });
+    openTabColourMenu(windows.value[0], { left: 10, right: 10, top: 10, bottom: 10 });
+    const html = render(<Rail />);
+    expect(html).toContain("Colour for <b>worker</b>");
+    expect(html).toMatch(/aria-checked="true"[^>]*class="tb-dd-item tab-colour-item active"[^>]*>.*?ci<span class="tab-colour-hue">Iris<\/span>/);
+    expect(html).toContain('title="2 tabs in this colour">2</span>');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html.match(/role="menuitemradio"/g)).toHaveLength(7);   // six colours + No colour
   });
 });

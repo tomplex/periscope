@@ -16,6 +16,7 @@
 import { signal } from "@preact/signals";
 import { critterById } from "./chrome/critters.js";
 import { fontById } from "./fonts.js";
+import { TAB_COLOURS, tabTintById } from "./tabColours.js";
 import { apiCall } from "./util.js";
 
 // The cache mirrors the server's state.json shape. `loaded` flips to true
@@ -146,7 +147,7 @@ export function getAnnotation(pid) {
   return { notes, tags, pinned_files };
 }
 
-export async function setAnnotation(pid, { notes, tags, pinned_files }) {
+export async function setAnnotation(pid, { notes, tags, pinned_files, colour }) {
   if (!P().loaded) {
     await loadPrefs();
     if (!P().loaded) return false;
@@ -158,6 +159,7 @@ export async function setAnnotation(pid, { notes, tags, pinned_files }) {
     notes: notes ?? entry.notes,
     tags: tags ?? entry.tags,
     pinned_files: pinned_files ?? entry.pinned_files,
+    colour: colour ?? entry.colour,
   };
   prefsSignal.value = { ...P(), windows: { ...P().windows, [pid]: optimistic } };
   // exclude_none on the wire so server treats an omitted field as "no change",
@@ -166,6 +168,7 @@ export async function setAnnotation(pid, { notes, tags, pinned_files }) {
   if (notes !== undefined) body.notes = notes;
   if (tags !== undefined) body.tags = tags;
   if (pinned_files !== undefined) body.pinned_files = pinned_files;
+  if (colour !== undefined) body.colour = colour;
   const data = await apiCall("save annotation", `/api/prefs/windows/${encodeURIComponent(pid)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -204,6 +207,43 @@ export function togglePinnedFile(pid, path) {
   const cur = getPinnedFiles(pid);
   const next = cur.includes(path) ? cur.filter((p) => p !== path) : [...cur, path];
   return setAnnotation(pid, { pinned_files: next });
+}
+
+// ── Tab colours (tabColours.js) ───────────────────────────────────────────
+// A pane's colour rides its window annotation, like its pinned files, so it
+// goes when that entry is reaped (30 days unseen, pids._gc_windows). The
+// colours' names and the tint are ui prefs, one set for every pane. "" removes
+// a pane's colour on the wire.
+
+export function getTabColour(pid) {
+  return P().windows[pid]?.colour || null;
+}
+
+export function setTabColour(pid, id) {
+  return setAnnotation(pid, { colour: id || "" });
+}
+
+export function getTabColourName(id) {
+  return P().ui?.tab_colour_names?.[id] || TAB_COLOURS.find((c) => c.id === id)?.name || id;
+}
+
+export function getTabColourNames() {
+  return { ...(P().ui?.tab_colour_names || {}) };
+}
+
+// The whole map, as typed: update_ui merges only top-level keys, and the
+// server cleans it; patchUI keeps the cleaned reply.
+export function setTabColourNames(names) {
+  return patchUI({ tab_colour_names: names });
+}
+
+// Settings → Tab colours. Unset, or an id no longer in the list, is Default.
+export function getTabTint() {
+  return tabTintById(P().ui?.tab_tint);
+}
+
+export function setTabTint(id) {
+  return patchUI({ tab_tint: id });
 }
 
 // ── One-time localStorage → server migration ─────────────────────────────
