@@ -39,6 +39,13 @@ TAMA_CRITTERS = ("clawd", "scope", "faradaysie", "jelly", "nox", "ember", "volt"
 # two in step (tests/routes/test_prefs.py).
 FONT_IDS = ("hanken", "inter", "system-sans", "plex-mono", "jetbrains-mono", "sf-mono", "menlo")
 
+# Tab colours: static/src/tabColours.js's colour and tint ids, in its order. A
+# test keeps the two in step (tests/routes/test_prefs.py).
+TAB_COLOURS = ("rose", "clay", "moss", "teal", "iris", "plum")
+TAB_TINTS = ("quiet", "default", "strong")
+# The colour menu's rename input stops here too.
+TAB_COLOUR_NAME_MAX = 24
+
 
 @router.get("/api/prefs")
 def get_prefs():
@@ -109,6 +116,10 @@ class UIPatch(BaseModel):
     code_font: str | None = None
     # Settings → Notifications (NotifyPrefs). Declared for the same reason.
     notify: NotifyPrefs | None = None
+    # Tab colours: how strongly a colour tints its card (one of TAB_TINTS), and
+    # the names the user gave the colours (TAB_COLOURS id -> name).
+    tab_tint: str | None = None
+    tab_colour_names: dict[str, str] | None = None
     # Diagnostic label for the track_order change log (which client path wrote
     # it, and what it saw); never persisted.
     writer: str | None = None
@@ -127,6 +138,10 @@ def patch_prefs_ui(body: UIPatch):
     for key in ("ui_font", "code_font"):
         if key in patch and patch[key] not in FONT_IDS:
             raise HTTPException(400, f"invalid {key}: {patch[key]!r}")
+    if "tab_tint" in patch and patch["tab_tint"] not in TAB_TINTS:
+        raise HTTPException(400, f"invalid tab_tint: {patch['tab_tint']!r}")
+    if "tab_colour_names" in patch:
+        patch["tab_colour_names"] = _clean_colour_names(patch["tab_colour_names"])
     if "detail_mode_by_pid" in patch:
         for pid, mode in patch["detail_mode_by_pid"].items():
             if mode not in ("terminal", "transcript"):
@@ -147,20 +162,37 @@ def patch_prefs_ui(body: UIPatch):
     return {"ok": True, "ui": get_ui()}
 
 
+def _clean_colour_names(names: dict[str, str]) -> dict[str, str]:
+    """Trimmed names for known colours; an empty name is no name."""
+    clean: dict[str, str] = {}
+    for colour, name in names.items():
+        if colour not in TAB_COLOURS:
+            raise HTTPException(400, f"invalid tab colour: {colour!r}")
+        name = name.strip()
+        if len(name) > TAB_COLOUR_NAME_MAX:
+            raise HTTPException(400, f"tab colour name over {TAB_COLOUR_NAME_MAX} characters: {name!r}")
+        if name:
+            clean[colour] = name
+    return clean
+
+
 class WindowAnnotation(BaseModel):
     notes: str | None = None
     tags: list[str] | None = None
     pinned_files: list[str] | None = None
+    colour: str | None = None  # one of TAB_COLOURS; "" removes it
 
 
 @router.put("/api/prefs/windows/{pid}")
 def put_window_annotation(pid: str, body: WindowAnnotation):
-    """Set/replace notes, tags, and pinned_files on a window. `last_seen`
+    """Set/replace notes, tags, pinned_files and colour on a window. `last_seen`
     and other fields are left intact — only the annotation-shaped fields
     are managed via this endpoint."""
     if not pid or not pid.isalnum():
         raise HTTPException(400, "invalid pid")
     patch = body.model_dump(exclude_none=True)
+    if patch.get("colour") and patch["colour"] not in TAB_COLOURS:
+        raise HTTPException(400, f"invalid colour: {patch['colour']!r}")
     # Coerce tags to a trimmed unique list, preserving order.
     if "tags" in patch:
         seen: set[str] = set()
@@ -190,6 +222,8 @@ def put_window_annotation(pid: str, body: WindowAnnotation):
         updates["tags"] = patch["tags"] if patch["tags"] != [] else None
     if "pinned_files" in patch:
         updates["pinned_files"] = patch["pinned_files"] if patch["pinned_files"] != [] else None
+    if "colour" in patch:
+        updates["colour"] = patch["colour"] or None
     set_window_fields(pid, **updates)
     entry = get_window(pid)
     return {
@@ -199,16 +233,17 @@ def put_window_annotation(pid: str, body: WindowAnnotation):
             "notes": entry.get("notes"),
             "tags": entry.get("tags") or [],
             "pinned_files": entry.get("pinned_files") or [],
+            "colour": entry.get("colour"),
         },
     }
 
 
 @router.delete("/api/prefs/windows/{pid}")
 def delete_window_annotation(pid: str):
-    """Remove notes + tags + pinned_files. last_seen is preserved (rebind hint)."""
+    """Remove notes + tags + pinned_files + colour. last_seen is preserved (rebind hint)."""
     if not pid or not pid.isalnum():
         raise HTTPException(400, "invalid pid")
-    set_window_fields(pid, notes=None, tags=None, pinned_files=None)
+    set_window_fields(pid, notes=None, tags=None, pinned_files=None, colour=None)
     return {"ok": True, "pid": pid}
 
 

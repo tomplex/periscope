@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import build_critters
-from periscope.routes.prefs import FONT_IDS, TAMA_CRITTERS
+from periscope.routes.prefs import FONT_IDS, TAB_COLOURS, TAB_TINTS, TAMA_CRITTERS
 
 
 def test_get_prefs_returns_state(client, clean_state):
@@ -134,6 +134,50 @@ def test_font_ids_match_the_client_list():
     assert tuple(re.findall(r'\bid: "([a-z0-9-]+)"', src)) == FONT_IDS
 
 
+@pytest.mark.parametrize("tint", TAB_TINTS)
+def test_patch_prefs_ui_tab_tint_round_trips(client, clean_state, tint):
+    r = client.patch("/api/prefs/ui", json={"tab_tint": tint})
+    assert r.status_code == 200
+    assert r.json()["ui"]["tab_tint"] == tint
+
+
+def test_patch_prefs_ui_rejects_unknown_tab_tint(client, clean_state):
+    r = client.patch("/api/prefs/ui", json={"tab_tint": "loud"})
+    assert r.status_code == 400
+    assert "tab_tint" in r.json()["detail"]
+
+
+def test_patch_prefs_ui_tab_colour_names_are_trimmed_and_empties_dropped(client, clean_state):
+    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"iris": "  ci ", "rose": "  "}})
+    assert r.status_code == 200
+    assert r.json()["ui"]["tab_colour_names"] == {"iris": "ci"}
+
+
+def test_patch_prefs_ui_tab_colour_names_replace_the_whole_map(client, clean_state):
+    # The client sends the whole map, so a name it dropped is gone.
+    client.patch("/api/prefs/ui", json={"tab_colour_names": {"iris": "ci", "teal": "ui"}})
+    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"teal": "ui"}})
+    assert r.json()["ui"]["tab_colour_names"] == {"teal": "ui"}
+
+
+def test_patch_prefs_ui_rejects_a_name_for_an_unknown_colour(client, clean_state):
+    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"red": "urgent"}})
+    assert r.status_code == 400
+    assert "red" in r.json()["detail"]
+
+
+def test_patch_prefs_ui_rejects_an_over_long_colour_name(client, clean_state):
+    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"iris": "x" * 25}})
+    assert r.status_code == 400
+
+
+def test_tab_colour_and_tint_ids_match_the_client_list():
+    # The menu and Settings offer static/src/tabColours.js's lists; an id there
+    # but not here would 400 on pick.
+    src = (Path(__file__).resolve().parents[2] / "static/src/tabColours.js").read_text()
+    assert tuple(re.findall(r'\bid: "([a-z]+)"', src)) == TAB_COLOURS + TAB_TINTS
+
+
 def test_patch_prefs_ui_notify_round_trips(client, clean_state):
     prefs = {
         "needs_input": True,
@@ -181,6 +225,24 @@ def test_put_window_annotation_pinned_files(client, clean_state):
     assert "pinned_files" not in clean_state["windows"]["abc123"]
 
 
+def test_put_window_annotation_colour_sets_and_clears(client, clean_state):
+    r = client.put("/api/prefs/windows/abc123", json={"colour": "teal"})
+    assert r.status_code == 200
+    assert r.json()["annotation"]["colour"] == "teal"
+    assert clean_state["windows"]["abc123"]["colour"] == "teal"
+    # Setting the colour leaves the notes alone, and "" removes the colour.
+    client.put("/api/prefs/windows/abc123", json={"notes": "hi"})
+    r = client.put("/api/prefs/windows/abc123", json={"colour": ""})
+    assert r.json()["annotation"]["colour"] is None
+    assert clean_state["windows"]["abc123"] == {"notes": "hi"}
+
+
+def test_put_window_annotation_rejects_an_unknown_colour(client, clean_state):
+    r = client.put("/api/prefs/windows/abc123", json={"colour": "red"})
+    assert r.status_code == 400
+    assert "colour" in r.json()["detail"]
+
+
 def test_put_window_annotation_invalid_pid(client, clean_state):
     r = client.put("/api/prefs/windows/abc-123", json={"notes": "hi"})
     assert r.status_code == 400
@@ -188,12 +250,13 @@ def test_put_window_annotation_invalid_pid(client, clean_state):
 
 
 def test_delete_window_annotation(client, clean_state):
-    clean_state["windows"]["abc123"] = {"notes": "x", "tags": ["t"], "pinned_files": ["/x"]}
+    clean_state["windows"]["abc123"] = {"notes": "x", "tags": ["t"], "pinned_files": ["/x"], "colour": "rose"}
     r = client.delete("/api/prefs/windows/abc123")
     assert r.json()["ok"] is True
     assert "notes" not in clean_state["windows"]["abc123"]
     assert "tags" not in clean_state["windows"]["abc123"]
     assert "pinned_files" not in clean_state["windows"]["abc123"]
+    assert "colour" not in clean_state["windows"]["abc123"]
 
 
 def test_add_and_delete_command(client, clean_state):

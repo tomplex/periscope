@@ -98,6 +98,7 @@ class WindowAnnotation(TypedDict, total=False):
     # set_name, or passed to spawn_claude) — narrator.is_name_pinned locks the
     # auto-rename out. Absent means unpinned; never stored as False.
     name_pinned: bool
+    colour: str  # the user's tab colour, one of routes/prefs.TAB_COLOURS
     session_model: SessionSetting
     session_effort: SessionSetting
 
