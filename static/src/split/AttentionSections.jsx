@@ -14,7 +14,7 @@ import { alertItems, dismissalFor, markDoneCardsSeen, nextEntries, openNextEntry
 import { buildActivity, prunedStateDismissals, resolvePinned, waitTier } from "./attention.js";
 import { useFrozenRows } from "./layoutFreeze.js";
 import { SectionHeader } from "./SectionHeader.jsx";
-import { shownTabColour, tabColourClass } from "./TabColourMenu.jsx";
+import { shownTabColour, tabColourClass } from "./PaneMenu.jsx";
 
 // Cards shown before the rest fold into "+N".
 const NEXT_SHOWN = 3;

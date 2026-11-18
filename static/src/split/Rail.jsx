@@ -32,7 +32,7 @@ import { confirmDialog } from "../overlays/Dialog.jsx";
 import { modalRequest } from "../overlays/modalRequest.js";
 import { showToast } from "../overlays/Toast.jsx";
 import * as prefs from "../prefs.js";
-import { currentFilter, dragState, editor as editorSignal, projects, railSelection, reviews, tracks, windows, workspaces } from "../store.js";
+import { currentFilter, dragState, projects, railSelection, reviews, tracks, windows, workspaces } from "../store.js";
 import { track } from "../track.js";
 import { apiCall, paneLabel, targetQuery } from "../util.js";
 import { ActivitySection, NextQueue, PinnedSection } from "./AttentionSections.jsx";
@@ -43,7 +43,7 @@ import { BranchRow, PaneRow, ReviewRow, TrackRow } from "./RailRows.jsx";
 import { mergeLiveAndPrefs, paneChip, reviewRowsByTrack, trackKind, trackLabel } from "./railTree.js";
 import { SectionHeader } from "./SectionHeader.jsx";
 import { SonarStrip } from "./SonarStrip.jsx";
-import { TabColourMenu } from "./TabColourMenu.jsx";
+import { PaneMenu } from "./PaneMenu.jsx";
 
 // Bridge to the launcher modal. A track header's + opens it via
 // window.__periscopeOpenLauncher; no-op if nothing is wired yet.
@@ -459,7 +459,6 @@ export function Rail() {
           pinned={prefs.getPinnedPids().includes(w.pid)}
           onTogglePin={() => prefs.togglePin(w.pid)}
           onToggleNamePin={() => toggleNamePin(w)}
-          editor={editorSignal.value}
           onOpenInEditor={() => openInEditor(w)}
           waitingSince={waitingSince.get(w.pid)}
         />
@@ -596,7 +595,7 @@ export function Rail() {
         );
       })}
       <ActivitySection />
-      <TabColourMenu />
+      <PaneMenu />
     </aside>
   );
 }
