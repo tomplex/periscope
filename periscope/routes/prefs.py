@@ -41,9 +41,9 @@ FONT_IDS = ("hanken", "inter", "system-sans", "plex-mono", "jetbrains-mono", "sf
 
 # Tab colours: static/src/tabColours.js's colour and tint ids, in its order. A
 # test keeps the two in step (tests/routes/test_prefs.py).
-TAB_COLOURS = ("rose", "clay", "moss", "teal", "iris", "plum")
+TAB_COLOURS = ("rose", "clay", "moss", "sky", "iris", "plum")
 TAB_TINTS = ("quiet", "default", "strong")
-# The colour menu's rename input stops here too.
+# tabColours.js holds the same limit for the rename input (a test keeps the two in step).
 TAB_COLOUR_NAME_MAX = 24
 
 
@@ -163,7 +163,9 @@ def patch_prefs_ui(body: UIPatch):
 
 
 def _clean_colour_names(names: dict[str, str]) -> dict[str, str]:
-    """Trimmed names for known colours; an empty name is no name."""
+    """Trimmed names for known colours. An empty name, or the hue's own (each
+    id is its hue's name in lower case), is no name. The one cleaner: the
+    client sends the names as typed and keeps this reply."""
     clean: dict[str, str] = {}
     for colour, name in names.items():
         if colour not in TAB_COLOURS:
@@ -171,7 +173,7 @@ def _clean_colour_names(names: dict[str, str]) -> dict[str, str]:
         name = name.strip()
         if len(name) > TAB_COLOUR_NAME_MAX:
             raise HTTPException(400, f"tab colour name over {TAB_COLOUR_NAME_MAX} characters: {name!r}")
-        if name:
+        if name and name.lower() != colour:
             clean[colour] = name
     return clean
 

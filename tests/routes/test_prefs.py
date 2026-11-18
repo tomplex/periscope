@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import build_critters
-from periscope.routes.prefs import FONT_IDS, TAB_COLOURS, TAB_TINTS, TAMA_CRITTERS
+from periscope.routes.prefs import FONT_IDS, TAB_COLOUR_NAME_MAX, TAB_COLOURS, TAB_TINTS, TAMA_CRITTERS
 
 
 def test_get_prefs_returns_state(client, clean_state):
@@ -153,29 +153,36 @@ def test_patch_prefs_ui_tab_colour_names_are_trimmed_and_empties_dropped(client,
     assert r.json()["ui"]["tab_colour_names"] == {"iris": "ci"}
 
 
+def test_patch_prefs_ui_tab_colour_names_drop_the_hues_own_name(client, clean_state):
+    # A name that only repeats the hue would show as "Moss Moss" in the menu.
+    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"moss": "Moss", "clay": " CLAY ", "plum": "plums"}})
+    assert r.json()["ui"]["tab_colour_names"] == {"plum": "plums"}
+
+
 def test_patch_prefs_ui_tab_colour_names_replace_the_whole_map(client, clean_state):
     # The client sends the whole map, so a name it dropped is gone.
-    client.patch("/api/prefs/ui", json={"tab_colour_names": {"iris": "ci", "teal": "ui"}})
-    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"teal": "ui"}})
-    assert r.json()["ui"]["tab_colour_names"] == {"teal": "ui"}
+    client.patch("/api/prefs/ui", json={"tab_colour_names": {"iris": "ci", "sky": "ui"}})
+    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"sky": "ui"}})
+    assert r.json()["ui"]["tab_colour_names"] == {"sky": "ui"}
 
 
 def test_patch_prefs_ui_rejects_a_name_for_an_unknown_colour(client, clean_state):
-    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"red": "urgent"}})
+    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"teal": "urgent"}})
     assert r.status_code == 400
-    assert "red" in r.json()["detail"]
+    assert "teal" in r.json()["detail"]
 
 
 def test_patch_prefs_ui_rejects_an_over_long_colour_name(client, clean_state):
-    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"iris": "x" * 25}})
+    r = client.patch("/api/prefs/ui", json={"tab_colour_names": {"iris": "x" * (TAB_COLOUR_NAME_MAX + 1)}})
     assert r.status_code == 400
 
 
-def test_tab_colour_and_tint_ids_match_the_client_list():
+def test_tab_colours_match_the_client_list():
     # The menu and Settings offer static/src/tabColours.js's lists; an id there
-    # but not here would 400 on pick.
+    # but not here would 400 on pick, and a longer client limit would 400 on save.
     src = (Path(__file__).resolve().parents[2] / "static/src/tabColours.js").read_text()
     assert tuple(re.findall(r'\bid: "([a-z]+)"', src)) == TAB_COLOURS + TAB_TINTS
+    assert re.search(r"TAB_COLOUR_NAME_MAX = (\d+);", src).group(1) == str(TAB_COLOUR_NAME_MAX)
 
 
 def test_patch_prefs_ui_notify_round_trips(client, clean_state):
@@ -226,10 +233,10 @@ def test_put_window_annotation_pinned_files(client, clean_state):
 
 
 def test_put_window_annotation_colour_sets_and_clears(client, clean_state):
-    r = client.put("/api/prefs/windows/abc123", json={"colour": "teal"})
+    r = client.put("/api/prefs/windows/abc123", json={"colour": "sky"})
     assert r.status_code == 200
-    assert r.json()["annotation"]["colour"] == "teal"
-    assert clean_state["windows"]["abc123"]["colour"] == "teal"
+    assert r.json()["annotation"]["colour"] == "sky"
+    assert clean_state["windows"]["abc123"]["colour"] == "sky"
     # Setting the colour leaves the notes alone, and "" removes the colour.
     client.put("/api/prefs/windows/abc123", json={"notes": "hi"})
     r = client.put("/api/prefs/windows/abc123", json={"colour": ""})
