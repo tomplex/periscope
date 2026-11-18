@@ -70,20 +70,24 @@ function Menu({ m }) {
     const below = rect.bottom + 4;
     const top = below + box.height > innerHeight - 8 ? Math.max(8, rect.top - box.height - 4) : below;
     setPos({ left: Math.max(8, Math.min(rect.left, innerWidth - box.width - 8)), top });
-    ref.current.focus();
   }, [m]);
+  // Focus once placed: a visibility:hidden element can't take focus, and
+  // without it the keys go nowhere.
+  useEffect(() => { if (pos) ref.current.focus(); }, [pos]);
 
-  // A click elsewhere, a rail scroll or a resize closes it: its place would be
-  // stale. Only the rail's scroll: a terminal scrolls on every line of output.
+  // A click elsewhere, a wheel over the rail or a resize closes it: its place
+  // would be stale. The wheel, not `scroll`: the browser's scroll anchoring
+  // moves the rail on its own when a poll reshapes the rows above.
   useEffect(() => {
     const rail = document.getElementById("rail");
     const onDown = (e) => { if (!ref.current?.contains(e.target)) finish(); };
+    const onWheel = (e) => { if (!ref.current?.contains(e.target)) finish(); };
     document.addEventListener("pointerdown", onDown, true);
-    rail?.addEventListener("scroll", finish);
+    rail?.addEventListener("wheel", onWheel, { passive: true });
     window.addEventListener("resize", finish);
     return () => {
       document.removeEventListener("pointerdown", onDown, true);
-      rail?.removeEventListener("scroll", finish);
+      rail?.removeEventListener("wheel", onWheel);
       window.removeEventListener("resize", finish);
     };
   });
