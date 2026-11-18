@@ -427,6 +427,21 @@ def account_config_dir(account_id: str | None) -> str:
     return ""
 
 
+def account_email(account_id: str | None) -> str | None:
+    """The email the account is logged in with, from its `.claude.json` (`~/.claude.json` for the
+    default account), or None, with a warning, when the file has none or cannot be read."""
+    path = Path(account_config_dir(account_id) or Path.home()) / ".claude.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        log.warning("account_email: cannot read %s: %s", path, e)
+        return None
+    email = (data.get("oauthAccount") or {}).get("emailAddress")
+    if not email:
+        log.warning("account_email: no oauthAccount.emailAddress in %s", path)
+    return email or None
+
+
 _DEFAULT_COMMANDS = [
     # Seeded entry. The `_channels_migration_v1` rewriter below upgrades
     # any pre-existing user state's `"exec": "claude"` to the channels-

@@ -411,6 +411,8 @@ def test_duplicate_resume_grouped_by_the_session_each_line_renders_with():
         (f"claude --resume {OLD_SID} --effort high", None),  # argv kept whole
         ("claude --effort high", SID),
         ("claude", None),
+        (f"claude --session-id {OLD_SID} --effort high", None),  # a spawn's id, no row
+        (f"claude --session-id {OLD_SID}", SID),  # the row wins over the spawn's id
         (f"claude {SYS}", None),  # "--resume not-a-flag" is prompt text
     ],
 )
@@ -447,6 +449,28 @@ def test_demoted_line_takes_the_session_lost_shape():
 def test_demoted_line_with_nothing_to_change_is_untouched():
     line = _pane_line("s", "1", "1", "claude --dangerously-load-development-channels server:periscope")
     assert resurrect._rewrite_line(line, *_maps(), demote=True) == (line, False)
+
+
+def test_captured_session_id_resumes_without_a_row():
+    line = _pane_line("s", "1", "1", f"claude --session-id {SID} --effort high")
+    out, changed = resurrect._rewrite_line(line, {"s:1.1": "%56"}, {})
+    assert changed
+    assert out.split("\t")[10] == f":claude --resume {SID} --effort high"
+
+
+def test_demoted_line_loses_its_session_id():
+    line = _pane_line("s", "1", "1", f"claude --session-id {SID} --effort high")
+    out, changed = resurrect._rewrite_line(line, *_maps(), demote=True)
+    assert changed
+    assert out.split("\t")[10] == ":claude --effort high"
+
+
+def test_a_captured_session_id_counts_as_a_resume_for_duplicates():
+    lines = [
+        _pane_line("p", "1", "0", f"claude --resume {SID}"),
+        _pane_line("p", "2", "0", f"claude --session-id {SID}"),
+    ]
+    assert resurrect._duplicate_resumes(lines, {}, {}, {}) == {1}
 
 
 def test_distinct_sessions_and_prompt_text_untouched():

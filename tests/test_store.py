@@ -459,6 +459,43 @@ def test_account_config_dir_resolves(clean_state):
     assert store.account_config_dir(None) == ""
 
 
+def test_account_email_reads_each_accounts_claude_json(clean_state, tmp_path, monkeypatch):
+    import json
+
+    import periscope.store as store
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    other = tmp_path / ".claude-c"
+    other.mkdir()
+    clean_state["accounts"] = [
+        {"id": "default", "label": "A", "config_dir": ""},
+        {"id": "c", "label": "C", "config_dir": str(other)},
+    ]
+    (tmp_path / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "a@example.com"}}))
+    (other / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "c@example.com"}}))
+    assert store.account_email("default") == "a@example.com"
+    assert store.account_email("c") == "c@example.com"
+
+
+def test_account_email_is_none_when_the_account_is_not_logged_in(clean_state, tmp_path, monkeypatch, caplog):
+    import logging
+
+    import periscope.store as store
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with caplog.at_level(logging.WARNING, logger="periscope"):
+        assert store.account_email("default") is None  # no .claude.json
+        assert "cannot read" in caplog.text
+        caplog.clear()
+        (tmp_path / ".claude.json").write_text('{"userID": "x"}')
+        assert store.account_email("default") is None  # no oauthAccount
+        assert "no oauthAccount.emailAddress" in caplog.text
+        caplog.clear()
+        (tmp_path / ".claude.json").write_text("{not json")
+        assert store.account_email("default") is None
+        assert "cannot read" in caplog.text
+
+
 def test_poke_log_round_trips_per_account(clean_state):
     from periscope import store
 

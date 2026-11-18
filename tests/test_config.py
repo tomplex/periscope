@@ -179,3 +179,10 @@ def test_build_agent_command_carries_effort_as_a_flag():
 
 def test_build_agent_command_never_gives_codex_an_effort():
     assert "--effort" not in config.build_agent_command("codex", cwd="/x", effort="high")
+
+
+def test_build_agent_command_names_a_new_claude_session():
+    sid = "3f2a9c1e-5b7d-4e2a-9f10-2c4d6e8a0b1c"
+    assert config.build_agent_command("claude", cwd="/x", session_id=sid)[-2:] == ["--session-id", sid]
+    assert "--session-id" not in config.build_agent_command("claude", cwd="/x")
+    assert "--session-id" not in config.build_agent_command("codex", cwd="/x", session_id=sid)

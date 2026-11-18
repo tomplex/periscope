@@ -176,13 +176,17 @@ def build_agent_command(
     cwd: str,
     resume_id: str | None = None,
     effort: str | None = None,
+    session_id: str | None = None,
 ) -> list[str]:
     """Build a typed agent argv. Shell serialization belongs at the tmux edge.
-    `effort` is the pin value; codex has no equivalent and ignores it."""
+    `effort` is the pin value and `session_id` names a new Claude session; codex has no equivalent of either
+    and ignores them."""
     if agent == "claude":
         argv = shlex.split(claude_exec())
         if resume_id:
             argv.extend(["--resume", resume_id])
+        if session_id:
+            argv.extend(["--session-id", session_id])
         if level := effort_level(effort):
             argv.extend(["--effort", level])
         return argv

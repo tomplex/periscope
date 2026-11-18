@@ -4,9 +4,10 @@ session on restore.
 tmux-resurrect + continuum already restore the workspace after a reboot, and
 `@resurrect-processes 'claude'` makes resurrect re-run each Claude pane's
 command. But the captured command launches a FRESH session — it has no
-`--resume <uuid>`. This module is invoked by resurrect's post-save-layout hook
-(via `bin/periscope resurrect-rewrite`) to rewrite each Claude pane's command in
-the just-written save file to `claude --resume <uuid> <its channel flags>`.
+`--resume <uuid>` — and a periscope spawn's `--session-id <uuid>` fails, because
+Claude refuses it twice. This module is invoked by resurrect's post-save-layout
+hook (via `bin/periscope resurrect-rewrite`) to rewrite each Claude pane's
+command in the just-written save file to `claude --resume <uuid> <its channel flags>`.
 
 The rewrite must happen at SAVE time, while panes are live: the pane->session
 map is keyed by tmux pane id, and pane ids are reassigned when the tmux server
@@ -51,6 +52,10 @@ _CHANNEL_RE = re.compile(r"--dangerously-load-development-channels (\S+)")
 # session_status's UUID-only match, with the space before it so a strip
 # leaves no double space.
 _RESUME_ARG_RE = re.compile(r"\s*" + session_status.RESUME_RE.pattern + r"\b")
+# A periscope spawn starts Claude with `--session-id <uuid>`, which Claude refuses once that Claude
+# session exists ("Session ID … is already in use"). Restored, it must resume that Claude session instead.
+_SESSION_ID_ARG_RE = re.compile(r"--session-id[= ]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
+
 
 _CONTINUUM_SAVE_SH = Path.home() / ".tmux/plugins/tmux-continuum/scripts/continuum_save.sh"
 
@@ -135,13 +140,19 @@ def _row_session(pane_id: str | None, session_map: dict[str, str]) -> str | None
     return session_map.get(pane_id) if pane_id else None
 
 
+def _session_id_as_resume(cmd: str) -> str:
+    """`cmd` with its `--session-id <uuid>` read as `--resume <uuid>`."""
+    return _SESSION_ID_ARG_RE.sub(r"--resume \1", cmd)
+
+
 def _line_session(parts: list[str], pane_id: str | None, session_map: dict[str, str]) -> str | None:
     """The session a claude pane line resumes once rendered: its pane_sessions
     row (_rewrite_line rebuilds `claude --resume <row>`), else the `--resume`
-    its captured argv already carries (kept whole) — a restored zombie's argv
-    says it. The one rule _duplicate_resumes groups by; a duplicate grouped
-    by any other escapes, and a line that isn't one loses its session."""
-    m = _RESUME_ARG_RE.search(parts[10])
+    its captured argv already carries — a restored zombie's argv says it, and
+    _session_id_as_resume reads a spawn's `--session-id` as one. The one rule
+    _duplicate_resumes groups by; a duplicate grouped by any other escapes, and
+    a line that isn't one loses its session."""
+    m = _RESUME_ARG_RE.search(_session_id_as_resume(parts[10]))
     return _row_session(pane_id, session_map) or (m.group(1) if m else None)
 
 
@@ -161,17 +172,21 @@ def _rewrite_line(
 
     `demote`: another line keeps this pane's session (_duplicate_resumes). It
     renders as a pane with no session to resume — the session-lost shape below,
-    its own captured `--resume` stripped. Stripping `--resume` off the rendered
-    resume line instead lost the model prefix and `--effort` that shape keeps."""
+    its own captured `--resume` (or `--session-id`) stripped. Stripping `--resume`
+    off the rendered resume line instead lost the model prefix and `--effort`
+    that shape keeps."""
     parts = _claude_pane(line)
     if parts is None:
         return line, False
     captured = parts[10][1:]
-    cmd = _RESUME_ARG_RE.sub("", captured) if demote else captured
+    cmd = _session_id_as_resume(captured)
+    if demote:
+        cmd = _RESUME_ARG_RE.sub("", cmd)
 
     pane_id = pane_map.get(_position(parts))
-    # The row only: without one the captured command is kept whole, its own
-    # --resume included (_line_session) — rebuilding it would drop --effort.
+    # The row only: without one the captured command is kept, its --resume
+    # included and its --session-id read as one (_session_id_as_resume) — rebuilding
+    # it would drop --effort.
     uuid = None if demote else _row_session(pane_id, session_map)
     cfg = (config_dirs or {}).get(pane_id) if pane_id else None
     prof = (profiles or {}).get(pane_id) if pane_id else None
@@ -206,7 +221,7 @@ def _rewrite_line(
     # `--effort` (the launch level) is dropped here with every other non-channel
     # flag, like the model prefix above: /effort can change a running session,
     # and re-emitting the launch level after a reboot would undo that. On the
-    # no-session path the captured command is kept whole, flag included.
+    # no-session path the captured command keeps `--effort`.
     new_cmd = f"{prefix}claude --resume {uuid}"
     for ch in channels:
         new_cmd += f" --dangerously-load-development-channels {ch}"

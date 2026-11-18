@@ -13,6 +13,14 @@ when the server restarts, so at restore time there is nothing left to map.
 Import discipline: stdlib + `periscope.config` only — it runs under plain
 `python3`, and `periscope.activity` would drag in the Anthropic SDK.
 
+**A captured `--session-id` restores as `--resume`.** A Claude that periscope
+starts with a prompt (`channels.spawn_claude_with_prompt`) gets
+`--session-id <uuid>`, and Claude refuses to start twice with one ID ("Session
+ID … is already in use"). A pane with no `pane_sessions` row keeps its
+captured command, so without this it would come back with no Claude. The
+rewrite reads the flag as `--resume <uuid>` everywhere it reads a captured
+`--resume`: the duplicate grouping, the row-less line and the demoted line.
+
 **One `--resume` per session per save.** If several pane lines would resume
 the same session (by `pane_sessions` row, or captured argv — a restored
 zombie's argv already says `--resume`), only one keeps it: the pane whose live

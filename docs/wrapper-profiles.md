@@ -96,7 +96,7 @@ What the flag costs, and how each is handled:
   `--effort` off the live claude's command line. It's the LAUNCH level, like
   `pane_models`; `/effort` leaves argv alone.
 - **Resurrect treats it like the model.** On the session-lost path the
-  captured command is restored whole, flag included. On `--resume` the
+  captured command keeps the flag. On `--resume` the
   command is rebuilt from scratch and the flag is dropped, because
   re-emitting the launch level after a reboot would undo a later `/effort`.
 - **Only the agent window carries it.** It's on the agent's command line, so

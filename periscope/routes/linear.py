@@ -1,9 +1,10 @@
 """POST /api/linear/start — another app on this Mac starts Claude on a Linear issue's branch.
 
 The route makes the worktree, spawns Claude with a prompt through branch_spawn (the spawn path of
-/api/reviews/prepare), and links the Linear issue to the new pane. A `name` labels the new pane and
-pins the label. A Claude already on the branch is only reported (mode "existing"): its prompt is never
-pasted into a session that may be busy, and it keeps its name.
+/api/reviews/prepare), and links the Linear issue to the new pane. It answers with the new Claude's session
+id and the email of its Claude account. A `name` labels the new pane and pins the label. A Claude already on
+the branch is only reported (mode "existing"): its prompt is never pasted into a session that may be busy,
+and it keeps its name.
 Selecting the pane is a separate request (POST /api/select), sent when the user asks for it.
 """
 
@@ -49,4 +50,12 @@ async def _start(body: StartBody, repo: str, key: tuple[str, str]) -> dict:
         raise HTTPException(400, str(e)) from e
     spawned = await branch_spawn.spawn(key, wt["path"], body.prompt, body.name.strip() or None)
     store.set_window_fields(spawned["pid"], linked_linear=body.ticket, linked_linear_title=body.title or None)
-    return {"mode": "spawned", "pid": spawned["pid"], "path": wt["path"], "reused": wt["reused"]}
+    email = await asyncio.to_thread(store.account_email, spawned["account"])
+    return {
+        "mode": "spawned",
+        "pid": spawned["pid"],
+        "path": wt["path"],
+        "reused": wt["reused"],
+        "session_id": spawned["session_id"],
+        "email": email,
+    }
