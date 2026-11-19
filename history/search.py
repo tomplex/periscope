@@ -6,18 +6,11 @@ import json
 import logging
 import os
 import re
-import time
 from pathlib import Path
 
 from .db import connect
 
 log = logging.getLogger(__name__)
-
-# Periscope's resume guardrails refuse if the JSONL has been written within
-# the last `LIVE_MTIME_S` seconds — the session likely has an active
-# appender. The search result mirrors that check up-front so the UI can
-# render the disabled state without round-tripping.
-LIVE_MTIME_S = 60
 
 
 def _build_fts_query(query: str) -> str:
@@ -103,23 +96,14 @@ def search(
 
 def _normalize_rows(rows: list[dict]) -> list[dict]:
     """Shape DB rows into the API surface: parse JSON columns, drop verbose
-    blobs, compute `is_live`. `is_resuming` belongs to periscope's in-process
-    `_resuming` dict and is added at the API route layer — keep this
-    function pure (no periscope coupling)."""
-    now = time.time()
+    blobs. Whether periscope can resume a session is periscope's question
+    (routes/history.py asks it), so this function stays pure."""
     out = []
     for i, r in enumerate(rows):
-        jsonl_path = r["jsonl_path"] or ""
-        is_live = False
-        if jsonl_path:
-            try:
-                is_live = (now - os.path.getmtime(jsonl_path)) < LIVE_MTIME_S
-            except OSError:
-                is_live = False
         out.append(
             {
                 "session_id": r["session_id"],
-                "jsonl_path": jsonl_path,
+                "jsonl_path": r["jsonl_path"] or "",
                 "project_path": r["project_path"],
                 "branch": r["branch"],
                 "started_at": r["started_at"],
@@ -139,7 +123,6 @@ def _normalize_rows(rows: list[dict]) -> list[dict]:
                 "notable_cmds": json.loads(r["notable_cmds"]) if r["notable_cmds"] else [],
                 "tool_use_counts": json.loads(r["tool_use_counts"]) if r["tool_use_counts"] else {},
                 "trivial": r["summary_model"] is None,
-                "is_live": is_live,
                 "rank": i + 1,
                 "rerank_reason": r.get("rerank_reason"),
                 "rerank_score": r.get("rerank_score"),
@@ -372,8 +355,6 @@ def get_session(session_id: str, *, db_path: Path | str | None = None) -> dict |
     Reads the JSONL on demand and shapes it for a UI detail view. Returns
     None if no row matches session_id, or if the JSONL file is missing on
     disk (the row exists but is orphaned; `clean` would remove it)."""
-    import os
-
     conn = connect(db_path)
     try:
         row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()

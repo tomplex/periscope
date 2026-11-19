@@ -1,7 +1,16 @@
 """Tests for /api/history/* and /history page."""
 
+import pytest
 
-def test_history_search_with_query(client, mocker):
+
+@pytest.fixture
+def no_transcripts(mocker):
+    """Claude keeps no transcript for any session, and no pane ran one."""
+    mocker.patch("periscope.routes.history.jsonl_for_session", return_value=None)
+    mocker.patch("periscope.store.all_windows", return_value={})
+
+
+def test_history_search_with_query(client, mocker, no_transcripts):
     mocker.patch(
         "history.search",
         return_value=[{"session_id": "abc", "title": "x"}],
@@ -11,8 +20,61 @@ def test_history_search_with_query(client, mocker):
     body = r.json()
     assert body["query"] == "hello"
     assert body["results"][0]["session_id"] == "abc"
-    # is_resuming was annotated from the in-process _resuming dict.
-    assert body["results"][0]["is_resuming"] is False
+    # The same answer the resume route gives, so the page offers no dead resume.
+    assert body["results"][0]["resume_refusal"] == {"status": 404, "detail": "Claude has no transcript for session abc"}
+
+
+def test_history_search_rows_resume_when_claude_has_a_quiet_transcript(client, mocker, tmp_path):
+    import os
+    import time
+
+    jsonl = tmp_path / "abc.jsonl"
+    jsonl.write_text("{}\n")
+    os.utime(jsonl, (time.time() - 600, time.time() - 600))
+    mocker.patch("periscope.routes.history.jsonl_for_session", return_value=jsonl)
+    mocker.patch("periscope.store.all_windows", return_value={})
+    mocker.patch("history.recent", return_value=[{"session_id": "abc", "branch": "main"}])
+    r = client.get("/api/history/search?q=")
+    assert r.json()["results"][0]["resume_refusal"] is None
+
+
+def test_history_search_rows_carry_the_pane_that_last_ran_the_session(client, mocker, no_transcripts):
+    """Name, PR and ticket come from the state.json entry whose last sighting
+    carried the session id; of two entries, the newer sighting wins."""
+    mocker.patch(
+        "periscope.store.all_windows",
+        return_value={
+            "p-old": {"last_seen": {"sid": "abc", "ts": 100, "name": "old-name"}, "linked_pr": 7},
+            "p-new": {
+                "last_seen": {"sid": "abc", "ts": 200, "name": "history-p1-fixes"},
+                "linked_pr": 66,
+                "linked_linear": "THI-470",
+            },
+            "p-other": {"last_seen": {"sid": "zzz", "ts": 300, "name": "other"}},
+        },
+    )
+    mocker.patch(
+        "history.recent",
+        return_value=[{"session_id": "abc", "branch": "main"}, {"session_id": "def", "branch": "thi-402-rank"}],
+    )
+    mocker.patch("periscope.store.linear_team_keys", return_value=frozenset({"THI"}))
+    rows = client.get("/api/history/search?q=").json()["results"]
+    assert rows[0]["pane_name"] == "history-p1-fixes"
+    assert rows[0]["linked_pr"] == 66
+    assert rows[0]["linked_linear"] == "THI-470"
+    # No pane ran it: the ticket comes from the branch, as on the dashboard.
+    assert rows[1]["pane_name"] is None
+    assert rows[1]["linked_pr"] is None
+    assert rows[1]["linear_ticket"] == "THI-402"
+
+
+def test_history_search_says_rerank_was_used_only_when_a_row_was_scored(client, mocker, no_transcripts):
+    """A failed Haiku call (no key, 401) keeps the FTS order; the page must not
+    head that order "Reranked by relevance"."""
+    search = mocker.patch("history.search", return_value=[{"session_id": "a"}, {"session_id": "b"}])
+    assert client.get("/api/history/search?q=x&rerank=true").json()["rerank_used"] is False
+    search.return_value = [{"session_id": "a", "rerank_score": 0.9}, {"session_id": "b", "rerank_score": 0.1}]
+    assert client.get("/api/history/search?q=x&rerank=true").json()["rerank_used"] is True
 
 
 def test_history_search_empty_query_uses_recent(client, mocker):
@@ -23,7 +85,7 @@ def test_history_search_empty_query_uses_recent(client, mocker):
     assert recent.called
 
 
-def test_history_session_found(client, mocker):
+def test_history_session_found(client, mocker, no_transcripts):
     mocker.patch(
         "history.search.get_session",
         return_value={"session_id": "abc", "messages": []},
@@ -32,7 +94,7 @@ def test_history_session_found(client, mocker):
     assert r.status_code == 200
     body = r.json()
     assert body["session_id"] == "abc"
-    assert body["is_resuming"] is False
+    assert body["resume_refusal"]["status"] == 404
 
 
 def test_history_session_missing_returns_404(client, mocker):
