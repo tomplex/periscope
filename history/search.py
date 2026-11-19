@@ -73,7 +73,7 @@ def search(
             sql += " AND s.branch = :branch"
             params["branch"] = branch
         if since is not None:
-            sql += " AND s.started_at >= :since"
+            sql += " AND s.ended_at >= :since"
             params["since"] = since
         if until is not None:
             sql += " AND s.started_at <= :until"
@@ -132,34 +132,27 @@ def _normalize_rows(rows: list[dict]) -> list[dict]:
 
 
 def stats(*, db_path: Path | str | None = None) -> dict:
-    """Index summary for the route header + footer: total / summarized /
-    heuristic counts, distinct projects, last full scan, DB file size.
-    Single round trip; not cached (each call ~1-3ms on a populated index)."""
-    from .db import DEFAULT_DB_PATH, get_meta
-
-    path = Path(db_path) if db_path else DEFAULT_DB_PATH
+    """Index summary for the /history page: session counts, and every project
+    path, newest last turn first, for its project filter. Not cached (each
+    call ~1-3ms on a populated index)."""
     conn = connect(db_path)
     try:
         total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         summarized = conn.execute("SELECT COUNT(*) FROM sessions WHERE summary_model IS NOT NULL").fetchone()[0]
-        heuristic = total - summarized
-        projects = conn.execute("SELECT COUNT(DISTINCT project_path) FROM sessions").fetchone()[0]
-        last_scan = get_meta(conn, "last_full_scan_at")
-        haiku_model = get_meta(conn, "haiku_model")
+        project_paths = [
+            row[0]
+            for row in conn.execute(
+                "SELECT project_path FROM sessions WHERE project_path != '' "
+                "GROUP BY project_path ORDER BY MAX(ended_at) DESC"
+            )
+        ]
     finally:
         conn.close()
-    try:
-        db_bytes = path.stat().st_size
-    except OSError:
-        db_bytes = 0
     return {
         "total": total,
         "summarized": summarized,
-        "heuristic": heuristic,
-        "projects": projects,
-        "last_scan_at": int(last_scan) if last_scan else None,
-        "haiku_model": haiku_model,
-        "db_bytes": db_bytes,
+        "heuristic": total - summarized,
+        "project_paths": project_paths,
     }
 
 
@@ -171,8 +164,8 @@ def recent(
     include_trivial: bool = False,
     limit: int = 50,
 ) -> list[dict]:
-    """List recent sessions by `started_at desc` — what the UI shows on an
-    empty query. Same filters as `search()`, no FTS rank."""
+    """List sessions by their last turn, newest first — what the UI shows on
+    an empty query. Same filters as `search()`, no FTS rank."""
     conn = connect(db_path)
     try:
         sql = "SELECT * FROM sessions WHERE 1=1"
@@ -181,11 +174,11 @@ def recent(
             sql += " AND project_path = :project"
             params["project"] = project
         if since is not None:
-            sql += " AND started_at >= :since"
+            sql += " AND ended_at >= :since"
             params["since"] = since
         if not include_trivial:
             sql += " AND summary_model IS NOT NULL"
-        sql += " ORDER BY started_at DESC LIMIT :limit"
+        sql += " ORDER BY ended_at DESC LIMIT :limit"
         params["limit"] = max(1, min(limit, 200))
         rows = [dict(r) for r in conn.execute(sql, params)]
     finally:

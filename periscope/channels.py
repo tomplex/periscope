@@ -1852,7 +1852,7 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                 },
                 "since": {
                     "type": "integer",
-                    "description": "Unix timestamp lower bound on session start.",
+                    "description": "Unix timestamp lower bound on the session's last turn.",
                 },
                 "limit": {"type": "integer", "default": 10},
             },
