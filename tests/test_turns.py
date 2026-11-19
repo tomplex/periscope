@@ -313,6 +313,40 @@ def test_last_reply_for_session_is_none_without_a_transcript(tmp_path, monkeypat
     assert turns.last_reply_for_session("sid-gone") is None
 
 
+# ── resume_refusal: the one answer to "can periscope resume this?" ───────
+
+
+def _aged(path, age_s):
+    import os
+    import time
+
+    path.write_text("{}\n")
+    os.utime(path, (time.time() - age_s, time.time() - age_s))
+    return path
+
+
+def test_resume_refusal_404s_without_claudes_transcript():
+    assert turns.resume_refusal("sid-gone", None) == (404, "Claude has no transcript for session sid-gone")
+
+
+def test_resume_refusal_409s_a_transcript_written_in_the_last_minute_unless_forced(tmp_path, monkeypatch):
+    monkeypatch.setattr(turns, "_resuming", {})
+    status, detail = turns.resume_refusal("sid-live", _aged(tmp_path / "sid-live.jsonl", 5))
+    assert status == 409 and detail.startswith("session looks live (written 5s ago)")
+    assert turns.resume_refusal("sid-live", tmp_path / "sid-live.jsonl", force=True) is None
+
+
+def test_resume_refusal_409s_a_session_already_resumed_even_when_forced(tmp_path, monkeypatch):
+    monkeypatch.setattr(turns, "_resuming", {"sid-r": {"target": "resumes:4", "started_at": 0}})
+    old = _aged(tmp_path / "sid-r.jsonl", 600)
+    assert turns.resume_refusal("sid-r", old, force=True) == (409, "already resumed in resumes:4")
+
+
+def test_resume_refusal_is_none_for_a_quiet_transcript(tmp_path, monkeypatch):
+    monkeypatch.setattr(turns, "_resuming", {})
+    assert turns.resume_refusal("sid-ok", _aged(tmp_path / "sid-ok.jsonl", 600)) is None
+
+
 # ── pane_session_hook producer (SessionStart / UserPromptSubmit) ─────────
 
 
