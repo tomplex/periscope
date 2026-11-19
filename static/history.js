@@ -1,56 +1,79 @@
-// /history route — single-page conversation history search.
+// /history — find a past Claude session, read it, resume it.
 //
-// Layout: route header / search row / filter chips / body (results | detail) /
-// footer. Single mutable state object; render() does a full innerHTML rebuild
-// of #history-root and restores input focus + caret. Event delegation: one
-// click handler on the root, one keydown on the document.
+// boot() builds the page once. render() rewrites only the filter panel, the
+// list and the detail, so the search input keeps its caret and the list and
+// the transcript keep their scroll. Events delegate from the root; one keydown
+// handler serves the page.
 
-import { escapeHtml, relTime, apiCall } from './util.js';
+import { escapeHtml, relTime } from "./util.js";
 
-const RESUME_SESSION = "resumes";  // tmux session host for resume windows
+const RESUME_SESSION = "resumes"; // tmux session host for resume windows
 const STORAGE_KEY = "periscope:history:filter";
 const DEBOUNCE_MS = 200;
+// One page of results. A full page means the index may hold more.
+const LIMIT = 50;
 
-const SINCE_LABELS = {
-  today: "today",
-  week: "this week",
-  month: "this month",
-  all: "all time",
-};
+const SINCE_LABELS = { today: "today", week: "this week", month: "this month", all: "any time" };
 
 // Module state — mutated in place; render() reads it.
 const S = {
   query: "",
   filter: loadFilter(),
+  filtersOpen: false,
   results: [],
-  selectedId: null,
-  detail: null,
-  detailCache: new Map(),    // session_id → detail payload
-  stats: null,
+  answered: null, // { query, rerankUsed } of the results on screen
+  searchError: null,
   loading: false,
-  searchToken: 0,            // race-protect overlapping fetches
+  searchToken: 0, // a newer search supersedes an older one still in flight
+  selectedId: null,
+  detailCache: new Map(), // session_id → detail payload
+  detailError: null, // { id, message }
+  stats: null,
+  resumes: new Map(), // session_id → { state: "pending" | "done" | "failed", target, detail }
 };
 
+// Scroll intents for the next render.
+let listToTop = false;
+let selectedIntoView = false;
+
 const root = document.getElementById("history-root");
+let el = {}; // the regions boot() builds: input, filters, listHead, list, detail, total, announce
 
 // ── Persistence ─────────────────────────────────────────
 
 function loadFilter() {
+  const none = { project: "", since: "all", includeTrivial: false, rerank: false };
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
     return {
-      project: typeof raw.project === "string" ? raw.project : "all",
-      since: ["today", "week", "month", "all"].includes(raw.since) ? raw.since : "all",
+      // "all" is the old stored value for "every project".
+      project: typeof raw.project === "string" && raw.project !== "all" ? raw.project : "",
+      since: Object.hasOwn(SINCE_LABELS, raw.since) ? raw.since : "all",
       includeTrivial: !!raw.includeTrivial,
       rerank: !!raw.rerank,
     };
   } catch {
-    return { project: "all", since: "all", includeTrivial: false, rerank: false };
+    return none;
   }
 }
 
 function saveFilter() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(S.filter));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(S.filter));
+  } catch {}
+}
+
+// The filters that hide sessions, as words. Rerank sorts; it hides nothing.
+function activeFilterLabels() {
+  const out = [];
+  if (S.filter.project) out.push(baseName(S.filter.project));
+  if (S.filter.since !== "all") out.push(`last turn ${SINCE_LABELS[S.filter.since]}`);
+  if (S.filter.includeTrivial) out.push("short sessions included");
+  return out;
+}
+
+function filtersHideSessions() {
+  return !!S.filter.project || S.filter.since !== "all";
 }
 
 // ── Formatters ──────────────────────────────────────────
@@ -65,428 +88,433 @@ function fmtDuration(s) {
   return mm ? `${h}h ${mm}m` : `${h}h`;
 }
 
-function fmtBytes(n) {
-  if (!n) return "0 B";
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function fmtDateTime(epochSec) {
+function fmtDate(epochSec) {
   if (!epochSec) return "";
-  const d = new Date(epochSec * 1000);
-  // Match the design: "May 13, 9:14 AM"
-  const opts = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
-  return d.toLocaleString(undefined, opts);
+  return new Date(epochSec * 1000).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function fmtTime(epochMs) {
   if (!epochMs) return "";
-  const d = new Date(epochMs);
-  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return new Date(epochMs).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-function shortenPath(p) {
-  if (!p) return "";
-  // Compact `~/dev/<name>` to `<name>`; keep other paths whole.
-  return p.replace(/^~?\/(?:Users\/[^/]+\/)?dev\//, "");
+const baseName = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "";
+const homePath = (p) => (p || "").replace(/^\/Users\/[^/]+/, "~");
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const ticketOf = (r) => r.linked_linear || r.linear_ticket || null;
+const optId = (sid) => `ph-opt-${sid}`;
+
+// A file path relative to the session's project when it sits inside it.
+function relPath(path, project) {
+  return project && path.startsWith(`${project}/`) ? path.slice(project.length + 1) : homePath(path);
 }
 
-function tagClass(t) {
-  if (t === "shipped") return "is-shipped";
-  if (t === "bug") return "is-bug";
-  if (t === "design") return "is-design";
-  if (t === "unfinished") return "is-unfinished";
-  return "";
+// The one line that says what a tool call did: the input a person would
+// recognise (the command, the file, the pattern), else its first string.
+const TOOL_SUMMARY_KEYS = {
+  Bash: "command",
+  Read: "file_path",
+  Edit: "file_path",
+  Write: "file_path",
+  NotebookEdit: "notebook_path",
+  Agent: "description",
+  Task: "description",
+  Grep: "pattern",
+  Glob: "pattern",
+  WebFetch: "url",
+  WebSearch: "query",
+};
+
+function toolSummary(t) {
+  const input = t.input || {};
+  const v = input[TOOL_SUMMARY_KEYS[t.name]];
+  const s = typeof v === "string" ? v : Object.values(input).find((x) => typeof x === "string") || "";
+  return s.split("\n")[0].slice(0, 160);
 }
 
 // Wrap query-term matches in <mark>. Case-insensitive, word-boundary-free
 // so partial matches highlight. Returns escaped HTML.
 function highlight(text) {
   const escaped = escapeHtml(text || "");
-  const q = S.query.trim();
-  if (!q) return escaped;
-  const terms = q.split(/\s+/)
+  const terms = S.query
+    .trim()
+    .split(/\s+/)
     .filter(Boolean)
-    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    .map((t) => escapeHtml(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   if (!terms.length) return escaped;
-  const re = new RegExp(`(${terms.join("|")})`, "gi");
-  return escaped.replace(re, "<mark>$1</mark>");
+  return escaped.replace(new RegExp(`(${terms.join("|")})`, "gi"), "<mark>$1</mark>");
 }
 
-// ── Render helpers ──────────────────────────────────────
+// ── Regions ─────────────────────────────────────────────
 
-function renderHead() {
-  const st = S.stats;
-  const indexed = st ? `<b>${st.total.toLocaleString()}</b> sessions indexed` : `loading…`;
-  const synced = st && st.last_scan_at
-    ? `synced ${relTime(st.last_scan_at)} ago`
-    : (st ? "no full scan yet" : "");
-  const projects = st ? `${st.projects} project${st.projects === 1 ? "" : "s"}` : "";
-  const parts = [
-    `<span class="ph-row"><span class="ph-idx-pulse"></span><span>${indexed}</span></span>`,
-  ];
-  if (synced) parts.push(`<span style="color:var(--fg-4)">·</span>`, `<span>${escapeHtml(synced)}</span>`);
-  if (projects) parts.push(`<span style="color:var(--fg-4)">·</span>`, `<span>${escapeHtml(projects)}</span>`);
-  return `
-    <div class="ph-head">
-      <button class="ph-back" data-action="back">← dashboard</button>
-      <div class="ph-route-title"><span class="ph-route-slash">/</span>history</div>
-      <div class="ph-head-meta">${parts.join(" ")}</div>
-    </div>
-  `;
+// Replace a region's markup and give focus back to the control that had it:
+// a click on a filter control re-renders the panel it sits in.
+function swap(region, html) {
+  const active = document.activeElement;
+  const key = region.contains(active) ? active.dataset.focus : null;
+  region.innerHTML = html;
+  if (key) region.querySelector(`[data-focus="${key}"]`)?.focus();
 }
 
-function renderSearchRow() {
-  const count = S.results.length;
-  const countLabel = count === 1 ? "1 result" : `${count} results`;
-  return `
-    <div class="ph-search-row">
-      <div class="ph-search-input">
-        <span class="glyph">🔍</span>
-        <input id="ph-search-input" type="text" placeholder="search summaries, prompts, files, commands…"
-               autocomplete="off" spellcheck="false"
-               value="${escapeHtml(S.query)}">
-        <span class="ph-result-count">${countLabel}</span>
-        <span class="ph-kbd-hint"><span class="ps-kbd">⌘</span><span class="ps-kbd">/</span></span>
-      </div>
-    </div>
-  `;
+// Scroll `child` into its scroller by offsets. scrollIntoView would also
+// scroll the fixed-height page around it. The scroller is position: relative.
+function scrollWithin(scroller, child, mode) {
+  if (!child) return;
+  const top = child.offsetTop;
+  const bottom = top + child.offsetHeight;
+  if (mode === "third") scroller.scrollTop = top - scroller.clientHeight / 3;
+  else if (top < scroller.scrollTop) scroller.scrollTop = top;
+  else if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight;
 }
 
 function renderFilters() {
-  // Project options: the static "all" + every project_path we've seen in
-  // results. Cheap and useful; on first paint (no results yet) only "all"
-  // shows. Once Tom searches the chips populate dynamically.
-  const seenProjects = new Set();
-  for (const r of S.results) {
-    if (r.project_path) seenProjects.add(r.project_path);
-  }
-  const projectChips = ["all", ...[...seenProjects].sort()];
-  const projectHtml = projectChips.map((p) => {
-    const label = p === "all" ? "all projects" : escapeHtml(shortenPath(p));
-    const active = S.filter.project === p ? " is-active" : "";
-    return `<button class="ph-fchip${active}" data-action="set-project" data-value="${escapeHtml(p)}">${label}</button>`;
-  }).join("");
-
-  const sinceHtml = ["today", "week", "month", "all"].map((v) => {
-    const active = S.filter.since === v ? " is-active" : "";
-    return `<button class="ph-fchip${active}" data-action="set-since" data-value="${v}">${SINCE_LABELS[v]}</button>`;
-  }).join("");
-
-  const trivialActive = S.filter.includeTrivial ? " is-active" : "";
-  const rerankActive = S.filter.rerank ? " is-active" : "";
-
-  return `
-    <div class="ph-filters">
-      ${projectHtml}
-      <div class="ph-fchip-sep"></div>
-      ${sinceHtml}
-      <div class="ph-fchip-sep"></div>
-      <button class="ph-fchip${trivialActive}" data-action="toggle-trivial">
-        <span class="ph-fchip-glyph">${S.filter.includeTrivial ? "☑" : "☐"}</span> trivial
-      </button>
-      <button class="ph-fchip${rerankActive}" data-action="toggle-rerank">
-        <span class="ph-fchip-glyph">✦</span> rerank
-        <span class="ph-rerank-cost">~$0.001</span>
-      </button>
+  const f = S.filter;
+  const paths = S.stats?.project_paths || [];
+  const options = (f.project && !paths.includes(f.project) ? [f.project, ...paths] : paths)
+    .map((p) => `<option value="${escapeHtml(p)}"${p === f.project ? " selected" : ""}>${escapeHtml(homePath(p))}</option>`)
+    .join("");
+  const pills = Object.entries(SINCE_LABELS)
+    .map(
+      ([v, label]) =>
+        `<button type="button" class="ph-pill" data-action="set-since" data-value="${v}" data-focus="since-${v}" aria-pressed="${f.since === v}">${label}</button>`,
+    )
+    .join("");
+  const short = S.stats ? ` (${S.stats.heuristic})` : "";
+  swap(
+    el.filters,
+    `
+    <label class="ph-field">
+      <span class="ph-field-label">Project</span>
+      <select class="ph-select" data-action="set-project" data-focus="project">
+        <option value="">all projects</option>${options}
+      </select>
+    </label>
+    <div class="ph-field" role="group" aria-labelledby="ph-since-label">
+      <span class="ph-field-label" id="ph-since-label">Last turn</span>
+      <span class="ph-pills">${pills}</span>
     </div>
-  `;
+    <label class="ph-check">
+      <input type="checkbox" data-action="toggle-trivial" data-focus="trivial"${f.includeTrivial ? " checked" : ""}>
+      short sessions${short}
+    </label>
+    <label class="ph-check">
+      <input type="checkbox" data-action="toggle-rerank" data-focus="rerank"${f.rerank ? " checked" : ""}>
+      rerank matches with Haiku, about $0.001 a search
+    </label>
+    <button type="button" class="ph-text-btn" data-action="clear-filters" data-focus="clear"${filtersHideSessions() || f.includeTrivial ? "" : " disabled"}>clear filters</button>
+  `,
+  );
+  el.filters.hidden = !S.filtersOpen;
+  const n = activeFilterLabels().length;
+  el.filterToggle.setAttribute("aria-expanded", String(S.filtersOpen));
+  el.filterToggle.innerHTML = `Filters${n ? ` <span class="ph-count">${n}</span>` : ""}`;
 }
 
-function renderSectionHead() {
-  if (!S.query.trim() && S.results.length) {
-    return `<div class="ph-section-head">Recent</div>`;
+function listHeadText() {
+  if (S.searchError) return "Search failed";
+  if (!S.answered) return "Loading sessions…";
+  const n = S.results.length;
+  const searching = !!S.answered.query.trim();
+  const noun = searching ? (n === 1 ? "match" : "matches") : n === 1 ? "session" : "sessions";
+  const parts = [n >= LIMIT ? `first ${n} ${noun}` : `${n} ${noun}`];
+  if (n > 1) {
+    if (!searching) parts.push("newest last turn first");
+    else if (S.answered.rerankUsed) parts.push("reranked by Haiku");
+    else if (S.filter.rerank) parts.push("best text match first (rerank failed)");
+    else parts.push("best text match first");
   }
-  if (S.filter.rerank) {
-    return `<div class="ph-section-head">✦ Reranked by relevance</div>`;
-  }
-  return `<div class="ph-section-head">Sorted by BM25 rank</div>`;
+  return [...parts, ...activeFilterLabels()].join(" · ");
 }
 
-function renderResultRow(r) {
-  const selected = r.session_id === S.selectedId ? " is-selected" : "";
-  const trivial = r.trivial ? " is-trivial" : "";
+function refsHtml(r) {
+  const out = [];
+  const project = baseName(r.project_path);
+  // A worktree's folder is often named after its branch: say it once.
+  if (project !== r.branch) {
+    out.push(`<span class="ph-proj" title="${escapeHtml(r.project_path || "")}">${escapeHtml(project)}</span>`);
+  }
+  if (r.branch && r.branch !== "HEAD") {
+    out.push(`<span class="ph-ref ph-branch"><span class="ph-glyph" aria-hidden="true">⎇</span>${escapeHtml(r.branch)}</span>`);
+  }
+  if (r.linked_pr) out.push(`<span class="ph-ref" title="pull request">#${escapeHtml(r.linked_pr)}</span>`);
+  const ticket = ticketOf(r);
+  if (ticket) out.push(`<span class="ph-ref ph-ticket" title="Linear ticket">${escapeHtml(ticket)}</span>`);
+  return out.join("");
+}
+
+function marksOf(r) {
+  const out = [];
+  if (r.resume_refusal?.status === 404) out.push("no transcript");
+  if (r.was_interrupted) out.push("interrupted");
+  if (r.trivial) out.push("short session");
+  return out;
+}
+
+function renderRow(r) {
+  const selected = r.session_id === S.selectedId;
   const summary = r.summary || r.first_user_msg || "(no summary)";
-  // BM25 isn't meaningful as an absolute number to the user, but the
-  // monotonic-decreasing bar gives a visual rank cue. We render rank
-  // (1..N) since BM25's raw score isn't on the API surface.
-  const barPct = Math.max(8, 100 - (r.rank - 1) * 9);
-  const projLabel = escapeHtml(shortenPath(r.project_path || ""));
-  const meta = [
-    `<span class="ph-meta-proj">${projLabel}</span>`,
-    `<span class="ph-meta-dot">·</span>`,
-    `<span class="ph-meta-branch">${escapeHtml(r.branch || "—")}</span>`,
-    `<span class="ph-meta-dot">·</span>`,
-    `<span>${r.user_msg_count} msgs</span>`,
-    `<span class="ph-meta-dot">·</span>`,
-    `<span>${fmtDuration(r.duration_s)}</span>`,
-    `<span class="ph-meta-dot">·</span>`,
-    `<span>${escapeHtml(relTime(r.started_at) || "")} ago</span>`,
-  ];
-  if (r.trivial) meta.push(`<span class="ph-trivial-pill" title="heuristic summary only">trivial</span>`);
-  if (r.was_interrupted) meta.push(`<span class="ph-interrupted-pill">interrupted</span>`);
-
-  const tags = (r.tags || []).map((t) =>
-    `<span class="ph-tag ${tagClass(t)}">${escapeHtml(t)}</span>`
-  ).join("");
-  const tagsRow = tags ? `<div class="ph-result-tags">${tags}</div>` : "";
-
-  const rerankRow = (S.filter.rerank && r.rerank_reason)
-    ? `<div class="ph-result-rerank"><span class="ph-rerank-mark">✦</span><span>${escapeHtml(r.rerank_reason)}</span></div>`
-    : "";
-
+  const marks = marksOf(r)
+    .map((m) => `<span class="ph-mark">${m}</span>`)
+    .join("");
   return `
-    <div class="ph-result${selected}${trivial}" data-action="select" data-id="${escapeHtml(r.session_id)}">
-      <div class="ph-result-head">
-        <div class="ph-result-summary">${highlight(summary)}</div>
-        <div class="ph-result-rank">
-          <span class="ph-bm25">
-            <span class="ph-bm25-bar"><i style="width:${barPct}%"></i></span>
-            #${r.rank}
-          </span>
-        </div>
+    <div class="ph-row${selected ? " is-selected" : ""}" role="option" id="${optId(r.session_id)}"
+         aria-selected="${selected}" data-action="select" data-id="${escapeHtml(r.session_id)}">
+      <div class="ph-row-line">
+        <span class="ph-row-title">${highlight(r.pane_name || summary)}</span>
+        <span class="ph-row-age" title="last turn ${escapeHtml(fmtDate(r.ended_at))}">${relTime(r.ended_at)} ago</span>
       </div>
-      <div class="ph-result-meta">${meta.join(" ")}</div>
-      ${tagsRow}
-      ${rerankRow}
-    </div>
-  `;
+      ${r.pane_name ? `<div class="ph-row-summary">${highlight(summary)}</div>` : ""}
+      <div class="ph-row-meta">${refsHtml(r)}${marks}</div>
+    </div>`;
 }
 
-function renderResults() {
-  if (S.loading && !S.results.length) {
-    return `<div class="ph-empty"><div class="ph-empty-sub">searching…</div></div>`;
-  }
-  if (!S.results.length) {
-    if (S.query.trim()) {
-      return `
-        <div class="ph-empty">
-          <div class="ph-empty-title">No matches</div>
-          <div class="ph-empty-sub">Try a broader query, toggle <b>trivial</b>, or expand the time range.</div>
-        </div>
-      `;
+function emptyHtml(title, sub = "", action = "") {
+  return `<div class="ph-empty"><p class="ph-empty-title">${title}</p>${sub ? `<p class="ph-empty-sub">${sub}</p>` : ""}${action}</div>`;
+}
+
+const clearFiltersBtn = `<button type="button" class="ph-btn" data-action="clear-filters">Clear filters</button>`;
+
+function renderList() {
+  el.listHead.textContent = listHeadText();
+  let html;
+  if (S.searchError) {
+    html = emptyHtml(
+      "Search failed",
+      escapeHtml(S.searchError),
+      `<button type="button" class="ph-btn" data-action="retry">Try again</button>`,
+    );
+  } else if (!S.answered) {
+    html = "";
+  } else if (!S.results.length) {
+    const q = S.answered.query.trim();
+    if (S.stats && S.stats.total === 0) {
+      html = emptyHtml("History has no sessions yet", "Run <code>python -m history backfill</code> to index them.");
+    } else if (filtersHideSessions()) {
+      html = emptyHtml(
+        q ? `No session matches “${escapeHtml(q)}” here` : "No session matches these filters",
+        `Filters: ${escapeHtml(activeFilterLabels().join(", "))}.`,
+        clearFiltersBtn,
+      );
+    } else {
+      html = emptyHtml(`No session matches “${escapeHtml(q)}”`, "Try fewer or shorter words.");
     }
-    return `
-      <div class="ph-empty">
-        <div class="ph-empty-title">No indexed sessions yet</div>
-        <div class="ph-empty-sub">Run <code>python -m history backfill</code> to build the index.</div>
-      </div>
-    `;
+  } else {
+    html = S.results.map(renderRow).join("");
   }
-  return renderSectionHead() + S.results.map(renderResultRow).join("");
+  swap(el.list, html);
+  if (listToTop) el.list.scrollTop = 0;
+  if (S.selectedId && S.results.length) {
+    el.input.setAttribute("aria-activedescendant", optId(S.selectedId));
+  } else {
+    el.input.removeAttribute("aria-activedescendant");
+  }
+  if (selectedIntoView) scrollWithin(el.list, document.getElementById(optId(S.selectedId)));
 }
 
-function renderDetailEmpty(msg) {
+function resumeView(r) {
+  const sid = escapeHtml(r.session_id);
+  const run = S.resumes.get(r.session_id);
+  const dashboard = `<a class="ph-link" href="/">Open the dashboard</a>`;
+  if (run?.state === "done") {
+    return {
+      control: "",
+      status: `Resumed in tmux window <span class="ph-ref">${escapeHtml(run.target)}</span>. ${dashboard}`,
+    };
+  }
+  if (run?.state === "pending") {
+    return { control: `<button type="button" class="ph-btn is-primary" disabled>Resuming…</button>`, status: "" };
+  }
+  const refusal = r.resume_refusal;
+  if (refusal?.status === 404) {
+    return { control: "", status: "Claude has no transcript for this session, so it cannot resume it." };
+  }
+  if (refusal) {
+    const why = escapeHtml(refusal.detail.charAt(0).toUpperCase() + refusal.detail.slice(1));
+    return {
+      control: `<button type="button" class="ph-btn is-primary" disabled>Resume</button>`,
+      status: `${why}.${refusal.detail.startsWith("already resumed") ? ` ${dashboard}` : ""}`,
+    };
+  }
+  return {
+    control: `<button type="button" class="ph-btn is-primary" data-action="resume" data-id="${sid}" data-focus="resume"
+                title="claude --resume in a new window of tmux session ${RESUME_SESSION}">Resume <span class="ps-kbd">⌘↵</span></button>`,
+    status: run?.state === "failed" ? `Resume failed: ${escapeHtml(run.detail)}` : "",
+  };
+}
+
+function renderMore(r) {
+  const files = r.files_touched || [];
+  const cmds = r.notable_cmds || [];
+  if (!files.length && !cmds.length) return "";
+  const label = [files.length ? plural(files.length, "file") : "", cmds.length ? plural(cmds.length, "command") : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const fileItems = files.map((f) => `<li class="ph-path">${escapeHtml(relPath(f, r.project_path))}</li>`).join("");
+  const cmdItems = cmds.map((c) => `<li class="ph-cmd">${escapeHtml(c)}</li>`).join("");
   return `
-    <div class="ph-empty">
-      <div class="ph-empty-title">${escapeHtml(msg)}</div>
-    </div>
-  `;
-}
-
-function renderResumeButton(r) {
-  const blocked = r.is_live || r.is_resuming;
-  const title = r.is_live
-    ? "Session is currently live (last modified < 60s). Wait or focus the running window."
-    : r.is_resuming
-      ? "Another resume in progress for this session."
-      : `claude --resume in a new tmux window (session: ${RESUME_SESSION})`;
-  const cls = blocked ? "ph-resume is-disabled" : "ph-resume";
-  const dis = blocked ? " disabled aria-disabled=\"true\"" : "";
-  return `<button class="${cls}" data-action="resume" data-id="${escapeHtml(r.session_id)}" title="${escapeHtml(title)}"${dis}>↻ resume</button>`;
-}
-
-function renderDetailHead(r) {
-  const proj = escapeHtml(shortenPath(r.project_path || ""));
-  const startedDate = r.started_at ? fmtDateTime(r.started_at) : "";
-  const dur = fmtDuration(r.duration_s);
-  const idShort = r.session_id ? `${r.session_id.slice(0, 10)}…` : "";
-
-  const files = (r.files_touched || []).slice(0, 8).map((f) => {
-    const idx = f.lastIndexOf("/");
-    const dir = idx >= 0 ? f.slice(0, idx + 1) : "";
-    const name = idx >= 0 ? f.slice(idx + 1) : f;
-    return `<span class="ph-file"><span class="ph-file-dir">${escapeHtml(dir)}</span>${escapeHtml(name)}</span>`;
-  }).join("");
-  const filesOverflow = (r.files_touched || []).length > 8
-    ? `<span class="ph-file" style="color:var(--fg-4)">+${r.files_touched.length - 8} more</span>`
-    : "";
-  const filesRow = files ? `<div class="ph-detail-files">${files}${filesOverflow}</div>` : "";
-
-  const cmds = (r.notable_cmds || []).map((c) =>
-    `<span class="ph-cmd">${escapeHtml(c)}</span>`
-  ).join("");
-  const cmdsRow = cmds ? `<div class="ph-detail-cmds">${cmds}</div>` : "";
-
-  const interruptedPill = r.was_interrupted
-    ? `<span class="dm-pill is-interrupted">interrupted</span>` : "";
-  const livePill = r.is_live
-    ? `<span class="dm-pill is-resuming">live · cannot resume</span>` : "";
-
-  return `
-    <div class="ph-detail-head">
-      <div class="ph-detail-title-row">
-        <div class="ph-detail-title">${highlight(r.summary || r.first_user_msg || "(no summary)")}</div>
-        <div class="ph-detail-actions">
-          ${renderResumeButton(r)}
-          <button class="modal-actions-btn ph-copy" data-action="copy-id" data-id="${escapeHtml(r.session_id)}">copy id</button>
-        </div>
-      </div>
-      <div class="ph-detail-meta">
-        <span class="dm-pill" title="${escapeHtml(r.session_id || "")}">${escapeHtml(idShort)}</span>
-        <span><b>${proj}</b></span>
-        <span style="color:var(--fg-4)">·</span>
-        <span>${escapeHtml(r.branch || "—")}</span>
-        <span style="color:var(--fg-4)">·</span>
-        <span>${escapeHtml(startedDate)} · ${escapeHtml(dur)}</span>
-        <span style="color:var(--fg-4)">·</span>
-        <span><b>${r.user_msg_count || 0}</b> user · <b>${r.asst_msg_count || 0}</b> assistant · <b>${r.tool_use_count || 0}</b> tools</span>
-        ${interruptedPill}
-        ${livePill}
-      </div>
-      ${filesRow}
-      ${cmdsRow}
-    </div>
-  `;
+    <details class="ph-more">
+      <summary data-focus="more">${label}</summary>
+      ${fileItems ? `<ul class="ph-more-list">${fileItems}</ul>` : ""}
+      ${cmdItems ? `<ul class="ph-more-list">${cmdItems}</ul>` : ""}
+    </details>`;
 }
 
 function renderMsg(m) {
-  const at = m.ts_ms ? fmtTime(m.ts_ms) : "";
-  if (m.role === "tool" || (m.role === "assistant" && Array.isArray(m.tool_uses) && m.tool_uses.length)) {
-    // Assistant turn that includes tool_use blocks: render the tool calls
-    // inline below the text. (The API returns tool calls attached to the
-    // assistant message, not as separate "tool" role rows.)
-    const toolsHtml = (m.tool_uses || []).map((t) => `
-      <div class="ph-msg role-tool">
-        <div class="ph-msg-gutter"><span class="ph-role-label">tool</span></div>
-        <div class="ph-msg-body">
-          <span class="ph-tool-head">${escapeHtml(t.name || "tool")} <span class="ph-tool-sub">${escapeHtml((t.input && JSON.stringify(t.input).slice(0, 80)) || "")}</span></span>
-        </div>
-      </div>
-    `).join("");
-    const text = m.text
-      ? `<div class="ph-msg role-assistant">
-           <div class="ph-msg-gutter"><span class="ph-role-label">claude</span>${at}</div>
-           <div class="ph-msg-body">${highlight(m.text)}</div>
-         </div>`
-      : "";
-    return text + toolsHtml;
+  if (m.role === "system") {
+    return m.kind === "compact" ? `<div class="ph-divider"><span>context compacted ${fmtTime(m.ts_ms)}</span></div>` : "";
   }
-  const roleLabel = m.role === "user" ? "you" : m.role === "assistant" ? "claude" : escapeHtml(m.role);
-  return `
-    <div class="ph-msg role-${escapeHtml(m.role)}">
-      <div class="ph-msg-gutter">
-        <span class="ph-role-label">${roleLabel}</span>${at}
-      </div>
-      <div class="ph-msg-body">${highlight(m.text || "")}</div>
-    </div>
-  `;
+  const at = m.ts_ms ? `<time>${fmtTime(m.ts_ms)}</time>` : "";
+  const text = m.text
+    ? `<div class="ph-msg role-${m.role === "user" ? "user" : "assistant"}">
+         <div class="ph-msg-gutter"><span class="ph-role">${m.role === "user" ? "you" : "claude"}</span>${at}</div>
+         <div class="ph-msg-body">${highlight(m.text)}</div>
+       </div>`
+    : "";
+  const tools = (m.tool_uses || [])
+    .map(
+      (t) =>
+        `<li class="ph-tool"><span class="ph-tool-name">${escapeHtml(t.name || "tool")}</span><span class="ph-tool-sub">${highlight(toolSummary(t))}</span></li>`,
+    )
+    .join("");
+  return text + (tools ? `<ul class="ph-tools">${tools}</ul>` : "");
 }
 
 function renderDetail() {
-  const sel = S.results.find((r) => r.session_id === S.selectedId);
-  if (!sel) return renderDetailEmpty("Select a result");
-  // Detail body lazy-loads; fall back to the search row's metadata while
-  // waiting. The head doesn't need detail data — search results already
-  // carry everything it shows.
-  const detail = S.detail && S.detail.session_id === sel.session_id ? S.detail : sel;
-  const messagesHtml = detail.messages && detail.messages.length
-    ? detail.messages.map(renderMsg).join("")
-    : (S.detail
-        ? `<div class="ph-empty"><div class="ph-empty-sub">(no parsed messages)</div></div>`
-        : `<div class="ph-empty"><div class="ph-empty-sub">loading messages…</div></div>`);
-  return `
-    ${renderDetailHead(detail)}
-    <div class="ph-detail-body">${messagesHtml}</div>
-  `;
-}
-
-function renderFoot() {
-  const meta = S.stats
-    ? `last indexer run · ${S.stats.last_scan_at ? relTime(S.stats.last_scan_at) + " ago" : "never"} · ${S.stats.total.toLocaleString()} sessions · ${fmtBytes(S.stats.db_bytes)} index`
+  const row = S.results.find((r) => r.session_id === S.selectedId);
+  if (!row) {
+    swap(el.detail, S.results.length ? emptyHtml("Select a session to read it") : "");
+    return;
+  }
+  const loaded = S.detailCache.get(row.session_id);
+  // The row wins: it carries the newest resume answer.
+  const r = loaded ? { ...loaded, ...row } : row;
+  const summary = r.summary || r.first_user_msg || "(no summary)";
+  const { control, status } = resumeView(r);
+  const tags = (r.tags || []).length
+    ? `<ul class="ph-tags" aria-label="tags">${r.tags.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>`
     : "";
-  return `
-    <div class="ph-foot">
-      <span><span class="ps-kbd">↑</span><span class="ps-kbd">↓</span> navigate</span>
-      <span><span class="ps-kbd">↵</span> focus detail</span>
-      <span><span class="ps-kbd">⌘</span><span class="ps-kbd">↵</span> resume</span>
-      <span><span class="ps-kbd">esc</span> back</span>
-      <span class="ph-foot-meta">${escapeHtml(meta)}</span>
+  const facts = [
+    `last turn ${escapeHtml(fmtDate(r.ended_at))}`,
+    `ran ${fmtDuration(r.duration_s)}`,
+    plural(r.user_msg_count || 0, "prompt"),
+    plural(r.tool_use_count || 0, "tool call"),
+  ];
+  if (r.was_interrupted) facts.push("interrupted");
+
+  let body;
+  if (S.detailError?.id === row.session_id) {
+    body = emptyHtml("Could not load this session", escapeHtml(S.detailError.message));
+  } else if (!loaded) {
+    body = emptyHtml("Loading the transcript…");
+  } else if (loaded.jsonl_missing) {
+    body = emptyHtml("History lost its copy of this transcript", "Only the summary above remains.");
+  } else if (!loaded.messages.length) {
+    body = emptyHtml("This transcript has no messages");
+  } else {
+    body = loaded.messages.map(renderMsg).join("");
+  }
+
+  // Same session on screen: keep the transcript's scroll and the open list
+  // of files. A transcript that just loaded opens at the first match.
+  const sameSession = el.detail.dataset.id === row.session_id;
+  const keepTop = sameSession && el.detail.dataset.loaded === String(!!loaded);
+  const top = keepTop ? el.detail.querySelector(".ph-detail-body")?.scrollTop || 0 : 0;
+  const moreOpen = sameSession && !!el.detail.querySelector(".ph-more")?.open;
+  swap(
+    el.detail,
+    `
+    <div class="ph-detail-head">
+      <div class="ph-detail-titlerow">
+        <h2 class="ph-detail-title${r.pane_name ? "" : " is-summary"}">${highlight(r.pane_name || summary)}</h2>
+        <div class="ph-detail-actions">
+          ${control}
+          <button type="button" class="ph-btn" data-action="copy-id" data-id="${escapeHtml(r.session_id)}" data-focus="copy">Copy session id</button>
+        </div>
+      </div>
+      ${r.pane_name ? `<p class="ph-detail-summary">${highlight(summary)}</p>` : ""}
+      <div class="ph-detail-refs">${refsHtml(r)}<span class="ph-ref" title="${escapeHtml(r.session_id)}">${escapeHtml(r.session_id.slice(0, 8))}</span></div>
+      <p class="ph-detail-facts">${facts.join(" · ")}</p>
+      ${status ? `<p class="ph-resume-status">${status}</p>` : ""}
+      ${tags}
+      ${renderMore(r)}
     </div>
-  `;
+    <div class="ph-detail-body" tabindex="0" aria-label="Transcript">${body}</div>
+  `,
+  );
+  el.detail.dataset.id = row.session_id;
+  el.detail.dataset.loaded = String(!!loaded);
+  const next = el.detail.querySelector(".ph-detail-body");
+  if (keepTop) next.scrollTop = top;
+  else if (loaded) scrollWithin(next, next.querySelector("mark"), "third");
+  if (moreOpen) el.detail.querySelector(".ph-more").open = true;
 }
 
 function render() {
-  // Preserve search-input focus + caret across the full innerHTML rebuild.
-  // The input is the only stateful focus surface; everything else is purely
-  // derived from S.
-  const active = document.activeElement;
-  const wasInSearch = active && active.id === "ph-search-input";
-  const caret = wasInSearch
-    ? { start: active.selectionStart, end: active.selectionEnd }
-    : null;
+  renderList();
+  renderDetail();
+  el.total.textContent = S.stats ? `${S.stats.total.toLocaleString()} sessions in history` : "";
+  listToTop = false;
+  selectedIntoView = false;
+}
 
-  root.innerHTML = `
-    ${renderHead()}
-    ${renderSearchRow()}
-    ${renderFilters()}
-    <div class="ph-body">
-      <div class="ph-results">${renderResults()}</div>
-      <div class="ph-detail">${renderDetail()}</div>
-    </div>
-    ${renderFoot()}
-  `;
-
-  if (wasInSearch) {
-    const input = document.getElementById("ph-search-input");
-    if (input) {
-      input.focus();
-      try { input.setSelectionRange(caret.start, caret.end); } catch {}
-    }
-  }
+function announce(msg) {
+  el.announce.textContent = msg;
 }
 
 // ── Fetch ───────────────────────────────────────────────
 
+// The error a failed response carries: FastAPI's `detail`, else the status.
+async function responseError(res) {
+  const body = await res.json().catch(() => ({}));
+  return new Error(body.detail ? `${body.detail} (HTTP ${res.status})` : `periscope answered HTTP ${res.status}`);
+}
+
+// Calendar boundaries in local time: "today" starts at midnight, the week on Monday.
 function sinceToEpoch(since) {
   if (since === "all") return null;
-  const now = Math.floor(Date.now() / 1000);
-  if (since === "today") return now - 86400;
-  if (since === "week") return now - 7 * 86400;
-  if (since === "month") return now - 30 * 86400;
-  return null;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  if (since === "week") d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  if (since === "month") d.setDate(1);
+  return Math.floor(d.getTime() / 1000);
 }
 
 async function fetchSearch() {
   const token = ++S.searchToken;
+  const query = S.query;
   S.loading = true;
-  const params = new URLSearchParams();
-  params.set("q", S.query);
-  if (S.filter.project && S.filter.project !== "all") params.set("project", S.filter.project);
+  const params = new URLSearchParams({ q: query, limit: String(LIMIT) });
+  if (S.filter.project) params.set("project", S.filter.project);
   const since = sinceToEpoch(S.filter.since);
   if (since != null) params.set("since", String(since));
   if (S.filter.includeTrivial) params.set("include_trivial", "true");
   if (S.filter.rerank) params.set("rerank", "true");
   try {
-    const res = await fetch(`/api/history/search?${params.toString()}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetch(`/api/history/search?${params}`);
+    if (!res.ok) throw await responseError(res);
     const data = await res.json();
-    if (token !== S.searchToken) return;  // a newer query has superseded us
+    if (token !== S.searchToken) return;
+    const newQuery = S.answered?.query !== query;
     S.results = data.results || [];
-    // Preserve selection by session_id if still present, else first row.
-    if (S.selectedId && !S.results.find((r) => r.session_id === S.selectedId)) {
-      S.selectedId = S.results[0]?.session_id || null;
-    } else if (!S.selectedId) {
-      S.selectedId = S.results[0]?.session_id || null;
+    S.answered = { query, rerankUsed: !!data.rerank_used };
+    S.searchError = null;
+    // A new query starts at its best match; a filter change keeps the row
+    // you were reading while it is still in the list.
+    if (newQuery || !S.results.some((r) => r.session_id === S.selectedId)) {
+      S.selectedId = S.results[0]?.session_id ?? null;
+      listToTop = true;
     }
-    // Selection changed → fetch detail (cached if known).
     if (S.selectedId) ensureDetail(S.selectedId);
   } catch (e) {
     if (token !== S.searchToken) return;
     S.results = [];
-    console.error("history search failed:", e);
+    S.selectedId = null;
+    S.searchError = e instanceof TypeError ? "periscope did not answer. Is the server running?" : e.message;
   } finally {
     if (token === S.searchToken) {
       S.loading = false;
@@ -496,30 +524,16 @@ async function fetchSearch() {
 }
 
 async function ensureDetail(sessionId) {
-  if (!sessionId) {
-    S.detail = null;
-    return;
-  }
-  if (S.detailCache.has(sessionId)) {
-    S.detail = S.detailCache.get(sessionId);
-    return;
-  }
-  // Don't block render on the detail fetch; render with placeholder, then
-  // re-render when it lands.
-  S.detail = null;
+  if (S.detailCache.has(sessionId)) return;
   try {
     const res = await fetch(`/api/history/session/${encodeURIComponent(sessionId)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    S.detailCache.set(sessionId, data);
-    // Only commit if the user is still on this row.
-    if (S.selectedId === sessionId) {
-      S.detail = data;
-      render();
-    }
+    if (!res.ok) throw await responseError(res);
+    S.detailCache.set(sessionId, await res.json());
+    if (S.detailError?.id === sessionId) S.detailError = null;
   } catch (e) {
-    console.error("history detail fetch failed:", e);
+    S.detailError = { id: sessionId, message: e instanceof TypeError ? "periscope did not answer." : e.message };
   }
+  if (S.selectedId === sessionId) renderDetail();
 }
 
 async function fetchStats() {
@@ -527,171 +541,207 @@ async function fetchStats() {
     const res = await fetch("/api/history/stats");
     if (!res.ok) return;
     S.stats = await res.json();
+    renderFilters();
     render();
-  } catch (e) {
-    console.error("history stats failed:", e);
+  } catch {
+    // The page works without counts and the project list; the search reports the outage.
   }
 }
 
 async function doResume(sessionId) {
-  const params = new URLSearchParams();
-  params.set("session", RESUME_SESSION);
-  params.set("mode", "resume");
-  params.set("resume_id", sessionId);
-  const data = await apiCall("resume", `/api/window/new?${params.toString()}`, {
-    method: "POST",
-  });
-  if (data && data.target) {
-    // Hand off to the dashboard and ask it to pop the modal for the freshly-
-    // spawned window. The dashboard reads `modal` once and strips it from the
-    // URL so a refresh doesn't keep re-opening the same modal.
-    window.location.href = `/?modal=${encodeURIComponent(data.target)}`;
+  const row = S.results.find((r) => r.session_id === sessionId);
+  const run = S.resumes.get(sessionId);
+  if (!row || row.resume_refusal || run?.state === "pending" || run?.state === "done") return;
+  S.resumes.set(sessionId, { state: "pending" });
+  renderDetail();
+  const params = new URLSearchParams({ session: RESUME_SESSION, mode: "resume", resume_id: sessionId });
+  let res;
+  let data = {};
+  try {
+    res = await fetch(`/api/window/new?${params}`, { method: "POST" });
+    data = await res.json().catch(() => ({}));
+  } catch {
+    S.resumes.set(sessionId, { state: "failed", detail: "periscope did not answer." });
+    renderDetail();
+    announce("Resume failed: periscope did not answer.");
+    return;
   }
+  if (res.ok) {
+    S.resumes.set(sessionId, { state: "done", target: data.target });
+    row.resume_refusal = { status: 409, detail: `already resumed in ${data.target}` };
+    announce(`Resumed in tmux window ${data.target}.`);
+  } else if (res.status === 404 || res.status === 409) {
+    // The server's answer is newer than the row's: it becomes the row's.
+    S.resumes.delete(sessionId);
+    row.resume_refusal = { status: res.status, detail: data.detail || `HTTP ${res.status}` };
+    announce(`Resume refused: ${row.resume_refusal.detail}.`);
+  } else {
+    S.resumes.set(sessionId, { state: "failed", detail: data.detail || `HTTP ${res.status}` });
+    announce(`Resume failed: ${data.detail || `HTTP ${res.status}`}.`);
+  }
+  renderList();
+  renderDetail();
 }
 
-// ── Event wiring ────────────────────────────────────────
+// ── Events ──────────────────────────────────────────────
 
 let searchTimer = null;
 
+function select(id, { scroll = false } = {}) {
+  if (!id || id === S.selectedId) return;
+  S.selectedId = id;
+  selectedIntoView = scroll;
+  renderList();
+  renderDetail();
+  selectedIntoView = false;
+  ensureDetail(id);
+}
+
+function setQuery(q) {
+  S.query = q;
+  const url = new URL(window.location.href);
+  if (q) url.searchParams.set("q", q);
+  else url.searchParams.delete("q");
+  history.replaceState(null, "", url.toString());
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(fetchSearch, DEBOUNCE_MS);
+}
+
+function setFilter(patch) {
+  Object.assign(S.filter, patch);
+  saveFilter();
+  renderFilters();
+  fetchSearch();
+}
+
 function onRootClick(e) {
   const btn = e.target.closest("[data-action]");
-  if (!btn) return;
-  const action = btn.dataset.action;
-  const value = btn.dataset.value;
-  const id = btn.dataset.id;
+  if (!btn || btn.disabled) return;
+  const { action, value, id } = btn.dataset;
+  if (action === "select") select(id);
+  else if (action === "toggle-filters") {
+    S.filtersOpen = !S.filtersOpen;
+    renderFilters();
+  } else if (action === "set-since") setFilter({ since: value });
+  else if (action === "clear-filters") setFilter({ project: "", since: "all", includeTrivial: false });
+  else if (action === "retry") fetchSearch();
+  else if (action === "resume") doResume(id);
+  else if (action === "copy-id") {
+    const done = (text) => {
+      btn.textContent = text;
+      setTimeout(() => {
+        btn.textContent = "Copy session id";
+      }, 1500);
+    };
+    navigator.clipboard?.writeText(id).then(
+      () => done("Copied"),
+      () => done("Copy failed"),
+    );
+  }
+}
 
-  if (action === "back") {
-    window.location.href = "/";
-    return;
-  }
-  if (action === "select") {
-    if (S.selectedId === id) return;
-    S.selectedId = id;
-    S.detail = S.detailCache.get(id) || null;
-    render();
-    if (!S.detail) ensureDetail(id);
-    return;
-  }
-  if (action === "set-project") {
-    S.filter.project = value;
-    saveFilter();
-    fetchSearch();
-    return;
-  }
-  if (action === "set-since") {
-    S.filter.since = value;
-    saveFilter();
-    fetchSearch();
-    return;
-  }
-  if (action === "toggle-trivial") {
-    S.filter.includeTrivial = !S.filter.includeTrivial;
-    saveFilter();
-    fetchSearch();
-    return;
-  }
-  if (action === "toggle-rerank") {
-    S.filter.rerank = !S.filter.rerank;
-    saveFilter();
-    fetchSearch();
-    return;
-  }
-  if (action === "resume") {
-    doResume(id);
-    return;
-  }
-  if (action === "copy-id") {
-    navigator.clipboard?.writeText(id).then(() => {
-      btn.textContent = "copied ✓";
-      setTimeout(() => { btn.textContent = "copy id"; }, 1500);
-    });
-    return;
-  }
+function onRootChange(e) {
+  const action = e.target.dataset.action;
+  if (action === "set-project") setFilter({ project: e.target.value });
+  else if (action === "toggle-trivial") setFilter({ includeTrivial: e.target.checked });
+  else if (action === "toggle-rerank") setFilter({ rerank: e.target.checked });
 }
 
 function onRootInput(e) {
-  if (e.target.id !== "ph-search-input") return;
-  S.query = e.target.value;
-  // Update the URL so the query is shareable / bookmarkable.
-  const url = new URL(window.location.href);
-  if (S.query) url.searchParams.set("q", S.query); else url.searchParams.delete("q");
-  history.replaceState(null, "", url.toString());
-  if (searchTimer) clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    searchTimer = null;
-    fetchSearch();
-  }, DEBOUNCE_MS);
+  if (e.target === el.input) setQuery(e.target.value);
 }
 
 function onDocKeydown(e) {
-  // ⌘/ — focus search from anywhere.
   if ((e.metaKey || e.ctrlKey) && e.key === "/") {
     e.preventDefault();
-    document.getElementById("ph-search-input")?.focus();
+    el.input.focus();
+    el.input.select();
     return;
   }
-  const inSearch = document.activeElement?.id === "ph-search-input";
-  // Esc: clear search if non-empty, else back to dashboard.
-  if (e.key === "Escape") {
-    if (inSearch && S.query) {
-      const input = document.getElementById("ph-search-input");
-      input.value = "";
-      S.query = "";
-      // Drop the URL query immediately.
-      const url = new URL(window.location.href);
-      url.searchParams.delete("q");
-      history.replaceState(null, "", url.toString());
-      fetchSearch();
-      return;
-    }
-    e.preventDefault();
-    window.location.href = "/";
-    return;
-  }
-  // Arrow keys move selection. Skip when the input is focused — text-cursor
-  // movement inside the input shouldn't get hijacked.
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-    if (inSearch) return;
-    if (!S.results.length) return;
-    e.preventDefault();
-    const idx = S.results.findIndex((r) => r.session_id === S.selectedId);
-    const next = e.key === "ArrowDown"
-      ? Math.min(S.results.length - 1, (idx < 0 ? 0 : idx + 1))
-      : Math.max(0, (idx < 0 ? 0 : idx - 1));
-    const id = S.results[next]?.session_id;
-    if (id && id !== S.selectedId) {
-      S.selectedId = id;
-      S.detail = S.detailCache.get(id) || null;
-      render();
-      if (!S.detail) ensureDetail(id);
-    }
-    return;
-  }
-  // ⌘↵ — resume selected row.
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
     e.preventDefault();
-    if (S.selectedId) {
-      const row = S.results.find((r) => r.session_id === S.selectedId);
-      if (row && !row.is_live && !row.is_resuming) {
-        doResume(S.selectedId);
-      }
+    if (S.selectedId) doResume(S.selectedId);
+    return;
+  }
+  // Esc clears the search, then closes the filters. It never leaves the page:
+  // "← dashboard" does that.
+  if (e.key === "Escape") {
+    if (S.query) {
+      e.preventDefault();
+      el.input.value = "";
+      setQuery("");
+    } else if (S.filtersOpen) {
+      S.filtersOpen = false;
+      renderFilters();
+      el.filterToggle.focus();
     }
+    return;
+  }
+  // ↑↓ move the selection from the search field and from the list's
+  // surroundings; a select, a checkbox or the transcript keeps its own keys.
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    const t = e.target;
+    const ours = t === el.input || t === document.body || el.list.contains(t);
+    if (!ours || !S.results.length) return;
+    e.preventDefault();
+    const idx = S.results.findIndex((r) => r.session_id === S.selectedId);
+    const next = e.key === "ArrowDown" ? Math.min(S.results.length - 1, idx + 1) : Math.max(0, idx - 1);
+    select(S.results[next]?.session_id, { scroll: true });
   }
 }
 
 // ── Boot ────────────────────────────────────────────────
 
 function boot() {
-  // Hydrate query from URL so deep-links work.
-  const params = new URLSearchParams(window.location.search);
-  const initQ = params.get("q") || "";
-  S.query = initQ;
+  S.query = new URLSearchParams(window.location.search).get("q") || "";
+  root.innerHTML = `
+    <header class="ph-bar">
+      <a class="ph-back" href="/">← dashboard</a>
+      <h1 class="ph-title">History</h1>
+      <div class="ph-search">
+        <input id="ph-search-input" type="text" role="combobox" aria-expanded="true" aria-controls="ph-results"
+               aria-autocomplete="list" aria-label="Search sessions"
+               placeholder="search summaries, prompts, files and commands" autocomplete="off" spellcheck="false">
+        <span class="ps-kbd" aria-hidden="true">⌘/</span>
+      </div>
+      <button type="button" class="ph-btn ph-filter-toggle" data-action="toggle-filters" aria-controls="ph-filters" aria-expanded="false">Filters</button>
+    </header>
+    <div class="ph-filters" id="ph-filters" hidden></div>
+    <main class="ph-body">
+      <section class="ph-list" aria-label="Sessions">
+        <p class="ph-list-head" aria-live="polite"></p>
+        <div class="ph-results" id="ph-results" role="listbox" aria-label="Sessions"></div>
+      </section>
+      <section class="ph-detail" aria-label="Session"></section>
+    </main>
+    <footer class="ph-foot">
+      <span><span class="ps-kbd">↑</span><span class="ps-kbd">↓</span> select</span>
+      <span><span class="ps-kbd">⌘↵</span> resume</span>
+      <span><span class="ps-kbd">esc</span> clear the search</span>
+      <span class="ph-foot-total"></span>
+    </footer>
+    <p class="ph-sr-only" aria-live="polite"></p>
+  `;
+  el = {
+    input: root.querySelector("#ph-search-input"),
+    filterToggle: root.querySelector(".ph-filter-toggle"),
+    filters: root.querySelector("#ph-filters"),
+    listHead: root.querySelector(".ph-list-head"),
+    list: root.querySelector("#ph-results"),
+    detail: root.querySelector(".ph-detail"),
+    total: root.querySelector(".ph-foot-total"),
+    announce: root.querySelector(".ph-sr-only"),
+  };
+  el.input.value = S.query;
 
   root.addEventListener("click", onRootClick);
+  root.addEventListener("change", onRootChange);
   root.addEventListener("input", onRootInput);
   document.addEventListener("keydown", onDocKeydown);
 
+  renderFilters();
   render();
+  el.input.focus();
   fetchStats();
   fetchSearch();
 }
