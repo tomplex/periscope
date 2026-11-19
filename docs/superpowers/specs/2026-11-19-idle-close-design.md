@@ -246,18 +246,19 @@ forbidden.
   link to it. `~/.claude-b/projects` does not exist on this machine, so this is
   not tested here.
 
-## 9. Decisions for review
+## 9. Decisions made in review
 
-- **D1. Done-but-unread panes.** Recommended: keep them open. They show as news
-  on the rail, and they wait for you to read them, like a `needs-input` pane.
-  The other option: close them, because the reply stays in the transcript.
-- **D2. The default.** Recommended: off. Other installs get this feature from a
-  release, and it kills panes. The other option: 3 weekdays.
-- **D3. The Mac sleeps through 04:00.** Recommended: skip that night, like the
-  poke. The other option: close the panes when the Mac wakes.
-- **D4. What counts as use.** Recommended: transcript writes, turn ends and your
-  actions in periscope. The other option: also count terminal focus
-  (`focused_at`), which a restart clears.
+- **D1. Done-but-unread panes.** Decided on 19 Nov: keep them open. They show
+  as news on the rail, and they wait for you to read them, like a `needs-input`
+  pane.
+- **D2. The default.** Decided on 19 Nov: off. Other installs get this feature
+  from a release, and it kills panes.
+- **D3. The Mac sleeps through 04:00.** Decided on 19 Nov: skip that night,
+  like the poke. Result: on a Mac that sleeps every night at 04:00, no pane
+  closes.
+- **D4. What counts as use.** Decided on 19 Nov: transcript writes, turn ends
+  and your actions in periscope. Terminal focus (`focused_at`) does not count,
+  because a restart clears it.
 
 ## 10. Assumptions to check in the implementation
 
