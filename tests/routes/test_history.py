@@ -85,16 +85,14 @@ def test_history_search_empty_query_uses_recent(client, mocker):
     assert recent.called
 
 
-def test_history_session_found(client, mocker, no_transcripts):
+def test_history_session_found(client, mocker):
     mocker.patch(
         "history.search.get_session",
         return_value={"session_id": "abc", "messages": []},
     )
     r = client.get("/api/history/session/abc")
     assert r.status_code == 200
-    body = r.json()
-    assert body["session_id"] == "abc"
-    assert body["resume_refusal"]["status"] == 404
+    assert r.json()["session_id"] == "abc"
 
 
 def test_history_session_missing_returns_404(client, mocker):

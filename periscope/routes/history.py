@@ -108,7 +108,6 @@ def history_session(session_id: str):
     data = get_session(session_id)
     if data is None:
         raise HTTPException(404, "unknown session_id")
-    _annotate([data])
     return data
 
 
