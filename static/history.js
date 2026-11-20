@@ -334,18 +334,15 @@ function resumeView(r) {
   if (refusal?.status === 404) {
     return { control: "", status: "Claude has no transcript for this session, so it cannot resume it." };
   }
+  const control = `<button type="button" class="ph-btn is-primary" data-action="resume" data-id="${sid}" data-focus="resume"
+                title="claude --resume in a new window of tmux session ${RESUME_SESSION}">Resume <span class="ps-kbd">⌘↵</span></button>`;
+  // A 409 lapses (a minute of quiet, the resumed window closing), and the
+  // route checks again on every click: say why, and keep the button.
   if (refusal) {
     const why = escapeHtml(refusal.detail.charAt(0).toUpperCase() + refusal.detail.slice(1));
-    return {
-      control: `<button type="button" class="ph-btn is-primary" disabled>Resume</button>`,
-      status: `${why}.${refusal.detail.startsWith("already resumed") ? ` ${dashboard}` : ""}`,
-    };
+    return { control, status: `${why}.${refusal.detail.startsWith("already resumed") ? ` ${dashboard}` : ""}` };
   }
-  return {
-    control: `<button type="button" class="ph-btn is-primary" data-action="resume" data-id="${sid}" data-focus="resume"
-                title="claude --resume in a new window of tmux session ${RESUME_SESSION}">Resume <span class="ps-kbd">⌘↵</span></button>`,
-    status: run?.state === "failed" ? `Resume failed: ${escapeHtml(run.detail)}` : "",
-  };
+  return { control, status: run?.state === "failed" ? `Resume failed: ${escapeHtml(run.detail)}` : "" };
 }
 
 function renderMore(r) {
@@ -504,6 +501,8 @@ async function fetchSearch() {
     S.results = data.results || [];
     S.answered = { query, rerankUsed: !!data.rerank_used, limit: data.limit };
     S.searchError = null;
+    // The new rows say whether a resumed window still runs ("already resumed in …").
+    for (const [sid, run] of S.resumes) if (run.state === "done") S.resumes.delete(sid);
     // A new query starts at its best match; a filter change keeps the row
     // you were reading while it is still in the list.
     if (newQuery || !S.results.some((r) => r.session_id === S.selectedId)) {
@@ -552,7 +551,15 @@ async function fetchStats() {
 async function doResume(sessionId) {
   const row = S.results.find((r) => r.session_id === sessionId);
   const run = S.resumes.get(sessionId);
-  if (!row || row.resume_refusal || run?.state === "pending" || run?.state === "done") return;
+  if (!row || run?.state === "pending") return;
+  if (run?.state === "done") {
+    announce(`Already resumed in tmux window ${run.target}.`);
+    return;
+  }
+  if (row.resume_refusal?.status === 404) {
+    announce("Claude has no transcript for this session, so it cannot resume it.");
+    return;
+  }
   S.resumes.set(sessionId, { state: "pending" });
   renderDetail();
   const params = new URLSearchParams({ session: RESUME_SESSION, mode: "resume", resume_id: sessionId });
@@ -569,7 +576,6 @@ async function doResume(sessionId) {
   }
   if (res.ok) {
     S.resumes.set(sessionId, { state: "done", target: data.target });
-    row.resume_refusal = { status: 409, detail: `already resumed in ${data.target}` };
     announce(`Resumed in tmux window ${data.target}.`);
   } else if (res.status === 404 || res.status === 409) {
     // The server's answer is newer than the row's: it becomes the row's.
