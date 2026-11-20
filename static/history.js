@@ -155,12 +155,20 @@ function highlight(text) {
 // ── Regions ─────────────────────────────────────────────
 
 // Replace a region's markup and give focus back to the control that had it:
-// a click on a filter control re-renders the panel it sits in.
+// a click on a filter control re-renders the panel it sits in. When that
+// control is gone or disabled, focus stays in the region, else goes to the
+// search, so a keyboard user never lands on <body>.
 function swap(region, html) {
   const active = document.activeElement;
-  const key = region.contains(active) ? active.dataset.focus : null;
+  if (!region.contains(active)) {
+    region.innerHTML = html;
+    return;
+  }
+  const key = active.dataset.focus;
   region.innerHTML = html;
-  if (key) region.querySelector(`[data-focus="${key}"]`)?.focus();
+  const enabled = (sel) => region.querySelector(`${sel}:not(:disabled)`);
+  const next = (key && enabled(`[data-focus="${key}"]`)) || enabled("[data-focus]") || el.input;
+  next.focus({ preventScroll: true });
 }
 
 // Scroll `child` into its scroller by offsets. scrollIntoView would also
@@ -279,7 +287,7 @@ function emptyHtml(title, sub = "", action = "") {
   return `<div class="ph-empty"><p class="ph-empty-title">${title}</p>${sub ? `<p class="ph-empty-sub">${sub}</p>` : ""}${action}</div>`;
 }
 
-const clearFiltersBtn = `<button type="button" class="ph-btn" data-action="clear-filters">Clear filters</button>`;
+const clearFiltersBtn = `<button type="button" class="ph-btn" data-action="clear-filters" data-focus="clear">Clear filters</button>`;
 
 function renderList() {
   el.listHead.textContent = listHeadText();
@@ -288,7 +296,7 @@ function renderList() {
     html = emptyHtml(
       "Search failed",
       escapeHtml(S.searchError),
-      `<button type="button" class="ph-btn" data-action="retry">Try again</button>`,
+      `<button type="button" class="ph-btn" data-action="retry" data-focus="retry">Try again</button>`,
     );
   } else if (!S.answered) {
     html = "";
@@ -322,12 +330,15 @@ function resumeView(r) {
   const offer = resumeOffer(r.resume_refusal, S.resumes.get(r.session_id));
   const control =
     offer.button === "pending"
-      ? `<button type="button" class="ph-btn is-primary" disabled>Resuming…</button>`
+      ? `<button type="button" class="ph-btn is-primary" data-focus="resume" aria-disabled="true">Resuming…</button>`
       : offer.button === "ready"
         ? `<button type="button" class="ph-btn is-primary" data-action="resume" data-id="${escapeHtml(r.session_id)}" data-focus="resume"
                 title="claude --resume in a new window of tmux session ${RESUME_SESSION}">Resume <span class="ps-kbd">⌘↵</span></button>`
         : "";
-  const dashboard = offer.dashboard ? ` <a class="ph-link" href="/">Open the dashboard</a>` : "";
+  // With no button, the link is where Resume's focus goes.
+  const dashboard = offer.dashboard
+    ? ` <a class="ph-link" href="/" data-focus="${control ? "dashboard" : "resume"}">Open the dashboard</a>`
+    : "";
   return { control, status: offer.status ? `${escapeHtml(offer.status)}${dashboard}` : "" };
 }
 
@@ -427,7 +438,7 @@ function renderDetail() {
       ${tags}
       ${renderMore(r)}
     </div>
-    <div class="ph-detail-body" tabindex="0" aria-label="Transcript">${body}</div>
+    <div class="ph-detail-body" tabindex="0" aria-label="Transcript" data-focus="transcript">${body}</div>
   `,
   );
   el.detail.dataset.id = row.session_id;

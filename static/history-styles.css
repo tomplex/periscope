@@ -77,7 +77,7 @@ body { overflow: hidden; }
   color: var(--fg-0);
 }
 .ph-btn.is-primary:hover { background: color-mix(in oklch, var(--accent) 28%, transparent); }
-.ph-btn:disabled, .ph-btn:disabled:hover {
+.ph-btn[aria-disabled="true"], .ph-btn[aria-disabled="true"]:hover {
   background: var(--bg-1);
   border-color: var(--line-soft);
   color: var(--fg-2);
