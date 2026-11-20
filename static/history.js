@@ -6,7 +6,7 @@
 // handler serves the page.
 
 import { resumeAnswer, resumeOffer } from "./resume.js";
-import { escapeHtml, relTime } from "./util.js";
+import { escapeHtml, linearTicket, relTime } from "./util.js";
 
 const RESUME_SESSION = "resumes"; // tmux session host for resume windows
 const STORAGE_KEY = "periscope:history:filter";
@@ -108,7 +108,6 @@ function fmtTime(epochMs) {
 const baseName = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "";
 const homePath = (p) => (p || "").replace(/^\/Users\/[^/]+/, "~");
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-const ticketOf = (r) => r.linked_linear || r.linear_ticket || null;
 const optId = (sid) => `ph-opt-${sid}`;
 
 // A file path relative to the session's project when it sits inside it.
@@ -253,8 +252,8 @@ function refsHtml(r) {
     out.push(`<span class="ph-ref ph-branch"><span class="ph-glyph" aria-hidden="true">⎇</span>${escapeHtml(r.branch)}</span>`);
   }
   if (r.linked_pr) out.push(`<span class="ph-ref" title="pull request">#${escapeHtml(r.linked_pr)}</span>`);
-  const ticket = ticketOf(r);
-  if (ticket) out.push(`<span class="ph-ref ph-ticket" title="Linear ticket">${escapeHtml(ticket)}</span>`);
+  const ticket = linearTicket(r);
+  if (ticket) out.push(`<span class="ph-ref ph-ticket" title="${escapeHtml(ticket.tip)}">${escapeHtml(ticket.id)}</span>`);
   return out.join("");
 }
 
