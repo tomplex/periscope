@@ -5,6 +5,7 @@
 // the transcript keep their scroll. Events delegate from the root; one keydown
 // handler serves the page.
 
+import { resumeAnswer, resumeOffer } from "./resume.js";
 import { escapeHtml, relTime } from "./util.js";
 
 const RESUME_SESSION = "resumes"; // tmux session host for resume windows
@@ -318,31 +319,16 @@ function renderList() {
 }
 
 function resumeView(r) {
-  const sid = escapeHtml(r.session_id);
-  const run = S.resumes.get(r.session_id);
-  const dashboard = `<a class="ph-link" href="/">Open the dashboard</a>`;
-  if (run?.state === "done") {
-    return {
-      control: "",
-      status: `Resumed in tmux window <span class="ph-ref">${escapeHtml(run.target)}</span>. ${dashboard}`,
-    };
-  }
-  if (run?.state === "pending") {
-    return { control: `<button type="button" class="ph-btn is-primary" disabled>Resuming…</button>`, status: "" };
-  }
-  const refusal = r.resume_refusal;
-  if (refusal?.status === 404) {
-    return { control: "", status: "Claude has no transcript for this session, so it cannot resume it." };
-  }
-  const control = `<button type="button" class="ph-btn is-primary" data-action="resume" data-id="${sid}" data-focus="resume"
-                title="claude --resume in a new window of tmux session ${RESUME_SESSION}">Resume <span class="ps-kbd">⌘↵</span></button>`;
-  // A 409 lapses (a minute of quiet, the resumed window closing), and the
-  // route checks again on every click: say why, and keep the button.
-  if (refusal) {
-    const why = escapeHtml(refusal.detail.charAt(0).toUpperCase() + refusal.detail.slice(1));
-    return { control, status: `${why}.${refusal.detail.startsWith("already resumed") ? ` ${dashboard}` : ""}` };
-  }
-  return { control, status: run?.state === "failed" ? `Resume failed: ${escapeHtml(run.detail)}` : "" };
+  const offer = resumeOffer(r.resume_refusal, S.resumes.get(r.session_id));
+  const control =
+    offer.button === "pending"
+      ? `<button type="button" class="ph-btn is-primary" disabled>Resuming…</button>`
+      : offer.button === "ready"
+        ? `<button type="button" class="ph-btn is-primary" data-action="resume" data-id="${escapeHtml(r.session_id)}" data-focus="resume"
+                title="claude --resume in a new window of tmux session ${RESUME_SESSION}">Resume <span class="ps-kbd">⌘↵</span></button>`
+        : "";
+  const dashboard = offer.dashboard ? ` <a class="ph-link" href="/">Open the dashboard</a>` : "";
+  return { control, status: offer.status ? `${escapeHtml(offer.status)}${dashboard}` : "" };
 }
 
 function renderMore(r) {
@@ -550,42 +536,29 @@ async function fetchStats() {
 
 async function doResume(sessionId) {
   const row = S.results.find((r) => r.session_id === sessionId);
-  const run = S.resumes.get(sessionId);
-  if (!row || run?.state === "pending") return;
-  if (run?.state === "done") {
-    announce(`Already resumed in tmux window ${run.target}.`);
-    return;
-  }
-  if (row.resume_refusal?.status === 404) {
-    announce("Claude has no transcript for this session, so it cannot resume it.");
+  if (!row) return;
+  const offer = resumeOffer(row.resume_refusal, S.resumes.get(sessionId));
+  if (offer.button !== "ready") {
+    if (offer.status) announce(offer.status);
     return;
   }
   S.resumes.set(sessionId, { state: "pending" });
   renderDetail();
   const params = new URLSearchParams({ session: RESUME_SESSION, mode: "resume", resume_id: sessionId });
-  let res;
-  let data = {};
+  let status = 0;
+  let body = {};
   try {
-    res = await fetch(`/api/window/new?${params}`, { method: "POST" });
-    data = await res.json().catch(() => ({}));
+    const res = await fetch(`/api/window/new?${params}`, { method: "POST" });
+    status = res.status;
+    body = await res.json().catch(() => ({}));
   } catch {
-    S.resumes.set(sessionId, { state: "failed", detail: "periscope did not answer." });
-    renderDetail();
-    announce("Resume failed: periscope did not answer.");
-    return;
+    // status 0: periscope did not answer.
   }
-  if (res.ok) {
-    S.resumes.set(sessionId, { state: "done", target: data.target });
-    announce(`Resumed in tmux window ${data.target}.`);
-  } else if (res.status === 404 || res.status === 409) {
-    // The server's answer is newer than the row's: it becomes the row's.
-    S.resumes.delete(sessionId);
-    row.resume_refusal = { status: res.status, detail: data.detail || `HTTP ${res.status}` };
-    announce(`Resume refused: ${row.resume_refusal.detail}.`);
-  } else {
-    S.resumes.set(sessionId, { state: "failed", detail: data.detail || `HTTP ${res.status}` });
-    announce(`Resume failed: ${data.detail || `HTTP ${res.status}`}.`);
-  }
+  const next = resumeAnswer(status, body, row.resume_refusal);
+  if (next.run) S.resumes.set(sessionId, next.run);
+  else S.resumes.delete(sessionId);
+  row.resume_refusal = next.refusal;
+  announce(next.announce);
   renderList();
   renderDetail();
 }
