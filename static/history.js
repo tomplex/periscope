@@ -10,7 +10,8 @@ import { escapeHtml, relTime } from "./util.js";
 const RESUME_SESSION = "resumes"; // tmux session host for resume windows
 const STORAGE_KEY = "periscope:history:filter";
 const DEBOUNCE_MS = 200;
-// One page of results. A full page means the index may hold more.
+// One page of results. The server answers with the cap that applied (a rerank
+// returns fewer); a full page means the index may hold more.
 const LIMIT = 50;
 
 const SINCE_LABELS = { today: "today", week: "this week", month: "this month", all: "any time" };
@@ -21,7 +22,7 @@ const S = {
   filter: loadFilter(),
   filtersOpen: false,
   results: [],
-  answered: null, // { query, rerankUsed } of the results on screen
+  answered: null, // { query, rerankUsed, limit } of the results on screen
   searchError: null,
   loading: false,
   searchToken: 0, // a newer search supersedes an older one still in flight
@@ -221,7 +222,7 @@ function listHeadText() {
   const n = S.results.length;
   const searching = !!S.answered.query.trim();
   const noun = searching ? (n === 1 ? "match" : "matches") : n === 1 ? "session" : "sessions";
-  const parts = [n >= LIMIT ? `first ${n} ${noun}` : `${n} ${noun}`];
+  const parts = [n >= S.answered.limit ? `first ${n} ${noun}` : `${n} ${noun}`];
   if (n > 1) {
     if (!searching) parts.push("newest last turn first");
     else if (S.answered.rerankUsed) parts.push("reranked by Haiku");
@@ -501,7 +502,7 @@ async function fetchSearch() {
     if (token !== S.searchToken) return;
     const newQuery = S.answered?.query !== query;
     S.results = data.results || [];
-    S.answered = { query, rerankUsed: !!data.rerank_used };
+    S.answered = { query, rerankUsed: !!data.rerank_used, limit: data.limit };
     S.searchError = null;
     // A new query starts at its best match; a filter change keeps the row
     // you were reading while it is still in the list.

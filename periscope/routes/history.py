@@ -64,11 +64,14 @@ def history_search(
 ):
     """FTS5-ranked search across the history index. Empty q falls back to
     `recent()` (newest last turn first) so the UI can populate before the
-    user types."""
+    user types. `limit` in the answer is the cap that applied: a rerank
+    returns fewer rows than asked for."""
     import history
+    from history.search import row_limit
 
     started = time.time()
-    if q and q.strip():
+    searching = bool(q and q.strip())
+    if searching:
         results = history.search(
             q,
             project=project,
@@ -93,7 +96,7 @@ def history_search(
         "query": q,
         # A failed Haiku call keeps the FTS order and scores nothing.
         "rerank_used": any(r.get("rerank_score") is not None for r in results),
-        "limit": limit,
+        "limit": row_limit(limit, rerank=rerank and searching),
         "results": results,
         "took_ms": int((time.time() - started) * 1000),
     }

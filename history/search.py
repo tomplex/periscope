@@ -36,6 +36,16 @@ def _build_fts_query(query: str) -> str:
     return " AND ".join(terms) if terms else ""
 
 
+# Haiku reranks at most this many FTS candidates.
+RERANK_CANDIDATES = 20
+MAX_ROWS = 200
+
+
+def row_limit(limit: int, *, rerank: bool = False) -> int:
+    """The most rows `search()` or `recent()` returns when asked for `limit`."""
+    return min(max(limit, 1), RERANK_CANDIDATES if rerank else MAX_ROWS)
+
+
 def search(
     query: str,
     *,
@@ -81,9 +91,8 @@ def search(
         if not include_trivial:
             # Trivial heuristic-summary rows have summary_model IS NULL.
             sql += " AND s.summary_model IS NOT NULL"
-        # FTS rerank request bounds candidates higher, then we trim.
         sql += " ORDER BY fts_rank ASC LIMIT :limit"
-        params["limit"] = min(max(limit, 1), 20 if rerank else 200)
+        params["limit"] = row_limit(limit, rerank=rerank)
         rows = [dict(r) for r in conn.execute(sql, params)]
     finally:
         conn.close()
@@ -179,7 +188,7 @@ def recent(
         if not include_trivial:
             sql += " AND summary_model IS NOT NULL"
         sql += " ORDER BY ended_at DESC LIMIT :limit"
-        params["limit"] = max(1, min(limit, 200))
+        params["limit"] = row_limit(limit)
         rows = [dict(r) for r in conn.execute(sql, params)]
     finally:
         conn.close()

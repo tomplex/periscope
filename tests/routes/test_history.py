@@ -87,6 +87,24 @@ def test_history_search_says_rerank_was_used_only_when_a_row_was_scored(client, 
     assert client.get("/api/history/search?q=x&rerank=true").json()["rerank_used"] is True
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("q=x&limit=50", 50),
+        # Haiku reranks 20 candidates, so 20 rows is a full page.
+        ("q=x&limit=50&rerank=true", 20),
+        # An empty query lists recent sessions, which nothing reranks.
+        ("q=&limit=50&rerank=true", 50),
+        ("q=x&limit=500", 200),
+    ],
+)
+def test_history_search_answers_with_the_limit_that_applied(client, mocker, no_transcripts, query, expected):
+    """The page writes "first N" only when the list is full at this limit."""
+    mocker.patch("history.search", return_value=[])
+    mocker.patch("history.recent", return_value=[])
+    assert client.get(f"/api/history/search?{query}").json()["limit"] == expected
+
+
 def test_history_search_empty_query_uses_recent(client, mocker):
     recent = mocker.patch("history.recent", return_value=[])
     r = client.get("/api/history/search?q=")
