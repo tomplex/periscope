@@ -214,15 +214,15 @@ def is_echo(suggestion: str, container: set[str]) -> bool:
 
 
 # tmux `automatic-rename` names a window after its running command; for Claude
-# Code that renders as the bare version ("2.1.220"). `claude` is what periscope
-# itself passes to `new-window -n`.
+# Code that renders as the bare version ("2.1.220") or the binary ("claude.exe").
+# `claude` is what periscope itself passes to `new-window -n`.
 _PLACEHOLDER_NAME_RE = re.compile(r"^\d+(\.\d+)+$")
 
 
 def is_placeholder_name(name: str | None) -> bool:
     """This window name says nothing about the work happening in it."""
     n = (name or "").strip()
-    return not n or n == "claude" or bool(_PLACEHOLDER_NAME_RE.match(n))
+    return not n or n in ("claude", "claude.exe") or bool(_PLACEHOLDER_NAME_RE.match(n))
 
 
 def rename_decision(

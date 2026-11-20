@@ -68,6 +68,16 @@ def test_history_search_rows_carry_the_pane_that_last_ran_the_session(client, mo
     assert rows[1]["linear_ticket"] == "THI-402"
 
 
+@pytest.mark.parametrize("name", ["claude.exe", "claude", "2.1.220"])
+def test_history_search_drops_a_placeholder_pane_name(client, mocker, no_transcripts, name):
+    """tmux's automatic name says nothing about the session; the page titles the row with the summary."""
+    mocker.patch(
+        "periscope.store.all_windows", return_value={"p": {"last_seen": {"sid": "abc", "ts": 1, "name": name}}}
+    )
+    mocker.patch("history.recent", return_value=[{"session_id": "abc", "branch": "main"}])
+    assert client.get("/api/history/search?q=").json()["results"][0]["pane_name"] is None
+
+
 def test_history_search_says_rerank_was_used_only_when_a_row_was_scored(client, mocker, no_transcripts):
     """A failed Haiku call (no key, 401) keeps the FTS order; the page must not
     head that order "Reranked by relevance"."""

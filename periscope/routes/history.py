@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from periscope import store
 from periscope.config import STATIC
 from periscope.git_pr import linear_ticket_fields
+from periscope.narrator import is_placeholder_name
 from periscope.turns import jsonl_for_session, resume_refusal
 
 router = APIRouter()
@@ -35,7 +36,8 @@ def _panes_by_session() -> dict[str, dict]:
 def _annotate(rows: list[dict]) -> None:
     """Add what periscope knows and the history index does not: why resume
     would refuse the session (null when it would resume), and the name, PR
-    and ticket of the pane that last ran it."""
+    and ticket of the pane that last ran it. A placeholder name is null, so
+    the page titles the row with the summary."""
     panes = _panes_by_session()
     team_keys = store.linear_team_keys()
     for r in rows:
@@ -43,7 +45,8 @@ def _annotate(rows: list[dict]) -> None:
         refusal = resume_refusal(sid, jsonl_for_session(sid))
         r["resume_refusal"] = {"status": refusal[0], "detail": refusal[1]} if refusal else None
         pane = panes.get(sid) or {}
-        r["pane_name"] = (pane.get("last_seen") or {}).get("name")
+        name = (pane.get("last_seen") or {}).get("name")
+        r["pane_name"] = None if is_placeholder_name(name) else name
         r["linked_pr"] = pane.get("linked_pr")
         r.update(linear_ticket_fields(pane, r.get("branch"), None, team_keys))
 
