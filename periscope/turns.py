@@ -57,7 +57,7 @@ def jsonl_for_session(session_id: str):
 
 # A transcript written this recently probably has a live appender: a second
 # `--resume` would put two processes on one JSONL and interleave their turns.
-_LIVE_WRITE_S = 60
+_LIVE_MTIME_S = 60
 
 
 def resume_refusal(session_id: str, transcript: Path | None, *, force: bool = False) -> tuple[int, str] | None:
@@ -71,7 +71,7 @@ def resume_refusal(session_id: str, transcript: Path | None, *, force: bool = Fa
     age = time.time() - transcript.stat().st_mtime
     # Rail.movePaneAccount matches the "session looks live" prefix to offer
     # "move anyway": change both or neither.
-    if not force and age < _LIVE_WRITE_S:
+    if not force and age < _LIVE_MTIME_S:
         return 409, f"session looks live (written {int(age)}s ago); wait a minute or pick another"
     # Two windows on one session interleave just the same, so `force` never skips this.
     if session_id in _resuming:
