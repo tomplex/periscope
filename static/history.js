@@ -70,7 +70,7 @@ function activeFilterLabels() {
   const out = [];
   if (S.filter.project) out.push(baseName(S.filter.project));
   if (S.filter.since !== "all") out.push(`last turn ${SINCE_LABELS[S.filter.since]}`);
-  if (S.filter.includeTrivial) out.push("short sessions included");
+  if (S.filter.includeTrivial) out.push("unsummarized included");
   return out;
 }
 
@@ -194,7 +194,8 @@ function renderFilters() {
         `<button type="button" class="ph-pill" data-action="set-since" data-value="${v}" data-focus="since-${v}" aria-pressed="${f.since === v}">${label}</button>`,
     )
     .join("");
-  const short = S.stats ? ` (${S.stats.heuristic})` : "";
+  // Haiku did not summarize them: too short to be worth it, no API key, or a failed call.
+  const unsummarized = S.stats ? ` (${S.stats.heuristic})` : "";
   swap(
     el.filters,
     `
@@ -210,7 +211,7 @@ function renderFilters() {
     </div>
     <label class="ph-check">
       <input type="checkbox" data-action="toggle-trivial" data-focus="trivial"${f.includeTrivial ? " checked" : ""}>
-      short sessions${short}
+      unsummarized sessions${unsummarized}
     </label>
     <label class="ph-check">
       <input type="checkbox" data-action="toggle-rerank" data-focus="rerank"${f.rerank ? " checked" : ""}>
@@ -261,7 +262,7 @@ function marksOf(r) {
   const out = [];
   if (r.resume_refusal?.status === 404) out.push("no transcript");
   if (r.was_interrupted) out.push("interrupted");
-  if (r.trivial) out.push("short session");
+  if (r.trivial) out.push("unsummarized");
   return out;
 }
 
@@ -311,7 +312,15 @@ function renderList() {
         clearFiltersBtn,
       );
     } else {
-      html = emptyHtml(`No session matches “${escapeHtml(q)}”`, "Try fewer or shorter words.");
+      const title = q ? `No session matches “${escapeHtml(q)}”` : "No session to show";
+      const hidden = S.filter.includeTrivial ? 0 : S.stats?.heuristic || 0;
+      html = hidden
+        ? emptyHtml(
+            title,
+            `${plural(hidden, "unsummarized session")} hidden.`,
+            `<button type="button" class="ph-btn" data-action="include-unsummarized" data-focus="include-unsummarized">Include unsummarized sessions</button>`,
+          )
+        : emptyHtml(title, q ? "Try fewer or shorter words." : "");
     }
   } else {
     html = S.results.map(renderRow).join("");
@@ -616,6 +625,7 @@ function onRootClick(e) {
   } else if (action === "set-since") setFilter({ since: value });
   else if (action === "clear-filters") setFilter({ project: "", since: "all", includeTrivial: false });
   else if (action === "retry") fetchSearch();
+  else if (action === "include-unsummarized") setFilter({ includeTrivial: true });
   else if (action === "resume") doResume(id);
   else if (action === "copy-id") {
     const done = (text) => {
