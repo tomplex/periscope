@@ -106,7 +106,7 @@ function fmtTime(epochMs) {
 }
 
 const baseName = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "";
-const homePath = (p) => (p || "").replace(/^\/Users\/[^/]+/, "~");
+const homePath = (p) => (p || "").replace(/^\/(?:Users|home)\/[^/]+/, "~");
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const optId = (sid) => `ph-opt-${sid}`;
 
