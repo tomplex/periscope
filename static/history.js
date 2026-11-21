@@ -5,6 +5,7 @@
 // the transcript keep their scroll. Events delegate from the root; one keydown
 // handler serves the page.
 
+import { SINCE_LABELS, activeFilterLabels, baseName, emptyList, filtersHideSessions, listHead } from "./historyList.js";
 import { resumeAnswer, resumeOffer } from "./resume.js";
 import { escapeHtml, linearTicket, relTime } from "./util.js";
 
@@ -14,8 +15,6 @@ const DEBOUNCE_MS = 200;
 // One page of results. The server answers with the cap that applied (a rerank
 // returns fewer); a full page means the index may hold more.
 const LIMIT = 50;
-
-const SINCE_LABELS = { today: "today", week: "this week", month: "this month", all: "any time" };
 
 // Module state — mutated in place; render() reads it.
 const S = {
@@ -39,7 +38,7 @@ let listToTop = false;
 let selectedIntoView = false;
 
 const root = document.getElementById("history-root");
-let el = {}; // the regions boot() builds: input, filters, listHead, list, detail, total, announce
+let el = {}; // the regions boot() builds: input, filters, listHead, list, empty, detail, total, announce
 
 // ── Persistence ─────────────────────────────────────────
 
@@ -63,19 +62,6 @@ function saveFilter() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(S.filter));
   } catch {}
-}
-
-// The filters that hide sessions, as words. Rerank sorts; it hides nothing.
-function activeFilterLabels() {
-  const out = [];
-  if (S.filter.project) out.push(baseName(S.filter.project));
-  if (S.filter.since !== "all") out.push(`last turn ${SINCE_LABELS[S.filter.since]}`);
-  if (S.filter.includeTrivial) out.push("unsummarized included");
-  return out;
-}
-
-function filtersHideSessions() {
-  return !!S.filter.project || S.filter.since !== "all";
 }
 
 // ── Formatters ──────────────────────────────────────────
@@ -105,7 +91,6 @@ function fmtTime(epochMs) {
   return new Date(epochMs).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-const baseName = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "";
 const homePath = (p) => (p || "").replace(/^\/(?:Users|home)\/[^/]+/, "~");
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const optId = (sid) => `ph-opt-${sid}`;
@@ -216,29 +201,13 @@ function renderFilters() {
       <input type="checkbox" data-action="toggle-rerank" data-focus="rerank"${f.rerank ? " checked" : ""}>
       rerank matches with Haiku, about $0.001 a search
     </label>
-    <button type="button" class="ph-text-btn" data-action="clear-filters" data-focus="clear"${filtersHideSessions() || f.includeTrivial ? "" : " disabled"}>clear filters</button>
+    <button type="button" class="ph-text-btn" data-action="clear-filters" data-focus="clear"${filtersHideSessions(f) || f.includeTrivial ? "" : " disabled"}>clear filters</button>
   `,
   );
   el.filters.hidden = !S.filtersOpen;
-  const n = activeFilterLabels().length;
+  const n = activeFilterLabels(f).length;
   el.filterToggle.setAttribute("aria-expanded", String(S.filtersOpen));
   el.filterToggle.innerHTML = `Filters${n ? ` <span class="ph-count">${n}</span>` : ""}`;
-}
-
-function listHeadText() {
-  if (S.searchError) return "Search failed";
-  if (!S.answered) return "Loading sessions…";
-  const n = S.results.length;
-  const searching = !!S.answered.query.trim();
-  const noun = searching ? (n === 1 ? "match" : "matches") : n === 1 ? "session" : "sessions";
-  const parts = [n >= S.answered.limit ? `first ${n} ${noun}` : `${n} ${noun}`];
-  if (n > 1) {
-    if (!searching) parts.push("newest last turn first");
-    else if (S.answered.rerankUsed) parts.push("reranked by Haiku");
-    else if (S.filter.rerank) parts.push("best text match first (rerank failed)");
-    else parts.push("best text match first");
-  }
-  return [...parts, ...activeFilterLabels()].join(" · ");
 }
 
 function refsHtml(r) {
@@ -289,44 +258,52 @@ function emptyHtml(title, sub = "", action = "") {
 
 const clearFiltersBtn = `<button type="button" class="ph-btn" data-action="clear-filters" data-focus="clear">Clear filters</button>`;
 
-function renderList() {
-  el.listHead.textContent = listHeadText();
-  let html;
-  if (S.searchError) {
-    html = emptyHtml(
+// The head is a live region: writing the same text again would announce it again.
+function renderListHead() {
+  const head = listHead(S);
+  if (el.listHead.textContent !== head) el.listHead.textContent = head;
+}
+
+function emptyListHtml(empty) {
+  const q = escapeHtml(S.answered?.query.trim() || "");
+  const noMatch = q ? `No session matches “${q}”` : "No session to show";
+  if (empty.kind === "error") {
+    return emptyHtml(
       "Search failed",
       escapeHtml(S.searchError),
       `<button type="button" class="ph-btn" data-action="retry" data-focus="retry">Try again</button>`,
     );
-  } else if (!S.answered) {
-    html = "";
-  } else if (!S.results.length) {
-    const q = S.answered.query.trim();
-    if (S.stats && S.stats.total === 0) {
-      html = emptyHtml("History has no sessions yet", "Run <code>python -m history backfill</code> to index them.");
-    } else if (filtersHideSessions()) {
-      html = emptyHtml(
-        q ? `No session matches “${escapeHtml(q)}” here` : "No session matches these filters",
-        `Filters: ${escapeHtml(activeFilterLabels().join(", "))}.`,
-        clearFiltersBtn,
-      );
-    } else {
-      const title = q ? `No session matches “${escapeHtml(q)}”` : "No session to show";
-      // With no query and no filter, recent() hides every unsummarized session;
-      // for a query, the route counts the unsummarized sessions that match it.
-      const hidden = S.filter.includeTrivial ? 0 : (q ? S.answered.unsummarizedHidden : S.stats?.heuristic) || 0;
-      html = hidden
-        ? emptyHtml(
-            title,
-            `${plural(hidden, "unsummarized session")} hidden.`,
-            `<button type="button" class="ph-btn" data-action="include-unsummarized" data-focus="include-unsummarized">Include unsummarized sessions</button>`,
-          )
-        : emptyHtml(title, q ? "Try fewer or shorter words." : "");
-    }
-  } else {
-    html = S.results.map(renderRow).join("");
   }
-  swap(el.list, html);
+  if (empty.kind === "no-index") {
+    return emptyHtml("History has no sessions yet", "Run <code>python -m history backfill</code> to index them.");
+  }
+  if (empty.kind === "filtered") {
+    return emptyHtml(
+      q ? `No session matches “${q}” here` : "No session matches these filters",
+      `Filters: ${escapeHtml(activeFilterLabels(S.filter).join(", "))}.`,
+      clearFiltersBtn,
+    );
+  }
+  if (empty.kind === "hidden") {
+    return emptyHtml(
+      noMatch,
+      `${plural(empty.hidden, "unsummarized session")} hidden.`,
+      `<button type="button" class="ph-btn" data-action="include-trivial" data-focus="include-trivial">Include unsummarized sessions</button>`,
+    );
+  }
+  return emptyHtml(noMatch, q ? "Try fewer or shorter words." : "");
+}
+
+function renderList() {
+  renderListHead();
+  const empty = emptyList(S);
+  // A listbox owns only options, so the states with buttons sit beside it.
+  // Swap before hiding: a hidden region drops the focus it holds.
+  swap(el.list, S.results.map(renderRow).join(""));
+  swap(el.empty, empty ? emptyListHtml(empty) : "");
+  el.list.hidden = !S.results.length;
+  el.empty.hidden = !empty;
+  el.input.setAttribute("aria-expanded", String(S.results.length > 0));
   if (listToTop) el.list.scrollTop = 0;
   if (S.selectedId && S.results.length) {
     el.input.setAttribute("aria-activedescendant", optId(S.selectedId));
@@ -413,7 +390,12 @@ function renderDetail() {
 
   let body;
   if (S.detailError?.id === row.session_id) {
-    body = emptyHtml("Could not load this session", escapeHtml(S.detailError.message));
+    // Its focus key is the transcript's, so focus lands there and not on Resume.
+    body = emptyHtml(
+      "Could not load this session",
+      escapeHtml(S.detailError.message),
+      `<button type="button" class="ph-btn" data-action="retry-detail" data-id="${escapeHtml(row.session_id)}" data-focus="transcript">Try again</button>`,
+    );
   } else if (!loaded) {
     body = emptyHtml("Loading the transcript…");
   } else if (loaded.jsonl_missing) {
@@ -448,7 +430,7 @@ function renderDetail() {
       ${tags}
       ${renderMore(r)}
     </div>
-    <div class="ph-detail-body" tabindex="0" aria-label="Transcript" data-focus="transcript">${body}</div>
+    <div class="ph-detail-body" tabindex="0" role="region" aria-label="Transcript" data-focus="transcript">${body}</div>
   `,
   );
   el.detail.dataset.id = row.session_id;
@@ -493,6 +475,7 @@ async function fetchSearch() {
   const token = ++S.searchToken;
   const query = S.query;
   S.loading = true;
+  renderListHead();
   const params = new URLSearchParams({ q: query, limit: String(LIMIT) });
   if (S.filter.project) params.set("project", S.filter.project);
   const since = sinceToEpoch(S.filter.since);
@@ -626,7 +609,12 @@ function onRootClick(e) {
   } else if (action === "set-since") setFilter({ since: value });
   else if (action === "clear-filters") setFilter({ project: "", since: "all", includeTrivial: false });
   else if (action === "retry") fetchSearch();
-  else if (action === "include-unsummarized") setFilter({ includeTrivial: true });
+  else if (action === "include-trivial") setFilter({ includeTrivial: true });
+  else if (action === "retry-detail") {
+    S.detailError = null;
+    renderDetail();
+    ensureDetail(id);
+  }
   else if (action === "resume") doResume(id);
   else if (action === "copy-id") {
     const done = (text) => {
@@ -701,7 +689,7 @@ function boot() {
       <a class="ph-back" href="/">← dashboard</a>
       <h1 class="ph-title">History</h1>
       <div class="ph-search">
-        <input id="ph-search-input" type="text" role="combobox" aria-expanded="true" aria-controls="ph-results"
+        <input id="ph-search-input" type="text" role="combobox" aria-expanded="false" aria-controls="ph-results"
                aria-autocomplete="list" aria-label="Search sessions"
                placeholder="search summaries, prompts, files and commands" autocomplete="off" spellcheck="false">
         <span class="ps-kbd" aria-hidden="true">⌘/</span>
@@ -712,7 +700,8 @@ function boot() {
     <main class="ph-body">
       <section class="ph-list" aria-label="Sessions">
         <p class="ph-list-head" aria-live="polite"></p>
-        <div class="ph-results" id="ph-results" role="listbox" aria-label="Sessions"></div>
+        <div class="ph-results" id="ph-results" role="listbox" aria-label="Sessions" hidden></div>
+        <div class="ph-list-empty" hidden></div>
       </section>
       <section class="ph-detail" aria-label="Session"></section>
     </main>
@@ -730,6 +719,7 @@ function boot() {
     filters: root.querySelector("#ph-filters"),
     listHead: root.querySelector(".ph-list-head"),
     list: root.querySelector("#ph-results"),
+    empty: root.querySelector(".ph-list-empty"),
     detail: root.querySelector(".ph-detail"),
     total: root.querySelector(".ph-foot-total"),
     announce: root.querySelector(".ph-sr-only"),
