@@ -90,3 +90,33 @@ describe("resumeAnswer", () => {
     expect(resumeAnswer(502, {}, null).run.detail).toBe("HTTP 502");
   });
 });
+
+// The page feeds resumeAnswer's result into resumeOffer.
+describe("an answer, then the offer", () => {
+  const offerAfter = (status, body, refusal) => {
+    const next = resumeAnswer(status, body, refusal);
+    return resumeOffer(next.refusal, next.run);
+  };
+
+  it("a failed resume on a row that looked live says it failed", () => {
+    expect(offerAfter(500, { detail: "tmux new-window failed" }, LOOKS_LIVE)).toEqual({
+      button: "ready",
+      status: "Resume failed: tmux new-window failed.",
+      dashboard: false,
+    });
+  });
+
+  it("a failed resume on a row resumed elsewhere drops the dashboard link", () => {
+    const offer = offerAfter(500, { detail: "tmux new-window failed" }, ALREADY);
+    expect(offer.status).toBe("Resume failed: tmux new-window failed.");
+    expect(offer.dashboard).toBe(false);
+  });
+
+  it("no answer on a row that looked live says periscope did not answer", () => {
+    expect(offerAfter(0, {}, LOOKS_LIVE).status).toBe("Resume failed: periscope did not answer.");
+  });
+
+  it("a 409 answer shows the new refusal", () => {
+    expect(offerAfter(409, { detail: ALREADY.detail }, LOOKS_LIVE).status).toBe("Already resumed in resumes:4.");
+  });
+});

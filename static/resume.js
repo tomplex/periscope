@@ -16,12 +16,16 @@ export function resumeOffer(refusal, run) {
   if (run?.state === "done") return { button: "none", status: `Resumed in tmux window ${run.target}.`, dashboard: true };
   if (run?.state === "pending") return { button: "pending", status: "", dashboard: false };
   if (refusal?.status === 404) return { button: "none", status: NO_TRANSCRIPT, dashboard: false };
+  // The page's failed run is newer than the row's 409.
+  if (run?.state === "failed") {
+    return { button: "ready", status: sentence(`Resume failed: ${run.detail}`), dashboard: false };
+  }
   // A 409 lapses (a minute of quiet, the resumed window closing), and the
   // route checks again on every click: say why, and keep the button.
   if (refusal) {
     return { button: "ready", status: sentence(refusal.detail), dashboard: refusal.detail.startsWith("already resumed") };
   }
-  return { button: "ready", status: run?.state === "failed" ? sentence(`Resume failed: ${run.detail}`) : "", dashboard: false };
+  return { button: "ready", status: "", dashboard: false };
 }
 
 // What an answer from POST /api/window/new does: the run to keep (null drops
