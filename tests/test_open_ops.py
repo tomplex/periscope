@@ -669,6 +669,14 @@ def test_build_catalog_lists_repo_and_main_worktree(tmp_git_repo, clean_state, m
     assert any(w["path"] == os.path.realpath(repo) and w["is_main"] for w in cat["worktrees"])
 
 
+def test_build_catalog_gives_each_repo_its_github_slug(tmp_git_repo, clean_state, monkeypatch):
+    repo = str(tmp_git_repo)
+    monkeypatch.setattr(open_ops, "discover_repos", lambda: {repo})
+    assert open_ops.build_catalog()["repos"][0]["slug"] is None
+    subprocess.run(["git", "-C", repo, "remote", "add", "origin", "git@github.com:acme/api.git"], check=True)
+    assert open_ops.build_catalog()["repos"][0]["slug"] == "acme/api"
+
+
 def test_open_target_pr_rolls_back_worktree_on_open_failure(tmp_git_repo, clean_state, monkeypatch):
     repo = str(tmp_git_repo)
     discarded = {}
