@@ -973,6 +973,7 @@ def test_echo_guard_yields_to_a_placeholder_name():
 def test_placeholder_name_detection():
     assert narrator.is_placeholder_name("2.1.220")
     assert narrator.is_placeholder_name("claude")
+    assert narrator.is_placeholder_name("claude.exe")
     assert narrator.is_placeholder_name("")
     assert not narrator.is_placeholder_name("pit-join-migration")
     assert not narrator.is_placeholder_name("v2-planning")

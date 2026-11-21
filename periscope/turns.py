@@ -16,11 +16,13 @@ Imports only periscope.* / history.* — never `from server import`."""
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
 import periscope.activity as activity
 import periscope.session_status as session_status
 from history.search import messages_from_jsonl
+from periscope.panes import _resuming
 from periscope.tmux import tmux
 
 
@@ -51,6 +53,30 @@ def jsonl_for_session(session_id: str):
     globally unique, so a glob finds the one true file regardless."""
     matches = list(activity._PROJECTS_DIR.glob(f"*/{session_id}.jsonl"))
     return matches[0] if matches else None
+
+
+# A transcript written this recently probably has a live appender: a second
+# `--resume` would put two processes on one JSONL and interleave their turns.
+_LIVE_MTIME_S = 60
+
+
+def resume_refusal(session_id: str, transcript: Path | None, *, force: bool = False) -> tuple[int, str] | None:
+    """The status and detail periscope refuses to resume `session_id` with, or
+    None when it can. `transcript` is Claude's own (`jsonl_for_session`), never
+    history's archive copy: `--resume` reads Claude's file, which Claude deletes
+    after `cleanupPeriodDays` while the archive keeps its copy. `force` skips
+    only the liveness check (routes/sessions._window_new_resume says why)."""
+    if transcript is None:
+        return 404, f"Claude has no transcript for session {session_id}"
+    age = time.time() - transcript.stat().st_mtime
+    # Rail.movePaneAccount matches the "session looks live" prefix to offer
+    # "move anyway": change both or neither.
+    if not force and age < _LIVE_MTIME_S:
+        return 409, f"session looks live (written {int(age)}s ago); wait a minute or pick another"
+    # Two windows on one session interleave just the same, so `force` never skips this.
+    if session_id in _resuming:
+        return 409, f"already resumed in {_resuming[session_id]['target']}"
+    return None
 
 
 def jsonl_for_session_prefix(prefix: str):

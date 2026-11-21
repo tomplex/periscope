@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path);
 CREATE INDEX IF NOT EXISTS idx_sessions_branch  ON sessions(branch);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_ended   ON sessions(ended_at DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
   session_id     UNINDEXED,
