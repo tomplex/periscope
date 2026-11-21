@@ -57,8 +57,8 @@ Out (not planned):
 - **Weekday hours**: the hours between two times that fall on Monday to Friday,
   in local time.
 - **The sweep**: the 04:00 pass that closes panes.
-- **Verdict**: what the sweep does with one pane: `closes`, or the reason it
-  stays.
+- **Verdict**: what the sweep does with one pane: the code `closes`, or the
+  code of the reason it stays.
 - **Closed record**: one `closed_panes` row for each pane that the sweep closed.
 
 ## 1. The setting
@@ -67,8 +67,10 @@ Out (not planned):
 `state['settings']`. The name says weekdays because `cleanup_idle_days`, in
 the same block, counts calendar days.
 
-- `PATCH /api/settings` accepts an integer from 1 to 30. It refuses a boolean:
-  Pydantic reads JSON `true` as 1, the most aggressive value.
+- `PATCH /api/settings` accepts an integer from 1 to 30. `SettingsPatch`
+  declares the field `StrictInt | None`, so Pydantic refuses JSON `true` and
+  `"3"` with 422. A lax `int` reads `true` as 1, the most aggressive value.
+  The route refuses 0 and 31 with 400.
 - Unset means off. `update_settings` pops null keys, so null turns it off.
 - 04:00 is a constant, `SWEEP_AT`. It is not a setting, because nothing asks for
   another time.
@@ -98,8 +100,9 @@ periscope was down. `acted_at` catches a pane that you opened in periscope but
 did not type in. `focused_at` does not count: it is kept only in memory, and it
 changes when you switch windows in a terminal (see decision D4).
 
-A pane with no transcript never closes (section 3), so idle since always has
-a value.
+Idle since is `None` when none of the three times is set. Section 10 predicts
+this pane: a Claude that you started from a terminal and never prompted. Such
+a pane stays open, and the preview leaves it out (section 3).
 
 A pane closes when its weekday hours since idle since are equal to or more than
 `idle_close_weekdays × 24`.
@@ -118,29 +121,49 @@ New module `periscope/idle_close.py`, in the same shape as `poke.py`.
 
 ### Pure functions
 
-- `idle_since(transcript_mtime, completed_at, acted_at) -> int`: the latest of
-  the three. A 0 stamp does not count.
-- `verdict(pane, at, weekdays, pinned) -> str | None`. `pane` is a small dict
-  that the sweep builds from a view: `pid`, `pane_id`, `session_id`, `state`,
-  `track_id`, `mem_mb`, `idle_since`, and whether the transcript exists.
-  The checks, in this order:
-  1. Wall-clock hours since idle since are less than `weekdays × 24`:
-     `None`. The pane is not near the limit, and the preview leaves it out.
-  2. No session id, or no transcript: `stays · no transcript`. Resume refuses
-     such a session with 404, so a record for it can never resume.
-  3. The pid is in `pinned`: `stays · pinned`.
-  4. The state is not `idle`: `stays · needs you` for `needs-input`,
-     `stays · unread` for `done` (decision D1), and `stays · <state>` for the
-     others, for example `stays · working`.
-  5. Weekday hours are equal to or more than the limit: `closes`.
-  6. Otherwise: `stays · weekend skipped`.
+- `idle_since(transcript_mtime, completed_at, acted_at) -> int | None`: the
+  latest of the three. A 0 or `None` stamp does not count. With no stamp that
+  counts, the result is `None`.
+- `verdict(pane, at, weekdays, pinned) -> str | None` returns a code. The
+  checks read `pid`, `session_id`, `state`, `panes`, `idle_since` and
+  `transcript_mtime`. In this order:
+  1. Idle since is `None`, or the wall-clock hours since idle since are less
+     than `weekdays × 24`: `None`. The pane is not near the limit, and the
+     preview leaves it out.
+  2. No session id, or no transcript: `no-transcript`. Resume refuses such a
+     session with 404, so a record for it can never resume.
+  3. The pid is in `pinned`: `pinned`.
+  4. The window has more than one pane: `split-window`. `@periscope_id` is a
+     window option, so after `kill-pane` the window keeps the closed pane's
+     pid, PR and ticket, and a resume could not take them back.
+  5. The state is not `idle`: the state, for example `needs-input`, `done`
+     (decision D1) or `working`.
+  6. Weekday hours are equal to or more than the limit: `closes`.
+  7. Otherwise: `weekend`.
 - `due(now, settings, log) -> bool`: true from `SWEEP_AT` to `SWEEP_AT` + 90
   minutes (like `poke_grace_min`), when the setting is on, and when
   `idle_close_log` has no entry for today.
 
-The sweep and the preview both use `verdict`. The view's state is already
-`done` when `completed_at > acted_at` (`periscope/window_view.py:438`), so
-`verdict` needs no separate unread rule.
+One function builds the `pane` dict from a view:
+`pane_from_view(view) -> dict | None`. It gives `None` for a codex or shell
+view. The dict has the fields that `verdict` reads, plus `pane_id`, `name`
+and `mem_mb` for the record and the preview. The session id comes from
+`turns.session_id_for_pane(pane_id)`, and the transcript mtime from
+`jsonl_for_session`. `mem_mb` is `None` when the view's `res` is `None`: the
+process snapshot failed, or the pane is not in it (`periscope/resources.py:263`).
+For the window's pane count, add `window_panes` to `tmux.PANE_FIELDS`, and
+copy it to the `list_windows` row and the view as `panes`.
+
+The sweep and the preview both use `pane_from_view` and `verdict`. The view's
+state is already `done` when `completed_at > acted_at`
+(`periscope/window_view.py:438`), so `verdict` needs no separate rule for an
+unread result.
+
+The server sends codes, and the frontend forms the words, as
+`static/src/notify/copy.js:117` does for `needs-input`. In phase 2,
+`needs-input` reads "stays · needs you", `no-transcript` reads "stays · no
+transcript", `split-window` reads "stays · split window", `weekend` reads
+"stays · weekend skipped", and each other code reads "stays · <code>".
 
 ### The tick
 
@@ -168,27 +191,35 @@ D3). Otherwise it would close panes at 08:30, while you sit down to use them.
 `sweep(views)` runs in the `_bg` thread:
 
 1. Retention (section 4).
-2. For each Claude view, build the `pane` dict. The session id comes from
-   `turns.session_id_for_pane(pane_id)`. The pinned pids come from
+2. Build the `pane` dicts with `pane_from_view`. The pinned pids come from
    `store.get_ui()["pinned_pids"]`, which the dashboard's pin writes
-   (`static/src/prefs.js:403`). The memory comes from
-   the view's `res.mem_mb`; `build_state` runs `resources.measure` on each
-   call.
+   (`static/src/prefs.js:403`). The memory comes from the view's `res`;
+   `build_state` runs `resources.measure` on each call.
 3. For each pane with the verdict `closes`, in its own `try`, so that one
    failing pane does not stop the others:
    1. Check the pane again, because the views can be up to 13 seconds old,
       and a turn can start in that time. Skip the pane if one check fails:
       - `pane_id` still exists in tmux.
+      - Its window still has one pane.
       - `session_id_for_pane(pane_id)` gives the same session id.
       - `session_status.session_state_for(session_id)` still says `idle`.
-      - The transcript mtime did not change.
+      - The transcript mtime did not change. Only this check sees a short
+        turn that started and ended after the snapshot.
    2. Write the closed record (section 4).
    3. `kill-pane -t <pane_id>`. Use the stable pane id, not `session:index`,
       because `renumber-windows on` moves the indexes (as in
-      `periscope/routes/cleanup.py:84`). Then call `drop_target_focus`. If
-      the kill fails, delete the record and log a warning.
-4. If a pane closed, call `resurrect.save_now()`. Otherwise a reboot before
-   the next continuum save brings the closed panes back.
+      `periscope/routes/cleanup.py:84`). The window has one pane, so the
+      kill closes the window too. Then call `drop_target_focus`. If the kill
+      fails, delete the record and log a warning.
+4. If a pane closed, call `resurrect.save_now(force=True)`. Otherwise a reboot
+   before the next continuum save brings the closed panes back. A plain
+   `save_now()` does not save here: `continuum_save.sh` saves only when
+   `@continuum-save-interval` (15 minutes) has passed since
+   `@continuum-save-last-timestamp`, and the activity worker calls it every
+   30 seconds. `force=True` unsets that timestamp
+   (`set-option -gu @continuum-save-last-timestamp`), so the script reads 0
+   and saves. The script then writes a new timestamp, so the worker's
+   15-minute cadence continues. The option name stays in `resurrect.py`.
 5. For each closed session, call `index_one(jsonl_path, force=True)`
    (`history/indexer.py:233`) inline, and log an exception, as
    `history/hook.py:49` does. Nobody has confirmed that Claude's `SessionEnd`
@@ -203,8 +234,7 @@ A new table in the activity DB (`periscope.db`), beside `pane_tracks`:
 CREATE TABLE IF NOT EXISTS closed_panes (
   session_id   TEXT PRIMARY KEY NOT NULL,  -- Claude session id
   pid          TEXT NOT NULL,              -- @periscope_id of the closed pane
-  track_id     TEXT,
-  mem_mb       INTEGER,                    -- footprint at close
+  mem_mb       INTEGER,                    -- footprint at close, NULL if unknown
   idle_since   INTEGER NOT NULL,
   closed_at    INTEGER NOT NULL
 );
@@ -215,9 +245,7 @@ as `set_pane_track` does (`periscope/activity.py:478`). A session can close
 twice: for example, you resume it with `claude --resume <id>` in a terminal,
 and it goes idle again.
 
-The record keeps `track_id` because `prune_pane_tracks`
-(`periscope/activity.py:501`) deletes the track tag of a dead pid at each boot.
-The record keeps nothing else that a live store keeps:
+The record keeps nothing that a live store keeps:
 
 - The name, branch, cwd, PR and ticket stay in the pid's `state.json` entry
   (`store.get_window(pid)`: `last_seen.name`, `last_seen.branch`,
@@ -226,15 +254,31 @@ The record keeps nothing else that a live store keeps:
   deletes an entry only when it has no field from `_IMMUNITY_FIELDS` and its
   `last_seen` is more than 30 days old. The record lives at most 30 days after
   the last transcript write, which is before the last sighting.
+- The track tag stays in `pane_tracks`. `prune_pane_tracks`
+  (`periscope/activity.py:501`) deletes the tag of a dead pid at each boot. It
+  skips the pids that have a `closed_panes` row (`AND pid NOT IN (SELECT pid
+  FROM closed_panes)`; both tables are in the activity DB), as
+  `_IMMUNITY_FIELDS` keeps a `state.json` entry. After retention deletes a
+  row, the next boot prunes its tag.
 
 A record has no close reason. The sweep is its only writer.
 
-Retention, `prune_closed(live_session_ids)`, runs at boot and at the start of
-each sweep. It deletes:
+The session came back when a live window wears the record's pid, or a live
+Claude runs its session. `came_back(record, live_pids) -> bool` asks this
+question. `live_pids` is the `pid_raw` set of `list_windows()`, as
+`resolve_pids` builds `carried` (`periscope/pids.py:488`). The session check
+reads the live session files, as `session_status.claude_proc_for` does. The
+two checks catch both outcomes of a `claude --resume` that you typed: Pass 0b
+rebinds its window to the record's pid, and Claude keeps or changes the
+session id. (`periscope/session_status.py:200` and `periscope/turns.py:32`
+disagree on whether Claude keeps it.)
+
+Retention, `prune_closed(live_pids)`, runs at boot and at the start of each
+sweep. It deletes:
 
 - The rows for which `jsonl_for_session` finds no file.
-- At a sweep, the rows whose session a live pane runs. The session came back
-  by another path, such as a reboot or a `claude --resume` that you typed.
+- The rows for which `came_back` is true. The session came back by another
+  path, such as a reboot or a `claude --resume` that you typed.
 
 A resume also deletes the row (section 5).
 
@@ -243,20 +287,38 @@ A resume also deletes the row (section 5).
 `_window_new_resume` (`periscope/routes/sessions.py:152`) gets one change.
 When a closed record exists for `resume_id`, after the refusal checks:
 
-1. Read the name from the record's `state.json` entry (`last_seen.name`).
+1. If `came_back(record, live_pids)` is true (section 4), delete the record
+   and resume as today, with a fresh pid. A live window already wears the
+   record's pid, or a live Claude runs the session. A second window with
+   that pid would make two windows share one `@periscope_id`, and
+   `_arbitrate_duplicates` (`periscope/pids.py:363`) would take the PR,
+   ticket and name pin from one of them.
+2. Read the name from the record's `state.json` entry (`last_seen.name`).
    Do this before the spawn: the next poll writes the new window's name over
    it.
-2. Open the window with `-n <name>` on `new-window` or `new-session`. Skip
-   `-n` when `narrator.is_placeholder_name(name)` is true. The pane name is the
-   tmux window name (`periscope/panes.py:407`), so this restores it.
-3. Stamp `record.pid` on the new window as its `@periscope_id`, with the same
-   `set-option` that `stamp_new_window` uses. `_resolve_one` keeps a stamped
-   id (`periscope/pids.py:195`). Thus the window gets the old `state.json`
-   entry with its PR, ticket and name pin. No rebind is needed, so the cwd
-   does not need to match.
-4. Tag the pane with `tracks.move_pane(record.pid, record.track_id)` when
-   `activity.get_track` gives a track that is not archived, as
-   `periscope/channels.py:1030` does.
+3. Open the window with `-n <name>` and stamp `record.pid` in the same tmux
+   command:
+   `new-window … -n <name> -P -F '#{window_index}' ; set-option -w @periscope_id <record.pid>`.
+   The `;` is its own argv item. Do the same for `new-session`. Skip `-n` when
+   `narrator.is_placeholder_name(name)` is true. The pane name is the tmux
+   window name (`periscope/panes.py:407`), so `-n` restores it.
+   - Why one command: `_tmux_mutate` kicks the state hub after
+     `new-window` (`periscope/tmux.py:200`). A dashboard build that lists the
+     window before a separate stamp mints a fresh id, and stamps it after
+     `record.pid` (`periscope/pids.py:241`). Then the pane comes back without
+     its PR, ticket, name pin and track, and nothing repairs it. tmux runs
+     the chained commands in one queue, so no `list-windows` sees the window
+     unstamped.
+   - Checked with tmux 3.6a on a private server: the chained `set-option -w`
+     lands on the new window after `new-window` without `-d` and after
+     `new-session -d`. After `new-window -d` it lands on the old current
+     window. The resume's `new-window` has no `-d`; keep it that way.
+   - `_resolve_one` keeps a stamped id (`periscope/pids.py:195`). Thus the
+     window gets the old `state.json` entry with its PR, ticket and name pin.
+     No rebind is needed, so the cwd does not need to match.
+4. The window wears `record.pid`, so its track tag in `pane_tracks` applies
+   again (section 4). `resolve_track_for_window` ignores a tag whose track is
+   archived (`periscope/tracks.py:73`), so resume needs no track step.
 5. Delete the record. Return `pid` in the result.
 
 The callers:
@@ -267,8 +329,9 @@ The callers:
   `periscope/channels.py:983`) stamps a fresh pid today. Change it to
   `result.get("pid") or stamp_new_window(target)`. An explicit `workspace_id`
   still tags the pane into that track.
-- Move-account (`periscope/routes/sessions.py:616`) moves a live pane, which
-  has no record. It keeps its fresh pid.
+- Move-account (`periscope/routes/sessions.py:616`) moves a live pane, so
+  `came_back` is true for its session. Step 1 deletes a stale record, and the
+  pane keeps its fresh pid.
 - Phase 2's ⌘K group will use the dashboard route.
 
 The resumed pane opens in the tmux session "resumes". The rail groups panes by
@@ -282,10 +345,10 @@ the account (`docs/account-routing.md`).
 - `PATCH /api/settings`: accepts `idle_close_weekdays` (section 1).
 - `GET /api/idle-close/preview`: one row for each Claude pane for which
   `verdict(pane, next SWEEP_AT, …)` is not `None`. Each row has the name, idle
-  since, weekday hours, `mem_mb` and the verdict. The preview uses the current
-  state of each pane; the sweep decides again at 04:00. The settings row shows
-  the count and names of the `closes` rows. With the setting off, the response
-  is an empty list.
+  since, weekday hours, `mem_mb` and the verdict code. The preview uses the
+  current state of each pane; the sweep decides again at 04:00. The settings
+  row shows the count and names of the `closes` rows. With the setting off,
+  the response is an empty list.
 - `/api/history/search` rows: a `closed_at` field when a closed record exists.
   The current `/history` page shows "closed Thu 04:00" on those rows.
 
@@ -302,45 +365,71 @@ the activity DB. `index_one` writes the real `~/.claude/history.db`, copies
 into `~/.claude/projects-archive` and can call Haiku. Add an autouse neuter of
 `idle_close._bg` to `_no_plan_usage_refresh` in `tests/conftest.py`, next to
 poke's. That one guard stops both threads, because the sweep calls `index_one`.
-Tests that run `sweep` call it directly and patch `index_one`.
+Tests that run `sweep` call it directly and patch `index_one`. The `_tick`
+tests patch `state_hub.current_windows` with an async stub: with no fresh
+build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 
 - `weekday_hours`: same day; Friday to Monday; a start on Saturday; an end on
   Sunday; the section 2 example (Thursday 04:00 gives 59, Friday 04:00 gives
   83).
 - `idle_since`: the transcript mtime wins when it is the newest; a 0 stamp does
-  not count. A newer `focused_at` on the view does not change the result.
+  not count; `idle_since(None, 0, 0)` is `None`.
+- `pane_from_view`: a view whose `focused_at` is newer than every other stamp
+  gives the same `idle_since` as without it (decision D4); a codex or shell
+  view gives `None`; a view with `res` `None` gives `mem_mb` `None`, and the
+  pane can still close.
 - `due`: before 04:00, in the grace, after the grace, setting off, logged today.
-- `verdict`: under the limit gives `None`; exactly `weekdays × 24` weekday
-  hours gives `closes`; no session id; no transcript; an account-B session
-  whose transcript `jsonl_for_session` does not find; pinned; `needs-input`;
-  `done`; `working`; a pane over the limit only in wall-clock hours gives
-  `stays · weekend skipped`.
+- `verdict`: under the limit gives `None`; idle since `None` gives `None`;
+  exactly `weekdays × 24` weekday hours gives `closes`; no session id; no
+  transcript; an account-B session whose transcript `jsonl_for_session` does
+  not find; pinned; a window with 2 panes gives `split-window`;
+  `needs-input`; `done`; `working`; a pane over the limit only in wall-clock
+  hours gives `weekend`.
 - `_tick`: when due, it writes the log and hands one sweep to `_bg`; when not
-  due, nothing (`tests/test_poke.py:208`).
+  due, nothing (`tests/test_poke.py:208`). When the stub raises, the log is
+  written, and a second `_tick` at the same frozen time hands nothing to
+  `_bg`.
 - The sweep: the record is written before the kill; the kill uses the pane id;
   a failed kill deletes the record; one failing pane does not stop the others;
-  a pane whose session id or state changed after the snapshot is skipped;
-  `resurrect.save_now` is called once when a pane closed; `index_one` is
-  called with `force=True`; a second close of the same session replaces the
+  a pane with no stamp beside a closable pane: the closable pane closes. At
+  the re-check, the pane is skipped, with no record and no `kill-pane`, when
+  its session id or state changed, when its transcript mtime is newer, when
+  its window has 2 panes, or when its `pane_id` is gone. With a pane closed,
+  `resurrect.save_now` is called once with `force=True`. `index_one` is
+  called with `force=True`. A second close of the same session replaces the
   row.
+- `resurrect.save_now(force=True)` unsets `@continuum-save-last-timestamp`
+  before it runs the script; a plain `save_now()` does not.
 - Retention: a row whose transcript is missing is deleted; a row whose
-  transcript exists stays; at a sweep, a row whose session runs in a live pane
-  is deleted.
-- Resume, through the route: with a record `{pid: 'dddd4444', track_id: 't1'}`
-  and a `state.json` entry with `linked_pr: 12` and a name, run the route and
-  then `resolve_pids`. Assert that the window's pid is `dddd4444`, the track is
-  `t1`, `linked_pr` is 12, `new-window` got `-n <name>`, and the record is
-  deleted. A placeholder name gives no `-n`. A pinned name stays pinned. With
-  no record, nothing changes.
+  transcript exists stays; a row whose pid a live window wears is deleted; a
+  row whose session a live Claude runs is deleted. `prune_pane_tracks` keeps
+  the tag of a pid with a `closed_panes` row, and prunes it after the row is
+  gone.
+- Resume, through the route, on both branches: `_patch_resume_path(mocker,
+  calls, has_session=1)` for `new-session` and `has_session=0` for
+  `new-window` (`tests/routes/test_sessions.py:583`). With a record
+  `{pid: 'dddd4444'}`, a `pane_tracks` tag `t1` on `dddd4444`, and a
+  `state.json` entry with `linked_pr: 12` and a name, run the route and then
+  `resolve_pids`. On each branch, assert that the spawn argv has `-n <name>`
+  and the chained `set-option -w @periscope_id dddd4444`, that the window's
+  pid is `dddd4444`, its track is `t1`, `linked_pr` is 12, and the record is
+  deleted. Assert also that no separate `set-option @periscope_id` call
+  follows the spawn: the chained stamp is the fix for the race in section 5.
+  A placeholder name gives no `-n`. A pinned name stays pinned. With no
+  record, nothing changes.
+- Resume, a session that came back: a record whose pid a live window wears,
+  and a record whose session a live Claude runs, each give a fresh pid and
+  delete the record.
 - Resume, through `resume_session`: the tool keeps the record's pid. A failed
   `new-window` keeps the record.
 - Preview (`tests/routes/test_idle_close.py`): with 3 weekdays and a frozen
-  clock, one pane for each verdict, and one pane that crosses the limit between
-  now and the next 04:00. With the setting off, an empty list.
+  clock, one pane for each verdict code, one pane with no stamp (200, and no
+  row for it), and one pane that crosses the limit between now and the next
+  04:00. With the setting off, an empty list.
 - `/api/history/search` (`tests/routes/test_history.py`): a `closed_panes` row
   gives `closed_at`; a session with no row has none.
-- `PATCH /api/settings`: 0 and 31 give 400; `true` gives 400; `"abc"` gives
-  422; null removes the key.
+- `PATCH /api/settings`: 0 and 31 give 400; `true` and `"3"` give 422; null
+  removes the key.
 
 ## 8. Known gaps
 
@@ -352,14 +441,22 @@ Tests that run `sweep` call it directly and patch `index_one`.
   kills it with the pane.
 - **Second account**: `jsonl_for_session` looks only in `~/.claude/projects`.
   The move-account docstring says another account's `projects` folder is a
-  link to it. If it is not, an account-B pane gets `stays · no transcript` and
-  never closes. That is safe, and a test pins it.
+  link to it. If it is not, an account-B pane gets `no-transcript` and never
+  closes. That is safe, and a test pins it.
 - **A session that comes back outside periscope** keeps its record until the
   next sweep, so `/history` shows it as closed for up to a day.
+- **The stamp race on other spawn paths**: `stamp_new_window` stamps after the
+  spawn, so a dashboard build between the two can mint a second id and stamp
+  it last. Resume avoids this with the chained stamp (section 5). The other
+  spawn paths (`periscope/routes/sessions.py:402`, `periscope/channels.py:655`)
+  keep the race. A read-only check of prod found that 5 of the 21
+  `pane_tracks` rows written since the 2026-11-18 boot are on pids that no
+  poll saw. It gets a Linear ticket.
 
 ## 9. Decisions made in review
 
-- **D1. Panes with an unread result.** Decided on 19 Nov: keep them open. They
+- **D1. Panes in the `done` state** (a result that you did not read).
+  Decided on 19 Nov: keep them open. They
   show as news on the rail, and they wait for you to read them, like a pane
   that needs you.
 - **D2. The default.** Decided on 19 Nov: off. Other installs get this feature
@@ -377,8 +474,9 @@ Tests that run `sweep` call it directly and patch `index_one`.
   nothing. Check: kill an idle test pane, then compare the transcript before
   and after.
 - Claude writes the transcript at the first prompt, not at start. If so, a
-  Claude that you started and never prompted has no transcript, and gets
-  `stays · no transcript`. Check: start a test Claude with no prompt and look
+  Claude that you started and never prompted has no transcript. It gets
+  `no-transcript`, or `None` when you also never acted on it in periscope.
+  Check: start a test Claude with no prompt and look
   for `~/.claude/projects/*/<sid>.jsonl`.
 - `build_state()` at 04:00 takes 3 to 13 seconds, as at other times. The
   re-check before each kill covers a pane that changes in that time.
