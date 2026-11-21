@@ -71,7 +71,8 @@ History (the `/history` index, so live panes aren't in it):
   session's conversation, the last 30 messages by default.
 - `resume_session(session_id, tmux_session?, workspace_id?, account?)` —
   `claude --resume` in a new window, in the session's original directory;
-  refuses a session that looks live.
+  refuses a session that looks live, one already resumed in another window,
+  or one whose transcript Claude no longer keeps.
 
 Repos and rail groups:
 - `open(path? | repo+branch? | repo+pr?)` — materialize a directory, a
