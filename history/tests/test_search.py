@@ -167,10 +167,12 @@ def test_recent_and_since_go_by_the_last_turn(seeded_db):
 
 
 def test_stats_lists_project_paths_newest_last_turn_first(seeded_db):
-    _, db_path = seeded_db
+    conn, db_path = seeded_db
+    # First by name and the oldest start, but the newest last turn.
+    _seed_session(conn, "s-a", "Renamed a flag", "", "/Users/tom/dev/aaa", started_at=100, ended_at=9000)
     st = stats(db_path=db_path)
-    assert st["project_paths"] == ["/Users/tom/dev/fdy", "/Users/tom/dev/web"]
-    assert (st["total"], st["summarized"], st["heuristic"]) == (3, 3, 0)
+    assert st["project_paths"] == ["/Users/tom/dev/aaa", "/Users/tom/dev/fdy", "/Users/tom/dev/web"]
+    assert (st["total"], st["summarized"], st["heuristic"]) == (4, 4, 0)
 
 
 def test_build_fts_query_escapes_quotes():

@@ -189,8 +189,7 @@ def stats(*, db_path: Path | str | None = None) -> dict:
         project_paths = [
             row[0]
             for row in conn.execute(
-                "SELECT project_path FROM sessions WHERE project_path != '' "
-                "GROUP BY project_path ORDER BY MAX(ended_at) DESC"
+                "SELECT project_path FROM sessions GROUP BY project_path ORDER BY MAX(ended_at) DESC"
             )
         ]
     finally:
