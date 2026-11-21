@@ -56,8 +56,8 @@ Another app on this Mac can start work too. `POST /api/linear/start` takes a
 repo, a branch, a Linear issue and a prompt: periscope makes the worktree,
 starts Claude, sends it the prompt and links the issue to the card. With a
 pull request number (`pr`) in place of the branch, periscope checks the pull
-request out as `pr-<N>`, as ⌘K does, or uses the worktree already on it, and
-links the PR too. It answers with the new Claude's `session_id` and its
+request out as `pr-<N>`, as ⌘K does, or uses the worktree already on it as it
+is, and links the PR too. It answers with the new Claude's `session_id` and its
 account's `email` (null when periscope cannot read it). If a Claude is already
 on that branch, it reports that pane and starts nothing.
 `GET /api/open/catalog` gives each repo's `slug`, the `owner/name` of its

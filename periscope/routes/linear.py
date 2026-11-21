@@ -22,8 +22,9 @@ router = APIRouter()
 
 class StartBody(BaseModel):
     repo: str = Field(min_length=1)  # a main checkout, as GET /api/open/catalog lists it
-    branch: str = ""  # the branch to start on, or
-    pr: int | None = Field(default=None, gt=0)  # a pull request on the repo's origin, checked out as `pr-<N>`
+    # Exactly one of: the branch to start on, or a pull request on the repo's origin, checked out as `pr-<N>`.
+    branch: str = ""
+    pr: int | None = Field(default=None, gt=0)
     ticket: str = Field(min_length=1)
     title: str = ""
     prompt: str = Field(min_length=1)
@@ -56,7 +57,7 @@ async def _start(body: StartBody, repo: str, branch: str, key: tuple[str, str]) 
             raise HTTPException(400, str(e)) from e
         path, reused, pr_fields = wt["path"], wt["reused"], {}
     else:
-        path, reused, pr_fields = await _pr_worktree(repo, body.pr)
+        path, reused, pr_fields = await _pr_worktree(repo, body.pr, branch)
     spawned = await branch_spawn.spawn(key, path, body.prompt, body.name.strip() or None)
     store.set_window_fields(
         spawned["pid"], linked_linear=body.ticket, linked_linear_title=body.title or None, **pr_fields
@@ -72,11 +73,11 @@ async def _start(body: StartBody, repo: str, branch: str, key: tuple[str, str]) 
     }
 
 
-async def _pr_worktree(repo: str, pr: int) -> tuple[str, bool, dict]:
-    """The worktree on `pr-<N>`, whether it was there already, and the card fields for the PR. Only a fetch
-    asks GitHub whether the PR comes from a fork. The fetch's 409s become 400: this route's 409 means only
-    that a start is running."""
-    existing = await asyncio.to_thread(worktrees.for_branch, repo, f"pr-{pr}")
+async def _pr_worktree(repo: str, pr: int, branch: str) -> tuple[str, bool, dict]:
+    """The worktree on `branch` (`pr-<N>`), whether it was there already, and the card fields for the PR. Only a
+    fetch asks GitHub whether the PR comes from a fork. The fetch's 409s become 400: this route's 409 means only
+    that a start is running. A failed spawn keeps the worktree, and a retry uses it."""
+    existing = await asyncio.to_thread(worktrees.for_branch, repo, branch)
     if existing:
         return existing, True, {"linked_pr": pr}
     try:
