@@ -312,7 +312,9 @@ function renderList() {
       );
     } else {
       const title = q ? `No session matches “${escapeHtml(q)}”` : "No session to show";
-      const hidden = S.filter.includeTrivial ? 0 : S.stats?.heuristic || 0;
+      // With no query and no filter, recent() hides every unsummarized session;
+      // for a query, the route counts the unsummarized sessions that match it.
+      const hidden = S.filter.includeTrivial ? 0 : (q ? S.answered.unsummarizedHidden : S.stats?.heuristic) || 0;
       html = hidden
         ? emptyHtml(
             title,
@@ -504,7 +506,7 @@ async function fetchSearch() {
     if (token !== S.searchToken) return;
     const newQuery = S.answered?.query !== query;
     S.results = data.results || [];
-    S.answered = { query, rerankUsed: !!data.rerank_used, limit: data.limit };
+    S.answered = { query, rerankUsed: !!data.rerank_used, limit: data.limit, unsummarizedHidden: data.unsummarized_hidden };
     S.searchError = null;
     // The new rows say whether a resumed window still runs ("already resumed in …").
     for (const [sid, run] of S.resumes) if (run.state === "done") S.resumes.delete(sid);

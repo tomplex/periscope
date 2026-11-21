@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from history.db import connect
-from history.search import _build_fts_query, recent, search, stats
+from history.search import _build_fts_query, count_unsummarized, recent, search, stats
 
 
 def _seed_session(
@@ -138,6 +138,20 @@ def test_search_excludes_trivial_by_default(tmp_path):
     results = search("session", db_path=db_path, rerank=False, include_trivial=True)
     assert len(results) == 1
     conn.close()
+
+
+def test_count_unsummarized_counts_the_matches_that_search_hides(seeded_db):
+    """The /history empty state offers to include unsummarized sessions only
+    when one matches: the count bounds by the query and the filters, not the
+    whole index."""
+    conn, db_path = seeded_db
+    _seed_session(conn, "u1", "Fixed a flaky cohort test", "", "/Users/tom/dev/fdy", summary_model=None)
+    _seed_session(conn, "u2", "Fixed the login redirect", "", "/Users/tom/dev/web", summary_model=None)
+    _seed_session(conn, "u3", "Renamed a column", "", "/Users/tom/dev/fdy", summary_model=None)
+    assert count_unsummarized("fixed", db_path=db_path) == 2
+    assert count_unsummarized("fixed", db_path=db_path, project="/Users/tom/dev/fdy") == 1
+    assert count_unsummarized("xyzzyplugh", db_path=db_path) == 0
+    assert count_unsummarized("", db_path=db_path) == 0
 
 
 def test_recent_and_since_go_by_the_last_turn(seeded_db):

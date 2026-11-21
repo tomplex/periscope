@@ -9,6 +9,6 @@ AFTER the submodule import has already set the package attribute.
 """
 
 from .indexer import index_one
-from .search import recent, search, stats
+from .search import count_unsummarized, recent, search, stats
 
-__all__ = ["index_one", "search", "recent", "stats"]
+__all__ = ["index_one", "search", "recent", "stats", "count_unsummarized"]

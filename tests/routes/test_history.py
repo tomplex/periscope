@@ -105,6 +105,32 @@ def test_history_search_answers_with_the_limit_that_applied(client, mocker, no_t
     assert client.get(f"/api/history/search?{query}").json()["limit"] == expected
 
 
+def test_history_search_with_no_rows_counts_the_unsummarized_matches(client, mocker, no_transcripts):
+    """The empty state names the unsummarized sessions that match the query,
+    not every unsummarized session in the index."""
+    mocker.patch("history.search", return_value=[])
+    count = mocker.patch("history.count_unsummarized", return_value=3)
+    body = client.get("/api/history/search?q=cohort&project=/p").json()
+    assert body["unsummarized_hidden"] == 3
+    count.assert_called_once_with("cohort", project="/p", branch=None, since=None, until=None)
+
+
+@pytest.mark.parametrize(
+    "query, rows",
+    [
+        ("q=cohort", [{"session_id": "abc"}]),  # rows: nothing to explain
+        ("q=cohort&include_trivial=true", []),  # nothing hidden
+        ("q=", []),  # the empty query: the page reads stats
+    ],
+)
+def test_history_search_counts_unsummarized_only_for_a_query_with_no_rows(client, mocker, no_transcripts, query, rows):
+    mocker.patch("history.search", return_value=rows)
+    mocker.patch("history.recent", return_value=rows)
+    count = mocker.patch("history.count_unsummarized")
+    assert client.get(f"/api/history/search?{query}").json()["unsummarized_hidden"] is None
+    count.assert_not_called()
+
+
 def test_history_search_empty_query_uses_recent(client, mocker):
     recent = mocker.patch("history.recent", return_value=[])
     r = client.get("/api/history/search?q=")

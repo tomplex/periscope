@@ -92,12 +92,18 @@ def history_search(
             limit=limit,
         )
     _annotate(results)
+    # A query that nothing summarized matches: how many unsummarized sessions
+    # match it, so the empty state offers to include them only when one does.
+    unsummarized_hidden = None
+    if searching and not results and not include_trivial:
+        unsummarized_hidden = history.count_unsummarized(q, project=project, branch=branch, since=since, until=until)
     return {
         "query": q,
         # A failed Haiku call keeps the FTS order and scores nothing.
         "rerank_used": any(r.get("rerank_score") is not None for r in results),
         "limit": row_limit(limit, rerank=rerank and searching),
         "results": results,
+        "unsummarized_hidden": unsummarized_hidden,
         "took_ms": int((time.time() - started) * 1000),
     }
 

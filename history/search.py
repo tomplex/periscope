@@ -46,6 +46,40 @@ def row_limit(limit: int, *, rerank: bool = False) -> int:
     return min(max(limit, 1), RERANK_CANDIDATES if rerank else MAX_ROWS)
 
 
+def _match_sql(
+    query: str,
+    *,
+    project: str | None,
+    branch: str | None,
+    since: int | None,
+    until: int | None,
+) -> tuple[str, dict] | None:
+    """FROM and WHERE for the sessions that match `query` and the filters, or
+    None when the query has no word to match."""
+    fts_q = _build_fts_query(query)
+    if not fts_q:
+        return None
+    sql = """
+        FROM sessions_fts
+        JOIN sessions s ON s.session_id = sessions_fts.session_id
+        WHERE sessions_fts MATCH :q
+    """
+    params: dict = {"q": fts_q}
+    if project:
+        sql += " AND s.project_path = :project"
+        params["project"] = project
+    if branch:
+        sql += " AND s.branch = :branch"
+        params["branch"] = branch
+    if since is not None:
+        sql += " AND s.ended_at >= :since"
+        params["since"] = since
+    if until is not None:
+        sql += " AND s.started_at <= :until"
+        params["until"] = until
+    return sql, params
+
+
 def search(
     query: str,
     *,
@@ -63,36 +97,18 @@ def search(
     Returns a list of result dicts ordered by relevance, optionally re-ranked
     via Haiku when `rerank=True` and the API key is available.
     """
-    fts_q = _build_fts_query(query)
-    if not fts_q:
+    match = _match_sql(query, project=project, branch=branch, since=since, until=until)
+    if match is None:
         return []
+    where, params = match
+    if not include_trivial:
+        # Trivial heuristic-summary rows have summary_model IS NULL.
+        where += " AND s.summary_model IS NOT NULL"
+    params["limit"] = row_limit(limit, rerank=rerank)
 
     conn = connect(db_path)
     try:
-        sql = """
-            SELECT s.*, bm25(sessions_fts) AS fts_rank
-            FROM sessions_fts
-            JOIN sessions s ON s.session_id = sessions_fts.session_id
-            WHERE sessions_fts MATCH :q
-        """
-        params: dict = {"q": fts_q}
-        if project:
-            sql += " AND s.project_path = :project"
-            params["project"] = project
-        if branch:
-            sql += " AND s.branch = :branch"
-            params["branch"] = branch
-        if since is not None:
-            sql += " AND s.ended_at >= :since"
-            params["since"] = since
-        if until is not None:
-            sql += " AND s.started_at <= :until"
-            params["until"] = until
-        if not include_trivial:
-            # Trivial heuristic-summary rows have summary_model IS NULL.
-            sql += " AND s.summary_model IS NOT NULL"
-        sql += " ORDER BY fts_rank ASC LIMIT :limit"
-        params["limit"] = row_limit(limit, rerank=rerank)
+        sql = f"SELECT s.*, bm25(sessions_fts) AS fts_rank {where} ORDER BY fts_rank ASC LIMIT :limit"
         rows = [dict(r) for r in conn.execute(sql, params)]
     finally:
         conn.close()
@@ -101,6 +117,28 @@ def search(
         rows = _rerank(rows, query)
 
     return _normalize_rows(rows[:limit])
+
+
+def count_unsummarized(
+    query: str,
+    *,
+    db_path: Path | str | None = None,
+    project: str | None = None,
+    branch: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+) -> int:
+    """How many sessions with no Haiku summary match `query` and the filters:
+    the matches that `search()` hides without `include_trivial`."""
+    match = _match_sql(query, project=project, branch=branch, since=since, until=until)
+    if match is None:
+        return 0
+    where, params = match
+    conn = connect(db_path)
+    try:
+        return conn.execute(f"SELECT COUNT(*) {where} AND s.summary_model IS NULL", params).fetchone()[0]
+    finally:
+        conn.close()
 
 
 def _normalize_rows(rows: list[dict]) -> list[dict]:
