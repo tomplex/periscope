@@ -86,6 +86,34 @@ def place(mocker):
     return mocker.patch("periscope.open_ops.place_in_rail")
 
 
+# A PR start: `pr` in place of `branch`. Periscope checks the PR out as `pr-812`.
+PR_BODY = {**{k: v for k, v in BODY.items() if k != "branch"}, "pr": 812}
+PR_KEY = ("api", "pr-812")
+
+
+@pytest.fixture
+def no_pr_worktree(mocker):
+    """No worktree of the repo is on `pr-812` yet."""
+    return mocker.patch("periscope.worktrees.for_branch", return_value=None)
+
+
+@pytest.fixture
+def fetch(mocker):
+    from periscope import projects
+
+    return mocker.patch(
+        "periscope.projects.fetch_pr_into_worktree",
+        return_value=projects.PRWorktree(
+            path="/repos/api-pr",
+            base_branch="main",
+            is_fork=True,
+            local_branch="pr-812",
+            pr_state="OPEN",
+            name="sam/retry-uploads",
+        ),
+    )
+
+
 @pytest.fixture
 def prepare(client, monkeypatch, mocker, tmp_path):
     """POST /api/reviews/prepare on the same repo label and branch, with `wins` as the last blob."""
@@ -257,3 +285,71 @@ def test_a_rail_placement_failure_still_answers_spawned(client, worktree, spawn,
 def test_no_title_stamps_only_the_ticket(client, worktree, spawn, place):
     assert client.post("/api/linear/start", json={**BODY, "title": ""}).status_code == 200
     assert store.get_window("k") == {"linked_linear": "ENG-1"}
+
+
+def test_a_pr_start_checks_the_pr_out_and_links_it(client, no_pr_worktree, fetch, worktree, spawn, place):
+    r = client.post("/api/linear/start", json=PR_BODY)
+    assert r.status_code == 200
+    assert r.json() == {
+        "mode": "spawned",
+        "pid": "k",
+        "path": "/repos/api-pr",
+        "reused": False,
+        "session_id": SID,
+        "email": "you@example.com",
+    }
+    no_pr_worktree.assert_called_once_with("/repos/api", "pr-812")
+    fetch.assert_called_once_with("/repos/api", 812)
+    worktree.assert_not_called()
+    assert spawn.call_args.args == ("/repos/api-pr", "/repos/api", "Read Linear ticket ENG-1.")
+    assert store.get_window("k") == {
+        "linked_linear": "ENG-1",
+        "linked_linear_title": "Fix it",
+        "linked_pr": 812,
+        "is_fork": True,
+    }
+
+
+def test_a_pr_start_uses_the_worktree_already_on_the_pr(client, mocker, fetch, spawn, place):
+    mocker.patch("periscope.worktrees.for_branch", return_value="/repos/api-pr")
+    r = client.post("/api/linear/start", json=PR_BODY)
+    assert r.status_code == 200 and r.json()["path"] == "/repos/api-pr" and r.json()["reused"] is True
+    fetch.assert_not_called()
+    # Only a fetch asks GitHub whether the PR comes from a fork.
+    assert store.get_window("k") == {"linked_linear": "ENG-1", "linked_linear_title": "Fix it", "linked_pr": 812}
+
+
+def test_a_claude_on_the_pr_branch_is_reported(client, windows, no_pr_worktree, fetch, spawn):
+    windows.return_value = [_win(branch="pr-812")]
+    assert client.post("/api/linear/start", json=PR_BODY).json() == {"mode": "existing", "pid": "p1"}
+    fetch.assert_not_called()
+    spawn.assert_not_called()
+
+
+def test_a_second_pr_start_before_the_claude_shows_is_refused(client, no_pr_worktree, fetch, spawn, place):
+    assert client.post("/api/linear/start", json=PR_BODY).status_code == 200
+    assert PR_KEY in branch_spawn._recent_spawn
+    r = client.post("/api/linear/start", json=PR_BODY)
+    assert r.status_code == 409 and spawn.call_count == 1
+
+
+@pytest.mark.parametrize("target", [{"branch": "me/eng-1-fix-it", "pr": 812}, {}, {"branch": ""}])
+def test_a_start_takes_a_branch_or_a_pr(client, worktree, fetch, spawn, target):
+    body = {k: v for k, v in BODY.items() if k != "branch"} | target
+    r = client.post("/api/linear/start", json=body)
+    assert r.status_code == 400 and r.json()["detail"] == "send exactly one of branch and pr"
+    worktree.assert_not_called()
+    fetch.assert_not_called()
+    spawn.assert_not_called()
+
+
+def test_a_pr_fetch_conflict_is_400_and_a_missing_pr_stays_404(client, no_pr_worktree, fetch, spawn):
+    # This route's 409 means only that a start is running.
+    from fastapi import HTTPException
+
+    fetch.side_effect = HTTPException(409, "local branch 'pr-812' already in use — remove the existing worktree")
+    r = client.post("/api/linear/start", json=PR_BODY)
+    assert r.status_code == 400 and "already in use" in r.json()["detail"]
+    fetch.side_effect = HTTPException(404, "PR #812 not found in /repos/api: no pull requests found")
+    assert client.post("/api/linear/start", json=PR_BODY).status_code == 404
+    spawn.assert_not_called()
