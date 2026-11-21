@@ -329,6 +329,13 @@ def test_resume_refusal_404s_without_claudes_transcript():
     assert turns.resume_refusal("sid-gone", None) == (404, "Claude has no transcript for session sid-gone")
 
 
+def test_resume_refusal_404s_a_transcript_deleted_after_the_glob(tmp_path):
+    assert turns.resume_refusal("sid-swept", tmp_path / "sid-swept.jsonl") == (
+        404,
+        "Claude has no transcript for session sid-swept",
+    )
+
+
 def test_resume_refusal_409s_a_transcript_written_in_the_last_minute_unless_forced(tmp_path, monkeypatch):
     monkeypatch.setattr(turns, "_resuming", {})
     status, detail = turns.resume_refusal("sid-live", _aged(tmp_path / "sid-live.jsonl", 5))

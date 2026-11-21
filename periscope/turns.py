@@ -66,16 +66,21 @@ def resume_refusal(session_id: str, transcript: Path | None, *, force: bool = Fa
     history's archive copy: `--resume` reads Claude's file, which Claude deletes
     after `cleanupPeriodDays` while the archive keeps its copy. `force` skips
     only the liveness check (routes/sessions._window_new_resume says why)."""
-    if transcript is None:
+    try:
+        age = time.time() - transcript.stat().st_mtime if transcript else None
+    except OSError:  # Claude's cleanup deleted it after the glob
+        age = None
+    if age is None:
         return 404, f"Claude has no transcript for session {session_id}"
-    age = time.time() - transcript.stat().st_mtime
     # Rail.movePaneAccount matches the "session looks live" prefix to offer
     # "move anyway": change both or neither.
     if not force and age < _LIVE_MTIME_S:
         return 409, f"session looks live (written {int(age)}s ago); wait a minute or pick another"
     # Two windows on one session interleave just the same, so `force` never skips this.
-    if session_id in _resuming:
-        return 409, f"already resumed in {_resuming[session_id]['target']}"
+    # static/resume.js matches the "already resumed" prefix to link the
+    # dashboard: change both or neither.
+    if (entry := _resuming.get(session_id)) is not None:
+        return 409, f"already resumed in {entry['target']}"
     return None
 
 
