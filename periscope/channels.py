@@ -932,6 +932,8 @@ def _do_search_history_tool(pane: str, arguments: dict):
             "project_path": r["project_path"],
             "branch": r["branch"],
             "started_at": r["started_at"],
+            # `since` bounds the last turn, so show it.
+            "ended_at": r["ended_at"],
             "duration_s": r["duration_s"],
             "summary": r["summary"],
             "tags": r["tags"],

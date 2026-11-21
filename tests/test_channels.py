@@ -423,6 +423,7 @@ def test_search_history_tool_trims_fields_and_caps_files(mocker):
         "project_path",
         "branch",
         "started_at",
+        "ended_at",
         "duration_s",
         "summary",
         "tags",
