@@ -14,7 +14,7 @@ from periscope import store
 from periscope.config import STATIC
 from periscope.git_pr import linear_ticket_fields
 from periscope.narrator import is_placeholder_name
-from periscope.turns import jsonl_for_session, resume_refusal
+from periscope.turns import jsonl_by_session, resume_refusal
 
 router = APIRouter()
 
@@ -40,9 +40,10 @@ def _annotate(rows: list[dict]) -> None:
     the page titles the row with the summary."""
     panes = _panes_by_session()
     team_keys = store.linear_team_keys()
+    transcripts = jsonl_by_session()
     for r in rows:
         sid = r["session_id"]
-        refusal = resume_refusal(sid, jsonl_for_session(sid))
+        refusal = resume_refusal(sid, transcripts.get(sid))
         r["resume_refusal"] = {"status": refusal[0], "detail": refusal[1]} if refusal else None
         pane = panes.get(sid) or {}
         name = (pane.get("last_seen") or {}).get("name")

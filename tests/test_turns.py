@@ -306,6 +306,17 @@ def test_last_reply_for_session_finds_the_file_and_caches_by_size(tmp_path, monk
     assert len(reads) == 2
 
 
+def test_jsonl_by_session_finds_what_jsonl_for_session_finds(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)
+    for folder, sid in (("-Users-tom-dev-x", "sid-A"), ("-Users-tom-dev-y", "sid-B")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / f"{sid}.jsonl").write_text("{}\n")
+    (tmp_path / "-Users-tom-dev-x" / "sid-A" / "subagents").mkdir(parents=True)
+    (tmp_path / "-Users-tom-dev-x" / "sid-A" / "subagents" / "agent-1.jsonl").write_text("{}\n")
+    found = turns.jsonl_by_session()
+    assert found == {sid: turns.jsonl_for_session(sid) for sid in ("sid-A", "sid-B")}
+
+
 def test_last_reply_for_session_is_none_without_a_transcript(tmp_path, monkeypatch):
     monkeypatch.setattr(activity, "_PROJECTS_DIR", tmp_path)
     monkeypatch.setattr(turns, "_reply_cache", {})

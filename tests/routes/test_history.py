@@ -6,7 +6,7 @@ import pytest
 @pytest.fixture
 def no_transcripts(mocker):
     """Claude keeps no transcript for any session, and no pane ran one."""
-    mocker.patch("periscope.routes.history.jsonl_for_session", return_value=None)
+    mocker.patch("periscope.routes.history.jsonl_by_session", return_value={})
     mocker.patch("periscope.store.all_windows", return_value={})
 
 
@@ -31,7 +31,7 @@ def test_history_search_rows_resume_when_claude_has_a_quiet_transcript(client, m
     jsonl = tmp_path / "abc.jsonl"
     jsonl.write_text("{}\n")
     os.utime(jsonl, (time.time() - 600, time.time() - 600))
-    mocker.patch("periscope.routes.history.jsonl_for_session", return_value=jsonl)
+    mocker.patch("periscope.routes.history.jsonl_by_session", return_value={"abc": jsonl})
     mocker.patch("periscope.store.all_windows", return_value={})
     mocker.patch("history.recent", return_value=[{"session_id": "abc", "branch": "main"}])
     r = client.get("/api/history/search?q=")
@@ -44,12 +44,13 @@ def test_history_search_rows_carry_the_pane_that_last_ran_the_session(client, mo
     mocker.patch(
         "periscope.store.all_windows",
         return_value={
-            "p-old": {"last_seen": {"sid": "abc", "ts": 100, "name": "old-name"}, "linked_pr": 7},
+            # The newer sighting comes first, so a last-entry-wins lookup fails.
             "p-new": {
                 "last_seen": {"sid": "abc", "ts": 200, "name": "history-p1-fixes"},
                 "linked_pr": 66,
                 "linked_linear": "THI-470",
             },
+            "p-old": {"last_seen": {"sid": "abc", "ts": 100, "name": "old-name"}, "linked_pr": 7},
             "p-other": {"last_seen": {"sid": "zzz", "ts": 300, "name": "other"}},
         },
     )
@@ -66,6 +67,14 @@ def test_history_search_rows_carry_the_pane_that_last_ran_the_session(client, mo
     assert rows[1]["pane_name"] is None
     assert rows[1]["linked_pr"] is None
     assert rows[1]["linear_ticket"] == "THI-402"
+
+
+def test_history_search_lists_the_transcripts_once_for_all_rows(client, mocker):
+    listing = mocker.patch("periscope.routes.history.jsonl_by_session", return_value={})
+    mocker.patch("periscope.store.all_windows", return_value={})
+    mocker.patch("history.recent", return_value=[{"session_id": "abc"}, {"session_id": "def"}])
+    client.get("/api/history/search?q=")
+    assert listing.call_count == 1
 
 
 @pytest.mark.parametrize("name", ["claude.exe", "claude", "2.1.220"])

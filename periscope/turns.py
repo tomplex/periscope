@@ -55,6 +55,12 @@ def jsonl_for_session(session_id: str):
     return matches[0] if matches else None
 
 
+def jsonl_by_session() -> dict:
+    """Every session id's transcript, as jsonl_for_session finds it, from one
+    pass over the project folders: cheaper than one glob for each of many ids."""
+    return {p.stem: p for p in activity._PROJECTS_DIR.glob("*/*.jsonl")}
+
+
 # A transcript written this recently probably has a live appender: a second
 # `--resume` would put two processes on one JSONL and interleave their turns.
 _LIVE_MTIME_S = 60
