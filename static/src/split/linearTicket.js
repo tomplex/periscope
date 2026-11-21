@@ -1,6 +1,7 @@
 // The Linear ticket a pane shows: the one Claude linked (link_linear), else the
 // one its PR title or branch names, derived server-side (THI-441). The tooltip
 // says where a derived one came from, so it doesn't read as confirmed.
+// static/util.js holds a copy for the /history page; the test runs both.
 const SOURCES = { pr_title: "from the PR title", branch: "from the branch name" };
 
 export function linearTicket(w) {
