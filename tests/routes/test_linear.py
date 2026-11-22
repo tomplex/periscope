@@ -1,8 +1,13 @@
 """POST /api/linear/start — worktree, Claude with a prompt, the Linear link, rail placement.
-Windows come from a patched state_hub.current_windows and the spawn is an AsyncMock (docs/testing.md)."""
+Windows come from a patched state_hub.current_windows and the spawn is an AsyncMock (docs/testing.md).
+The tests of a reused PR worktree run real git in tmp_path."""
 
 import json
+import os
+import subprocess
 import time
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -310,10 +315,20 @@ def test_a_pr_start_checks_the_pr_out_and_links_it(client, no_pr_worktree, fetch
     }
 
 
+def test_a_branch_start_answers_the_worktree_warning(client, worktree, spawn, place):
+    worktree.return_value = {**worktree.return_value, "warning": "fetch failed: origin/main may be stale ('offline')"}
+    r = client.post("/api/linear/start", json=BODY)
+    assert r.status_code == 200 and r.json()["warning"] == "fetch failed: origin/main may be stale ('offline')"
+
+
 def test_a_pr_start_uses_the_worktree_already_on_the_pr(client, mocker, fetch, spawn, place):
     mocker.patch("periscope.worktrees.for_branch", return_value="/repos/api-pr")
+    # The fetch works, and the worktree has the PR's head already.
+    git = mocker.patch("periscope.routes.linear._run", return_value=(0, ""))
     r = client.post("/api/linear/start", json=PR_BODY)
     assert r.status_code == 200 and r.json()["path"] == "/repos/api-pr" and r.json()["reused"] is True
+    assert "warning" not in r.json()
+    assert git.call_args_list[0].args[0] == ["git", "-C", "/repos/api-pr", "fetch", "origin", "pull/812/head"]
     fetch.assert_not_called()
     # Only a fetch asks GitHub whether the PR comes from a fork.
     assert store.get_window("k") == {"linked_linear": "ENG-1", "linked_linear_title": "Fix it", "linked_pr": 812}
@@ -353,3 +368,89 @@ def test_a_pr_fetch_conflict_is_400_and_a_missing_pr_stays_404(client, no_pr_wor
     fetch.side_effect = HTTPException(404, "PR #812 not found in /repos/api: no pull requests found")
     assert client.post("/api/linear/start", json=PR_BODY).status_code == 404
     spawn.assert_not_called()
+
+
+@pytest.fixture
+def pr_checkout(tmp_path, monkeypatch, fetch):
+    """Real git: an origin with PR 812, a clone of it, and a worktree of the clone on `pr-812` at the PR's head.
+    `push(text)` adds a commit to the PR on origin and returns its sha. `head()` is the worktree's HEAD."""
+    from periscope import worktree_spawn
+
+    # A start that misses the worktree puts its new one here, never under ~/dev/worktrees.
+    monkeypatch.setattr(worktree_spawn, "WORKTREES_DIR", tmp_path / "worktrees")
+    for var in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+        monkeypatch.setenv(var, "t")
+    for var in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(var, "t@t")
+
+    def git(*args):
+        return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    origin, author, repo, wt = (str(tmp_path / n) for n in ("origin.git", "author", "repo", "wt"))
+    git("init", "-q", "--bare", origin)
+    git("init", "-q", author)
+
+    def push(text):
+        Path(author, "f").write_text(text)
+        git("-C", author, "add", "f")
+        git("-C", author, "commit", "-qm", text)
+        git("-C", author, "push", "-q", origin, "HEAD:refs/heads/main", "HEAD:refs/pull/812/head")
+        return git("-C", author, "rev-parse", "HEAD")
+
+    push("one\n")
+    git("clone", "-q", origin, repo)
+    git("-C", repo, "fetch", "-q", "origin", "pull/812/head:pr-812")
+    git("-C", repo, "worktree", "add", "-q", wt, "pr-812")
+    return SimpleNamespace(
+        origin=origin,
+        repo=os.path.realpath(repo),
+        wt=os.path.realpath(wt),
+        git=git,
+        push=push,
+        head=lambda: git("-C", wt, "rev-parse", "HEAD"),
+    )
+
+
+def test_a_reused_pr_worktree_moves_to_the_prs_head(client, pr_checkout, fetch, spawn, place):
+    new = pr_checkout.push("two\n")
+    r = client.post("/api/linear/start", json={**PR_BODY, "repo": pr_checkout.repo})
+    assert r.status_code == 200 and r.json()["reused"] is True and "warning" not in r.json()
+    assert pr_checkout.head() == new
+    assert spawn.call_args.args[0] == pr_checkout.wt
+    fetch.assert_not_called()
+
+
+def test_local_changes_need_no_update_when_the_worktree_has_the_prs_head(client, pr_checkout, spawn, place):
+    Path(pr_checkout.wt, "notes.md").write_text("mine\n")
+    r = client.post("/api/linear/start", json={**PR_BODY, "repo": pr_checkout.repo})
+    assert r.status_code == 200 and "warning" not in r.json()
+
+
+def test_a_reused_pr_worktree_with_local_changes_stays_as_it_is(client, pr_checkout, spawn, place):
+    old = pr_checkout.head()
+    pr_checkout.push("two\n")
+    Path(pr_checkout.wt, "f").write_text("mine\n")
+    r = client.post("/api/linear/start", json={**PR_BODY, "repo": pr_checkout.repo})
+    assert r.status_code == 200
+    assert r.json()["warning"] == "pr-812 may be behind PR #812: the worktree has local changes"
+    assert pr_checkout.head() == old and Path(pr_checkout.wt, "f").read_text() == "mine\n"
+
+
+def test_a_reused_pr_worktree_that_diverged_stays_as_it_is(client, pr_checkout, spawn, place):
+    pr_checkout.push("two\n")
+    pr_checkout.git("-C", pr_checkout.wt, "commit", "-q", "--allow-empty", "-m", "local")
+    local = pr_checkout.head()
+    r = client.post("/api/linear/start", json={**PR_BODY, "repo": pr_checkout.repo})
+    assert r.status_code == 200
+    assert r.json()["warning"] == "pr-812 may be behind PR #812: it cannot fast-forward"
+    assert pr_checkout.head() == local
+
+
+def test_a_failed_fetch_leaves_the_reused_worktree_as_it_is(client, pr_checkout, spawn, place):
+    old = pr_checkout.head()
+    pr_checkout.git("-C", pr_checkout.origin, "update-ref", "-d", "refs/pull/812/head")
+    r = client.post("/api/linear/start", json={**PR_BODY, "repo": pr_checkout.repo})
+    assert r.status_code == 200
+    assert r.json()["warning"].startswith("pr-812 may be behind PR #812: fetch failed (")
+    assert "pull/812/head" in r.json()["warning"]
+    assert pr_checkout.head() == old and r.json()["path"] == pr_checkout.wt
