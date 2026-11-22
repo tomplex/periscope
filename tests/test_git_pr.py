@@ -106,27 +106,13 @@ def test_git_state_none_when_status_fails(tmp_path, mocker):
     assert git_state_for(str(tmp_path)) is None
 
 
-def test_identity_with_no_slug_is_not_cached(tmp_path, mocker):
-    """github_slug returning None (no GitHub remote, or a failed/timed-out
-    read) is not cached — the rule reviews._GH_SLUG already applies to the
-    same value. Re-read on the next git refresh instead of for the full
-    10-minute identity TTL."""
+def test_identity_is_cached_for_a_repo_with_no_slug(tmp_path, mocker):
     _mock_git(mocker)
-    slug = mocker.patch("periscope.git_pr.github_slug", return_value=None)
-    mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
+    resolve = mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
     git_state_for(str(tmp_path))
-    git_state_for(str(tmp_path))
-    assert slug.call_count == 2
-
-
-def test_identity_with_a_found_slug_is_cached_for_the_ttl(tmp_path, mocker):
-    _mock_git(mocker)
-    slug = mocker.patch("periscope.git_pr.github_slug", return_value="owner/repo")
-    mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
-    out1 = git_state_for(str(tmp_path))
-    out2 = git_state_for(str(tmp_path))
-    assert slug.call_count == 1
-    assert out1["repo_slug"] == out2["repo_slug"] == "owner/repo"
+    out = git_state_for(str(tmp_path))
+    assert resolve.call_count == 1
+    assert out["repo_slug"] is None
 
 
 def test_git_reads_never_write_the_index(tmp_path, git_identity):
@@ -393,9 +379,8 @@ def test_a_git_dir_without_a_work_tree_reads_its_branch(tmp_path, git_identity):
 
 
 def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypatch, git_identity):
-    """Identity caches only once a slug is found — a GitHub remote here, so
-    the second read skips rev-parse/remote; see test_identity_with_no_slug_is_not_cached
-    for a repo with none."""
+    """The second read skips rev-parse and remote. After the identity TTL,
+    rev-parse runs again; github_slug keeps a found slug with no TTL."""
     repo_path = _committed(tmp_path)
     _git(repo_path, "remote", "add", "origin", "https://github.com/faradayio/periscope.git")
     repo = str(repo_path)
@@ -422,7 +407,7 @@ def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypa
     assert subcommands() == ["status", "diff-index"]
     clock[0] += 601
     git_state_for(repo)
-    assert subcommands() == ["status", "diff-index", "rev-parse", "remote"]
+    assert subcommands() == ["status", "diff-index", "rev-parse"]
 
 
 @pytest.fixture
@@ -776,6 +761,14 @@ def test_github_slug_none_for_non_github(tmp_path):
 def test_github_slug_none_when_no_remote(tmp_path):
     _git(tmp_path, "init")
     assert github_slug(str(tmp_path)) is None
+
+
+def test_github_slug_caches_a_found_slug_but_retries_after_none(tmp_path, mocker):
+    run = mocker.patch("periscope.gitutil._run", side_effect=[(-1, ""), (0, "git@github.com:owner/repo.git")])
+    assert github_slug(str(tmp_path)) is None
+    assert github_slug(str(tmp_path)) == "owner/repo"
+    assert github_slug(str(tmp_path)) == "owner/repo"
+    assert run.call_count == 2
 
 
 def test_git_state_includes_repo_key_and_label(tmp_path, mocker):

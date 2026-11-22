@@ -2,8 +2,9 @@
 detection.
 
 Distinct from `git_pr.py`, which owns the cached git/PR *state* the
-dashboard renders. These are stateless primitives — given a directory,
-shell out to `git` and return a path or branch name. Kept in their own
+dashboard renders. These are primitives — given a directory, shell out
+to `git` and return a path, a branch name or a slug. Only `github_slug`
+keeps a cache. Kept in their own
 module so import-sensitive callers (notably `store.py`, whose v2
 migration runs at import time) can use them without pulling in
 `git_pr.py`'s heavier import graph. Imports only `tmux._run`.
@@ -78,10 +79,17 @@ def detect_default_branch(repo: str) -> str:
     return "main"
 
 
+_GH_SLUG: dict[str, str] = {}  # no TTL: the origin remote effectively never changes
+
+
 def github_slug(directory: str) -> str | None:
     """The `owner/repo` GitHub slug for the repo containing `directory`,
     derived from `git remote get-url origin`. None when there is no origin
     remote or it doesn't point at github.com.
+
+    Only a found slug is cached, for each `directory`. A None can be a 3 s git
+    timeout on a slow first read, and would otherwise strip every link from
+    the repo until restart.
 
     Handles the common origin URL forms:
       git@github.com:owner/repo.git
@@ -89,8 +97,13 @@ def github_slug(directory: str) -> str | None:
       https://github.com/owner/repo
       ssh://git@github.com/owner/repo.git
     """
+    if directory in _GH_SLUG:
+        return _GH_SLUG[directory]
     code, url = _run(["git", "-C", directory, "remote", "get-url", "origin"])
     if code != 0 or not url:
         return None
     m = re.search(r"github\.com[:/]+([^/]+/[^/]+?)(?:\.git)?/?$", url.strip())
-    return m.group(1) if m else None
+    if not m:
+        return None
+    _GH_SLUG[directory] = m.group(1)
+    return m.group(1)
