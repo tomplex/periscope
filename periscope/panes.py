@@ -65,7 +65,7 @@ _active_per_session: dict[str, str] = {}
 # `claude --resume <id>` is currently running so we can refuse concurrent
 # resume requests (they'd interleave appends into the same JSONL).
 _resuming: dict[str, dict] = {}
-RESUME_EXPIRY_S = 30 * 60  # forget about a resume after 30 min idle
+RESUME_EXPIRY_S = 30 * 60  # forget a resume 30 min after it starts, even if its window still runs
 
 # Per-target spinner hysteresis. Tmux capture-pane occasionally catches Claude's
 # TUI mid-redraw, dropping the spinner line for one cycle even when Claude is

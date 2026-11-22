@@ -491,7 +491,8 @@ async function fetchSearch() {
     S.results = data.results || [];
     S.answered = { query, rerankUsed: !!data.rerank_used, limit: data.limit, unsummarizedHidden: data.unsummarized_hidden };
     S.searchError = null;
-    // The new rows say whether a resumed window still runs ("already resumed in …").
+    // The new rows say "already resumed in …" while the resumed window runs, but
+    // only for 30 minutes (panes.RESUME_EXPIRY_S); then they offer Resume again.
     for (const [sid, run] of S.resumes) if (run.state === "done") S.resumes.delete(sid);
     // A new query starts at its best match; a filter change keeps the row
     // you were reading while it is still in the list.
