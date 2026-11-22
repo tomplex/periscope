@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from periscope import config, open_ops, projects, tracks
+from periscope import config, open_ops, projects, tracks, worktree_spawn
 from periscope.tmux import _tmux_mutate
 from tests.conftest import needs_tmux
 
@@ -26,7 +26,7 @@ def test_fetch_pr_into_worktree_worktree_add_failure_cleans_up_branch(tmp_git_re
         capture_output=True,
     )
     wt_dest = str(tmp_git_repo.parent / "wt-pr-42")
-    monkeypatch.setattr(projects, "worktree_path", lambda repo, slug: wt_dest)
+    monkeypatch.setattr(worktree_spawn, "worktree_path", lambda repo, slug: wt_dest)
     monkeypatch.setattr(
         projects,
         "_resolve_pr_metadata",
@@ -41,8 +41,6 @@ def test_fetch_pr_into_worktree_worktree_add_failure_cleans_up_branch(tmp_git_re
 
     # The add runs through worktree_spawn.worktree_add; fail it there and let
     # every other git call (the branch -D rollback included) run for real.
-    from periscope import worktree_spawn
-
     real_run = worktree_spawn._run
 
     def patched_run(cmd, **kwargs):
@@ -76,7 +74,7 @@ def test_fetch_pr_into_worktree_carries_the_git_crypt_key(tmp_git_repo, tmp_path
 
     arm_fake_git_crypt(tmp_git_repo)
     subprocess.run(["git", "-C", str(tmp_git_repo), "branch", "pr-42"], check=True)
-    monkeypatch.setattr(projects, "worktree_path", lambda repo, slug: str(tmp_path / "wt-pr-42"))
+    monkeypatch.setattr(worktree_spawn, "worktree_path", lambda repo, slug: str(tmp_path / "wt-pr-42"))
     monkeypatch.setattr(
         projects,
         "_resolve_pr_metadata",
@@ -94,14 +92,14 @@ def test_fetch_pr_into_worktree_carries_the_git_crypt_key(tmp_git_repo, tmp_path
     assert (Path(res.path) / "secret").read_text() == "hunter2\n"
 
 
-def test_fetch_pr_into_worktree_409_if_wt_path_exists(tmp_git_repo, monkeypatch):
-    """If the target worktree path already exists on disk (e.g. a duplicate
-    PR review attempt), fetch_pr_into_worktree raises HTTPException(409) before
-    calling git worktree add — so the existing worktree is never clobbered.
-    """
-    existing_wt = str(tmp_git_repo.parent / "wt-pr-99")
-    os.makedirs(existing_wt, exist_ok=True)
-    monkeypatch.setattr(projects, "worktree_path", lambda repo, slug: existing_wt)
+def test_fetch_pr_into_worktree_takes_the_next_free_path(tmp_git_repo, monkeypatch):
+    """A folder already at the PR's path (your own worktree on its head branch, say) stays as it is: the PR
+    gets the next free path, as a branch start does."""
+    taken = tmp_git_repo.parent / "wt-dup-branch"
+    taken.mkdir()
+    (taken / "mine").write_text("keep\n")
+    monkeypatch.setattr(worktree_spawn, "worktree_path", lambda repo, slug: str(tmp_git_repo.parent / f"wt-{slug}"))
+    subprocess.run(["git", "-C", str(tmp_git_repo), "branch", "pr-99"], check=True)
     monkeypatch.setattr(
         projects,
         "_resolve_pr_metadata",
@@ -114,19 +112,19 @@ def test_fetch_pr_into_worktree_409_if_wt_path_exists(tmp_git_repo, monkeypatch)
     )
     monkeypatch.setattr(projects, "_fetch_pr_branch", lambda *a, **k: None)
 
-    from fastapi import HTTPException as FastHTTPException
+    res = projects.fetch_pr_into_worktree(str(tmp_git_repo), 99)
 
-    with pytest.raises(FastHTTPException) as exc_info:
-        projects.fetch_pr_into_worktree(str(tmp_git_repo), 99)
-    assert exc_info.value.status_code == 409
-    assert "already exists" in exc_info.value.detail
+    assert res.path == f"{taken}-2"
+    assert (taken / "mine").read_text() == "keep\n"
+    head = subprocess.run(["git", "-C", res.path, "branch", "--show-current"], capture_output=True, text=True)
+    assert head.stdout.strip() == "pr-99"
 
 
 def test_fetch_pr_into_worktree_returns_metadata(tmp_git_repo, monkeypatch):
     # Redirect worktree_path to a location inside tmp_git_repo so git worktree
     # add runs for real without touching ~/dev/worktrees.
     wt_dest = str(tmp_git_repo.parent / "wt-pr-7")
-    monkeypatch.setattr(projects, "worktree_path", lambda repo, slug: wt_dest)
+    monkeypatch.setattr(worktree_spawn, "worktree_path", lambda repo, slug: wt_dest)
     # Create the local branch that worktree add will check out — normally
     # created by _fetch_pr_branch (which we stub out).
     subprocess.run(
@@ -667,6 +665,14 @@ def test_build_catalog_lists_repo_and_main_worktree(tmp_git_repo, clean_state, m
     cat = open_ops.build_catalog()
     assert any(r["repo"] == repo for r in cat["repos"])
     assert any(w["path"] == os.path.realpath(repo) and w["is_main"] for w in cat["worktrees"])
+
+
+def test_build_catalog_gives_each_repo_its_github_slug(tmp_git_repo, clean_state, monkeypatch):
+    repo = str(tmp_git_repo)
+    monkeypatch.setattr(open_ops, "discover_repos", lambda: {repo})
+    assert open_ops.build_catalog()["repos"][0]["slug"] is None
+    subprocess.run(["git", "-C", repo, "remote", "add", "origin", "git@github.com:acme/api.git"], check=True)
+    assert open_ops.build_catalog()["repos"][0]["slug"] == "acme/api"
 
 
 def test_open_target_pr_rolls_back_worktree_on_open_failure(tmp_git_repo, clean_state, monkeypatch):
