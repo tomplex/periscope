@@ -54,10 +54,18 @@ track also has a **+ New tab** launcher: pick a branch, then what to run
 
 Another app on this Mac can start work too. `POST /api/linear/start` takes a
 repo, a branch, a Linear issue and a prompt: periscope makes the worktree,
-starts Claude, sends it the prompt and links the issue to the card. It
-answers with the new Claude's `session_id` and its account's `email` (null
-when periscope cannot read it). If a Claude is already on that branch, it
-reports that pane and starts nothing.
+starts Claude, sends it the prompt and links the issue to the card. With a
+pull request number (`pr`) in place of the branch, periscope checks the pull
+request out as `pr-<N>`, as ⌘K does, and links the PR too. A worktree already
+on `pr-<N>` moves to the PR's latest commit by a fast-forward. When the fetch
+fails, the worktree has local changes or the branch diverged, periscope uses
+the worktree as it is. It answers with the new Claude's `session_id` and its
+account's `email` (null when periscope cannot read it). A `warning` in the
+answer tells of a problem that did not stop the start, for example a worktree
+that stays behind its PR. If a Claude is already on that branch, it reports
+that pane and starts nothing.
+`GET /api/open/catalog` gives each repo's `slug`, the `owner/name` of its
+origin on GitHub, so the app can find the repo of a pull request.
 `POST /api/select` with a pane's `pid` makes the dashboard select it.
 
 Free text in ⌘K becomes a background command, a headless Claude that hands

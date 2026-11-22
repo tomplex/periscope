@@ -13,6 +13,7 @@ from typing import Literal
 from periscope import config, projects, store, tracks, usage, worktrees
 from periscope.gitutil import (
     detect_default_branch,
+    github_slug,
     resolve_repo,
     resolve_repo_and_branch,
 )
@@ -398,7 +399,7 @@ def open_target(
 
 
 def build_catalog() -> dict:
-    """GET /api/open/catalog payload: {repos:[...], worktrees:[...], roots:[...]}.
+    """GET /api/open/catalog payload: {repos:[{repo, label, default_branch, branches, slug}], worktrees:[...], roots:[...]}.
     `roots` is the expanded scan list, so an empty catalog can say where it
     looked."""
     repos_out, worktrees_out = [], []
@@ -427,6 +428,8 @@ def build_catalog() -> dict:
                 "label": os.path.basename(repo),
                 "default_branch": detect_default_branch(repo),
                 "branches": branches,
+                # `owner/name` of origin on GitHub, or None: another app finds a pull request's repo by it.
+                "slug": github_slug(repo),
             }
         )
         for path, branch in worktrees._cached_worktrees(repo):

@@ -22,7 +22,7 @@ from periscope import store as _store
 from periscope.log import log
 from periscope.repo_locks import repo_lock
 from periscope.tmux import _run
-from periscope.worktree_spawn import worktree_add, worktree_path
+from periscope.worktree_spawn import free_worktree_path, worktree_add
 from periscope.worktrees import invalidate as worktrees_invalidate
 
 MAIN_KEY = "__main__"
@@ -232,8 +232,9 @@ def fetch_pr_into_worktree(repo: str, pr: int, name_override: str | None = None)
     """Fetch PR #pr into a fresh worktree under `repo`, preserving the
     route's rollback semantics: on any failure after the worktree exists,
     `_discard_pr_worktree` force-removes it and deletes the orphan branch.
-    Raises ValueError on bad input; HTTPException on gh/git failures
-    (the caller maps). Returns the worktree metadata.
+    Raises ValueError on bad input or when every de-collided path candidate
+    is taken; HTTPException on gh/git failures (the caller maps). Returns the
+    worktree metadata.
 
     `name_override` (the route's explicit user-supplied name) takes
     precedence over the PR's head branch when slugging the on-disk worktree
@@ -260,17 +261,15 @@ def fetch_pr_into_worktree(repo: str, pr: int, name_override: str | None = None)
     # Fetch the PR head into local branch `pr-<N>`.
     _fetch_pr_branch(repo, pr, local_branch)
 
-    # Worktree path honors the repo's inline/sibling layout. Slugged from
-    # the PR's head branch so the dir on disk is recognizable, not `pr-<N>`.
-    wt_path = worktree_path(repo, name)
-
-    if os.path.exists(wt_path):
-        raise HTTPException(409, f"worktree path already exists: {wt_path}")
-
     # Create the worktree at `pr-<N>` under the per-repo lock. On failure,
     # delete the orphan `pr-<N>` branch the fetch created — otherwise a
     # retry hits the "non-fast-forward" path and 409s with a confusing error.
     with repo_lock(repo):
+        # Worktree path honors the repo's inline/sibling layout. Slugged from
+        # the PR's head branch so the dir on disk is recognizable, not `pr-<N>`.
+        # A dir already there (your own worktree on that branch, say) stays as
+        # it is: the PR takes the next free path, as a branch start does.
+        wt_path = free_worktree_path(repo, name)
         Path(wt_path).parent.mkdir(parents=True, exist_ok=True)
         code, out = worktree_add(repo, wt_path, [wt_path, local_branch])
         if code != 0:
