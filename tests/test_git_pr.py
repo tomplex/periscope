@@ -106,27 +106,13 @@ def test_git_state_none_when_status_fails(tmp_path, mocker):
     assert git_state_for(str(tmp_path)) is None
 
 
-def test_identity_with_no_slug_is_not_cached(tmp_path, mocker):
-    """github_slug returning None (no GitHub remote, or a failed/timed-out
-    read) is not cached — the rule reviews._GH_SLUG already applies to the
-    same value. Re-read on the next git refresh instead of for the full
-    10-minute identity TTL."""
+def test_identity_is_cached_for_a_repo_with_no_slug(tmp_path, mocker):
     _mock_git(mocker)
-    slug = mocker.patch("periscope.git_pr.github_slug", return_value=None)
-    mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
+    resolve = mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
     git_state_for(str(tmp_path))
-    git_state_for(str(tmp_path))
-    assert slug.call_count == 2
-
-
-def test_identity_with_a_found_slug_is_cached_for_the_ttl(tmp_path, mocker):
-    _mock_git(mocker)
-    slug = mocker.patch("periscope.git_pr.github_slug", return_value="owner/repo")
-    mocker.patch("periscope.git_pr.resolve_repo", return_value=str(tmp_path))
-    out1 = git_state_for(str(tmp_path))
-    out2 = git_state_for(str(tmp_path))
-    assert slug.call_count == 1
-    assert out1["repo_slug"] == out2["repo_slug"] == "owner/repo"
+    out = git_state_for(str(tmp_path))
+    assert resolve.call_count == 1
+    assert out["repo_slug"] is None
 
 
 def test_git_reads_never_write_the_index(tmp_path, git_identity):

@@ -46,11 +46,10 @@ _GIT_BG_TIMEOUT_S = 10.0
 _git_cache: dict[str, tuple[float, dict | None]] = {}
 _git_fetching: set[str] = set()
 _git_lock = threading.Lock()
-# A repo's root and its GitHub remote: re-read rarely, they change only when a
-# checkout is re-pointed.
+# A repo's root: re-read rarely, it changes only when a checkout is re-pointed.
 _REPO_IDENTITY_TTL_S = 600.0
-# path -> (read at, repo_key, repo_slug)
-_repo_identity_cache: dict[str, tuple[float, str, str | None]] = {}
+# path -> (read at, repo_key)
+_repo_identity_cache: dict[str, tuple[float, str]] = {}
 _signal_cache: dict[str, tuple[float, dict | None]] = {}
 _pr_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
 _pr_fetching: set[tuple[str, str]] = set()
@@ -150,19 +149,14 @@ def git_state_for(path: str, timeout: float = 3.0) -> dict | None:
     # basename for human-readable display in the rail.
     now = time.time()
     identity = _repo_identity_cache.get(path)
-    if identity is not None and now - identity[0] < _REPO_IDENTITY_TTL_S:
-        _, repo_key, repo_slug = identity
-    else:
-        repo_key, repo_slug = resolve_repo(path), github_slug(path)
-        # Only a found slug is cached: a None can be a 3 s git timeout on a
-        # slow read, and would otherwise strip every PR link from the repo
-        # for the full TTL instead of just this refresh.
-        if repo_slug is not None:
-            _repo_identity_cache[path] = (now, repo_key, repo_slug)
+    if identity is None or now - identity[0] >= _REPO_IDENTITY_TTL_S:
+        identity = (now, resolve_repo(path))
+        _repo_identity_cache[path] = identity
+    repo_key = identity[1]
     return {
         "branch": branch,
         "git": state,
-        "repo_slug": repo_slug,
+        "repo_slug": github_slug(path),
         "repo_key": repo_key,
         "repo_label": os.path.basename(repo_key.rstrip("/")) if repo_key else "",
     }
