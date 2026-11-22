@@ -393,9 +393,8 @@ def test_a_git_dir_without_a_work_tree_reads_its_branch(tmp_path, git_identity):
 
 
 def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypatch, git_identity):
-    """Identity caches only once a slug is found — a GitHub remote here, so
-    the second read skips rev-parse/remote; see test_identity_with_no_slug_is_not_cached
-    for a repo with none."""
+    """The second read skips rev-parse and remote. After the identity TTL,
+    rev-parse runs again; github_slug keeps a found slug with no TTL."""
     repo_path = _committed(tmp_path)
     _git(repo_path, "remote", "add", "origin", "https://github.com/faradayio/periscope.git")
     repo = str(repo_path)
@@ -422,7 +421,7 @@ def test_git_state_forks_two_commands_once_identity_is_cached(tmp_path, monkeypa
     assert subcommands() == ["status", "diff-index"]
     clock[0] += 601
     git_state_for(repo)
-    assert subcommands() == ["status", "diff-index", "rev-parse", "remote"]
+    assert subcommands() == ["status", "diff-index", "rev-parse"]
 
 
 @pytest.fixture
@@ -776,6 +775,14 @@ def test_github_slug_none_for_non_github(tmp_path):
 def test_github_slug_none_when_no_remote(tmp_path):
     _git(tmp_path, "init")
     assert github_slug(str(tmp_path)) is None
+
+
+def test_github_slug_caches_a_found_slug_but_retries_after_none(tmp_path, mocker):
+    run = mocker.patch("periscope.gitutil._run", side_effect=[(-1, ""), (0, "git@github.com:owner/repo.git")])
+    assert github_slug(str(tmp_path)) is None
+    assert github_slug(str(tmp_path)) == "owner/repo"
+    assert github_slug(str(tmp_path)) == "owner/repo"
+    assert run.call_count == 2
 
 
 def test_git_state_includes_repo_key_and_label(tmp_path, mocker):
