@@ -2314,51 +2314,53 @@ In the load effect, after `setIdleDays(…)`:
 
 Put these three lines at the end of the `async` body, after `setRoots(…)`, so that a slow preview does not hold up the other fields.
 
-In `handleSubmit`, after the `idle` check:
+Add above `handleSubmit`:
 
 ```jsx
-    const weekdays = idleClose === "" ? null : Number(idleClose);
-    if (weekdays !== null && !(Number.isInteger(weekdays) && weekdays >= 1 && weekdays <= 30)) {
-      setError("idle close weekdays must be 1 to 30, or empty for off");
-      return;
-    }
+  function editIdleClose(weekdays) {
+    setIdleClose(weekdays);
+    setIdleCloseRows(null);  // the preview is for the saved value
+  }
 ```
 
-and add to `patch`:
+and add to `patch`. The input's own `min` and `max` stop a number out of range, and the route refuses it too:
 
 ```jsx
-      idle_close_weekdays: weekdays,  // null turns it off
+      idle_close_weekdays: idleClose === "" ? null : Number(idleClose),  // null turns it off
 ```
 
 Add the row, after the "Cleanup idle threshold" label:
 
 ```jsx
           <div class="settings-idle-close">
-            <label for="settings-idle-close">Close idle Claude panes after</label>
-            <input
-              id="settings-idle-close"
-              type="number"
-              min="1"
-              max="30"
-              placeholder="off"
-              value={idleClose}
-              onInput={(e) => setIdleClose(e.currentTarget.value)}
-            />
-            <span>weekdays</span>
-            <button type="button" disabled={idleClose === ""} onClick={() => setIdleClose("")}>off</button>
+            <div class="settings-idle-close-row">
+              <label for="settings-idle-close">Close idle Claude panes after</label>
+              <input
+                id="settings-idle-close"
+                type="number"
+                min="1"
+                max="30"
+                placeholder="off"
+                value={idleClose}
+                onInput={(e) => editIdleClose(e.currentTarget.value)}
+              />
+              <span>weekdays</span>
+              <button type="button" disabled={idleClose === ""} onClick={() => editIdleClose("")}>off</button>
+            </div>
+            {idleCloseRows && <p class="settings-overrides-hint">{idleCloseLine(idleCloseRows)}</p>}
           </div>
-          {idleCloseRows && <p class="settings-overrides-hint">{idleCloseLine(idleCloseRows)}</p>}
 ```
 
-In `static/styles.css`, after the `#settings-form textarea` rule:
+In `static/styles.css`, add `.settings-idle-close button,` to the selector list of the `.settings-modal-actions button` rule. After the `#settings-form textarea` rule:
 
 ```css
-.settings-idle-close {
-  display: flex; align-items: baseline; gap: 0.5em; margin-bottom: 0.25em; font-size: 0.9em;
-}
+.settings-idle-close { margin-bottom: 0.75em; }
+.settings-idle-close-row { display: flex; align-items: baseline; gap: 0.5em; font-size: 0.9em; }
 /* ID-qualified to outrank #settings-form label / input, which are full-width blocks. */
-#settings-form .settings-idle-close label { display: inline; margin: 0; }
+#settings-form .settings-idle-close label { display: inline; margin: 0; font-size: inherit; }
 #settings-form .settings-idle-close input { display: inline-block; width: 5em; margin: 0; }
+.settings-idle-close button { padding: 0.4em 0.75em; font-size: inherit; }
+.settings-idle-close button:disabled { opacity: 0.5; cursor: default; }
 ```
 
 - [ ] **Step 7: Run the frontend checks and build the bundle**
@@ -2374,7 +2376,7 @@ Expected: all pass. `static/dist/app.js` changed.
 
 - [ ] **Step 8: Look at the row in a browser**
 
-Start the private server as in Task 8, Step 2. Open the settings modal. Check: the row shows "off" with an empty input and no second line. Type 3 and save. Open the modal again: the second line shows "No pane closes at 04:00 tonight", because the private tmux server has no Claude pane. Press off and save. Open it again: the line is gone. Type 31 and save: the modal shows the error. Check the row at about 900 px wide. Stop the server, and delete the scratch folder, the screenshots and `.playwright-mcp` files.
+Start the private server as in Task 8, Step 2. Open the settings modal. Check: the row shows "off" with an empty input and no second line. Type 3 and save. Open the modal again: the second line shows "No pane closes at 04:00 tonight", because the private tmux server has no Claude pane. Change the number: the line goes, because it is for the saved value. Press off and save. Open it again: the line is gone. Type 31 and save: the browser refuses. Check the row at about 900 px wide. Stop the server, and delete the scratch folder, the screenshots and `.playwright-mcp` files.
 
 - [ ] **Step 9: Commit**
 
