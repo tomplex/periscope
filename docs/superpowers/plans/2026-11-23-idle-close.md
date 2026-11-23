@@ -42,6 +42,13 @@ The order is a safety rule: the sweep must not exist before Resume can bring a p
 - `transcript_mtime` is the float from `stat()`, so the re-check sees a write in the same second.
 - `/api/history/search` rows always have `closed_at`; it is `null` without a record, like `linked_pr`.
 
+## Changed during the work
+
+The code blocks below show the first version. The branch differs in these places:
+
+- **Idle since** (tasks 11 and 13): a dry run on real panes showed that a transcript's mtime is not use. `turns.last_turn_at` reads the last prompt, reply or tool call, and `idle_since` takes that. The mtime serves only `no-transcript` and the re-check.
+- **The settings row** (task 15): its own style, and no preview after an edit.
+
 ## File map
 
 | File | PR | Change |

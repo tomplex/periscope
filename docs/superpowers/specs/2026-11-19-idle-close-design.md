@@ -89,14 +89,18 @@ setting is on.
 
 Idle since is the latest of these times:
 
-1. The last write to the session's transcript (`jsonl_for_session`, mtime).
+1. The last prompt, reply or tool call in the session's transcript
+   (`turns.last_turn_at`).
 2. The end of the last turn (the view's `completed_at`).
 3. Your last action on the pane in periscope (the view's `acted_at`).
 
 The views come from `state_hub.current_windows()` (section 3). The view takes
 the larger of the in-memory and the persisted stamp for 2 and 3
 (`periscope/window_view.py:435`). The transcript catches turns that ran while
-periscope was down. `acted_at` catches a pane that you opened in periscope but
+periscope was down. Its mtime does not count: an idle Claude keeps writing
+bookkeeping rows with no turn (see decision D4). `last_turn_at` reads at most
+the last 1 MB of the file. A session with no turn in there has only the other
+two times. `acted_at` catches a pane that you opened in periscope but
 did not type in. `focused_at` does not count: it is kept only in memory, and it
 changes when you switch windows in a terminal (see decision D4).
 
@@ -121,7 +125,7 @@ New module `periscope/idle_close.py`, in the same shape as `poke.py`.
 
 ### Pure functions
 
-- `idle_since(transcript_mtime, completed_at, acted_at) -> int | None`: the
+- `idle_since(last_turn, completed_at, acted_at) -> int | None`: the
   latest of the three. A 0 or `None` stamp does not count. With no stamp that
   counts, the result is `None`.
 - `verdict(pane, at, weekdays, pinned) -> str | None` returns a code. The
@@ -150,7 +154,8 @@ view. The dict has the fields that `verdict` reads, plus `pane_id`, `name`
 and `mem_mb` for the record and the preview, and `profile` for the record.
 The session id comes from
 `turns.session_id_for_pane(pane_id)`, and the transcript mtime from
-`jsonl_for_session`. `mem_mb` is `None` when the view's `res` is `None`: the
+`jsonl_for_session`. The mtime serves only the `no-transcript` verdict and the
+re-check before the kill. `mem_mb` is `None` when the view's `res` is `None`: the
 process snapshot failed, or the pane is not in it (`periscope/resources.py:263`).
 `profile` is `config.profile_env(view["profile"]) or None`. The view reads the
 profile from the live Claude's environment (`session_status.pane_profiles()`,
@@ -396,10 +401,15 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 - `weekday_hours`: same day; Friday to Monday; a start on Saturday; an end on
   Sunday; the section 2 example (Thursday 04:00 gives 59, Friday 04:00 gives
   83).
-- `idle_since`: the transcript mtime wins when it is the newest; a 0 stamp does
-  not count; `idle_since(None, 0, 0)` is `None`.
+- `idle_since`: the last turn wins when it is the newest; a 0 stamp does not
+  count; `idle_since(None, 0, 0)` is `None`.
+- `last_turn_at` (`tests/test_turns.py`): the newest prompt, reply or tool call
+  under bookkeeping rows; meta and sidechain rows, and a row with no time, do
+  not count; no turn in reach gives `None`. The tail read gives every row once,
+  newest first, for any chunk size.
 - `pane_from_view`: a view whose `focused_at` is newer than every other stamp
-  gives the same `idle_since` as without it (decision D4); a codex or shell
+  gives the same `idle_since` as without it (decision D4); a transcript write
+  with no turn gives the same `idle_since`; a codex or shell
   view gives `None`; a view with `res` `None` gives `mem_mb` `None`, and the
   pane can still close; a view with the profile `full` gives `full`, and
   `default` gives `None`.
@@ -512,7 +522,13 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   closes.
 - **D4. What counts as use.** Decided on 19 Nov: transcript writes, turn ends
   and your actions in periscope. Terminal focus (`focused_at`) does not count,
-  because a restart clears it.
+  because a restart clears it. Changed on 23 Nov: the last prompt, reply or
+  tool call in the transcript counts, not its last write. A dry run on 9 real
+  panes found 5 idle ones whose last turn was 5 to 116 hours old and whose
+  transcript was less than an hour old. Claude had written up to 50
+  `artifact-autoreact-ledger` rows with no turn. With the mtime, the sweep
+  closed none of them. Of 376 transcripts, 61 had an mtime more than an hour
+  after their last turn.
 
 ## 10. Assumptions to check in the implementation
 
