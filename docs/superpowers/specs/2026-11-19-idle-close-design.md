@@ -445,13 +445,25 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   closes. That is safe, and a test pins it.
 - **A session that comes back outside periscope** keeps its record until the
   next sweep, so `/history` shows it as closed for up to a day.
-- **The stamp race on other spawn paths**: `stamp_new_window` stamps after the
-  spawn, so a dashboard build between the two can mint a second id and stamp
-  it last. Resume avoids this with the chained stamp (section 5). The other
-  spawn paths (`periscope/routes/sessions.py:402`, `periscope/channels.py:655`)
-  keep the race. A read-only check of prod found that 5 of the 21
-  `pane_tracks` rows written since the 2026-11-18 boot are on pids that no
-  poll saw. It gets a Linear ticket.
+- **The stamp race on other spawn paths**: six call sites open a window, then
+  stamp it with `stamp_new_window` in a second tmux command. A dashboard build
+  between the two can mint a second id and stamp it last. Resume avoids this
+  with the chained stamp (section 5), and it covers two of the six:
+  - `periscope/channels.py:1021`, the `resume_session` tool, takes resume's
+    pid (section 5).
+  - `periscope/routes/sessions.py:631`, move-account, stamps a second id on a
+    window that the chain already stamped. A poll mints only for a window
+    with no stamp (`periscope/pids.py:195-242`), so no poll stamp lands last.
+
+  Four keep the race:
+  - `periscope/routes/sessions.py:402`: the new-pane route.
+  - `periscope/channels.py:655`: the `spawn_claude` tool.
+  - `periscope/worktree_spawn.py:410` and `:426`: the shell and Claude windows
+    of a new project.
+
+  A read-only check of prod found that 5 of the 21 `pane_tracks` rows written
+  since the 2026-11-18 boot are on pids that no poll saw.
+  [THI-468](https://linear.app/thibault-dody/issue/THI-468) tracks the fix.
 
 ## 9. Decisions made in review
 
