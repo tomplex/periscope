@@ -137,7 +137,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/pids.py` (`resolve_pids`, the `carried` line, and a new function after `_is_pid`)
 - Test: `tests/test_pids.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/test_pids.py`:
 
@@ -149,12 +149,12 @@ def test_stamped_pids_are_the_ids_the_windows_wear():
     assert stamped_pids(windows) == {"aaaa1111", "bbbb2222"}
 ```
 
-- [ ] **Step 2: Run it to make sure that it fails**
+- [x] **Step 2: Run it to make sure that it fails**
 
 Run: `uv run pytest tests/test_pids.py -q -k stamped_pids`
 Expected: FAIL with `ImportError: cannot import name 'stamped_pids'`.
 
-- [ ] **Step 3: Write the function and use it in `resolve_pids`**
+- [x] **Step 3: Write the function and use it in `resolve_pids`**
 
 In `periscope/pids.py`, after `_is_pid`:
 
@@ -170,12 +170,12 @@ In `resolve_pids`, replace the `carried` line:
         carried = stamped_pids(windows)
 ```
 
-- [ ] **Step 4: Run the pid tests**
+- [x] **Step 4: Run the pid tests**
 
 Run: `uv run pytest tests/test_pids.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/pids.py tests/test_pids.py
@@ -190,7 +190,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/activity.py` (`_SCHEMA`, imports, accessors after `sweep_legacy_pane_track_rows`, `prune_pane_tracks`)
 - Test: `tests/test_activity.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_activity.py`, after `test_pane_tracks_set_get_map_prune`:
 
@@ -226,12 +226,12 @@ def test_prune_pane_tracks_keeps_the_tag_of_a_closed_pane_until_its_row_goes():
     assert activity.prune_pane_tracks(set()) == 1
 ```
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/test_activity.py -q -k "closed_pane or closed_panes or second_close"`
 Expected: 3 FAIL with `AttributeError: module 'periscope.activity' has no attribute 'record_closed_pane'`.
 
-- [ ] **Step 3: Add the table, the row type and the accessors**
+- [x] **Step 3: Add the table, the row type and the accessors**
 
 In `_SCHEMA`, after the `pane_tracks` table:
 
@@ -322,12 +322,12 @@ In `prune_pane_tracks`, replace the body:
         return len(dead)
 ```
 
-- [ ] **Step 4: Run the activity tests**
+- [x] **Step 4: Run the activity tests**
 
 Run: `uv run pytest tests/test_activity.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/activity.py tests/test_activity.py
@@ -342,7 +342,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Create: `periscope/idle_close.py`, `tests/test_idle_close.py`
 - Modify: `periscope/app.py` (`_pane_sessions_housekeeping`)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_idle_close.py`:
 
@@ -399,12 +399,12 @@ def test_prune_closed_drops_a_row_whose_session_a_live_claude_runs(monkeypatch, 
     assert activity.closed_panes() == []
 ```
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/test_idle_close.py -q`
 Expected: ERROR with `ImportError: cannot import name 'idle_close' from 'periscope'`.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `periscope/idle_close.py`:
 
@@ -437,12 +437,12 @@ def prune_closed(live_pids: set[str]) -> int:
     return dropped
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/test_idle_close.py -q`
 Expected: 4 passed.
 
-- [ ] **Step 5: Prune at boot**
+- [x] **Step 5: Prune at boot**
 
 In `periscope/app.py`, in `_pane_sessions_housekeeping`, replace the `alive` line and add the prune at the end of the function:
 
@@ -465,12 +465,12 @@ In `lifespan`, extend the local imports next to `from periscope import activity`
     from periscope.pids import stamped_pids
 ```
 
-- [ ] **Step 6: Run the app tests**
+- [x] **Step 6: Run the app tests**
 
 Run: `uv run pytest tests/test_app.py tests/test_idle_close.py -q`
 Expected: all pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add periscope/idle_close.py periscope/app.py tests/test_idle_close.py
@@ -485,7 +485,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/routes/sessions.py` (imports, `_window_new_resume`)
 - Test: `tests/routes/test_sessions.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/routes/test_sessions.py`, add to the top of the file, after the docstring:
 
@@ -661,12 +661,12 @@ def test_the_resumed_window_wears_the_records_pid_in_tmux(
     assert "notify-buttons dddd4444" in listed.splitlines()
 ```
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/routes/test_sessions.py -q -k "closed or came_back or placeholder or records_pid"`
 Expected: the tests of a closed pane FAIL (`ValueError: '-n' is not in list`, or the assert on `spawn[-5:]`). The two tests of a session with no record pass.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `periscope/routes/sessions.py`, add `idle_close` to the `from periscope import (…)` block, in alphabetical order. Add two imports:
 
@@ -784,16 +784,16 @@ def _finish_resume(record: activity.ClosedPane | None, result: dict) -> dict:
 
 The `new-window` call must stay without `-d`: with `-d`, the chained `set-option -w` lands on the old current window.
 
-- [ ] **Step 4: Run the sessions tests**
+- [x] **Step 4: Run the sessions tests**
 
 Run: `uv run pytest tests/routes/test_sessions.py -q`
 Expected: all pass, old tests included.
 
-- [ ] **Step 5: Break it on purpose**
+- [x] **Step 5: Break it on purpose**
 
 Remove `*stamp_args,` from the `new-window` branch and run `uv run pytest tests/routes/test_sessions.py -q -k "closed or records_pid"`. Expected: FAIL. Put it back. Then change `if config_dir or profile:` to `if config_dir:` and run the same tests. Expected: the `new-session` profile test FAILS. Put it back, and run the file once more: all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add periscope/routes/sessions.py tests/routes/test_sessions.py
@@ -808,7 +808,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/channels.py` (`_do_resume_session_tool`)
 - Test: `tests/test_channels.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/test_channels.py`, after `test_resume_session_tool_wraps_window_new_resume`:
 
@@ -831,12 +831,12 @@ def test_resume_session_tool_keeps_the_pid_of_a_closed_pane(mocker):
     move.assert_called_once_with("dddd4444", "t2")
 ```
 
-- [ ] **Step 2: Run it to make sure that it fails**
+- [x] **Step 2: Run it to make sure that it fails**
 
 Run: `uv run pytest tests/test_channels.py -q -k keeps_the_pid_of_a_closed_pane`
 Expected: FAIL, because `stamp_new_window` was called.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `_do_resume_session_tool`, replace the comment and the `new_pid` line:
 
@@ -848,12 +848,12 @@ In `_do_resume_session_tool`, replace the comment and the `new_pid` line:
     new_pid = result.get("pid") or stamp_new_window(target)
 ```
 
-- [ ] **Step 4: Run the channel tests**
+- [x] **Step 4: Run the channel tests**
 
 Run: `uv run pytest tests/test_channels.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/channels.py tests/test_channels.py
@@ -868,7 +868,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/routes/history.py` (`_annotate`), `static/historyList.js`, `static/history.js` (import, `marksOf`)
 - Test: `tests/routes/test_history.py`, `static/src/__tests__/historyList.test.js`
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Add to `tests/routes/test_history.py`, after `test_history_search_drops_a_placeholder_pane_name`:
 
@@ -891,12 +891,12 @@ def test_history_search_rows_say_when_idle_close_closed_the_session(client, mock
     assert [r["closed_at"] for r in rows] == [1795078800, None]
 ```
 
-- [ ] **Step 2: Run it to make sure that it fails**
+- [x] **Step 2: Run it to make sure that it fails**
 
 Run: `uv run pytest tests/routes/test_history.py -q -k idle_close_closed`
 Expected: FAIL with `KeyError: 'closed_at'`.
 
-- [ ] **Step 3: Write the route change**
+- [x] **Step 3: Write the route change**
 
 In `periscope/routes/history.py`, import `activity`:
 
@@ -920,12 +920,12 @@ In `_annotate`, extend the docstring's first sentence and add the lookup and the
         r["closed_at"] = closed_at.get(sid)
 ```
 
-- [ ] **Step 4: Run the history route tests**
+- [x] **Step 4: Run the history route tests**
 
 Run: `uv run pytest tests/routes/test_history.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Write the failing page test**
+- [x] **Step 5: Write the failing page test**
 
 Add to `static/src/__tests__/historyList.test.js`, and add `closedLabel` to its import:
 
@@ -941,7 +941,7 @@ describe("closedLabel", () => {
 Run: `npx vitest run static/src/__tests__/historyList.test.js`
 Expected: FAIL with `closedLabel is not a function`.
 
-- [ ] **Step 6: Write the label**
+- [x] **Step 6: Write the label**
 
 In `static/historyList.js`, after `baseName`:
 
@@ -960,12 +960,12 @@ In `static/history.js`, add `closedLabel` to the import from `./historyList.js`,
   if (r.closed_at) out.push(closedLabel(r.closed_at));
 ```
 
-- [ ] **Step 7: Run the page tests**
+- [x] **Step 7: Run the page tests**
 
 Run: `npm test`
 Expected: all pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add periscope/routes/history.py static/historyList.js static/history.js tests/routes/test_history.py static/src/__tests__/historyList.test.js
@@ -976,7 +976,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 8: Finish PR 1
 
-- [ ] **Step 1: Run every check**
+- [x] **Step 1: Run every check**
 
 ```bash
 uv run pytest -q
@@ -987,7 +987,7 @@ git status --short
 
 Expected: all tests pass, `bin/check` has no violation in a file that this PR changes, and the tree is clean.
 
-- [ ] **Step 2: Look at the `/history` label in a browser**
+- [x] **Step 2: Look at the `/history` label in a browser**
 
 Start a private server with a scratch config, then seed one record for a session that its history page lists:
 
@@ -1002,7 +1002,7 @@ sqlite3 "$XDG_CONFIG_HOME/periscope/periscope-dev.db" "INSERT INTO closed_panes 
 
 Open `http://127.0.0.1:17376/history`. Expected: the row shows "closed <weekday> <time>". Click no button. Stop the server, and delete the scratch folder, the screenshots and `.playwright-mcp` files.
 
-- [ ] **Step 3: Update `docs/channels.md` and the spec**
+- [x] **Step 3: Update `docs/channels.md` and the spec**
 
 In `docs/channels.md`, replace the end of the `resume_session` entry:
 
@@ -2443,5 +2443,3 @@ PR 2:
 - `session_state_for` says `idle`. A pane whose status Claude does not report never closes.
 - An idle Claude can own a background shell. The sweep kills it with the pane.
 - `jsonl_for_session` looks only in `~/.claude/projects`.
-</content>
-</invoke>
