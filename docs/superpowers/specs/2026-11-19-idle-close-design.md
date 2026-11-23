@@ -152,12 +152,13 @@ One function builds the `pane` dict from a view:
 `pane_from_view(view) -> dict | None`. It gives `None` for a codex or shell
 view. The dict has the fields that `verdict` reads, plus `pane_id`, `name`
 and `mem_mb` for the record and the preview, and `profile` for the record.
-The session id comes from
-`turns.session_id_for_pane(pane_id)`, and the transcript mtime from
-`jsonl_for_session`. The mtime serves only the `no-transcript` verdict and the
-re-check before the kill. An idle pane whose Claude has background shells has
-the state `background-shell` (`session_status.has_background_shell`). `mem_mb` is `None` when the view's `res` is `None`: the
-process snapshot failed, or the pane is not in it (`periscope/resources.py:263`).
+The session id comes from `turns.session_id_for_pane(pane_id)`, and the
+transcript mtime from `jsonl_for_session`. The mtime serves only the
+`no-transcript` verdict and the re-check before the kill. An idle pane whose
+Claude has background shells has the state `background-shell`
+(`session_status.has_background_shell`). `mem_mb` is `None` when the view's
+`res` is `None`: the process snapshot failed, or the pane is not in it
+(`periscope/resources.py:263`).
 `profile` is `config.profile_env(view["profile"]) or None`. The view reads the
 profile from the live Claude's environment (`session_status.pane_profiles()`,
 `periscope/window_view.py:586`), so the sweep adds no `ps` call. `None` is the
@@ -173,9 +174,9 @@ unread result.
 The server sends codes, and the frontend forms the words, as
 `static/src/notify/copy.js:117` does for `needs-input`. In phase 2,
 `needs-input` reads "stays · needs you", `background-shell` reads "stays ·
-background shell", `no-transcript` reads "stays · no
-transcript", `split-window` reads "stays · split window", `weekend` reads
-"stays · weekend skipped", and each other code reads "stays · <code>".
+background shell", `no-transcript` reads "stays · no transcript",
+`split-window` reads "stays · split window", `weekend` reads "stays · weekend
+skipped", and each other code reads "stays · <code>".
 
 ### The tick
 

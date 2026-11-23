@@ -2451,5 +2451,5 @@ PR 2:
 
 - Kill on an idle Claude loses no turn (Task 1).
 - `session_state_for` says `idle`. A pane whose status Claude does not report never closes.
-- Claude reports the status `shell` while it has background shells. That status is not documented. If Claude drops it, the re-check finds no trusted `idle` state or the shell ends with the pane.
+- Claude reports the status `shell` while it has background shells. That status is not documented. If Claude reports `idle` instead, the sweep closes such a pane, and its shell ends.
 - `jsonl_for_session` looks only in `~/.claude/projects`.
