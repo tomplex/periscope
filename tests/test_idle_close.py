@@ -230,6 +230,17 @@ def test_pane_from_view_with_no_turn_in_the_transcript_counts_the_other_stamps(t
     assert idle_close.pane_from_view(view())["idle_since"] is None
 
 
+@pytest.mark.parametrize("state,code", [("idle", "draft"), ("done", "done"), ("working", "working")])
+def test_an_idle_pane_with_unsent_text_stays(transcript, state, code):
+    got = idle_close.pane_from_view(view(state=state, pending_input="half a prompt"))
+    assert idle_close.verdict(got, FRI, 3, set()) == code
+
+
+def test_an_empty_input_box_does_not_keep_a_pane(transcript):
+    got = idle_close.pane_from_view(view(pending_input=None))
+    assert idle_close.verdict(got, FRI, 3, set()) == "closes"
+
+
 @pytest.mark.parametrize("state,code", [("idle", "background-shell"), ("done", "done"), ("working", "working")])
 def test_an_idle_pane_with_background_shells_stays(transcript, monkeypatch, state, code):
     monkeypatch.setattr(idle_close.session_status, "has_background_shell", lambda sid: sid == "s1")
@@ -369,6 +380,12 @@ def test_a_pane_with_no_stamp_stays_beside_one_that_closes(night):
     night.sids["%2"] = None
     idle_close.sweep(night.views, 3)
     assert closed() == ["s1"]
+
+
+def test_the_sweep_keeps_a_pane_with_unsent_text(night):
+    night.views[0]["pending_input"] = "half a prompt"
+    idle_close.sweep(night.views, 3)
+    assert closed() == ["s2"]
 
 
 def test_the_sweep_keeps_a_pane_with_background_shells(night, monkeypatch):

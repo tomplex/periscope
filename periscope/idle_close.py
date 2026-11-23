@@ -122,8 +122,11 @@ def pane_from_view(view: dict) -> Pane | None:
     session_id = session_id_for_pane(view["pane_id"])
     transcript = jsonl_for_session(session_id) if session_id else None
     state = view["state"]
-    if state == "idle" and session_status.has_background_shell(session_id):
-        state = "background-shell"  # for example a dev server, which would end with the pane
+    # Both would end with the pane: text typed and not sent, and for example a dev server.
+    if state == "idle" and view.get("pending_input"):
+        state = "draft"
+    elif state == "idle" and session_status.has_background_shell(session_id):
+        state = "background-shell"
     return {
         "pid": view["pid"],
         "pane_id": view["pane_id"],
