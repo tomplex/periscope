@@ -1046,7 +1046,7 @@ Start from `main` after PR 1 merges: `git switch -c thibaultdody/thi-466-idle-cl
 - Modify: `periscope/tmux.py` (`PANE_FIELDS`), `periscope/panes.py` (`list_windows`)
 - Test: `tests/test_tmux.py` (`_FIELDS`), `tests/test_panes.py` (`_PANES` and its expected rows)
 
-- [ ] **Step 1: Write the failing test changes**
+- [x] **Step 1: Write the failing test changes**
 
 In `tests/test_tmux.py`, extend `_FIELDS` with the pane count:
 
@@ -1067,12 +1067,12 @@ In `tests/test_panes.py`, append the pane count to each row of `_PANES`: `"2"` t
                 "panes": int(p[12]),
 ```
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/test_tmux.py tests/test_panes.py -q -k "list_panes or list_windows or embedded_newline"`
 Expected: FAIL. The rows have one field too many, so `list_panes` skips them, and the live rows have no `panes`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `periscope/tmux.py`, add to `PANE_FIELDS` after `"pane_active"`:
 
@@ -1088,12 +1088,12 @@ In `periscope/panes.py`, in the `list_windows` row after `"opened"`:
 
 `build_window_view` starts from the window row, so the view gets `panes` too.
 
-- [ ] **Step 4: Run the suite**
+- [x] **Step 4: Run the suite**
 
 Run: `uv run pytest -q`
 Expected: all pass. A failure here is another test that builds a raw row: add the field there.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/tmux.py periscope/panes.py tests/test_tmux.py tests/test_panes.py
@@ -1108,7 +1108,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/store.py` (`Settings`), `periscope/routes/settings.py`
 - Test: `tests/routes/test_settings.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/routes/test_settings.py`:
 
@@ -1140,12 +1140,12 @@ def test_patch_idle_close_weekdays_null_turns_it_off(client, clean_state):
 
 Add `import pytest` at the top of the file if it is not there.
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/routes/test_settings.py -q -k idle_close`
 Expected: FAIL. The model ignores the unknown field, so every PATCH gives 200 and stores nothing.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `periscope/store.py`, in `Settings` after `cleanup_idle_days`:
 
@@ -1170,12 +1170,12 @@ After the `cleanup_idle_days` block in `settings_patch`:
             raise HTTPException(400, f"idle_close_weekdays must be 1..30: {v!r}")
 ```
 
-- [ ] **Step 4: Run the settings tests**
+- [x] **Step 4: Run the settings tests**
 
 Run: `uv run pytest tests/routes/test_settings.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/store.py periscope/routes/settings.py tests/routes/test_settings.py
@@ -1190,7 +1190,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/idle_close.py`
 - Test: `tests/test_idle_close.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_idle_close.py`, add to the imports:
 
@@ -1381,12 +1381,12 @@ def test_pane_from_view_finds_no_transcript_outside_the_default_projects_folder(
     assert idle_close.verdict(got, FRI, 3, set()) == "no-transcript"
 ```
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/test_idle_close.py -q`
 Expected: ERROR with `AttributeError: module 'periscope.idle_close' has no attribute 'Pane'`.
 
-- [ ] **Step 3: Write the rules**
+- [x] **Step 3: Write the rules**
 
 In `periscope/idle_close.py`, replace the imports with:
 
@@ -1501,12 +1501,12 @@ def pane_from_view(view: dict) -> Pane | None:
     }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/test_idle_close.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/idle_close.py tests/test_idle_close.py
@@ -1521,7 +1521,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/resurrect.py` (`save_now`)
 - Test: `tests/test_resurrect_save.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_resurrect_save.py`:
 
@@ -1545,12 +1545,12 @@ def test_a_plain_save_now_keeps_the_last_save_time(mocker):
     assert not any("set-option" in c.args[0] for c in run.call_args_list)
 ```
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/test_resurrect_save.py -q`
 Expected: the first new test FAILS with `TypeError: save_now() got an unexpected keyword argument 'force'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `periscope/resurrect.py`, above `save_now`:
 
@@ -1573,12 +1573,12 @@ and before the last `subprocess.run`:
         subprocess.run(["tmux", "set-option", "-gu", _LAST_SAVE_OPTION], capture_output=True, check=False)
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/test_resurrect_save.py -q`
 Expected: 5 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add periscope/resurrect.py tests/test_resurrect_save.py
@@ -1593,7 +1593,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/idle_close.py`, `tests/conftest.py` (`_no_plan_usage_refresh`)
 - Test: `tests/test_idle_close.py`
 
-- [ ] **Step 1: Neuter the thread in conftest**
+- [x] **Step 1: Neuter the thread in conftest**
 
 In `tests/conftest.py`, at the end of `_no_plan_usage_refresh`:
 
@@ -1605,7 +1605,7 @@ In `tests/conftest.py`, at the end of `_no_plan_usage_refresh`:
     monkeypatch.setattr(idle_close, "_bg", lambda *a, **kw: None, raising=False)
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Add to `tests/test_idle_close.py`, and add `import os`, `import subprocess` and `from tests.conftest import needs_tmux` at the top:
 
@@ -1798,12 +1798,12 @@ def test_sweep_closes_the_real_window(night, monkeypatch, tmux_test_server):
     assert "main" in on_test_server("list-sessions", "-F", "#{session_name}")
 ```
 
-- [ ] **Step 3: Run them to make sure that they fail**
+- [x] **Step 3: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/test_idle_close.py -q -k "sweep or re_check or kill or pinned or index or second_close or failing"`
 Expected: ERROR with `AttributeError: … has no attribute '_now'`.
 
-- [ ] **Step 4: Write the sweep**
+- [x] **Step 4: Write the sweep**
 
 In `periscope/idle_close.py`, extend the imports:
 
@@ -1892,16 +1892,16 @@ def sweep(views: list[dict], weekdays: int) -> None:
             log.exception("idle close: index_one failed for %s", transcript)
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `uv run pytest tests/test_idle_close.py -q`
 Expected: all pass. If `needs_tmux` tests are skipped, install tmux: they are the only check of the real kill.
 
-- [ ] **Step 6: Break it on purpose**
+- [x] **Step 6: Break it on purpose**
 
 Delete the `_mtime(transcript) != pane["transcript_mtime"]` check and run the file. Expected: the "new turn" case FAILS. Put it back. Move `activity.record_closed_pane(…)` after the kill and run the file. Expected: `test_sweep_records_each_pane_then_kills_it_by_pane_id` FAILS. Put it back, and run the file once more: all pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add periscope/idle_close.py tests/test_idle_close.py tests/conftest.py
@@ -1916,7 +1916,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `periscope/store.py`, `periscope/idle_close.py`, `periscope/app.py`
 - Test: `tests/test_idle_close.py`, `tests/test_app.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_idle_close.py`, and add `import asyncio` and `from periscope import store` at the top:
 
@@ -1975,12 +1975,12 @@ In `tests/test_app.py`, next to each of the two `mocker.patch("periscope.poke.ru
     mocker.patch("periscope.idle_close.run", side_effect=_noop)
 ```
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/test_idle_close.py tests/test_app.py -q`
 Expected: FAIL. The module has no `state_hub` or `run`.
 
-- [ ] **Step 3: Write the log accessors**
+- [x] **Step 3: Write the log accessors**
 
 In `periscope/store.py`, after `PokeEntry`:
 
@@ -2007,7 +2007,7 @@ def record_idle_close(entry: IdleCloseLog) -> None:
         _write_state(_STATE)
 ```
 
-- [ ] **Step 4: Write the tick and the loop**
+- [x] **Step 4: Write the tick and the loop**
 
 In `periscope/idle_close.py`, add `import asyncio` as the first import, add `state_hub` to the `from periscope import` line, change the log import to `from periscope.log import _bg, log`, and add `_TICK_S = 60.0` after `_GRACE_MIN`. At the end of the file:
 
@@ -2035,7 +2035,7 @@ async def run() -> None:
         await asyncio.sleep(_TICK_S)
 ```
 
-- [ ] **Step 5: Register the task**
+- [x] **Step 5: Register the task**
 
 In `periscope/app.py`, after `poke_task = _task("poke", poke.run())` in the prod branch:
 
@@ -2058,12 +2058,12 @@ In the `finally` block, after the poke cancel:
             idle_close_task.cancel()
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `uv run pytest tests/test_idle_close.py tests/test_app.py tests/test_store.py -q`
 Expected: all pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add periscope/store.py periscope/idle_close.py periscope/app.py tests/test_idle_close.py tests/test_app.py tests/test_store.py
@@ -2078,7 +2078,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Create: `periscope/routes/idle_close.py`, `tests/routes/test_idle_close.py`, `static/src/overlays/idleClose.js`, `static/src/overlays/__tests__/idleClose.test.js`
 - Modify: `periscope/idle_close.py` (`preview`), `periscope/app.py` (router), `static/src/overlays/SettingsModal.jsx`, `static/styles.css`, `static/dist/`
 
-- [ ] **Step 1: Write the failing route tests**
+- [x] **Step 1: Write the failing route tests**
 
 Create `tests/routes/test_idle_close.py`:
 
@@ -2183,12 +2183,12 @@ def test_preview_is_empty_with_the_setting_off(client, board, clean_state):
     assert preview(client) == {}
 ```
 
-- [ ] **Step 2: Run them to make sure that they fail**
+- [x] **Step 2: Run them to make sure that they fail**
 
 Run: `uv run pytest tests/routes/test_idle_close.py -q`
 Expected: FAIL with 404 from the static mount.
 
-- [ ] **Step 3: Write the preview and the route**
+- [x] **Step 3: Write the preview and the route**
 
 In `periscope/idle_close.py`, after `sweep`:
 
@@ -2250,12 +2250,12 @@ from periscope.routes import idle_close as idle_close_routes
 
 and add `idle_close_routes,` to the `for r in (…)` tuple, after `history,`.
 
-- [ ] **Step 4: Run the route tests**
+- [x] **Step 4: Run the route tests**
 
 Run: `uv run pytest tests/routes/test_idle_close.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Write the failing settings line test**
+- [x] **Step 5: Write the failing settings line test**
 
 Create `static/src/overlays/__tests__/idleClose.test.js`:
 
@@ -2282,7 +2282,7 @@ describe("idleCloseLine", () => {
 Run: `npx vitest run static/src/overlays/__tests__/idleClose.test.js`
 Expected: FAIL with "Failed to resolve import".
 
-- [ ] **Step 6: Write the line and the settings row**
+- [x] **Step 6: Write the line and the settings row**
 
 Create `static/src/overlays/idleClose.js`:
 
@@ -2372,7 +2372,7 @@ In `static/styles.css`, add `.settings-idle-close button,` to the selector list 
 .settings-idle-close button:disabled { opacity: 0.5; cursor: default; }
 ```
 
-- [ ] **Step 7: Run the frontend checks and build the bundle**
+- [x] **Step 7: Run the frontend checks and build the bundle**
 
 ```bash
 npm test
@@ -2383,11 +2383,11 @@ git status --short
 
 Expected: all pass. `static/dist/app.js` changed.
 
-- [ ] **Step 8: Look at the row in a browser**
+- [x] **Step 8: Look at the row in a browser**
 
 Start the private server as in Task 8, Step 2. Open the settings modal. Check: the row shows "off" with an empty input and no second line. Type 3 and save. Open the modal again: the second line shows "No pane closes at 04:00 tonight", because the private tmux server has no Claude pane. Change the number: the line goes, because it is for the saved value. Press off and save. Open it again: the line is gone. Type 31 and save: the browser refuses. Check the row at about 900 px wide. Stop the server, and delete the scratch folder, the screenshots and `.playwright-mcp` files.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add periscope/idle_close.py periscope/routes/idle_close.py periscope/app.py tests/routes/test_idle_close.py static/src/overlays static/styles.css static/dist
@@ -2398,7 +2398,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 16: Finish PR 2
 
-- [ ] **Step 1: Update the docs**
+- [x] **Step 1: Update the docs**
 
 In `CLAUDE.md`, add a row to the server module table, after the `poke.py` row:
 
@@ -2414,7 +2414,7 @@ and a row to the reference docs table, after the `poke.py` row:
 
 In the spec, change the `Status:` line to `Status: implemented (server part). The history view is phase 2.`
 
-- [ ] **Step 2: Run every check**
+- [x] **Step 2: Run every check**
 
 ```bash
 uv run pytest -q
