@@ -57,6 +57,11 @@ def _no_plan_usage_refresh(monkeypatch):
 
     monkeypatch.setattr(poke, "_bg", lambda *a, **kw: None, raising=False)
     monkeypatch.setattr(poke, "_in_flight", set(), raising=False)
+    # The sweep's thread writes the activity DB, kills panes, and indexes into
+    # the real ~/.claude/history.db (and can call Haiku).
+    from periscope import idle_close
+
+    monkeypatch.setattr(idle_close, "_bg", lambda *a, **kw: None, raising=False)
 
 
 @pytest.fixture(autouse=True)

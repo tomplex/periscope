@@ -4,11 +4,14 @@ Nothing here spawns a thread: conftest neuters idle_close._bg, and `sweep` is
 called directly."""
 
 import os
+import subprocess
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 from periscope import activity, idle_close
+from tests.conftest import needs_tmux
 
 RECORD: activity.ClosedPane = {
     "session_id": "s1",
@@ -227,3 +230,191 @@ def test_pane_from_view_finds_no_transcript_outside_the_default_projects_folder(
     got = idle_close.pane_from_view(view(completed_at=ts(MON)))
     assert got["transcript_mtime"] is None
     assert idle_close.verdict(got, FRI, 3, set()) == "no-transcript"
+
+
+# --- the sweep ----------------------------------------------------------------
+
+
+@pytest.fixture
+def night(monkeypatch, tmp_path):
+    """Friday 04:00, with two closable panes: %1 (session s1) and %2 (s2). Each
+    ran last on Monday at 17:00, in a window with one pane. `night` holds what
+    the sweep read and did; a test changes the parts that it is about."""
+    n = SimpleNamespace(
+        sids={"%1": "s1", "%2": "s2"}, states={}, paths={}, kills=[], kill_ok=True, saves=[], indexed=[]
+    )
+    for sid in ("s1", "s2"):
+        path = tmp_path / f"{sid}.jsonl"
+        path.write_text("{}\n")
+        os.utime(path, (ts(MON), ts(MON)))
+        n.paths[sid] = path
+    n.windows = [
+        {"pane_id": f"%{i}", "session": "main", "index": i, "panes": 1, "pid_raw": f"aaaa111{i}"} for i in (1, 2)
+    ]
+    n.views = [view(pane_id=f"%{i}", pid=f"aaaa111{i}", index=i) for i in (1, 2)]
+
+    def kill(*args):
+        n.kills.append((args, activity.get_closed_pane(n.sids[args[-1]])))
+        return n.kill_ok, "" if n.kill_ok else "no such pane"
+
+    monkeypatch.setattr(idle_close, "_now", lambda: FRI)
+    monkeypatch.setattr(idle_close, "list_windows", lambda: n.windows)
+    monkeypatch.setattr(idle_close, "session_id_for_pane", lambda pane_id: n.sids.get(pane_id))
+    monkeypatch.setattr(idle_close, "jsonl_for_session", lambda sid: n.paths.get(sid))
+    monkeypatch.setattr(
+        idle_close.session_status, "session_state_for", lambda sid: {"state": n.states.get(sid, "idle")}
+    )
+    monkeypatch.setattr(idle_close.session_status, "claude_proc_for", lambda sid: None)
+    monkeypatch.setattr(idle_close, "_tmux_mutate", kill)
+    monkeypatch.setattr(idle_close, "drop_target_focus", lambda target: None)
+    monkeypatch.setattr(idle_close.resurrect, "save_now", lambda force=False: n.saves.append(force))
+    monkeypatch.setattr("history.indexer.index_one", lambda path, force=False: n.indexed.append((path, force)))
+    return n
+
+
+def closed():
+    return [r["session_id"] for r in activity.closed_panes()]
+
+
+def test_sweep_records_each_pane_then_kills_it_by_pane_id(night):
+    idle_close.sweep(night.views, 3)
+    assert [args for args, _ in night.kills] == [("kill-pane", "-t", "%1"), ("kill-pane", "-t", "%2")]
+    assert all(record for _, record in night.kills), "the record comes before the kill"
+    assert closed() == ["s1", "s2"]
+    assert activity.get_closed_pane("s1") == {
+        "session_id": "s1",
+        "pid": "aaaa1111",
+        "mem_mb": 812,
+        "profile": None,
+        "idle_since": ts(MON),
+        "closed_at": ts(FRI),
+    }
+
+
+def test_sweep_keeps_the_panes_wrapper_profile(night):
+    night.views[0]["profile"] = "full"
+    idle_close.sweep(night.views, 3)
+    assert activity.get_closed_pane("s1")["profile"] == "full"
+
+
+def test_sweep_saves_tmux_once_and_indexes_each_closed_session(night):
+    idle_close.sweep(night.views, 3)
+    assert night.saves == [True]
+    assert night.indexed == [(str(night.paths["s1"]), True), (str(night.paths["s2"]), True)]
+
+
+def test_sweep_with_no_pane_to_close_saves_and_indexes_nothing(night):
+    idle_close.sweep([view(state="working")], 3)
+    assert (night.kills, night.saves, night.indexed) == ([], [], [])
+
+
+def test_a_failed_kill_deletes_the_record(night, caplog):
+    night.kill_ok = False
+    idle_close.sweep(night.views, 3)
+    assert closed() == []
+    assert (night.saves, night.indexed) == ([], [])
+    assert "no such pane" in caplog.text
+
+
+def test_one_failing_pane_does_not_stop_the_others(night, monkeypatch):
+    def session_id(pane_id):
+        if pane_id == "%1":
+            raise RuntimeError("boom")
+        return night.sids[pane_id]
+
+    monkeypatch.setattr(idle_close, "session_id_for_pane", session_id)
+    idle_close.sweep(night.views, 3)
+    assert closed() == ["s2"]
+
+
+def test_an_index_failure_does_not_stop_the_others(night, monkeypatch):
+    def index(path, force=False):
+        if path.endswith("s1.jsonl"):
+            raise RuntimeError("boom")
+        night.indexed.append(path)
+
+    monkeypatch.setattr("history.indexer.index_one", index)
+    idle_close.sweep(night.views, 3)
+    assert night.indexed == [str(night.paths["s2"])]
+
+
+def test_a_pane_with_no_stamp_stays_beside_one_that_closes(night):
+    night.sids["%2"] = None
+    idle_close.sweep(night.views, 3)
+    assert closed() == ["s1"]
+
+
+def test_a_pinned_pane_stays(night, clean_state):
+    clean_state["ui"]["pinned_pids"] = ["aaaa1111"]
+    idle_close.sweep(night.views, 3)
+    assert closed() == ["s2"]
+
+
+def _turn_after_the_snapshot(night, monkeypatch):
+    real = idle_close.list_windows
+    calls = []
+
+    def list_windows():
+        calls.append(1)
+        if len(calls) == 2:  # the first call is retention's, before the panes are read
+            os.utime(night.paths["s1"], (ts(FRI), ts(FRI)))
+        return real()
+
+    monkeypatch.setattr(idle_close, "list_windows", list_windows)
+
+
+def _session_rotated(night, monkeypatch):
+    seen = []
+
+    def session_id(pane_id):
+        seen.append(pane_id)
+        return "s1-new" if seen.count("%1") > 1 else night.sids[pane_id]
+
+    monkeypatch.setattr(idle_close, "session_id_for_pane", session_id)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda n, mp: n.windows.pop(0),  # the pane is gone
+        lambda n, mp: n.windows[0].update(panes=2),  # the window was split
+        lambda n, mp: n.states.update(s1="working"),
+        _session_rotated,
+        _turn_after_the_snapshot,
+    ],
+    ids=["gone", "split", "working", "new session", "new turn"],
+)
+def test_the_re_check_skips_a_pane_that_changed(night, monkeypatch, change):
+    change(night, monkeypatch)
+    idle_close.sweep(night.views[:1], 3)
+    assert (closed(), night.kills) == ([], [])
+
+
+def test_a_second_close_of_the_same_session_replaces_its_row(night):
+    activity.record_closed_pane({**RECORD, "session_id": "s1", "pid": "bbbb2222", "closed_at": 1})
+    idle_close.sweep(night.views, 3)
+    assert activity.get_closed_pane("s1")["pid"] == "aaaa1111"
+
+
+def test_sweep_prunes_first(night):
+    activity.record_closed_pane({**RECORD, "session_id": "gone", "pid": "cccc3333"})
+    idle_close.sweep([], 3)
+    assert closed() == []
+
+
+@needs_tmux
+def test_sweep_closes_the_real_window(night, monkeypatch, tmux_test_server):
+    from periscope import panes, tmux
+
+    def on_test_server(*args):
+        return subprocess.run(["tmux", "-L", tmux_test_server, *args], capture_output=True, text=True).stdout.strip()
+
+    on_test_server("new-session", "-d", "-s", "main", "cat")
+    pane_id = on_test_server("new-window", "-t", "main:", "-P", "-F", "#{pane_id}", "cat")
+    night.sids[pane_id] = "s1"
+    monkeypatch.setattr(idle_close, "list_windows", panes.list_windows)
+    monkeypatch.setattr(idle_close, "_tmux_mutate", tmux._tmux_mutate)
+    idle_close.sweep([view(pane_id=pane_id)], 3)
+    assert closed() == ["s1"]
+    assert pane_id not in on_test_server("list-panes", "-a", "-F", "#{pane_id}").splitlines()
+    assert "main" in on_test_server("list-sessions", "-F", "#{session_name}")

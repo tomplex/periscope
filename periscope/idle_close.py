@@ -10,8 +10,12 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import TypedDict
 
-from periscope import activity, config, session_status
+from periscope import activity, config, resurrect, session_status, store
+from periscope.log import log
+from periscope.panes import drop_target_focus, list_windows
+from periscope.pids import stamped_pids
 from periscope.store import Settings
+from periscope.tmux import _tmux_mutate
 from periscope.turns import jsonl_for_session, session_id_for_pane
 
 SWEEP_AT = time(4, 0)
@@ -127,3 +131,75 @@ def pane_from_view(view: dict) -> Pane | None:
         "mem_mb": (view.get("res") or {}).get("mem_mb"),
         "profile": config.profile_env(view["profile"]) or None,
     }
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _pinned() -> set[str]:
+    return set(store.get_ui().get("pinned_pids") or [])
+
+
+def _close(pane: Pane, at: datetime) -> Path | None:
+    """Close `pane`, and return its transcript. None when it changed since the
+    sweep read it (the views can be 13 seconds old), or when the kill failed."""
+    session_id = pane["session_id"]
+    window = next((w for w in list_windows() if w["pane_id"] == pane["pane_id"]), None)
+    if not session_id or window is None or window["panes"] != 1:
+        return None
+    if session_id_for_pane(pane["pane_id"]) != session_id:
+        return None
+    if (session_status.session_state_for(session_id) or {}).get("state") != "idle":
+        return None
+    transcript = jsonl_for_session(session_id)
+    # The only check that sees a short turn that started and ended in between.
+    if transcript is None or _mtime(transcript) != pane["transcript_mtime"]:
+        return None
+    assert pane["idle_since"] is not None  # verdict() closes no pane without it
+    activity.record_closed_pane(
+        {
+            "session_id": session_id,
+            "pid": pane["pid"],
+            "mem_mb": pane["mem_mb"],
+            "profile": pane["profile"],
+            "idle_since": pane["idle_since"],
+            "closed_at": int(at.timestamp()),
+        }
+    )
+    # By pane id: `renumber-windows on` moves the indexes during the loop.
+    ok, msg = _tmux_mutate("kill-pane", "-t", pane["pane_id"])
+    if not ok:
+        activity.delete_closed_pane(session_id)
+        log.warning("idle close: could not kill %s (%s): %s", pane["pane_id"], pane["name"], msg)
+        return None
+    drop_target_focus(f"{window['session']}:{window['index']}")
+    log.info("idle close: closed %s (%s), session %s", pane["pane_id"], pane["name"], session_id)
+    return transcript
+
+
+def sweep(views: list[dict], weekdays: int) -> None:
+    """Worker-thread body: close every pane whose verdict is "closes"."""
+    at = _now()
+    prune_closed(stamped_pids(list_windows()))
+    pinned = _pinned()
+    transcripts: list[Path] = []
+    for view in views:
+        try:
+            pane = pane_from_view(view)
+            if pane and verdict(pane, at, weekdays, pinned) == "closes" and (transcript := _close(pane, at)):
+                transcripts.append(transcript)
+        except Exception:
+            log.exception("idle close: pane %s failed", view.get("pane_id"))
+    if not transcripts:
+        return
+    # A reboot before the next continuum save would bring the closed panes back.
+    resurrect.save_now(force=True)
+    from history.indexer import index_one
+
+    # Claude's SessionEnd hook may not fire when tmux kills the pane.
+    for transcript in transcripts:
+        try:
+            index_one(str(transcript), force=True)
+        except Exception:
+            log.exception("idle close: index_one failed for %s", transcript)
