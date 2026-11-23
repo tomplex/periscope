@@ -63,8 +63,9 @@ async def lifespan(_app: FastAPI):
     # Bound periscope.db growth — drop events older than 30 days, import the
     # legacy pane_sessions/ directory if present, then drop pane_sessions rows
     # whose tmux pane is gone.
-    from periscope import activity
+    from periscope import activity, idle_close
     from periscope.panes import list_windows
+    from periscope.pids import stamped_pids
 
     _bg("activity-prune", activity.prune)
     _bg("ui-events-prune", activity.prune_ui_events)
@@ -74,7 +75,8 @@ async def lifespan(_app: FastAPI):
         imported = activity.migrate_legacy_pane_sessions()
         if imported:
             log.info("migrated %d legacy pane_sessions row(s) into periscope.db", imported)
-        alive = {w["pane_id"] for w in list_windows() if w.get("pane_id")}
+        windows = list_windows()
+        alive = {w["pane_id"] for w in windows if w.get("pane_id")}
         dropped = activity.prune_pane_sessions(alive)
         if dropped:
             log.info("pruned %d dead pane_sessions row(s)", dropped)
@@ -84,6 +86,9 @@ async def lifespan(_app: FastAPI):
         dropped_ws = activity.prune_pane_workspaces(alive)
         if dropped_ws:
             log.info("pruned %d dead pane_workspaces row(s)", dropped_ws)
+        dropped_closed = idle_close.prune_closed(stamped_pids(windows))
+        if dropped_closed:
+            log.info("pruned %d closed pane record(s)", dropped_closed)
         # Track-row prune moved to the first full-roster resolve pass (see
         # pids.resolve_pids) — pruning at boot fired before rebind could
         # reattach post-tmux-restart pids, deleting tags it should have kept.
