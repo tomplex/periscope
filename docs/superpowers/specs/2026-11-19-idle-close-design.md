@@ -1,6 +1,6 @@
 # Idle close: close idle Claude panes at night, resume them later
 
-Status: PR 1 of 2 (closed record and resume) implemented. Prototypes: the
+Status: implemented (server part). The history view is phase 2. Prototypes: the
 "Idle close prototypes" canvas
 (https://claude.ai/artifact/1KCaANrU4beN77zNbiJAYt).
 
@@ -141,7 +141,7 @@ New module `periscope/idle_close.py`, in the same shape as `poke.py`.
      window option, so after `kill-pane` the window keeps the closed pane's
      pid, PR and ticket, and a resume could not take them back.
   5. The state is not `idle`: the state, for example `needs-input`, `done`
-     (decision D1) or `working`.
+     (decision D1), `working` or `background-shell` (decision D5).
   6. Weekday hours are equal to or more than the limit: `closes`.
   7. Otherwise: `weekend`.
 - `due(now, settings, log) -> bool`: true from `SWEEP_AT` to `SWEEP_AT` + 90
@@ -155,7 +155,8 @@ and `mem_mb` for the record and the preview, and `profile` for the record.
 The session id comes from
 `turns.session_id_for_pane(pane_id)`, and the transcript mtime from
 `jsonl_for_session`. The mtime serves only the `no-transcript` verdict and the
-re-check before the kill. `mem_mb` is `None` when the view's `res` is `None`: the
+re-check before the kill. An idle pane whose Claude has background shells has
+the state `background-shell` (`session_status.has_background_shell`). `mem_mb` is `None` when the view's `res` is `None`: the
 process snapshot failed, or the pane is not in it (`periscope/resources.py:263`).
 `profile` is `config.profile_env(view["profile"]) or None`. The view reads the
 profile from the live Claude's environment (`session_status.pane_profiles()`,
@@ -171,7 +172,8 @@ unread result.
 
 The server sends codes, and the frontend forms the words, as
 `static/src/notify/copy.js:117` does for `needs-input`. In phase 2,
-`needs-input` reads "stays · needs you", `no-transcript` reads "stays · no
+`needs-input` reads "stays · needs you", `background-shell` reads "stays ·
+background shell", `no-transcript` reads "stays · no
 transcript", `split-window` reads "stays · split window", `weekend` reads
 "stays · weekend skipped", and each other code reads "stays · <code>".
 
@@ -418,8 +420,8 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   exactly `weekdays × 24` weekday hours gives `closes`; no session id; no
   transcript; an account-B session whose transcript `jsonl_for_session` does
   not find; pinned; a window with 2 panes gives `split-window`;
-  `needs-input`; `done`; `working`; a pane over the limit only in wall-clock
-  hours gives `weekend`.
+  `needs-input`; `done`; `working`; `background-shell`, only for an idle pane; a
+  pane over the limit only in wall-clock hours gives `weekend`.
 - `_tick`: when due, it writes the log and hands one sweep to `_bg`; when not
   due, nothing (`tests/test_poke.py:208`). When the stub raises, the log is
   written, and a second `_tick` at the same frozen time hands nothing to
@@ -480,9 +482,8 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   profile, so a `full` pane comes back on the default profile. This is true
   today. [THI-471](https://linear.app/thibault-dody/issue/THI-471) tracks the
   fix.
-- **Background shells**: an idle Claude can own a background shell, for example
-  a dev server that it started. Periscope has no signal for this. The sweep
-  kills it with the pane.
+- **A forgotten background shell** keeps its pane open, with its memory
+  (decision D5).
 - **Second account**: `jsonl_for_session` looks only in `~/.claude/projects`.
   The move-account docstring says another account's `projects` folder is a
   link to it. If it is not, an account-B pane gets `no-transcript` and never
@@ -529,6 +530,12 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   `artifact-autoreact-ledger` rows with no turn. With the mtime, the sweep
   closed none of them. Of 376 transcripts, 61 had an mtime more than an hour
   after their last turn.
+
+- **D5. Panes with background shells.** Decided on 23 Nov: keep them open, with
+  the reason. A kill would end the shell too, for example a dev server. Claude
+  reports the status `shell` for such a session. On 23 Nov, the 3 of 9 live
+  panes with that status all showed "1 shell" or "2 shells" in their footer and
+  had a `zsh` child process. No other pane did.
 
 ## 10. Assumptions to check in the implementation
 

@@ -47,6 +47,7 @@ The order is a safety rule: the sweep must not exist before Resume can bring a p
 The code blocks below show the first version. The branch differs in these places:
 
 - **Idle since** (tasks 11 and 13): a dry run on real panes showed that a transcript's mtime is not use. `turns.last_turn_at` reads the last prompt, reply or tool call, and `idle_since` takes that. The mtime serves only `no-transcript` and the re-check.
+- **Background shells** (tasks 11 and 13): `session_status.has_background_shell` gives an idle pane the state `background-shell`, so it stays.
 - **The settings row** (task 15): its own style, and no preview after an edit.
 
 ## File map
@@ -2450,5 +2451,5 @@ PR 2:
 
 - Kill on an idle Claude loses no turn (Task 1).
 - `session_state_for` says `idle`. A pane whose status Claude does not report never closes.
-- An idle Claude can own a background shell. The sweep kills it with the pane.
+- Claude reports the status `shell` while it has background shells. That status is not documented. If Claude drops it, the re-check finds no trusted `idle` state or the shell ends with the pane.
 - `jsonl_for_session` looks only in `~/.claude/projects`.
