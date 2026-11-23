@@ -461,11 +461,11 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 - **Wrapper profile with no record**: a resume of a session that has no
   closed record runs the default profile, as today. Nothing keeps the profile
   of a session that ended in another way, for example with `/exit` or × kill.
-- **Move-account and the profile**: move-account moves a live pane
-  (`periscope/routes/sessions.py:616`) but passes no profile, so a `full`
-  pane moves to the other account on the default profile. This is true today.
-  The fix reads `session_status.pane_profiles()` before the kill. It is
-  outside idle close.
+- **Move-account and the profile**: move-account resumes a live pane's session
+  on the other account (`periscope/routes/sessions.py:616`) but passes no
+  profile, so a `full` pane comes back on the default profile. This is true
+  today. [THI-471](https://linear.app/thibault-dody/issue/THI-471) tracks the
+  fix.
 - **Background shells**: an idle Claude can own a background shell, for example
   a dev server that it started. Periscope has no signal for this. The sweep
   kills it with the pane.
