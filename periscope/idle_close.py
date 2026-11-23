@@ -17,7 +17,7 @@ from periscope.panes import drop_target_focus, list_windows
 from periscope.pids import stamped_pids
 from periscope.store import Settings
 from periscope.tmux import _tmux_mutate
-from periscope.turns import jsonl_for_session, session_id_for_pane
+from periscope.turns import jsonl_for_session, last_turn_at, session_id_for_pane
 
 SWEEP_AT = time(4, 0)
 _GRACE_MIN = 90
@@ -68,9 +68,9 @@ def weekday_hours(start: datetime, end: datetime) -> float:
     return hours
 
 
-def idle_since(transcript_mtime: float | None, completed_at: int, acted_at: int) -> int | None:
+def idle_since(last_turn: float | None, completed_at: int, acted_at: int) -> int | None:
     """When the pane was last used, or None when nothing says. 0 is no stamp."""
-    return int(max(transcript_mtime or 0, completed_at, acted_at)) or None
+    return int(max(last_turn or 0, completed_at, acted_at)) or None
 
 
 def verdict(pane: Pane, at: datetime, weekdays: int, pinned: Collection[str]) -> str | None:
@@ -120,7 +120,7 @@ def pane_from_view(view: dict) -> Pane | None:
     if view.get("agent") != "claude":
         return None
     session_id = session_id_for_pane(view["pane_id"])
-    mtime = _mtime(jsonl_for_session(session_id) if session_id else None)
+    transcript = jsonl_for_session(session_id) if session_id else None
     return {
         "pid": view["pid"],
         "pane_id": view["pane_id"],
@@ -128,8 +128,8 @@ def pane_from_view(view: dict) -> Pane | None:
         "session_id": session_id,
         "state": view["state"],
         "panes": view["panes"],
-        "idle_since": idle_since(mtime, view["completed_at"], view["acted_at"]),
-        "transcript_mtime": mtime,
+        "idle_since": idle_since(transcript and last_turn_at(transcript), view["completed_at"], view["acted_at"]),
+        "transcript_mtime": _mtime(transcript),
         "mem_mb": (view.get("res") or {}).get("mem_mb"),
         "profile": config.profile_env(view["profile"]) or None,
     }

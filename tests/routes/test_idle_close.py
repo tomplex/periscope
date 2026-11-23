@@ -1,7 +1,7 @@
 """GET /api/idle-close/preview: the panes that close at the next 04:00."""
 
-import os
-from datetime import datetime
+import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -36,8 +36,7 @@ def board(monkeypatch, tmp_path, clean_state):
         sids[pane_id] = f"s-{name}"
         if transcript:
             path = tmp_path / f"{name}.jsonl"
-            path.write_text("{}\n")
-            os.utime(path, (ts(idle), ts(idle)))
+            path.write_text(json.dumps({"type": "user", "timestamp": idle.astimezone(UTC).isoformat()}) + "\n")
             paths[f"s-{name}"] = path
         base = {"agent": "claude", "pid": pid, "pane_id": pane_id, "name": name, "state": "idle", "panes": 1}
         stamps = {"completed_at": 0 if transcript else ts(idle), "acted_at": 0}

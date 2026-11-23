@@ -4,9 +4,10 @@ Nothing here spawns a thread: conftest neuters idle_close._bg, and `sweep` is
 called directly."""
 
 import asyncio
+import json
 import os
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -60,11 +61,21 @@ def test_prune_closed_drops_a_row_whose_session_a_live_claude_runs(monkeypatch, 
 # --- the rules ----------------------------------------------------------------
 
 MON, FRI = datetime(2026, 11, 16, 17), datetime(2026, 11, 20, 4)
+# An idle Claude writes bookkeeping rows with no turn, so the file is newer than the last turn.
+WROTE = datetime(2026, 11, 20, 3, 30)
 DAY = 24 * 3600
 
 
 def ts(at: datetime) -> int:
     return int(at.timestamp())
+
+
+def write_transcript(path, last_turn: datetime):
+    """Claude's transcript: one prompt at `last_turn`, then a bookkeeping row at WROTE."""
+    prompt = {"type": "user", "timestamp": last_turn.astimezone(UTC).isoformat(), "message": {"content": "go"}}
+    path.write_text(json.dumps(prompt) + "\n" + json.dumps({"type": "artifact-autoreact-ledger"}) + "\n")
+    os.utime(path, (ts(WROTE), ts(WROTE)))
+    return path
 
 
 @pytest.mark.parametrize(
@@ -97,7 +108,7 @@ def pane(**over):
         "state": "idle",
         "panes": 1,
         "idle_since": ts(MON),
-        "transcript_mtime": float(ts(MON)),
+        "transcript_mtime": float(ts(WROTE)),
         "mem_mb": 812,
         "profile": None,
     }
@@ -190,11 +201,9 @@ def view(**over):
 
 @pytest.fixture
 def transcript(monkeypatch, tmp_path):
-    """The transcript of session s1, which runs in pane %1: last written on
-    Monday at 17:00."""
-    path = tmp_path / "s1.jsonl"
-    path.write_text("{}\n")
-    os.utime(path, (ts(MON), ts(MON)))
+    """The transcript of session s1, which runs in pane %1: its last turn was
+    on Monday at 17:00."""
+    path = write_transcript(tmp_path / "s1.jsonl", MON)
     monkeypatch.setattr(idle_close, "session_id_for_pane", {"%1": "s1"}.get)
     monkeypatch.setattr(idle_close, "jsonl_for_session", {"s1": path}.get)
     return path
@@ -206,6 +215,19 @@ def test_pane_from_view_reads_the_view_and_the_transcript(transcript):
 
 def test_pane_from_view_does_not_count_terminal_focus(transcript):
     assert idle_close.pane_from_view(view(focused_at=ts(FRI))) == pane()
+
+
+def test_pane_from_view_does_not_count_a_transcript_write_with_no_turn(transcript):
+    os.utime(transcript, (ts(FRI), ts(FRI)))
+    got = idle_close.pane_from_view(view())
+    assert got["idle_since"] == ts(MON)
+    assert idle_close.verdict(got, FRI, 3, set()) == "closes"
+
+
+def test_pane_from_view_with_no_turn_in_the_transcript_counts_the_other_stamps(transcript):
+    transcript.write_text(json.dumps({"type": "mode"}) + "\n")
+    assert idle_close.pane_from_view(view(acted_at=ts(MON)))["idle_since"] == ts(MON)
+    assert idle_close.pane_from_view(view())["idle_since"] is None
 
 
 @pytest.mark.parametrize("agent", ["codex", None])
@@ -245,10 +267,7 @@ def night(monkeypatch, tmp_path):
         sids={"%1": "s1", "%2": "s2"}, states={}, paths={}, kills=[], kill_ok=True, saves=[], indexed=[]
     )
     for sid in ("s1", "s2"):
-        path = tmp_path / f"{sid}.jsonl"
-        path.write_text("{}\n")
-        os.utime(path, (ts(MON), ts(MON)))
-        n.paths[sid] = path
+        n.paths[sid] = write_transcript(tmp_path / f"{sid}.jsonl", MON)
     n.windows = [
         {"pane_id": f"%{i}", "session": "main", "index": i, "panes": 1, "pid_raw": f"aaaa111{i}"} for i in (1, 2)
     ]
