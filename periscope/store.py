@@ -132,6 +132,13 @@ class PokeEntry(TypedDict):
     verified: bool  # resets_at landed within tolerance of at + 5h
 
 
+class IdleCloseLog(TypedDict, total=False):
+    """The last night that idle close ran."""
+
+    date: str  # local YYYY-MM-DD
+    at: int
+
+
 class WallSpan(TypedDict):
     """A stretch every account was walled (usage.next_wall_spans)."""
 
@@ -166,6 +173,7 @@ _STATE_DEFAULTS: dict = {
     "workspaces": {},
     "settings": {},
     "poke_log": {},
+    "idle_close_log": {},
 }
 
 
@@ -654,6 +662,18 @@ def get_poke_log() -> dict[str, PokeEntry]:
 def record_poke(account_id: str, entry: PokeEntry) -> None:
     with _STATE_LOCK:
         _STATE.setdefault("poke_log", {})[account_id] = dict(entry)
+        _write_state(_STATE)
+
+
+def get_idle_close_log() -> IdleCloseLog:
+    """`.get` because a state file written before the key existed loads without it."""
+    with _STATE_LOCK:
+        return cast(IdleCloseLog, dict(_STATE.get("idle_close_log") or {}))
+
+
+def record_idle_close(entry: IdleCloseLog) -> None:
+    with _STATE_LOCK:
+        _STATE["idle_close_log"] = dict(entry)
         _write_state(_STATE)
 
 

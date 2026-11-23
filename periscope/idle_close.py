@@ -5,13 +5,14 @@ which Resume brings it back with its pid, name, track and wrapper profile.
 Spec: docs/superpowers/specs/2026-11-19-idle-close-design.md.
 """
 
+import asyncio
 from collections.abc import Collection, Mapping
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import TypedDict
 
-from periscope import activity, config, resurrect, session_status, store
-from periscope.log import log
+from periscope import activity, config, resurrect, session_status, state_hub, store
+from periscope.log import _bg, log
 from periscope.panes import drop_target_focus, list_windows
 from periscope.pids import stamped_pids
 from periscope.store import Settings
@@ -20,6 +21,7 @@ from periscope.turns import jsonl_for_session, session_id_for_pane
 
 SWEEP_AT = time(4, 0)
 _GRACE_MIN = 90
+_TICK_S = 60.0
 
 
 def came_back(record: activity.ClosedPane, live_pids: set[str]) -> bool:
@@ -203,3 +205,26 @@ def sweep(views: list[dict], weekdays: int) -> None:
             index_one(str(transcript), force=True)
         except Exception:
             log.exception("idle close: index_one failed for %s", transcript)
+
+
+async def _tick() -> None:
+    now, settings = _now(), store.get_settings()
+    if not due(now, settings, store.get_idle_close_log()):
+        return
+    # Before the work: a failing pane, or a sweep longer than a tick, must not
+    # start a second sweep.
+    store.record_idle_close({"date": now.strftime("%Y-%m-%d"), "at": int(now.timestamp())})
+    views = await state_hub.current_windows()
+    _bg("idle-close", sweep, views, settings["idle_close_weekdays"])
+
+
+async def run() -> None:
+    """Lifespan task, prod only (registered in app.lifespan)."""
+    while True:
+        try:
+            await _tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("idle close tick failed")
+        await asyncio.sleep(_TICK_S)

@@ -3,6 +3,7 @@
 Nothing here spawns a thread: conftest neuters idle_close._bg, and `sweep` is
 called directly."""
 
+import asyncio
 import os
 import subprocess
 from datetime import datetime
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from periscope import activity, idle_close
+from periscope import activity, idle_close, store
 from tests.conftest import needs_tmux
 
 RECORD: activity.ClosedPane = {
@@ -418,3 +419,49 @@ def test_sweep_closes_the_real_window(night, monkeypatch, tmux_test_server):
     assert closed() == ["s1"]
     assert pane_id not in on_test_server("list-panes", "-a", "-F", "#{pane_id}").splitlines()
     assert "main" in on_test_server("list-sessions", "-F", "#{session_name}")
+
+
+# --- the tick -----------------------------------------------------------------
+
+
+@pytest.fixture
+def ticking(monkeypatch, clean_state):
+    """Friday 04:00 with the setting at 3 weekdays. Collects what the tick
+    handed to a thread."""
+    clean_state["settings"]["idle_close_weekdays"] = 3
+    spawned = []
+
+    async def current_windows():
+        return [view()]
+
+    monkeypatch.setattr(idle_close, "_now", lambda: FRI)
+    monkeypatch.setattr(idle_close, "_bg", lambda name, fn, *a: spawned.append((name, fn, a)))
+    monkeypatch.setattr(idle_close.state_hub, "current_windows", current_windows)
+    return spawned
+
+
+def test_tick_logs_the_night_and_hands_one_sweep_to_a_thread(ticking):
+    asyncio.run(idle_close._tick())
+    assert ticking == [("idle-close", idle_close.sweep, ([view()], 3))]
+    assert store.get_idle_close_log() == {"date": "2026-11-20", "at": ts(FRI)}
+    asyncio.run(idle_close._tick())
+    assert len(ticking) == 1
+
+
+def test_tick_does_nothing_outside_the_window(ticking, monkeypatch):
+    monkeypatch.setattr(idle_close, "_now", lambda: datetime(2026, 11, 20, 5, 30))
+    asyncio.run(idle_close._tick())
+    assert ticking == []
+    assert store.get_idle_close_log() == {}
+
+
+def test_a_tick_that_fails_does_not_start_a_second_sweep_that_night(ticking, monkeypatch):
+    async def boom():
+        raise RuntimeError("no tmux")
+
+    monkeypatch.setattr(idle_close.state_hub, "current_windows", boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(idle_close._tick())
+    asyncio.run(idle_close._tick())
+    assert ticking == []
+    assert store.get_idle_close_log()["date"] == "2026-11-20"

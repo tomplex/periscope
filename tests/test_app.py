@@ -84,6 +84,9 @@ def test_lifespan_starts_and_shuts_down_cleanly(mocker, monkeypatch):
     # PORT at PROD_PORT here a real tick between 08:00 and 09:30 would spend a
     # Haiku call on the developer's real subscription.
     mocker.patch("periscope.poke.run", side_effect=_noop)
+    # Prod-gated too, and its tick can kill panes: between 04:00 and 05:30 a
+    # real one would sweep the developer's tmux server.
+    mocker.patch("periscope.idle_close.run", side_effect=_noop)
     # PORT defaults to PROD_PORT (prod), so the lifespan generates the bg-commander
     # MCP config — stub it so the test doesn't write into the real config dir.
     mocker.patch("periscope.bg_commander.write_mcp_config")
@@ -181,6 +184,9 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
     # PORT at PROD_PORT here a real tick between 08:00 and 09:30 would spend a
     # Haiku call on the developer's real subscription.
     mocker.patch("periscope.poke.run", side_effect=_noop)
+    # Prod-gated too, and its tick can kill panes: between 04:00 and 05:30 a
+    # real one would sweep the developer's tmux server.
+    mocker.patch("periscope.idle_close.run", side_effect=_noop)
     # Teardown unlinks MCP_SOCKET_PATH — no-op so we don't touch /tmp.
     mocker.patch("os.unlink")
 

@@ -38,6 +38,7 @@ _V2_EMPTY_DEFAULTS = {
     "workspaces": {},
     "settings": {},
     "poke_log": {},
+    "idle_close_log": {},
 }
 
 
