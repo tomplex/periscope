@@ -1179,7 +1179,22 @@ _PANES = (
     "\n".join(
         "\x1f".join(row)
         for row in [
-            ["main", "0", "shell", "1", "/home/tom/dev/foo", "pid-a", "%5", "1717250000", "@1", "4241", "zsh", "", "0"],
+            [
+                "main",
+                "0",
+                "shell",
+                "1",
+                "/home/tom/dev/foo",
+                "pid-a",
+                "%5",
+                "1717250000",
+                "@1",
+                "4241",
+                "zsh",
+                "",
+                "0",
+                "2",
+            ],
             [
                 "main",
                 "0",
@@ -1194,6 +1209,7 @@ _PANES = (
                 "nvim",
                 "",
                 "1",
+                "2",
             ],
             [
                 "main",
@@ -1209,8 +1225,9 @@ _PANES = (
                 "claude",
                 "1717249990 /home/tom/dev/my baz",
                 "1",
+                "1",
             ],
-            [INPUT_CTL_SESSION, "0", "ctl", "1", "/tmp", "", "%9", "1717250200", "@3", "4244", "sh", "", "1"],
+            [INPUT_CTL_SESSION, "0", "ctl", "1", "/tmp", "", "%9", "1717250200", "@3", "4244", "sh", "", "1", "1"],
         ]
     )
     + "\n"
@@ -1233,6 +1250,7 @@ def test_list_windows_reads_each_windows_active_pane(monkeypatch):
             "pane_pid": "4242",
             "current_command": "nvim",
             "opened": "",
+            "panes": 2,
         },
         {
             "session": "main",
@@ -1247,6 +1265,7 @@ def test_list_windows_reads_each_windows_active_pane(monkeypatch):
             "pane_pid": "4243",
             "current_command": "claude",
             "opened": "1717249990 /home/tom/dev/my baz",
+            "panes": 1,
         },
     ]
 
@@ -1288,7 +1307,7 @@ def test_one_list_panes_serves_the_whole_poll(monkeypatch):
 _LIST_WINDOWS_FMT = (
     "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t"
     "#{@periscope_id}\t#{pane_id}\t#{window_activity}\t#{window_id}\t#{pane_pid}\t"
-    "#{pane_current_command}\t#{@periscope_opened}"
+    "#{pane_current_command}\t#{@periscope_opened}\t#{window_panes}"
 )
 
 
@@ -1313,7 +1332,8 @@ def _list_windows_rows(out):
                 "window_id": p[8],
                 "pane_pid": p[9],
                 "current_command": p[10],
-                "opened": p[11] if len(p) > 11 else "",
+                "opened": p[11],
+                "panes": int(p[12]),
             }
         )
     return rows

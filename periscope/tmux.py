@@ -55,6 +55,7 @@ PANE_FIELDS = (
     "pane_current_command",
     "@periscope_opened",
     "pane_active",
+    "window_panes",
 )
 # \x1f (unit separator) between fields: tmux prints a tab inside a window name
 # or path verbatim, which a tab separator would split out of shape.

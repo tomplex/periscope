@@ -427,6 +427,7 @@ def list_windows() -> list[dict]:
                 # "<epoch> <dir>" on windows an open created (pids.stamp_new_window);
                 # open_ops trusts it over the live cwd while the pane is fresh.
                 "opened": p["@periscope_opened"],
+                "panes": int(p["window_panes"] or 0),
             }
         )
     return rows
