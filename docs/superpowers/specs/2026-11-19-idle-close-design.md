@@ -36,7 +36,7 @@ In (phase 1, this spec):
 - The `idle_close_weekdays` setting and its row in `SettingsModal`.
 - The sweep: a prod-only lifespan task, like `poke.run()`.
 - The closed record: a `closed_panes` table in the activity DB.
-- Resume puts the pane back with its pid, track and name.
+- Resume puts the pane back with its pid, track, name and wrapper profile.
 - A preview: the panes that close tonight, and why the others stay.
 - `/api/history/search` rows show when idle close closed the session.
 
@@ -49,7 +49,6 @@ Out (not planned):
 - Codex panes. Their resume path is different (`_window_new_codex_resume`).
 - Shell panes, and the shell window that a worktree spawn opens next to Claude.
 - A record for a pane that you kill by hand (× kill).
-- The wrapper profile on resume (see "Known gaps").
 
 ## Terms
 
@@ -147,10 +146,15 @@ New module `periscope/idle_close.py`, in the same shape as `poke.py`.
 One function builds the `pane` dict from a view:
 `pane_from_view(view) -> dict | None`. It gives `None` for a codex or shell
 view. The dict has the fields that `verdict` reads, plus `pane_id`, `name`
-and `mem_mb` for the record and the preview. The session id comes from
+and `mem_mb` for the record and the preview, and `profile` for the record.
+The session id comes from
 `turns.session_id_for_pane(pane_id)`, and the transcript mtime from
 `jsonl_for_session`. `mem_mb` is `None` when the view's `res` is `None`: the
 process snapshot failed, or the pane is not in it (`periscope/resources.py:263`).
+`profile` is `config.profile_env(view["profile"]) or None`. The view reads the
+profile from the live Claude's environment (`session_status.pane_profiles()`,
+`periscope/window_view.py:586`), so the sweep adds no `ps` call. `None` is the
+default profile.
 For the window's pane count, add `window_panes` to `tmux.PANE_FIELDS`, and
 copy it to the `list_windows` row and the view as `panes`.
 
@@ -235,6 +239,7 @@ CREATE TABLE IF NOT EXISTS closed_panes (
   session_id   TEXT PRIMARY KEY NOT NULL,  -- Claude session id
   pid          TEXT NOT NULL,              -- @periscope_id of the closed pane
   mem_mb       INTEGER,                    -- footprint at close, NULL if unknown
+  profile      TEXT,                       -- wrapper profile, NULL for the default
   idle_since   INTEGER NOT NULL,
   closed_at    INTEGER NOT NULL
 );
@@ -260,6 +265,10 @@ The record keeps nothing that a live store keeps:
   FROM closed_panes)`; both tables are in the activity DB), as
   `_IMMUNITY_FIELDS` keeps a `state.json` entry. After retention deletes a
   row, the next boot prunes its tag.
+
+The wrapper profile is in the record because no store keeps it. It lives only
+in the environment of the live Claude (`docs/wrapper-profiles.md`), and
+`kill-pane` ends that process.
 
 A record has no close reason. The sweep is its only writer.
 
@@ -316,6 +325,17 @@ When a closed record exists for `resume_id`, after the refusal checks:
    - `_resolve_one` keeps a stamped id (`periscope/pids.py:195`). Thus the
      window gets the old `state.json` entry with its PR, ticket and name pin.
      No rebind is needed, so the cwd does not need to match.
+   - Pass the record's profile, `env_args(config_dir, record.profile)`, on
+     both branches. The pane then comes back on its plugin set. Do not pass
+     the model: `--resume` restores the session's own model, and
+     `ANTHROPIC_MODEL` would override a later `/model`
+     (`docs/wrapper-profiles.md`). Resurrect does the same
+     (`periscope/resurrect.py:203`).
+   - On the `new-session` branch, scrub the session env when `config_dir` or
+     the profile is set, as the new-pane route does
+     (`periscope/routes/sessions.py:373`). `new-session -e` sets the session
+     env, so without the scrub every later resume into "resumes" runs that
+     profile.
 4. The window wears `record.pid`, so its track tag in `pane_tracks` applies
    again (section 4). `resolve_track_for_window` ignores a tag whose track is
    archived (`periscope/tracks.py:73`), so resume needs no track step.
@@ -377,7 +397,8 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 - `pane_from_view`: a view whose `focused_at` is newer than every other stamp
   gives the same `idle_since` as without it (decision D4); a codex or shell
   view gives `None`; a view with `res` `None` gives `mem_mb` `None`, and the
-  pane can still close.
+  pane can still close; a view with the profile `full` gives `full`, and
+  `default` gives `None`.
 - `due`: before 04:00, in the grace, after the grace, setting off, logged today.
 - `verdict`: under the limit gives `None`; idle since `None` gives `None`;
   exactly `weekdays × 24` weekday hours gives `closes`; no session id; no
@@ -397,7 +418,7 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   its window has 2 panes, or when its `pane_id` is gone. With a pane closed,
   `resurrect.save_now` is called once with `force=True`. `index_one` is
   called with `force=True`. A second close of the same session replaces the
-  row.
+  row. The record keeps the pane's profile.
 - `resurrect.save_now(force=True)` unsets `@continuum-save-last-timestamp`
   before it runs the script; a plain `save_now()` does not.
 - Retention: a row whose transcript is missing is deleted; a row whose
@@ -417,6 +438,10 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   follows the spawn: the chained stamp is the fix for the race in section 5.
   A placeholder name gives no `-n`. A pinned name stays pinned. With no
   record, nothing changes.
+- Resume, the profile, on both branches: a record with the profile `full`
+  gives `-e CLAUDE_WRAPPER_PROFILE=full` in the spawn argv and no
+  `ANTHROPIC_MODEL`. On the `new-session` branch, `scrub_session_env` runs
+  after the spawn. A record with no profile gives no profile `-e`.
 - Resume, a session that came back: a record whose pid a live window wears,
   and a record whose session a live Claude runs, each give a fresh pid and
   delete the record.
@@ -433,9 +458,14 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 
 ## 8. Known gaps
 
-- **Wrapper profile**: `_window_new_resume` does not pass a profile, so a
-  resumed pane runs the default profile. This is true today for history's
-  resume too. It gets a Linear ticket, not a workaround here.
+- **Wrapper profile with no record**: a resume of a session that has no
+  closed record runs the default profile, as today. Nothing keeps the profile
+  of a session that ended in another way, for example with `/exit` or × kill.
+- **Move-account and the profile**: move-account moves a live pane
+  (`periscope/routes/sessions.py:616`) but passes no profile, so a `full`
+  pane moves to the other account on the default profile. This is true today.
+  The fix reads `session_status.pane_profiles()` before the kill. It is
+  outside idle close.
 - **Background shells**: an idle Claude can own a background shell, for example
   a dev server that it started. Periscope has no signal for this. The sweep
   kills it with the pane.
