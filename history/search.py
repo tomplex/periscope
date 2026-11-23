@@ -179,13 +179,15 @@ def _normalize_rows(rows: list[dict]) -> list[dict]:
 
 
 def stats(*, db_path: Path | str | None = None) -> dict:
-    """Index summary for the /history page: session counts, and every project
-    path, newest last turn first, for its project filter. Not cached (each
-    call ~1-3ms on a populated index)."""
+    """Index summary for the /history page: session counts, when the index
+    last wrote a session (None when empty), and every project path, newest
+    last turn first, for its project filter. Not cached (each call ~1-3ms on
+    a populated index)."""
     conn = connect(db_path)
     try:
-        total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-        summarized = conn.execute("SELECT COUNT(*) FROM sessions WHERE summary_model IS NOT NULL").fetchone()[0]
+        total, summarized, last_indexed_at = conn.execute(
+            "SELECT COUNT(*), COUNT(summary_model), MAX(indexed_at) FROM sessions"
+        ).fetchone()
         project_paths = [
             row[0]
             for row in conn.execute(
@@ -198,6 +200,7 @@ def stats(*, db_path: Path | str | None = None) -> dict:
         "total": total,
         "summarized": summarized,
         "heuristic": total - summarized,
+        "last_indexed_at": last_indexed_at,
         "project_paths": project_paths,
     }
 

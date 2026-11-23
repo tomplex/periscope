@@ -18,6 +18,7 @@ def _seed_session(
     started_at=1000,
     summary_model="claude-haiku-5-5",
     ended_at=None,
+    indexed_at=0,
 ):
     """Insert a row representing a Haiku-summarized (non-trivial) session.
     Pass summary_model=None for a row that should be filtered by the default
@@ -31,7 +32,7 @@ def _seed_session(
           summary, tags, summary_model, first_user_msg, last_user_msg, final_assistant_msg,
           files_touched, notable_cmds, tool_use_counts,
           indexed_at, mechanical_version, source_mtime, source_size
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '{}', 0, 1, 0, 0)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '{}', ?, 1, 0, 0)
         """,
         (
             session_id,
@@ -50,6 +51,7 @@ def _seed_session(
             first_user,
             first_user,
             final_asst,
+            indexed_at,
         ),
     )
     conn.execute(
@@ -173,6 +175,14 @@ def test_stats_lists_project_paths_newest_last_turn_first(seeded_db):
     st = stats(db_path=db_path)
     assert st["project_paths"] == ["/Users/tom/dev/aaa", "/Users/tom/dev/fdy", "/Users/tom/dev/web"]
     assert (st["total"], st["summarized"], st["heuristic"]) == (4, 4, 0)
+
+
+def test_stats_says_when_the_index_last_wrote_a_session(seeded_db, tmp_path):
+    conn, db_path = seeded_db
+    _seed_session(conn, "s-old", "Old", "", "/Users/tom/dev/aaa", indexed_at=7000)
+    _seed_session(conn, "s-new", "New", "", "/Users/tom/dev/aaa", started_at=50, indexed_at=8000)
+    assert stats(db_path=db_path)["last_indexed_at"] == 8000
+    assert stats(db_path=tmp_path / "empty.db")["last_indexed_at"] is None
 
 
 def test_build_fts_query_escapes_quotes():

@@ -444,7 +444,11 @@ function renderDetail() {
 function render() {
   renderList();
   renderDetail();
-  el.total.textContent = S.stats ? `${S.stats.total.toLocaleString()} sessions in history` : "";
+  const st = S.stats;
+  // A stale "last indexed" says the session-end hook stopped feeding the index.
+  const indexed = st?.last_indexed_at && `last indexed ${relTime(st.last_indexed_at)} ago`;
+  el.total.textContent = st ? [`${st.total.toLocaleString()} sessions in history`, indexed].filter(Boolean).join(" · ") : "";
+  el.total.title = st?.last_indexed_at ? `last indexed ${fmtDate(st.last_indexed_at)}` : "";
   listToTop = false;
   selectedIntoView = false;
 }
