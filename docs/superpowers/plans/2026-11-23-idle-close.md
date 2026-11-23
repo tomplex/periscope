@@ -48,6 +48,7 @@ The code blocks below show the first version. The branch differs in these places
 
 - **Idle since** (tasks 11 and 13): a dry run on real panes showed that a transcript's mtime is not use. `turns.last_turn_at` reads the last prompt, reply or tool call, and `idle_since` takes that. The mtime serves only `no-transcript` and the re-check.
 - **Background shells** (tasks 11 and 13): `session_status.has_background_shell` gives an idle pane the state `background-shell`, so it stays.
+- **Unsent text** (tasks 11 and 13): an idle pane with a `pending_input` has the state `draft`, so it stays.
 - **The settings row** (task 15): its own style, and no preview after an edit.
 
 ## File map

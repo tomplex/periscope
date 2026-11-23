@@ -141,7 +141,8 @@ New module `periscope/idle_close.py`, in the same shape as `poke.py`.
      window option, so after `kill-pane` the window keeps the closed pane's
      pid, PR and ticket, and a resume could not take them back.
   5. The state is not `idle`: the state, for example `needs-input`, `done`
-     (decision D1), `working` or `background-shell` (decision D5).
+     (decision D1), `working`, `background-shell` (decision D5) or `draft`
+     (decision D6).
   6. Weekday hours are equal to or more than the limit: `closes`.
   7. Otherwise: `weekend`.
 - `due(now, settings, log) -> bool`: true from `SWEEP_AT` to `SWEEP_AT` + 90
@@ -154,8 +155,9 @@ view. The dict has the fields that `verdict` reads, plus `pane_id`, `name`
 and `mem_mb` for the record and the preview, and `profile` for the record.
 The session id comes from `turns.session_id_for_pane(pane_id)`, and the
 transcript mtime from `jsonl_for_session`. The mtime serves only the
-`no-transcript` verdict and the re-check before the kill. An idle pane whose
-Claude has background shells has the state `background-shell`
+`no-transcript` verdict and the re-check before the kill. An idle pane with
+text in its input box (the view's `pending_input`) has the state `draft`. An
+idle pane whose Claude has background shells has the state `background-shell`
 (`session_status.has_background_shell`). `mem_mb` is `None` when the view's
 `res` is `None`: the process snapshot failed, or the pane is not in it
 (`periscope/resources.py:263`).
@@ -421,8 +423,8 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   exactly `weekdays × 24` weekday hours gives `closes`; no session id; no
   transcript; an account-B session whose transcript `jsonl_for_session` does
   not find; pinned; a window with 2 panes gives `split-window`;
-  `needs-input`; `done`; `working`; `background-shell`, only for an idle pane; a
-  pane over the limit only in wall-clock hours gives `weekend`.
+  `needs-input`; `done`; `working`; `background-shell` and `draft`, only for an
+  idle pane; a pane over the limit only in wall-clock hours gives `weekend`.
 - `_tick`: when due, it writes the log and hands one sweep to `_bg`; when not
   due, nothing (`tests/test_poke.py:208`). When the stub raises, the log is
   written, and a second `_tick` at the same frozen time hands nothing to
@@ -537,6 +539,10 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   reports the status `shell` for such a session. On 23 Nov, the 3 of 9 live
   panes with that status all showed "1 shell" or "2 shells" in their footer and
   had a `zsh` child process. No other pane did.
+- **D6. Panes with unsent text.** Decided on 23 Nov: keep them open, with the
+  reason. Resume gives back the conversation, not text that you typed and did
+  not send. The re-check before the kill does not read the input box again:
+  the views are at most 13 seconds old.
 
 ## 10. Assumptions to check in the implementation
 
