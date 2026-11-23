@@ -51,6 +51,11 @@ def _is_pid(raw: str) -> bool:
     return len(raw) == 8 and all(c in "0123456789abcdef" for c in raw)
 
 
+def stamped_pids(windows: list[dict]) -> set[str]:
+    """The periscope ids that `windows` (list_windows rows) wear in tmux."""
+    return {p for w in windows if _is_pid(p := (w.get("pid_raw") or "").strip())}
+
+
 def _stamp_pid(target: str, pid: str) -> None:
     """Fire-and-forget set-option. If it fails (window gone, tmux racy),
     the next poll repeats the attempt. Uses the project's read-style
@@ -485,7 +490,7 @@ def resolve_pids(windows: list[dict], session_hints: dict[str, dict] | None = No
         # before phase 0 clears the losers' raw stamps — the keeper retains
         # the pid so the set is identical either way, but pinning the order
         # keeps the reasoning simple.
-        carried = {p for w in windows if _is_pid(p := (w.get("pid_raw") or "").strip())}
+        carried = stamped_pids(windows)
         dirty = False
         # Phase 0: duplicate arbitration (sid evidence beats list order).
         _arbitrate_duplicates(windows, wblock, hints)

@@ -1,6 +1,7 @@
 # Idle close: close idle Claude panes at night, resume them later
 
-Status: draft for review. Prototypes: the "Idle close prototypes" canvas
+Status: PR 1 of 2 (closed record and resume) implemented. Prototypes: the
+"Idle close prototypes" canvas
 (https://claude.ai/artifact/1KCaANrU4beN77zNbiJAYt).
 
 ## Goal
@@ -257,8 +258,11 @@ The record keeps nothing that a live store keeps:
   `last_seen.cwd`, `linked_pr`, `linked_linear`).
 - That entry outlives the record. `_gc_windows` (`periscope/pids.py:285`)
   deletes an entry only when it has no field from `_IMMUNITY_FIELDS` and its
-  `last_seen` is more than 30 days old. The record lives at most 30 days after
-  the last transcript write, which is before the last sighting.
+  `last_seen` is more than 30 days old. `completed_at` and `acked_at` are in
+  that list, so an entry with a turn end or an action of yours stays. An entry
+  with neither can go just before its record: Claude writes one line to the
+  transcript as the kill ends it, so its last write is after the last
+  sighting. Such a pane then resumes without its name.
 - The track tag stays in `pane_tracks`. `prune_pane_tracks`
   (`periscope/activity.py:501`) deletes the tag of a dead pid at each boot. It
   skips the pids that have a `closed_panes` row (`AND pid NOT IN (SELECT pid
@@ -279,7 +283,7 @@ question. `live_pids` is the `pid_raw` set of `list_windows()`, as
 reads the live session files, as `session_status.claude_proc_for` does. The
 two checks catch both outcomes of a `claude --resume` that you typed: Pass 0b
 rebinds its window to the record's pid, and Claude keeps or changes the
-session id. (`periscope/session_status.py:200` and `periscope/turns.py:32`
+session id. (`periscope/session_status.py:200` and `periscope/turns.py:34`
 disagree on whether Claude keeps it.)
 
 Retention, `prune_closed(live_pids)`, runs at boot and at the start of each
@@ -293,7 +297,7 @@ A resume also deletes the row (section 5).
 
 ## 5. Resume
 
-`_window_new_resume` (`periscope/routes/sessions.py:152`) gets one change.
+`_window_new_resume` (`periscope/routes/sessions.py:137`) gets one change.
 When a closed record exists for `resume_id`, after the refusal checks:
 
 1. If `came_back(record, live_pids)` is true (section 4), delete the record
@@ -333,7 +337,7 @@ When a closed record exists for `resume_id`, after the refusal checks:
      (`periscope/resurrect.py:203`).
    - On the `new-session` branch, scrub the session env when `config_dir` or
      the profile is set, as the new-pane route does
-     (`periscope/routes/sessions.py:373`). `new-session -e` sets the session
+     (`periscope/routes/sessions.py:346`). `new-session -e` sets the session
      env, so without the scrub every later resume into "resumes" runs that
      profile.
 4. The window wears `record.pid`, so its track tag in `pane_tracks` applies
@@ -343,13 +347,13 @@ When a closed record exists for `resume_id`, after the refusal checks:
 
 The callers:
 
-- The dashboard route (`periscope/routes/sessions.py:551`), which the history
+- The dashboard route (`periscope/routes/sessions.py:524`), which the history
   page uses, returns the pid.
 - The MCP tool `resume_session` (`_do_resume_session_tool`,
-  `periscope/channels.py:983`) stamps a fresh pid today. Change it to
+  `periscope/channels.py:985`) stamps a fresh pid today. Change it to
   `result.get("pid") or stamp_new_window(target)`. An explicit `workspace_id`
   still tags the pane into that track.
-- Move-account (`periscope/routes/sessions.py:616`) moves a live pane, so
+- Move-account (`periscope/routes/sessions.py:589`) moves a live pane, so
   `came_back` is true for its session. Step 1 deletes a stale record, and the
   pane keeps its fresh pid.
 - Phase 2's ⌘K group will use the dashboard route.
@@ -428,7 +432,7 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   gone.
 - Resume, through the route, on both branches: `_patch_resume_path(mocker,
   calls, has_session=1)` for `new-session` and `has_session=0` for
-  `new-window` (`tests/routes/test_sessions.py:583`). With a record
+  `new-window` (`tests/routes/test_sessions.py:594`). With a record
   `{pid: 'dddd4444'}`, a `pane_tracks` tag `t1` on `dddd4444`, and a
   `state.json` entry with `linked_pr: 12` and a name, run the route and then
   `resolve_pids`. On each branch, assert that the spawn argv has `-n <name>`
@@ -461,11 +465,11 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 - **Wrapper profile with no record**: a resume of a session that has no
   closed record runs the default profile, as today. Nothing keeps the profile
   of a session that ended in another way, for example with `/exit` or × kill.
-- **Move-account and the profile**: move-account moves a live pane
-  (`periscope/routes/sessions.py:616`) but passes no profile, so a `full`
-  pane moves to the other account on the default profile. This is true today.
-  The fix reads `session_status.pane_profiles()` before the kill. It is
-  outside idle close.
+- **Move-account and the profile**: move-account resumes a live pane's session
+  on the other account (`periscope/routes/sessions.py:589`) but passes no
+  profile, so a `full` pane comes back on the default profile. This is true
+  today. [THI-471](https://linear.app/thibault-dody/issue/THI-471) tracks the
+  fix.
 - **Background shells**: an idle Claude can own a background shell, for example
   a dev server that it started. Periscope has no signal for this. The sweep
   kills it with the pane.
@@ -479,14 +483,14 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   stamp it with `stamp_new_window` in a second tmux command. A dashboard build
   between the two can mint a second id and stamp it last. Resume avoids this
   with the chained stamp (section 5), and it covers two of the six:
-  - `periscope/channels.py:1021`, the `resume_session` tool, takes resume's
+  - `periscope/channels.py:1023`, the `resume_session` tool, takes resume's
     pid (section 5).
-  - `periscope/routes/sessions.py:631`, move-account, stamps a second id on a
+  - `periscope/routes/sessions.py:604`, move-account, stamps a second id on a
     window that the chain already stamped. A poll mints only for a window
     with no stamp (`periscope/pids.py:195-242`), so no poll stamp lands last.
 
   Four keep the race:
-  - `periscope/routes/sessions.py:402`: the new-pane route.
+  - `periscope/routes/sessions.py:375`: the new-pane route.
   - `periscope/channels.py:655`: the `spawn_claude` tool.
   - `periscope/worktree_spawn.py:410` and `:426`: the shell and Claude windows
     of a new project.
@@ -513,12 +517,13 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 ## 10. Assumptions to check in the implementation
 
 - An idle Claude has written every turn to its transcript, so `kill-pane` loses
-  nothing. Check: kill an idle test pane, then compare the transcript before
-  and after.
-- Claude writes the transcript at the first prompt, not at start. If so, a
-  Claude that you started and never prompted has no transcript. It gets
+  nothing. Checked once on 23 Nov 2026 with Claude Code 2.1.319, with hooks and
+  MCP off: one prompt, then `kill-pane` about 5 seconds after the reply. The
+  transcript kept its 43 lines. Claude added one `cost-state` line as it
+  exited.
+- Claude writes the transcript at the first prompt, not at start. Checked in the
+  same run: with no prompt, no transcript after 20 seconds, while its session
+  file said `idle`. So a Claude that you started and never prompted gets
   `no-transcript`, or `None` when you also never acted on it in periscope.
-  Check: start a test Claude with no prompt and look
-  for `~/.claude/projects/*/<sid>.jsonl`.
 - `build_state()` at 04:00 takes 3 to 13 seconds, as at other times. The
   re-check before each kill covers a pane that changes in that time.

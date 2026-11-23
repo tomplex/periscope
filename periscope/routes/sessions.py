@@ -33,6 +33,7 @@ from periscope import (
     activity,
     codex_sessions,
     config,
+    idle_close,
     open_ops,
     session_binding_db,
     store,
@@ -42,6 +43,7 @@ from periscope import (
 from periscope import tmux as tmux_mod
 from periscope.channels import _resolve_window_by_pid, dismiss_dev_channels_consent_bg
 from periscope.config import CLAUDE_EXEC, MANAGED_SESSION
+from periscope.narrator import is_placeholder_name
 from periscope.panes import (
     _acted_at,
     _active_per_session,
@@ -52,7 +54,7 @@ from periscope.panes import (
     note_action,
     note_focus,
 )
-from periscope.pids import stamp_new_window
+from periscope.pids import stamp_new_window, stamped_pids
 from periscope.tmux import _run, _tmux_mutate, tmux
 from periscope.turns import jsonl_for_session, resume_refusal, session_id_for_pane
 from periscope.worktree_spawn import spawn_worktree
@@ -134,6 +136,14 @@ def _start_cwd(transcript: Path) -> str:
     return ""
 
 
+def _finish_resume(record: activity.ClosedPane | None, result: dict) -> dict:
+    """The spawn result; with a closed record, its pid, and the record is gone."""
+    if record is None:
+        return result
+    activity.delete_closed_pane(record["session_id"])
+    return {**result, "pid": record["pid"]}
+
+
 def _window_new_resume(
     session: str, exec_cmd: str, resume_id: str | None, mode: str, account: str | None = None, force: bool = False
 ) -> dict:
@@ -152,6 +162,9 @@ def _window_new_resume(
     env, not a command-string prefix, so a user who exits and re-runs `claude`
     by hand in that pane stays on the same account.
 
+    A session whose pane idle close closed has a record: the new window takes
+    back its pid, name and wrapper profile, and the result has that `pid`.
+
     `force` skips ONLY the transcript-mtime liveness guard. Claude writes the
     limit-reached message into the JSONL, so a walled pane — the one the user
     most wants to move off an exhausted subscription — always looks live to
@@ -168,6 +181,24 @@ def _window_new_resume(
     cwd = _start_cwd(transcript)
     if not os.path.isdir(cwd):
         cwd = os.path.expanduser("~")
+
+    record = activity.get_closed_pane(resume_id)
+    if record and idle_close.came_back(record, stamped_pids(list_windows())):
+        # A second window with the record's pid would take its PR, ticket and name pin.
+        activity.delete_closed_pane(resume_id)
+        record = None
+    name_args: list[str] = []
+    stamp_args: list[str] = []
+    profile = None
+    if record:
+        # Read before the spawn: the next poll writes the new window's name over it.
+        name = (store.get_window(record["pid"]).get("last_seen") or {}).get("name")
+        if name and not is_placeholder_name(name):
+            name_args = ["-n", name]
+        # In the spawn's own tmux command: a poll that lists the window unstamped
+        # mints an id for it, and the PR, ticket and track stay on the old one.
+        stamp_args = [";", "set-option", "-w", "@periscope_id", record["pid"]]
+        profile = record["profile"]
 
     # Resume convention: the frontend always sends `session=resumes` (or
     # any sentinel). If that session doesn't exist yet, create it on first
@@ -186,10 +217,12 @@ def _window_new_resume(
             session,
             "-c",
             cwd,
-            *tmux_mod.env_args(config_dir),
+            *tmux_mod.env_args(config_dir, profile),
+            *name_args,
             "-P",
             "-F",
             "#{window_index}",
+            *stamp_args,
         )
         if not ok:
             raise HTTPException(500, f"failed to create session '{session}': {msg}")
@@ -197,7 +230,7 @@ def _window_new_resume(
         # resume into this sentinel inherits this account — silently billing
         # them to the wrong subscription. This window already forked with the
         # value; `new-window -e` has no such spillover.
-        if config_dir:
+        if config_dir or profile:
             tmux_mod.scrub_session_env(session)
         try:
             index = int(msg)
@@ -217,14 +250,17 @@ def _window_new_resume(
         cmd = exec_cmd.strip() or shlex.join(config.build_agent_command("claude", cwd=cwd, resume_id=resume_id))
         _send_and_stamp(target, cmd)
         _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
-        return {
-            "ok": True,
-            "session": session,
-            "index": index,
-            "target": target,
-            "mode": mode,
-            "resumed_session_id": resume_id,
-        }
+        return _finish_resume(
+            record,
+            {
+                "ok": True,
+                "session": session,
+                "index": index,
+                "target": target,
+                "mode": mode,
+                "resumed_session_id": resume_id,
+            },
+        )
 
     # Session exists — spawn a new window into it.
     ok, msg = _tmux_mutate(
@@ -233,10 +269,12 @@ def _window_new_resume(
         f"{session}:",
         "-c",
         cwd,
-        *tmux_mod.env_args(config_dir),
+        *tmux_mod.env_args(config_dir, profile),
+        *name_args,
         "-P",
         "-F",
         "#{window_index}",
+        *stamp_args,
     )
     if not ok:
         raise HTTPException(500, msg)
@@ -250,15 +288,18 @@ def _window_new_resume(
     _send_and_stamp(target, cmd)
     if resume_id not in _resuming:
         _resuming[resume_id] = {"target": target, "started_at": int(time.time())}
-    return {
-        "ok": True,
-        "session": session,
-        "index": index,
-        "target": target,
-        "mode": mode,
-        "exec": cmd,
-        "resumed_session_id": resume_id,
-    }
+    return _finish_resume(
+        record,
+        {
+            "ok": True,
+            "session": session,
+            "index": index,
+            "target": target,
+            "mode": mode,
+            "exec": cmd,
+            "resumed_session_id": resume_id,
+        },
+    )
 
 
 def _window_new_plain(

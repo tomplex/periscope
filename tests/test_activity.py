@@ -766,6 +766,37 @@ def test_pane_tracks_set_get_map_prune():
     assert activity.get_pane_track("%3") == "tk_foo"
 
 
+def _closed(session_id="s1", pid="dddd4444", **over):
+    row = {"session_id": session_id, "pid": pid, "mem_mb": 812, "profile": None, "idle_since": 1000, "closed_at": 2000}
+    return {**row, **over}
+
+
+def test_closed_panes_record_get_list_delete():
+    activity.record_closed_pane(_closed(profile="full"))
+    activity.record_closed_pane(_closed("s2", "eeee5555", mem_mb=None, closed_at=2001))
+    assert activity.get_closed_pane("s1") == _closed(profile="full")
+    assert activity.get_closed_pane("unknown") is None
+    assert [r["session_id"] for r in activity.closed_panes()] == ["s1", "s2"]
+    activity.delete_closed_pane("s1")
+    assert activity.get_closed_pane("s1") is None
+
+
+def test_a_second_close_of_a_session_replaces_its_row():
+    activity.record_closed_pane(_closed(profile="full"))
+    again = _closed("s1", "eeee5555", mem_mb=300, idle_since=3000, closed_at=4000)
+    activity.record_closed_pane(again)
+    assert activity.closed_panes() == [again]
+
+
+def test_prune_pane_tracks_keeps_the_tag_of_a_closed_pane_until_its_row_goes():
+    activity.set_pane_track("dddd4444", "tk_foo")
+    activity.record_closed_pane(_closed())
+    assert activity.prune_pane_tracks(set()) == 0
+    assert activity.get_pane_track("dddd4444") == "tk_foo"
+    activity.delete_closed_pane("s1")
+    assert activity.prune_pane_tracks(set()) == 1
+
+
 def test_pane_tracks_rekeyed_to_pid(fresh_activity_db):
     activity.set_pane_track("abc12345", "tk_prog")
     assert activity.get_pane_track("abc12345") == "tk_prog"

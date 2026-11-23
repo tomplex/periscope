@@ -5,6 +5,13 @@ POST /api/open (open_ops.ensure_session). Tests for session/new have been
 removed; the equivalent coverage lives in tests/test_open_ops.py.
 """
 
+import subprocess
+import time
+
+import pytest
+
+from tests.conftest import needs_tmux
+
 
 def _patch(mocker, name, **kwargs):
     """Patch in either the route module (post-extract) or server (pre)."""
@@ -855,3 +862,163 @@ def test_window_new_loose_track_uses_first_repo_root(client, mocker, fresh_activ
     assert r.status_code == 200, r.text
     call = next(c for c in mutate.call_args_list if c.args[0] == "new-window")
     assert call.args[list(call.args).index("-c") + 1] == str(tmp_path)
+
+
+# --- resume of a pane that idle close closed ----------------------------------
+
+
+@pytest.fixture
+def closed_pane(clean_state):
+    """Session "abc" ran in pane dddd4444, which idle close closed. Returns a
+    function that writes the record, with the fields you pass in."""
+    from periscope import activity
+
+    clean_state["windows"]["dddd4444"] = {
+        "linked_pr": 12,
+        "name_pinned": True,
+        "last_seen": {"name": "notify-buttons", "session": "main", "sid": "abc", "ts": int(time.time())},
+    }
+    activity.set_pane_track("dddd4444", "t1")
+
+    def record(**over):
+        row = {"session_id": "abc", "pid": "dddd4444", "mem_mb": 812, "profile": None, "idle_since": 1, "closed_at": 2}
+        activity.record_closed_pane(row | over)
+
+    record()
+    return record
+
+
+def _resume_closed(mocker, tmp_path, has_session):
+    """Resume session "abc", with no live window or Claude on it. Returns the
+    route's result and the tmux calls."""
+    from periscope.routes import sessions
+
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls, tmp_path, has_session=has_session)
+    _patch(mocker, "list_windows", return_value=[])
+    mocker.patch("periscope.session_status.claude_proc_for", return_value=None)
+    return sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume"), calls
+
+
+def _spawn(calls):
+    return next(list(c) for c in calls if c[0] in ("new-window", "new-session"))
+
+
+# `_run` returns tmux has-session's code: 0 is the new-window branch, 1 the new-session one.
+BOTH_BRANCHES = pytest.mark.parametrize("has_session", [0, 1], ids=["new-window", "new-session"])
+
+
+@BOTH_BRANCHES
+def test_resume_of_a_closed_pane_takes_back_its_pid_name_track_and_links(mocker, tmp_path, closed_pane, has_session):
+    from periscope import activity, store
+    from periscope.pids import resolve_pids
+
+    stamp = mocker.patch("periscope.pids._stamp_pid")
+    result, calls = _resume_closed(mocker, tmp_path, has_session)
+
+    spawn = _spawn(calls)
+    assert spawn[spawn.index("-n") + 1] == "notify-buttons"
+    assert spawn[-5:] == [";", "set-option", "-w", "@periscope_id", "dddd4444"]
+    assert result["pid"] == "dddd4444"
+    assert activity.get_closed_pane("abc") is None
+    # The next poll keeps the stamp, so the window gets its old entry and tag.
+    window = {"session": "resumes", "index": 3, "name": "notify-buttons", "pid_raw": "dddd4444"}
+    window |= {"pane_id": "%9", "window_id": "@9", "cwd": str(tmp_path), "branch": None}
+    resolve_pids([window])
+    assert window["pid"] == "dddd4444"
+    entry = store.get_window("dddd4444")
+    assert (entry["linked_pr"], entry["name_pinned"]) == (12, True)
+    assert activity.get_pane_track("dddd4444") == "t1"
+    # A second stamp after the spawn is the race that the chained one closes.
+    stamp.assert_not_called()
+
+
+@BOTH_BRANCHES
+def test_resume_of_a_closed_pane_keeps_its_wrapper_profile(mocker, tmp_path, closed_pane, has_session):
+    closed_pane(profile="full")
+    _, calls = _resume_closed(mocker, tmp_path, has_session)
+
+    spawn = _spawn(calls)
+    assert "CLAUDE_WRAPPER_PROFILE=full" in spawn
+    assert not any(a.startswith("ANTHROPIC_MODEL=") for a in spawn)
+    scrubbed = any(c[0] == "set-environment" and "CLAUDE_WRAPPER_PROFILE" in c for c in calls)
+    assert scrubbed == (has_session == 1), "only new-session -e sets the session env"
+
+
+@BOTH_BRANCHES
+def test_resume_of_a_closed_pane_on_the_default_profile_sends_no_profile(mocker, tmp_path, closed_pane, has_session):
+    _, calls = _resume_closed(mocker, tmp_path, has_session)
+    assert "-e" not in _spawn(calls)
+
+
+def test_resume_does_not_restore_a_placeholder_name(mocker, tmp_path, closed_pane, clean_state):
+    clean_state["windows"]["dddd4444"]["last_seen"]["name"] = "claude.exe"
+    _, calls = _resume_closed(mocker, tmp_path, has_session=0)
+    assert "-n" not in _spawn(calls)
+    assert _spawn(calls)[-1] == "dddd4444"
+
+
+@BOTH_BRANCHES
+def test_resume_of_a_session_with_no_closed_record_adds_nothing(mocker, tmp_path, has_session):
+    result, calls = _resume_closed(mocker, tmp_path, has_session)
+    assert _spawn(calls)[-1] == "#{window_index}"
+    assert "-n" not in _spawn(calls)
+    assert "pid" not in result
+
+
+@pytest.mark.parametrize("how", ["a window wears the pid", "a live Claude runs the session"])
+def test_resume_of_a_session_that_came_back_takes_a_fresh_pid(mocker, tmp_path, closed_pane, how):
+    from periscope import activity
+    from periscope.routes import sessions
+
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls, tmp_path)
+    by_window = how == "a window wears the pid"
+    _patch(mocker, "list_windows", return_value=[{"pid_raw": "dddd4444"}] if by_window else [])
+    mocker.patch("periscope.session_status.claude_proc_for", return_value=None if by_window else {"pid": 1})
+
+    result = sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+
+    assert _spawn(calls)[-1] == "#{window_index}"
+    assert "pid" not in result
+    assert activity.get_closed_pane("abc") is None
+
+
+def test_a_failed_spawn_keeps_the_closed_record(mocker, tmp_path, closed_pane):
+    from fastapi import HTTPException
+
+    from periscope import activity
+    from periscope.routes import sessions
+
+    _patch_resume_path(mocker, [], tmp_path)
+    _patch(mocker, "list_windows", return_value=[])
+    mocker.patch("periscope.session_status.claude_proc_for", return_value=None)
+    _patch(mocker, "_tmux_mutate", return_value=(False, "no space for new pane"))
+    with pytest.raises(HTTPException):
+        sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+    assert activity.get_closed_pane("abc") is not None
+
+
+@needs_tmux
+@pytest.mark.parametrize("session_exists", [True, False], ids=["new-window", "new-session"])
+def test_the_resumed_window_wears_the_records_pid_in_tmux(
+    mocker, tmp_path, closed_pane, tmux_test_server, session_exists
+):
+    from periscope.routes import sessions
+
+    def on_test_server(cmd, **_):
+        r = subprocess.run(["tmux", "-L", tmux_test_server, *cmd[1:]], capture_output=True, text=True)
+        return r.returncode, r.stdout
+
+    on_test_server(["tmux", "new-session", "-d", "-s", "resumes" if session_exists else "other"])
+    _patch(mocker, "jsonl_for_session", return_value=_transcript(tmp_path, age_s=300))
+    _patch(mocker, "_run", side_effect=on_test_server)
+    _patch(mocker, "_send_and_stamp")
+    _patch(mocker, "list_windows", return_value=[])
+    mocker.patch("periscope.session_status.claude_proc_for", return_value=None)
+    mocker.patch.dict(sessions._resuming, clear=True)
+
+    sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+
+    _, listed = on_test_server(["tmux", "list-windows", "-a", "-F", "#{window_name} #{@periscope_id}"])
+    assert "notify-buttons dddd4444" in listed.splitlines()

@@ -87,6 +87,24 @@ def test_history_search_drops_a_placeholder_pane_name(client, mocker, no_transcr
     assert client.get("/api/history/search?q=").json()["results"][0]["pane_name"] is None
 
 
+def test_history_search_rows_say_when_idle_close_closed_the_session(client, mocker, no_transcripts):
+    from periscope import activity
+
+    activity.record_closed_pane(
+        {
+            "session_id": "abc",
+            "pid": "dddd4444",
+            "mem_mb": 812,
+            "profile": None,
+            "idle_since": 1,
+            "closed_at": 1795078800,
+        }
+    )
+    mocker.patch("history.recent", return_value=[{"session_id": "abc"}, {"session_id": "def"}])
+    rows = client.get("/api/history/search?q=").json()["results"]
+    assert [r["closed_at"] for r in rows] == [1795078800, None]
+
+
 def test_history_search_says_rerank_was_used_only_when_a_row_was_scored(client, mocker, no_transcripts):
     """A failed Haiku call (no key, 401) keeps the FTS order; the page must not
     head that order "Reranked by relevance"."""
