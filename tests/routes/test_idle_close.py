@@ -51,8 +51,10 @@ def preview(client):
     return {row["name"]: row["verdict"] for row in r.json()}
 
 
-def test_preview_has_one_row_for_each_verdict(client, board):
+def test_preview_has_one_row_for_each_verdict(client, board, monkeypatch):
+    monkeypatch.setattr(idle_close.session_status, "has_background_shell", lambda sid: sid == "s-serves")
     board("closes")
+    board("serves")
     board("weekend", idle=datetime(2026, 11, 20, 23))  # Friday 23:00: 77 hours, 29 of them on weekdays
     board("pinned", pid="pinned00")
     board("split", panes=2)
@@ -62,6 +64,7 @@ def test_preview_has_one_row_for_each_verdict(client, board):
     board("archived", transcript=False)
     assert preview(client) == {
         "closes": "closes",
+        "serves": "background-shell",
         "weekend": "weekend",
         "pinned": "pinned",
         "split": "split-window",

@@ -121,12 +121,15 @@ def pane_from_view(view: dict) -> Pane | None:
         return None
     session_id = session_id_for_pane(view["pane_id"])
     transcript = jsonl_for_session(session_id) if session_id else None
+    state = view["state"]
+    if state == "idle" and session_status.has_background_shell(session_id):
+        state = "background-shell"  # for example a dev server, which would end with the pane
     return {
         "pid": view["pid"],
         "pane_id": view["pane_id"],
         "name": view["name"],
         "session_id": session_id,
-        "state": view["state"],
+        "state": state,
         "panes": view["panes"],
         "idle_since": idle_since(transcript and last_turn_at(transcript), view["completed_at"], view["acted_at"]),
         "transcript_mtime": _mtime(transcript),

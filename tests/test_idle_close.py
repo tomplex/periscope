@@ -230,6 +230,13 @@ def test_pane_from_view_with_no_turn_in_the_transcript_counts_the_other_stamps(t
     assert idle_close.pane_from_view(view())["idle_since"] is None
 
 
+@pytest.mark.parametrize("state,code", [("idle", "background-shell"), ("done", "done"), ("working", "working")])
+def test_an_idle_pane_with_background_shells_stays(transcript, monkeypatch, state, code):
+    monkeypatch.setattr(idle_close.session_status, "has_background_shell", lambda sid: sid == "s1")
+    got = idle_close.pane_from_view(view(state=state))
+    assert idle_close.verdict(got, FRI, 3, set()) == code
+
+
 @pytest.mark.parametrize("agent", ["codex", None])
 def test_pane_from_view_skips_a_pane_that_is_not_claude(transcript, agent):
     assert idle_close.pane_from_view(view(agent=agent)) is None
@@ -362,6 +369,12 @@ def test_a_pane_with_no_stamp_stays_beside_one_that_closes(night):
     night.sids["%2"] = None
     idle_close.sweep(night.views, 3)
     assert closed() == ["s1"]
+
+
+def test_the_sweep_keeps_a_pane_with_background_shells(night, monkeypatch):
+    monkeypatch.setattr(idle_close.session_status, "has_background_shell", lambda sid: sid == "s1")
+    idle_close.sweep(night.views, 3)
+    assert closed() == ["s2"]
 
 
 def test_a_pinned_pane_stays(night, clean_state):
