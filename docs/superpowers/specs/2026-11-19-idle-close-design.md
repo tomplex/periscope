@@ -258,8 +258,11 @@ The record keeps nothing that a live store keeps:
   `last_seen.cwd`, `linked_pr`, `linked_linear`).
 - That entry outlives the record. `_gc_windows` (`periscope/pids.py:285`)
   deletes an entry only when it has no field from `_IMMUNITY_FIELDS` and its
-  `last_seen` is more than 30 days old. The record lives at most 30 days after
-  the last transcript write, which is before the last sighting.
+  `last_seen` is more than 30 days old. `completed_at` and `acked_at` are in
+  that list, so an entry with a turn end or an action of yours stays. An entry
+  with neither can go just before its record: Claude writes one line to the
+  transcript as the kill ends it, so its last write is after the last
+  sighting. Such a pane then resumes without its name.
 - The track tag stays in `pane_tracks`. `prune_pane_tracks`
   (`periscope/activity.py:501`) deletes the tag of a dead pid at each boot. It
   skips the pids that have a `closed_panes` row (`AND pid NOT IN (SELECT pid
@@ -514,12 +517,13 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 ## 10. Assumptions to check in the implementation
 
 - An idle Claude has written every turn to its transcript, so `kill-pane` loses
-  nothing. Check: kill an idle test pane, then compare the transcript before
-  and after.
-- Claude writes the transcript at the first prompt, not at start. If so, a
-  Claude that you started and never prompted has no transcript. It gets
+  nothing. Checked once on 23 Nov 2026 with Claude Code 2.1.319, with hooks and
+  MCP off: one prompt, then `kill-pane` about 5 seconds after the reply. The
+  transcript kept its 43 lines. Claude added one `cost-state` line as it
+  exited.
+- Claude writes the transcript at the first prompt, not at start. Checked in the
+  same run: with no prompt, no transcript after 20 seconds, while its session
+  file said `idle`. So a Claude that you started and never prompted gets
   `no-transcript`, or `None` when you also never acted on it in periscope.
-  Check: start a test Claude with no prompt and look
-  for `~/.claude/projects/*/<sid>.jsonl`.
 - `build_state()` at 04:00 takes 3 to 13 seconds, as at other times. The
   re-check before each kill covers a pane that changes in that time.

@@ -12,7 +12,7 @@
 
 **Worktree:** `/Users/thibaultdody/github/tomplex/periscope/.claude/worktrees/idle-close-server`, branch `thibaultdody/thi-466-idle-close-server`. Run every command from there. Never edit `/Users/thibaultdody/github/tomplex/periscope`: prod runs from it.
 
-**What was run:** the code blocks of tasks 2 to 15 were applied to a throwaway clone of `58e1592a` and run there: 2,404 Python tests (87 new), 1,553 vitest tests (3 new), ruff and ty clean, the same 3 Biome warnings as `main`. The "break it on purpose" steps failed as written. Not run: task 1 and the browser checks.
+**What was run:** the code blocks of tasks 2 to 15 were applied to a throwaway clone of `58e1592a` and run there: 2,404 Python tests (87 new), 1,553 vitest tests (3 new), ruff and ty clean, the same 3 Biome warnings as `main`. The "break it on purpose" steps failed as written. Task 1 ran on 23 Nov 2026: both assumptions hold.
 
 ## Rules for every task
 
@@ -70,7 +70,7 @@ Section 10 of the spec has three assumptions. Two of them can change the sweep, 
 
 **This task starts a real Claude on a private tmux server. Ask the user first. If the user says no, skip to Task 2 and write "not checked" in the PR body.**
 
-- [ ] **Step 1: Make a scratch directory and the private server helper**
+- [x] **Step 1: Make a scratch directory and the private server helper**
 
 ```bash
 CHECK=/private/tmp/claude-501/idle-close-check
@@ -80,7 +80,7 @@ T() { tmux -L idle-close-check -f /dev/null "$@"; }
 CLAUDE='env -u TMUX -u TMUX_PANE claude --model haiku --strict-mcp-config --settings {"disableAllHooks":true}'
 ```
 
-- [ ] **Step 2: Check that a Claude with no prompt writes no transcript**
+- [x] **Step 2: Check that a Claude with no prompt writes no transcript**
 
 ```bash
 ls ~/.claude/projects/*/*.jsonl | sort > "$CHECK/before.txt"
@@ -92,7 +92,7 @@ ls ~/.claude/projects/*/*.jsonl | sort | comm -13 "$CHECK/before.txt" -
 
 Expected: the pane shows Claude's composer, and the last command prints nothing. If the pane shows a trust dialog, stop and ask the user. If a file appears, tell the user: a Claude that you never prompted then has a transcript.
 
-- [ ] **Step 3: Check that `kill-pane` on an idle Claude loses no turn**
+- [x] **Step 3: Check that `kill-pane` on an idle Claude loses no turn**
 
 ```bash
 T send-keys -t t 'Reply with the single word ok.' Enter
@@ -107,7 +107,7 @@ head -n "$(wc -l < "$CHECK/before-kill.jsonl")" "$NEW" | cmp - "$CHECK/before-ki
 
 Expected: the file has at least one assistant line before the kill, and the last line is `prefix intact`. If not, stop and tell the user: the sweep design changes.
 
-- [ ] **Step 4: Remove the scratch files**
+- [x] **Step 4: Remove the scratch files**
 
 ```bash
 T kill-server 2>/dev/null
@@ -116,7 +116,7 @@ rm -r "$CHECK"
 
 The transcript that the check made stays under `~/.claude/projects`. Tell the user its path, so that they can delete it.
 
-- [ ] **Step 5: Write the result in the spec and commit**
+- [x] **Step 5: Write the result in the spec and commit**
 
 Edit section 10 of the spec. For each of the two assumptions, replace the "Check:" sentence with what you saw and the Claude version (`claude --version`).
 
