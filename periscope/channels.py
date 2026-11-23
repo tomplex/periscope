@@ -1016,11 +1016,11 @@ def _do_resume_session_tool(pane: str, arguments: dict):
     except HTTPException as e:
         return _tool_result({"ok": False, "error": str(e.detail)})
 
-    # Stamp the brand-new window unconditionally (mint-fresh, no rebind — same
-    # reasoning as _do_spawn_claude_tool) so the caller gets the durable handle
-    # and its track without a follow-up list_claudes, tagged or not.
+    # A closed pane comes back with its own pid, stamped in the spawn. Any other
+    # window is new: mint one now, so the caller gets the durable handle and its
+    # track without a follow-up list_claudes.
     target = result.get("target") or f"{result.get('session')}:{result.get('index')}"
-    new_pid = stamp_new_window(target)
+    new_pid = result.get("pid") or stamp_new_window(target)
     # Tag the resumed pane into a track (the grouping authority) so it surfaces
     # under that group instead of the default "dev" bucket — the same tagging
     # spawn_claude does. workspace_id is a track id; pane_tracks keys on the

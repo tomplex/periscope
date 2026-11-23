@@ -549,6 +549,24 @@ def test_resume_session_tool_wraps_window_new_resume(mocker):
     assert args[2] == "abc123"
 
 
+def test_resume_session_tool_keeps_the_pid_of_a_closed_pane(mocker):
+    from periscope.channels import _do_resume_session_tool
+
+    mocker.patch(
+        "periscope.routes.sessions._window_new_resume",
+        return_value={"ok": True, "target": "resumes:3", "session": "resumes", "index": 3, "pid": "dddd4444"},
+    )
+    stamp = mocker.patch("periscope.channels.stamp_new_window")
+    move = mocker.patch("periscope.channels.tracks.move_pane")
+    mocker.patch("periscope.activity.get_track", return_value={"id": "t2", "archived_at": None})
+
+    body = _body(_do_resume_session_tool("%5", {"session_id": "abc123", "workspace_id": "t2"}))
+
+    assert body["pid"] == "dddd4444"
+    stamp.assert_not_called()
+    move.assert_called_once_with("dddd4444", "t2")
+
+
 def test_resume_session_tool_maps_http_errors(mocker):
     from fastapi import HTTPException
 
