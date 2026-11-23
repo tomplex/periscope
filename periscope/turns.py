@@ -17,6 +17,8 @@ import json
 import re
 import threading
 import time
+from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
 import periscope.activity as activity
@@ -103,9 +105,9 @@ def jsonl_for_session_prefix(prefix: str):
 # 42s` line and tool results all passed for the reply. The transcript holds it
 # as the newest assistant text, a few KB from the end under Claude's
 # bookkeeping rows (turn_duration, artifact-autoreact-ledger, mode, …).
-_REPLY_CHUNK = 64 * 1024
+_TAIL_CHUNK = 64 * 1024
 # Bounds the read for a turn that ended in a long run of tool calls.
-_REPLY_REACH = 1024 * 1024
+_TAIL_REACH = 1024 * 1024
 # The banner shows the first sentence, clipped at 140; this rides every poll.
 _REPLY_CHARS = 400
 # sid -> (path, size, mtime_ns, reply). A transcript never moves, so the glob
@@ -148,36 +150,61 @@ def _plain(md: str) -> str:
     return " ".join(text.split())[:_REPLY_CHARS]
 
 
+def _events_from_end(path) -> Iterator[dict]:
+    """The events in transcript `path`, newest first, from its last _TAIL_REACH
+    bytes. A row that is torn or not an object is skipped. Raises OSError."""
+    with open(path, "rb") as f:
+        end = f.seek(0, 2)
+        floor = max(0, end - _TAIL_REACH)
+        head = b""  # the end of a row that starts in an earlier chunk
+        while end > floor:
+            start = max(floor, end - _TAIL_CHUNK)
+            f.seek(start)
+            rows = (f.read(end - start) + head).split(b"\n")
+            end = start
+            head = rows.pop(0) if start else b""
+            for row in reversed(rows):
+                try:
+                    ev = json.loads(row)
+                except ValueError:
+                    continue
+                if isinstance(ev, dict):
+                    yield ev
+
+
+def _is_turn_event(ev: dict) -> bool:
+    """A prompt, a reply or a tool call, not a channel push (meta) or a
+    subagent's words (sidechain)."""
+    return ev.get("type") in ("user", "assistant") and not ev.get("isMeta") and not ev.get("isSidechain")
+
+
 def last_reply(path) -> str | None:
     """The newest assistant text in transcript `path`, as plain prose; None when
     a prompt came after it (the new turn has said nothing yet), none sits in the
-    last _REPLY_REACH bytes, or the file can't be read. Meta and sidechain
-    events are skipped: a channel push, a subagent's words."""
-    reach = _REPLY_CHUNK
+    last _TAIL_REACH bytes, or the file can't be read."""
     try:
-        with open(path, "rb") as f:
-            size = f.seek(0, 2)
-            while True:
-                start = max(0, size - reach)
-                f.seek(start)
-                rows = f.read(size - start).split(b"\n")
-                for row in reversed(rows[1:] if start else rows):  # rows[0] starts mid-row
-                    try:
-                        ev = json.loads(row)
-                    except ValueError:
-                        continue
-                    if not isinstance(ev, dict) or ev.get("isMeta") or ev.get("isSidechain"):
-                        continue
-                    text = _message_text(ev.get("message"))
-                    if text.strip() and ev.get("type") == "assistant":
-                        return _plain(text) or None
-                    if text.strip() and ev.get("type") == "user":
-                        return None
-                if not start or reach >= _REPLY_REACH:
-                    return None
-                reach = min(reach * 4, _REPLY_REACH)
+        for ev in filter(_is_turn_event, _events_from_end(path)):
+            text = _message_text(ev.get("message"))
+            if text.strip():
+                return (_plain(text) or None) if ev["type"] == "assistant" else None
     except OSError:
-        return None
+        pass
+    return None
+
+
+def last_turn_at(path) -> float | None:
+    """When the newest prompt, reply or tool call in transcript `path` was
+    written; None when none sits in its last _TAIL_REACH bytes. The file's mtime
+    does not say: an idle Claude keeps writing bookkeeping rows."""
+    try:
+        for ev in filter(_is_turn_event, _events_from_end(path)):
+            try:
+                return datetime.fromisoformat(ev["timestamp"]).timestamp()
+            except (KeyError, TypeError, ValueError):
+                continue
+    except OSError:
+        pass
+    return None
 
 
 def last_reply_for_session(session_id: str | None) -> str | None:
