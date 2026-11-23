@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from history.db import connect
-from history.search import _build_fts_query, search
+from history.search import _build_fts_query, count_unsummarized, recent, search, stats
 
 
 def _seed_session(
@@ -17,10 +17,12 @@ def _seed_session(
     final_asst="done",
     started_at=1000,
     summary_model="claude-haiku-5-5",
+    ended_at=None,
+    indexed_at=0,
 ):
     """Insert a row representing a Haiku-summarized (non-trivial) session.
     Pass summary_model=None for a row that should be filtered by the default
-    `include_trivial=False`."""
+    `include_trivial=False`. `ended_at` defaults to a minute after the start."""
     conn.execute(
         """
         INSERT INTO sessions(
@@ -30,7 +32,7 @@ def _seed_session(
           summary, tags, summary_model, first_user_msg, last_user_msg, final_assistant_msg,
           files_touched, notable_cmds, tool_use_counts,
           indexed_at, mechanical_version, source_mtime, source_size
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '{}', 0, 1, 0, 0)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '{}', ?, 1, 0, 0)
         """,
         (
             session_id,
@@ -38,7 +40,7 @@ def _seed_session(
             project,
             branch,
             started_at,
-            started_at + 60,
+            ended_at or started_at + 60,
             60,
             3,
             3,
@@ -49,6 +51,7 @@ def _seed_session(
             first_user,
             first_user,
             final_asst,
+            indexed_at,
         ),
     )
     conn.execute(
@@ -137,6 +140,49 @@ def test_search_excludes_trivial_by_default(tmp_path):
     results = search("session", db_path=db_path, rerank=False, include_trivial=True)
     assert len(results) == 1
     conn.close()
+
+
+def test_count_unsummarized_counts_the_matches_that_search_hides(seeded_db):
+    """The /history empty state offers to include unsummarized sessions only
+    when one matches: the count bounds by the query and the filters, not the
+    whole index."""
+    conn, db_path = seeded_db
+    _seed_session(conn, "u1", "Fixed a flaky cohort test", "", "/Users/tom/dev/fdy", summary_model=None)
+    _seed_session(conn, "u2", "Fixed the login redirect", "", "/Users/tom/dev/web", summary_model=None)
+    _seed_session(conn, "u3", "Renamed a column", "", "/Users/tom/dev/fdy", summary_model=None)
+    assert count_unsummarized("fixed", db_path=db_path) == 2
+    assert count_unsummarized("fixed", db_path=db_path, project="/Users/tom/dev/fdy") == 1
+    assert count_unsummarized("xyzzyplugh", db_path=db_path) == 0
+    assert count_unsummarized("", db_path=db_path) == 0
+
+
+def test_recent_and_since_go_by_the_last_turn(seeded_db):
+    """A session started long ago and worked on today is recent: the list
+    sorts by the last turn, and `since` bounds the last turn."""
+    conn, db_path = seeded_db
+    _seed_session(
+        conn, "s-long", "Fixed a long-running migration", "", "/Users/tom/dev/web", started_at=500, ended_at=9000
+    )
+    assert [r["session_id"] for r in recent(db_path=db_path)] == ["s-long", "s3", "s1", "s2"]
+    assert [r["session_id"] for r in recent(db_path=db_path, since=4000)] == ["s-long"]
+    assert {r["session_id"] for r in search("fixed", db_path=db_path, since=4000, rerank=False)} == {"s-long"}
+
+
+def test_stats_lists_project_paths_newest_last_turn_first(seeded_db):
+    conn, db_path = seeded_db
+    # First by name and the oldest start, but the newest last turn.
+    _seed_session(conn, "s-a", "Renamed a flag", "", "/Users/tom/dev/aaa", started_at=100, ended_at=9000)
+    st = stats(db_path=db_path)
+    assert st["project_paths"] == ["/Users/tom/dev/aaa", "/Users/tom/dev/fdy", "/Users/tom/dev/web"]
+    assert (st["total"], st["summarized"], st["heuristic"]) == (4, 4, 0)
+
+
+def test_stats_says_when_the_index_last_wrote_a_session(seeded_db, tmp_path):
+    conn, db_path = seeded_db
+    _seed_session(conn, "s-old", "Old", "", "/Users/tom/dev/aaa", indexed_at=7000)
+    _seed_session(conn, "s-new", "New", "", "/Users/tom/dev/aaa", started_at=50, indexed_at=8000)
+    assert stats(db_path=db_path)["last_indexed_at"] == 8000
+    assert stats(db_path=tmp_path / "empty.db")["last_indexed_at"] is None
 
 
 def test_build_fts_query_escapes_quotes():

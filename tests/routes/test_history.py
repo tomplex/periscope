@@ -1,7 +1,16 @@
 """Tests for /api/history/* and /history page."""
 
+import pytest
 
-def test_history_search_with_query(client, mocker):
+
+@pytest.fixture
+def no_transcripts(mocker):
+    """Claude keeps no transcript for any session, and no pane ran one."""
+    mocker.patch("periscope.routes.history.jsonl_by_session", return_value={})
+    mocker.patch("periscope.store.all_windows", return_value={})
+
+
+def test_history_search_with_query(client, mocker, no_transcripts):
     mocker.patch(
         "history.search",
         return_value=[{"session_id": "abc", "title": "x"}],
@@ -11,8 +20,124 @@ def test_history_search_with_query(client, mocker):
     body = r.json()
     assert body["query"] == "hello"
     assert body["results"][0]["session_id"] == "abc"
-    # is_resuming was annotated from the in-process _resuming dict.
-    assert body["results"][0]["is_resuming"] is False
+    # The same answer the resume route gives, so the page offers no dead resume.
+    assert body["results"][0]["resume_refusal"] == {"status": 404, "detail": "Claude has no transcript for session abc"}
+
+
+def test_history_search_rows_resume_when_claude_has_a_quiet_transcript(client, mocker, tmp_path):
+    import os
+    import time
+
+    jsonl = tmp_path / "abc.jsonl"
+    jsonl.write_text("{}\n")
+    os.utime(jsonl, (time.time() - 600, time.time() - 600))
+    mocker.patch("periscope.routes.history.jsonl_by_session", return_value={"abc": jsonl})
+    mocker.patch("periscope.store.all_windows", return_value={})
+    mocker.patch("history.recent", return_value=[{"session_id": "abc", "branch": "main"}])
+    r = client.get("/api/history/search?q=")
+    assert r.json()["results"][0]["resume_refusal"] is None
+
+
+def test_history_search_rows_carry_the_pane_that_last_ran_the_session(client, mocker, no_transcripts):
+    """Name, PR and ticket come from the state.json entry whose last sighting
+    carried the session id; of two entries, the newer sighting wins."""
+    mocker.patch(
+        "periscope.store.all_windows",
+        return_value={
+            # The newer sighting comes first, so a last-entry-wins lookup fails.
+            "p-new": {
+                "last_seen": {"sid": "abc", "ts": 200, "name": "history-p1-fixes"},
+                "linked_pr": 66,
+                "linked_linear": "THI-470",
+            },
+            "p-old": {"last_seen": {"sid": "abc", "ts": 100, "name": "old-name"}, "linked_pr": 7},
+            "p-other": {"last_seen": {"sid": "zzz", "ts": 300, "name": "other"}},
+        },
+    )
+    mocker.patch(
+        "history.recent",
+        return_value=[{"session_id": "abc", "branch": "main"}, {"session_id": "def", "branch": "thi-402-rank"}],
+    )
+    mocker.patch("periscope.store.linear_team_keys", return_value=frozenset({"THI"}))
+    rows = client.get("/api/history/search?q=").json()["results"]
+    assert rows[0]["pane_name"] == "history-p1-fixes"
+    assert rows[0]["linked_pr"] == 66
+    assert rows[0]["linked_linear"] == "THI-470"
+    # No pane ran it: the ticket comes from the branch, as on the dashboard.
+    assert rows[1]["pane_name"] is None
+    assert rows[1]["linked_pr"] is None
+    assert rows[1]["linear_ticket"] == "THI-402"
+
+
+def test_history_search_lists_the_transcripts_once_for_all_rows(client, mocker):
+    listing = mocker.patch("periscope.routes.history.jsonl_by_session", return_value={})
+    mocker.patch("periscope.store.all_windows", return_value={})
+    mocker.patch("history.recent", return_value=[{"session_id": "abc"}, {"session_id": "def"}])
+    client.get("/api/history/search?q=")
+    assert listing.call_count == 1
+
+
+@pytest.mark.parametrize("name", ["claude.exe", "claude", "2.1.220"])
+def test_history_search_drops_a_placeholder_pane_name(client, mocker, no_transcripts, name):
+    """tmux's automatic name says nothing about the session; the page titles the row with the summary."""
+    mocker.patch(
+        "periscope.store.all_windows", return_value={"p": {"last_seen": {"sid": "abc", "ts": 1, "name": name}}}
+    )
+    mocker.patch("history.recent", return_value=[{"session_id": "abc", "branch": "main"}])
+    assert client.get("/api/history/search?q=").json()["results"][0]["pane_name"] is None
+
+
+def test_history_search_says_rerank_was_used_only_when_a_row_was_scored(client, mocker, no_transcripts):
+    """A failed Haiku call (no key, 401) keeps the FTS order; the page must not
+    head that order "Reranked by relevance"."""
+    search = mocker.patch("history.search", return_value=[{"session_id": "a"}, {"session_id": "b"}])
+    assert client.get("/api/history/search?q=x&rerank=true").json()["rerank_used"] is False
+    search.return_value = [{"session_id": "a", "rerank_score": 0.9}, {"session_id": "b", "rerank_score": 0.1}]
+    assert client.get("/api/history/search?q=x&rerank=true").json()["rerank_used"] is True
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("q=x&limit=50", 50),
+        # Haiku reranks 20 candidates, so 20 rows is a full page.
+        ("q=x&limit=50&rerank=true", 20),
+        # An empty query lists recent sessions, which nothing reranks.
+        ("q=&limit=50&rerank=true", 50),
+        ("q=x&limit=500", 200),
+    ],
+)
+def test_history_search_answers_with_the_limit_that_applied(client, mocker, no_transcripts, query, expected):
+    """The page writes "first N" only when the list is full at this limit."""
+    mocker.patch("history.search", return_value=[])
+    mocker.patch("history.recent", return_value=[])
+    assert client.get(f"/api/history/search?{query}").json()["limit"] == expected
+
+
+def test_history_search_with_no_rows_counts_the_unsummarized_matches(client, mocker, no_transcripts):
+    """The empty state names the unsummarized sessions that match the query,
+    not every unsummarized session in the index."""
+    mocker.patch("history.search", return_value=[])
+    count = mocker.patch("history.count_unsummarized", return_value=3)
+    body = client.get("/api/history/search?q=cohort&project=/p").json()
+    assert body["unsummarized_hidden"] == 3
+    count.assert_called_once_with("cohort", project="/p", branch=None, since=None, until=None)
+
+
+@pytest.mark.parametrize(
+    "query, rows",
+    [
+        ("q=cohort", [{"session_id": "abc"}]),  # rows: nothing to explain
+        ("q=cohort&include_trivial=true", []),  # nothing hidden
+        ("q=", []),  # the empty query: the page reads stats
+    ],
+)
+def test_history_search_counts_unsummarized_only_for_a_query_with_no_rows(client, mocker, no_transcripts, query, rows):
+    mocker.patch("history.search", return_value=rows)
+    mocker.patch("history.recent", return_value=rows)
+    count = mocker.patch("history.count_unsummarized")
+    assert client.get(f"/api/history/search?{query}").json()["unsummarized_hidden"] is None
+    count.assert_not_called()
 
 
 def test_history_search_empty_query_uses_recent(client, mocker):
@@ -30,9 +155,7 @@ def test_history_session_found(client, mocker):
     )
     r = client.get("/api/history/session/abc")
     assert r.status_code == 200
-    body = r.json()
-    assert body["session_id"] == "abc"
-    assert body["is_resuming"] is False
+    assert r.json()["session_id"] == "abc"
 
 
 def test_history_session_missing_returns_404(client, mocker):

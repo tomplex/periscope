@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { linearTicket } from "../linearTicket.js";
+import { linearTicket as historyLinearTicket } from "../../../util.js";
+import { linearTicket as dashboardLinearTicket } from "../linearTicket.js";
 
-describe("linearTicket", () => {
+// static/util.js keeps a copy for the /history page: both copies give one answer.
+describe.each([
+  ["dashboard", dashboardLinearTicket],
+  ["history page", historyLinearTicket],
+])("linearTicket on the %s", (_page, linearTicket) => {
   it("is the ticket Claude linked, with its title and status", () => {
     const t = linearTicket({ linked_linear: "FAR-456", linked_linear_title: "Fix the thing", linked_linear_status: "In Progress" });
     expect(t).toEqual({

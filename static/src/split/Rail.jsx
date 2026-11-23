@@ -267,7 +267,7 @@ export function Rail() {
       prefs.setLastSelected({ kind: "pane", pid: data.pid });
       return;
     }
-    // Prefix pinned by routes/sessions._window_new_resume's mtime guard — change both or neither.
+    // Prefix pinned by turns.resume_refusal — change both or neither.
     if (status === 409 && !force && reason?.startsWith("session looks live")) {
       const ok = await confirmDialog(
         `${error}\n\nMove anyway? The original pane stays open; if the session really is mid-turn, the two copies will interleave writes to one transcript.`,

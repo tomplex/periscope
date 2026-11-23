@@ -83,11 +83,10 @@ def test_window_new_rejects_invalid_agent(client):
 
 
 def test_window_new_resume_unknown_session_id(client, mocker):
-    # Patch history.search.get_session to return None.
-    mocker.patch("history.search.get_session", return_value=None)
+    _patch(mocker, "jsonl_for_session", return_value=None)
     r = client.post("/api/window/new?session=resumes&mode=resume&resume_id=nope")
     assert r.status_code == 404
-    assert "unknown session_id" in r.json()["detail"]
+    assert r.json()["detail"] == "Claude has no transcript for session nope"
 
 
 def test_window_new_resume_routes_the_account_through_the_chooser(client, mocker):
@@ -115,7 +114,7 @@ def test_window_new_resume_routes_the_account_through_the_chooser(client, mocker
     assert resume.call_args.kwargs.get("account") == "default"  # explicit passes through
 
 
-def test_window_new_resume_honours_caller_exec_cmd(mocker):
+def test_window_new_resume_honours_caller_exec_cmd(mocker, tmp_path):
     """The create-session branch used to rebuild the command from scratch and
     throw the caller's away — silently dropping whatever flags the caller
     composed, on exactly the branch that runs after a tmux restart. (The
@@ -124,8 +123,7 @@ def test_window_new_resume_honours_caller_exec_cmd(mocker):
 
     sent: list[str] = []
 
-    # get_session is a function-local import — patch it at its source module.
-    mocker.patch("history.search.get_session", return_value={"project_path": "/tmp", "jsonl_path": ""})
+    _patch(mocker, "jsonl_for_session", return_value=_transcript(tmp_path, age_s=300))
     _patch(mocker, "_run", return_value=(1, ""))  # nonzero code → no session → create branch
     _patch(mocker, "_tmux_mutate", return_value=(True, "0"))
     _patch(mocker, "_send_and_stamp", side_effect=lambda target, cmd: sent.append(cmd))
@@ -580,17 +578,31 @@ def test_profile_only_spawn_still_scrubs_session_env(client, mocker, fresh_activ
 # --- resume path: account binding + move-account ------------------------------
 
 
-def _patch_resume_path(mocker, calls, has_session=0):
-    """Patch the resume path down to captured tmux argv. Same both-module
-    `_tmux_mutate` patch as `_patch_account_path` — `tmux.scrub_session_env`
-    calls its OWN module-level binding, so patching one alone lets the scrub
-    reach the real tmux server."""
+def _transcript(tmp_path, *, age_s):
+    """Claude's transcript for session "abc", started in `tmp_path` and written
+    `age_s` seconds ago (the liveness check reads mtime)."""
+    import json
+    import os
+    import time
+
+    jsonl = tmp_path / "abc.jsonl"
+    jsonl.write_text(json.dumps({"type": "summary"}) + "\n" + json.dumps({"type": "user", "cwd": str(tmp_path)}) + "\n")
+    os.utime(jsonl, (time.time() - age_s, time.time() - age_s))
+    return jsonl
+
+
+def _patch_resume_path(mocker, calls, tmp_path, has_session=0, age_s=300):
+    """Patch the resume path down to captured tmux argv, over a transcript
+    written `age_s` seconds ago. Same both-module `_tmux_mutate` patch as
+    `_patch_account_path` — `tmux.scrub_session_env` calls its OWN
+    module-level binding, so patching one alone lets the scrub reach the real
+    tmux server."""
 
     def fake_mutate(*args):
         calls.append(args)
         return True, "3"
 
-    mocker.patch("history.search.get_session", return_value={"project_path": "/tmp", "jsonl_path": ""})
+    _patch(mocker, "jsonl_for_session", return_value=_transcript(tmp_path, age_s=age_s))
     _patch(mocker, "_run", return_value=(has_session, ""))
     _patch(mocker, "_tmux_mutate", side_effect=fake_mutate)
     mocker.patch("periscope.tmux._tmux_mutate", side_effect=fake_mutate)
@@ -600,14 +612,14 @@ def _patch_resume_path(mocker, calls, has_session=0):
     mocker.patch.dict(sessions._resuming, clear=True)
 
 
-def test_window_new_resume_passes_account_env_to_tmux(mocker):
+def test_window_new_resume_passes_account_env_to_tmux(mocker, tmp_path):
     """A resumed pane must carry CLAUDE_CONFIG_DIR in its process env, not just
     on the one command line — the user re-running `claude` by hand in that pane
     has to stay on the same subscription."""
     from periscope.routes import sessions
 
     calls: list[tuple] = []
-    _patch_resume_path(mocker, calls, has_session=0)  # session exists → new-window
+    _patch_resume_path(mocker, calls, tmp_path, has_session=0)  # session exists → new-window
 
     sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume", account="b")
 
@@ -618,11 +630,11 @@ def test_window_new_resume_passes_account_env_to_tmux(mocker):
     assert any(a.startswith("CLAUDE_CONFIG_DIR=") and a.endswith("/.claude-b") for a in flat)
 
 
-def test_window_new_resume_default_account_sends_no_env(mocker):
+def test_window_new_resume_default_account_sends_no_env(mocker, tmp_path):
     from periscope.routes import sessions
 
     calls: list[tuple] = []
-    _patch_resume_path(mocker, calls, has_session=0)
+    _patch_resume_path(mocker, calls, tmp_path, has_session=0)
 
     sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
 
@@ -630,13 +642,13 @@ def test_window_new_resume_default_account_sends_no_env(mocker):
     assert created and "-e" not in list(created[0])
 
 
-def test_window_new_resume_scrubs_new_session_env(mocker):
+def test_window_new_resume_scrubs_new_session_env(mocker, tmp_path):
     """The sentinel session is created on first use with `-e`, which sets the
     SESSION env — every later resume into it would inherit this account."""
     from periscope.routes import sessions
 
     calls: list[tuple] = []
-    _patch_resume_path(mocker, calls, has_session=1)  # no session yet → new-session
+    _patch_resume_path(mocker, calls, tmp_path, has_session=1)  # no session yet → new-session
 
     sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume", account="b")
 
@@ -647,23 +659,15 @@ def test_window_new_resume_scrubs_new_session_env(mocker):
     )
 
 
-def test_window_new_resume_falls_back_to_jsonl_on_disk(mocker, tmp_path):
-    """The history index only gains a session at SessionEnd, so a LIVE session
-    — exactly what move-account resumes — has no row in it. Measured on the dev
-    host: 9 of 12 panes with a recorded session were missing from history.db."""
-    import json
-    import os
-    import time
-
+def test_window_new_resume_starts_in_the_transcripts_first_cwd(mocker, tmp_path):
+    """The cwd comes from Claude's transcript, never the history index: a LIVE
+    session — exactly what move-account resumes — has no history row until
+    SessionEnd (9 of 12 panes on the dev host, measured)."""
     from periscope.routes import sessions
 
-    jsonl = tmp_path / "abc.jsonl"
-    jsonl.write_text(json.dumps({"type": "summary"}) + "\n" + json.dumps({"type": "user", "cwd": str(tmp_path)}) + "\n")
-    os.utime(jsonl, (time.time() - 300, time.time() - 300))  # past the liveness guard
     calls: list[tuple] = []
-    _patch_resume_path(mocker, calls)
-    mocker.patch("history.search.get_session", return_value=None)
-    _patch(mocker, "jsonl_for_session", return_value=jsonl)
+    _patch_resume_path(mocker, calls, tmp_path)
+    get_session = mocker.patch("history.search.get_session")
 
     result = sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
 
@@ -671,31 +675,29 @@ def test_window_new_resume_falls_back_to_jsonl_on_disk(mocker, tmp_path):
     created = [c for c in calls if c and c[0] == "new-window"]
     cwd_idx = list(created[0]).index("-c") + 1
     assert created[0][cwd_idx] == str(tmp_path), "resume must start in the session's OWN dir"
+    assert not get_session.called
 
 
-def test_window_new_resume_unknown_everywhere_still_404s(mocker):
+def test_window_new_resume_refuses_an_indexed_session_whose_transcript_claude_deleted(mocker, tmp_path):
+    """Claude deletes a transcript after `cleanupPeriodDays`; history keeps its
+    archive copy and the row. Resume used to find the row and spawn a Claude
+    with nothing to resume (39 of 252 rows on 2026-11-19)."""
     import pytest
     from fastapi import HTTPException
 
     from periscope.routes import sessions
 
-    mocker.patch("history.search.get_session", return_value=None)
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls, tmp_path)
+    mocker.patch(
+        "history.search.get_session", return_value={"project_path": "/tmp", "jsonl_path": "/archive/abc.jsonl"}
+    )
     _patch(mocker, "jsonl_for_session", return_value=None)
     with pytest.raises(HTTPException) as e:
         sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
     assert e.value.status_code == 404
-
-
-def _live_jsonl(tmp_path, *, age_s):
-    """A transcript on disk written `age_s` seconds ago (the liveness guard reads mtime)."""
-    import json
-    import os
-    import time
-
-    jsonl = tmp_path / "abc.jsonl"
-    jsonl.write_text(json.dumps({"type": "user", "cwd": str(tmp_path)}) + "\n")
-    os.utime(jsonl, (time.time() - age_s, time.time() - age_s))
-    return jsonl
+    assert e.value.detail == "Claude has no transcript for session abc"
+    assert not [c for c in calls if c and c[0] in ("new-window", "new-session")]
 
 
 def test_window_new_resume_refuses_a_recently_written_transcript_and_says_how_recent(mocker, tmp_path):
@@ -707,9 +709,7 @@ def test_window_new_resume_refuses_a_recently_written_transcript_and_says_how_re
     from periscope.routes import sessions
 
     calls: list[tuple] = []
-    _patch_resume_path(mocker, calls)
-    mocker.patch("history.search.get_session", return_value=None)
-    _patch(mocker, "jsonl_for_session", return_value=_live_jsonl(tmp_path, age_s=12))
+    _patch_resume_path(mocker, calls, tmp_path, age_s=12)
     with pytest.raises(HTTPException) as e:
         sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
     assert e.value.status_code == 409
@@ -731,9 +731,7 @@ def test_window_new_resume_force_skips_only_the_mtime_guard(mocker, tmp_path):
     from periscope.routes import sessions
 
     calls: list[tuple] = []
-    _patch_resume_path(mocker, calls)
-    mocker.patch("history.search.get_session", return_value=None)
-    _patch(mocker, "jsonl_for_session", return_value=_live_jsonl(tmp_path, age_s=12))
+    _patch_resume_path(mocker, calls, tmp_path, age_s=12)
 
     result = sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume", force=True)
     assert result["ok"] is True

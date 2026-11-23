@@ -6,8 +6,8 @@ POST /api/window/move
 POST /api/pane/move-account
 DELETE /api/window
 
-window/new's resume mode looks up the original project_path via the
-history index, then spawns `claude --resume <id>` in that directory.
+window/new's resume mode reads the start directory from Claude's transcript,
+then spawns `claude --resume <id>` in that directory.
 The `resumes` sentinel session is auto-created on first use.
 
 /api/pane/move-account lives here rather than in routes/pane.py despite the
@@ -23,6 +23,7 @@ import os
 import shlex
 import sqlite3
 import time
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -53,7 +54,7 @@ from periscope.panes import (
 )
 from periscope.pids import stamp_new_window
 from periscope.tmux import _run, _tmux_mutate, tmux
-from periscope.turns import jsonl_for_session, session_id_for_pane
+from periscope.turns import jsonl_for_session, resume_refusal, session_id_for_pane
 from periscope.worktree_spawn import spawn_worktree
 
 router = APIRouter()
@@ -111,29 +112,14 @@ def _send_and_stamp(target: str, cmd: str) -> None:
     note_action(target)
 
 
-def _session_from_disk(resume_id: str) -> dict | None:
-    """`{"project_path", "jsonl_path"}` read straight off ~/.claude/projects,
-    or None when no transcript with that id exists.
-
-    The history index only gains a session at SessionEnd, so a session that is
-    still LIVE — precisely what "move this pane to the other account" resumes —
-    is normally absent from it (measured on the dev host: 9 of 12 panes with a
-    recorded session had no history row). The JSONL on disk is the source of
-    truth and the index is derived from it, so an index miss falls through to
-    the file rather than 404ing on work that is demonstrably right there.
-
-    project_path is the first `cwd` in the transcript — the same rule
-    history.extract._decode_project_path uses. It has to be the START cwd, not
-    wherever the pane has since cd'd to: `claude --resume` resolves the id
-    against the cwd-encoded project dir, and that encoding is fixed at session
-    start.
-    """
-    path = jsonl_for_session(resume_id)
-    if path is None:
-        return None
-    cwd = ""
+def _start_cwd(transcript: Path) -> str:
+    """The first `cwd` in Claude's transcript, or "" when it has none — the
+    same rule history.extract._decode_project_path uses. It has to be the START
+    cwd, not wherever the pane has since cd'd to: `claude --resume` resolves
+    the id against the cwd-encoded project dir, and that encoding is fixed at
+    session start."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
+        with open(transcript, encoding="utf-8", errors="replace") as fh:
             # Bounded: cwd rides on the first real event, and an unbounded scan
             # of a transcript with no cwd at all would read a multi-MB file.
             for line in itertools.islice(fh, 50):
@@ -142,20 +128,24 @@ def _session_from_disk(resume_id: str) -> dict | None:
                 except ValueError:
                     continue
                 if isinstance(rec, dict) and rec.get("cwd"):
-                    cwd = str(rec["cwd"])
-                    break
+                    return str(rec["cwd"])
     except OSError:
-        return None
-    return {"project_path": cwd, "jsonl_path": str(path)}
+        pass
+    return ""
 
 
 def _window_new_resume(
     session: str, exec_cmd: str, resume_id: str | None, mode: str, account: str | None = None, force: bool = False
 ) -> dict:
-    """`mode=resume`: look up the original session's project dir via the
-    history index and run `claude --resume <id>` there. The sentinel
-    `session` is auto-created on first use. Returns the standard
-    window-spawn result dict; raises HTTPException on any guard failure.
+    """`mode=resume`: run `claude --resume <id>` in the directory the session
+    started in. The sentinel `session` is auto-created on first use. Returns
+    the standard window-spawn result dict; raises HTTPException with
+    `turns.resume_refusal`'s answer when it refuses.
+
+    Claude's transcript is the only source, never the history index: Claude
+    resumes from its own file, so an indexed session whose transcript Claude
+    deleted cannot resume, and a LIVE session (what move-account resumes) has
+    no history row until SessionEnd.
 
     `account` binds the pane to a Claude subscription via `-e
     CLAUDE_CONFIG_DIR=…` on the tmux window (see `tmux.env_args`) — process
@@ -170,29 +160,12 @@ def _window_new_resume(
     """
     if not resume_id:
         raise HTTPException(400, "resume_id required for mode=resume")
-    from history.search import get_session
-
     config_dir = store.account_config_dir(account)
-    resume_sess = get_session(resume_id) or _session_from_disk(resume_id)
-    if resume_sess is None:
-        raise HTTPException(404, f"unknown session_id: {resume_id}")
-    # Liveness guard: refuse if the jsonl was written to in the last 60s
-    # (the session may be currently active in another window/process, and
-    # two concurrent appenders would interleave into the same JSONL). The
-    # detail's "session looks live" prefix is what Rail.movePaneAccount
-    # matches to offer "move anyway" — change both or neither.
-    if resume_sess["jsonl_path"] and os.path.isfile(resume_sess["jsonl_path"]):
-        mtime_age = time.time() - os.path.getmtime(resume_sess["jsonl_path"])
-        if not force and mtime_age < 60:
-            raise HTTPException(
-                409, f"session looks live (written {int(mtime_age)}s ago); wait a minute or pick another"
-            )
-    # Already resumed elsewhere in this periscope process? Deliberately NOT
-    # behind `force`.
-    if resume_id in _resuming:
-        existing = _resuming[resume_id]
-        raise HTTPException(409, f"already resumed in {existing['target']}")
-    cwd = resume_sess["project_path"] or os.path.expanduser("~")
+    transcript = jsonl_for_session(resume_id)
+    if refusal := resume_refusal(resume_id, transcript, force=force):
+        raise HTTPException(*refusal)
+    assert transcript is not None  # resume_refusal refuses a missing transcript
+    cwd = _start_cwd(transcript)
     if not os.path.isdir(cwd):
         cwd = os.path.expanduser("~")
 

@@ -932,6 +932,8 @@ def _do_search_history_tool(pane: str, arguments: dict):
             "project_path": r["project_path"],
             "branch": r["branch"],
             "started_at": r["started_at"],
+            # `since` bounds the last turn, so show it.
+            "ended_at": r["ended_at"],
             "duration_s": r["duration_s"],
             "summary": r["summary"],
             "tags": r["tags"],
@@ -1852,7 +1854,7 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
                 },
                 "since": {
                     "type": "integer",
-                    "description": "Unix timestamp lower bound on session start.",
+                    "description": "Unix timestamp lower bound on the session's last turn.",
                 },
                 "limit": {"type": "integer", "default": 10},
             },
@@ -1894,8 +1896,9 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "appears on the dashboard alongside this one; it does NOT "
             "replace this session. Use when past work should be continued, "
             "not just read — for reference, get_history_session is enough. "
-            "Refuses if the session looks live (transcript written within "
-            "the last minute) or is already resumed in another window."
+            "Refuses if Claude no longer keeps the session's transcript, if "
+            "the session looks live (transcript written within the last "
+            "minute), or if it is already resumed in another window."
         ),
         "inputSchema": {
             "type": "object",

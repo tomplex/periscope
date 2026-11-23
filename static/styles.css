@@ -49,6 +49,7 @@
   --accent: oklch(0.74 0.13 232);
   --effort: oklch(0.72 0.12 330);    /* track / effort accent — pink-magenta */
   --worktree: oklch(0.72 0.13 295);  /* branch / worktree accent — violet (⎇) */
+  --linear: oklch(0.7 0.13 280);     /* Linear ticket refs — Ticket Purple */
 
   /* The unset defaults; Settings → Fonts sets both on :root (main.jsx). */
   --mono: 'IBM Plex Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
@@ -2485,7 +2486,7 @@ body.col-resizing iframe { pointer-events: none; }
 .detail-pane-header .header-pr:hover, .detail-pane-header .header-linear:hover {
   text-decoration: underline;
 }
-.detail-pane-header .header-linear { color: oklch(0.7 0.13 280); }
+.detail-pane-header .header-linear { color: var(--linear); }
 .detail-pane-header .header-ci { font-family: var(--mono); }
 .detail-pane-header .header-ci.ci-ok { color: var(--s-success); }
 .detail-pane-header .header-ci.ci-bad { color: var(--s-danger); }
@@ -2855,7 +2856,7 @@ body.col-resizing iframe { pointer-events: none; }
 .pane-pill-pr.is-merged, .header-pr.is-merged, .rq-pr-link.is-merged { color: var(--worktree); }
 .pane-pill-pr.is-closed, .header-pr.is-closed, .rq-pr-link.is-closed { color: var(--fg-3); text-decoration: line-through; }
 .header-pr-state { opacity: 0.7; font-size: 0.9em; }
-.pane-pill-linear, .rq-linear { color: oklch(0.7 0.13 280); }
+.pane-pill-linear, .rq-linear { color: var(--linear); }
 /* Which subscription a pane bills; absent on the default account. Teal — clear
    of Linear's purple (280) and the repo-icon blue (232). */
 .pane-pill-acct { color: oklch(0.75 0.11 190); cursor: help; }

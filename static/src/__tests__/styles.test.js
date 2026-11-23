@@ -28,3 +28,16 @@ describe("styles.css", () => {
     expect(keyframeNames("/* @keyframes spin { } */ @keyframes spin { }")).toEqual(["spin"]);
   });
 });
+
+describe("history-styles.css", () => {
+  // A var() with no definition is invalid at computed-value time, so the
+  // property inherits instead: /history's tickets once lost Ticket Purple.
+  it("uses only custom properties that a stylesheet on /history defines", () => {
+    const read = (f) => readFileSync(new URL(`../../${f}`, import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const [shared, history] = ["styles.css", "history-styles.css"].map(read);
+    const defined = new Set([...`${shared}${history}`.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+    const used = [...history.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]);
+    expect(used.length).toBeGreaterThan(0);
+    expect(used.filter((v) => !defined.has(v))).toEqual([]);
+  });
+});
