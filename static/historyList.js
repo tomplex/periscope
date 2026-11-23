@@ -8,6 +8,13 @@ export const SINCE_LABELS = { today: "today", week: "this week", month: "this mo
 
 export const baseName = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "";
 
+// When idle close closed the session, in local time: "closed Thu 04:00".
+export function closedLabel(epochSec) {
+  const d = new Date(epochSec * 1000);
+  const two = (n) => String(n).padStart(2, "0");
+  return `closed ${d.toLocaleDateString("en-US", { weekday: "short" })} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
 // The filters that hide sessions, as words. Rerank sorts; it hides nothing.
 export function activeFilterLabels(filter) {
   const out = [];

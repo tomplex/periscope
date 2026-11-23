@@ -1,6 +1,6 @@
 // The /history list's head line and the state it shows with no row.
 import { describe, expect, it } from "vitest";
-import { emptyList, listHead } from "../../historyList.js";
+import { closedLabel, emptyList, listHead } from "../../historyList.js";
 
 const NO_FILTER = { project: "", since: "all", includeTrivial: false, rerank: false };
 const rows = (n) => Array.from({ length: n }, (_, i) => ({ session_id: `s${i}` }));
@@ -87,5 +87,12 @@ describe("emptyList", () => {
   it("tells an empty index apart, and a failed search first of all", () => {
     expect(emptyList(page({ answered: {}, stats: { total: 0, heuristic: 0 } }))).toEqual({ kind: "no-index" });
     expect(emptyList(page({ searchError: "periscope did not answer." }))).toEqual({ kind: "error" });
+  });
+});
+
+describe("closedLabel", () => {
+  it("says the weekday and the local time, with two digits each", () => {
+    const at = new Date(2026, 10, 19, 4, 0).getTime() / 1000;
+    expect(closedLabel(at)).toBe("closed Thu 04:00");
   });
 });

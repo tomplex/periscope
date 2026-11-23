@@ -5,7 +5,7 @@
 // the transcript keep their scroll. Events delegate from the root; one keydown
 // handler serves the page.
 
-import { SINCE_LABELS, activeFilterLabels, baseName, emptyList, filtersHideSessions, listHead } from "./historyList.js";
+import { SINCE_LABELS, activeFilterLabels, baseName, closedLabel, emptyList, filtersHideSessions, listHead } from "./historyList.js";
 import { resumeAnswer, resumeOffer } from "./resume.js";
 import { escapeHtml, linearTicket, relTime } from "./util.js";
 
@@ -229,6 +229,7 @@ function refsHtml(r) {
 function marksOf(r) {
   const out = [];
   if (r.resume_refusal?.status === 404) out.push("no transcript");
+  if (r.closed_at) out.push(closedLabel(r.closed_at));
   if (r.was_interrupted) out.push("interrupted");
   if (r.trivial) out.push("unsummarized");
   return out;
