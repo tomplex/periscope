@@ -207,6 +207,31 @@ def sweep(views: list[dict], weekdays: int) -> None:
             log.exception("idle close: index_one failed for %s", transcript)
 
 
+def preview(views: list[dict], weekdays: int) -> list[dict]:
+    """One row for each Claude pane that the next sweep decides about."""
+    at = next_sweep(_now())
+    pinned = _pinned()
+    rows = []
+    for view in views:
+        pane = pane_from_view(view)
+        if pane is None or pane["idle_since"] is None:
+            continue
+        code = verdict(pane, at, weekdays, pinned)
+        if code is None:
+            continue
+        since = datetime.fromtimestamp(pane["idle_since"])
+        rows.append(
+            {
+                "name": pane["name"],
+                "idle_since": pane["idle_since"],
+                "weekday_hours": weekday_hours(since, at),
+                "mem_mb": pane["mem_mb"],
+                "verdict": code,
+            }
+        )
+    return rows
+
+
 async def _tick() -> None:
     now, settings = _now(), store.get_settings()
     if not due(now, settings, store.get_idle_close_log()):

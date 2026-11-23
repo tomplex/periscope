@@ -1683,7 +1683,8 @@ body.modal-open { overflow: hidden; }
 .new-project-modal-actions button,
 .review-pr-modal-actions button,
 .cleanup-modal-actions button,
-.settings-modal-actions button {
+.settings-modal-actions button,
+.settings-idle-close button {
   padding: 0.5em 1em;
   border: 1px solid color-mix(in oklch, var(--fg-0) 20%, transparent);
   border-radius: 0.4em;
@@ -2008,6 +2009,13 @@ body.modal-open { overflow: hidden; }
   color: var(--fg-0);
   font: inherit;
 }
+.settings-idle-close { margin-bottom: 0.75em; }
+.settings-idle-close-row { display: flex; align-items: baseline; gap: 0.5em; font-size: 0.9em; }
+/* ID-qualified to outrank #settings-form label / input, which are full-width blocks. */
+#settings-form .settings-idle-close label { display: inline; margin: 0; font-size: inherit; }
+#settings-form .settings-idle-close input { display: inline-block; width: 5em; margin: 0; }
+.settings-idle-close button { padding: 0.4em 0.75em; font-size: inherit; }
+.settings-idle-close button:disabled { opacity: 0.5; cursor: default; }
 #settings-form fieldset {
   border: 1px solid color-mix(in oklch, var(--fg-0) 15%, transparent);
   border-radius: 0.4em;

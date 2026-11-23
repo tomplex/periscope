@@ -43,6 +43,7 @@ from periscope.routes import (
     ws,
 )
 from periscope.routes import cleanup as cleanup_routes
+from periscope.routes import idle_close as idle_close_routes
 from periscope.routes import open as open_route
 from periscope.routes import projects as projects_routes
 from periscope.routes import reviews as reviews_route
@@ -228,6 +229,7 @@ for r in (
     fs,
     healthz,
     history,
+    idle_close_routes,
     linear,
     open_route,
     pane,
