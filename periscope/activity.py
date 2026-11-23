@@ -21,6 +21,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict, cast
 
 from periscope import config, session_binding_db, tmux_persist
 from periscope.git_pr import shared_activity_for
@@ -74,6 +75,15 @@ CREATE TABLE IF NOT EXISTS pane_tracks (
                                    -- leftovers, migrated lazily by resolve
   track_id   TEXT NOT NULL,
   updated_at INTEGER NOT NULL
+);
+-- One row for each pane that idle close closed (periscope.idle_close).
+CREATE TABLE IF NOT EXISTS closed_panes (
+  session_id   TEXT PRIMARY KEY NOT NULL,  -- Claude session id
+  pid          TEXT NOT NULL,              -- @periscope_id of the closed pane
+  mem_mb       INTEGER,                    -- footprint at close, NULL if unknown
+  profile      TEXT,                       -- wrapper profile, NULL for the default
+  idle_since   INTEGER NOT NULL,
+  closed_at    INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS usage_samples (
   at        INTEGER NOT NULL,
@@ -502,10 +512,12 @@ def prune_pane_tracks(alive_pids: set[str]) -> int:
     with _LOCK:
         c = _conn()
         existing = [r[0] for r in c.execute("SELECT pid FROM pane_tracks")]
+        # A closed pane's pid is dead until Resume stamps it again.
+        closed = {r[0] for r in c.execute("SELECT pid FROM closed_panes")}
         # %N rows predate the pid re-key and are the sweep's business — judged
         # against a pid set they would ALWAYS look dead and lose their tag
         # before resolve's lazy migration could carry it over.
-        dead = [p for p in existing if not p.startswith("%") and p not in alive_pids]
+        dead = [p for p in existing if not p.startswith("%") and p not in alive_pids and p not in closed]
         c.executemany("DELETE FROM pane_tracks WHERE pid=?", [(p,) for p in dead])
         c.commit()
         return len(dead)
@@ -526,6 +538,55 @@ def sweep_legacy_pane_track_rows(live_pane_ids: set[str]) -> int:
         c.executemany("DELETE FROM pane_tracks WHERE pid=?", [(p,) for p in rows])
         c.commit()
         return len(rows)
+
+
+# --- closed_panes: the panes that idle close closed ---
+class ClosedPane(TypedDict):
+    session_id: str
+    pid: str
+    mem_mb: int | None
+    profile: str | None
+    idle_since: int
+    closed_at: int
+
+
+_CLOSED_COLS = tuple(ClosedPane.__annotations__)
+_CLOSED_SELECT = f"SELECT {','.join(_CLOSED_COLS)} FROM closed_panes"
+
+
+def _closed_row(row: tuple) -> ClosedPane:
+    return cast(ClosedPane, dict(zip(_CLOSED_COLS, row, strict=True)))
+
+
+def record_closed_pane(pane: ClosedPane) -> None:
+    """Write the pane's row. A session can close twice, so the newer close wins."""
+    with _LOCK:
+        c = _conn()
+        c.execute(
+            f"INSERT INTO closed_panes ({','.join(_CLOSED_COLS)}) "
+            f"VALUES ({','.join(':' + col for col in _CLOSED_COLS)}) ON CONFLICT(session_id) DO UPDATE SET "
+            + ", ".join(f"{col}=excluded.{col}" for col in _CLOSED_COLS[1:]),
+            dict(pane),
+        )
+        c.commit()
+
+
+def get_closed_pane(session_id: str) -> ClosedPane | None:
+    with _LOCK:
+        row = _conn().execute(f"{_CLOSED_SELECT} WHERE session_id=?", (session_id,)).fetchone()
+        return _closed_row(row) if row else None
+
+
+def closed_panes() -> list[ClosedPane]:
+    with _LOCK:
+        return [_closed_row(r) for r in _conn().execute(f"{_CLOSED_SELECT} ORDER BY closed_at, session_id")]
+
+
+def delete_closed_pane(session_id: str) -> None:
+    with _LOCK:
+        c = _conn()
+        c.execute("DELETE FROM closed_panes WHERE session_id=?", (session_id,))
+        c.commit()
 
 
 # --- tracks: entity rows (the registry, replacing projects/workspaces) ---
