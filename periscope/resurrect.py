@@ -60,7 +60,11 @@ _SESSION_ID_ARG_RE = re.compile(r"--session-id[= ]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a
 _CONTINUUM_SAVE_SH = Path.home() / ".tmux/plugins/tmux-continuum/scripts/continuum_save.sh"
 
 
-def save_now() -> None:
+# continuum_save.sh does nothing until its interval has passed since this time.
+_LAST_SAVE_OPTION = "@continuum-save-last-timestamp"
+
+
+def save_now(force: bool = False) -> None:
     """Drive tmux-continuum's periodic save.
 
     tmux-continuum has no timer: its save fires purely as a side effect of
@@ -75,11 +79,16 @@ def save_now() -> None:
     `@continuum-save-interval` and takes its own lock, so it only writes when
     an interval has actually elapsed. Degrades silently when continuum isn't
     installed.
+
+    `force` saves now, whatever the interval: the script reads a cleared
+    timestamp as 0, saves, and writes a new one.
     """
     if not config.is_prod():
         return
     if not _CONTINUUM_SAVE_SH.exists():
         return
+    if force:
+        subprocess.run(["tmux", "set-option", "-gu", _LAST_SAVE_OPTION], capture_output=True, check=False)
     subprocess.run([str(_CONTINUUM_SAVE_SH)], capture_output=True, check=False)
 
 
