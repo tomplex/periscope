@@ -1,6 +1,7 @@
 # Idle close: close idle Claude panes at night, resume them later
 
-Status: draft for review. Prototypes: the "Idle close prototypes" canvas
+Status: PR 1 of 2 (closed record and resume) implemented. Prototypes: the
+"Idle close prototypes" canvas
 (https://claude.ai/artifact/1KCaANrU4beN77zNbiJAYt).
 
 ## Goal
