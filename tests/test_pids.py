@@ -897,3 +897,10 @@ def test_channels_still_resolves_through_window_by_pid():
     from periscope import channels, pids
 
     assert channels._resolve_window_by_pid is pids.window_by_pid
+
+
+def test_stamped_pids_are_the_ids_the_windows_wear():
+    from periscope.pids import stamped_pids
+
+    windows = [_mkwin(pid_raw="aaaa1111"), _mkwin(pid_raw=" bbbb2222\n"), _mkwin(pid_raw=""), _mkwin(pid_raw="%5")]
+    assert stamped_pids(windows) == {"aaaa1111", "bbbb2222"}
