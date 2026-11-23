@@ -109,6 +109,7 @@ class Settings(TypedDict, total=False):
     worktree_layout_default: str  # "sibling" | "inline"
     worktree_layout_overrides: dict[str, str]  # realpath -> "sibling" | "inline"
     cleanup_idle_days: int
+    idle_close_weekdays: int  # 1-30; unset => idle close is off (periscope.idle_close)
     bg_account: str  # account id background commander jobs bill; unset => default
     spawn_account: str  # account id every unnamed spawn lands on; unset => launch_policy decides
     spawn_model: str  # "auto" | "default" | ANTHROPIC_MODEL value; unset => "auto" (launch_policy decides)

@@ -1,5 +1,7 @@
 """Tests for /api/settings."""
 
+import pytest
+
 
 def test_get_settings_returns_block(client, mocker):
     mocker.patch(
@@ -268,3 +270,28 @@ def test_patch_linear_team_keys_null_clears(client, mocker):
     r = client.patch("/api/settings", json={"linear_team_keys": None})
     assert r.status_code == 200
     update_spy.assert_called_once_with({"linear_team_keys": None})
+
+
+@pytest.mark.parametrize("days", [1, 3, 30])
+def test_patch_idle_close_weekdays_takes_1_to_30(client, clean_state, days):
+    assert client.patch("/api/settings", json={"idle_close_weekdays": days}).status_code == 200
+    assert clean_state["settings"]["idle_close_weekdays"] == days
+
+
+@pytest.mark.parametrize("days", [0, 31])
+def test_patch_idle_close_weekdays_refuses_a_number_out_of_range(client, clean_state, days):
+    assert client.patch("/api/settings", json={"idle_close_weekdays": days}).status_code == 400
+    assert "idle_close_weekdays" not in clean_state["settings"]
+
+
+# A lax int reads `true` as 1, the most aggressive value.
+@pytest.mark.parametrize("days", [True, "3", 3.5])
+def test_patch_idle_close_weekdays_refuses_anything_but_an_integer(client, clean_state, days):
+    assert client.patch("/api/settings", json={"idle_close_weekdays": days}).status_code == 422
+    assert "idle_close_weekdays" not in clean_state["settings"]
+
+
+def test_patch_idle_close_weekdays_null_turns_it_off(client, clean_state):
+    clean_state["settings"]["idle_close_weekdays"] = 3
+    assert client.patch("/api/settings", json={"idle_close_weekdays": None}).status_code == 200
+    assert "idle_close_weekdays" not in clean_state["settings"]

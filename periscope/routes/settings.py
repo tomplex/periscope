@@ -4,7 +4,7 @@ import os
 import re
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
 
 from periscope import config
 from periscope.editors import detect_editors
@@ -33,6 +33,7 @@ class SettingsPatch(BaseModel):
     worktree_layout_default: str | None = None
     worktree_layout_overrides: dict[str, str] | None = None
     cleanup_idle_days: int | None = None
+    idle_close_weekdays: StrictInt | None = None  # StrictInt: a lax int reads `true` as 1
     bg_account: str | None = None
     spawn_account: str | None = None
     spawn_model: str | None = None
@@ -81,6 +82,13 @@ def settings_patch(body: SettingsPatch):
             patch["cleanup_idle_days"] = v
         else:
             raise HTTPException(400, "cleanup_idle_days must be a positive integer")
+
+    if "idle_close_weekdays" in sent:
+        v = body.idle_close_weekdays
+        if v is None or 1 <= v <= 30:
+            patch["idle_close_weekdays"] = v
+        else:
+            raise HTTPException(400, f"idle_close_weekdays must be 1..30: {v!r}")
 
     if "bg_account" in sent:
         v = body.bg_account
