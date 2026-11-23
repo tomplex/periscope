@@ -1800,7 +1800,7 @@ In `periscope/idle_close.py`, extend the imports:
 
 ```python
 from periscope import activity, config, resurrect, session_status, store
-from periscope.log import _bg, log
+from periscope.log import log
 from periscope.panes import drop_target_focus, list_windows
 from periscope.pids import stamped_pids
 from periscope.store import Settings
@@ -2000,7 +2000,7 @@ def record_idle_close(entry: IdleCloseLog) -> None:
 
 - [ ] **Step 4: Write the tick and the loop**
 
-In `periscope/idle_close.py`, add `import asyncio` as the first import, add `state_hub` to the `from periscope import` line, and add `_TICK_S = 60.0` after `_GRACE_MIN`. At the end of the file:
+In `periscope/idle_close.py`, add `import asyncio` as the first import, add `state_hub` to the `from periscope import` line, change the log import to `from periscope.log import _bg, log`, and add `_TICK_S = 60.0` after `_GRACE_MIN`. At the end of the file:
 
 ```python
 async def _tick() -> None:
