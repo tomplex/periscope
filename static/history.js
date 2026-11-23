@@ -735,6 +735,8 @@ function boot() {
   root.addEventListener("change", onRootChange);
   root.addEventListener("input", onRootInput);
   document.addEventListener("keydown", onDocKeydown);
+  // A tab left open keeps its first stats; "last indexed" would then blame the hook.
+  document.addEventListener("visibilitychange", () => document.hidden || fetchStats());
 
   renderFilters();
   render();
