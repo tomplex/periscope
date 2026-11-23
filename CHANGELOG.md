@@ -3,6 +3,67 @@
 What changed in each periscope release, newest first. The dashboard's Update
 button installs releases, and its popover shows these sections.
 
+## v0.4.0 — 2026-11-23
+
+The rail now puts what wants you first, and another app can start a Claude
+on a Linear issue in one call.
+
+- **Rail.** A sonar strip at the top of the rail has one line for each
+  track and one blip for each pane. The blip's shape and colour show the
+  pane's state: asks, broken, done, working, idle or shell. Click a blip to
+  open its pane. Click a track's name to show only that track; this replaces
+  the filter chips. The tree is quieter: a branch gets a header only when
+  two or more panes share it, and only asking panes pulse. Each row has an
+  age column, which turns amber after 10 minutes of waiting and red after
+  an hour. The PR chip, with its CI glyph, moves to the row's first line.
+- **Next.** A Next queue replaces NEEDS YOU, READY and RUNNING. It lists
+  the panes that ask (longest wait first), then the broken ones (an API
+  error, or failing CI on an open PR), then the finished ones. Each card
+  shows what the agent said, its track and why it is there. × marks a done
+  card seen, and "mark all seen" clears every done card at once. ⌘J opens
+  the next pane that wants you, from anywhere, the terminal included. The
+  rail, ⌘J and Clawd now agree on which panes want you.
+- **Pane menu.** On hover, a card shows only ☆ pin, ⋯ more and × kill, so no
+  button covers its name. ⋯ or a right-click opens the pane menu: the tab
+  colours, Rename colours…, Pin tab, Move to account B, Freeze name, Open in
+  the editor and Kill tab. Each item has a key, except Kill tab.
+- **Tab colours.** Give a pane card one of six colours, so a group of
+  sessions is easy to find. The colour tints the card in the tree, in Next
+  and in PINNED. Pick it in the pane menu (1–6, and 0 removes it), and
+  rename a colour, for example Iris → "ci". Settings → Tab colours sets the
+  tint: Quiet, Default or Strong.
+- **History.** Resume stays on /history and links to the dashboard. A
+  session with no transcript shows "no transcript" and has no Resume
+  button; before, it started an empty pane. The dashboard's resume and the
+  `resume_session` tool refuse such a session too. The list and the
+  transcript scroll on their own, the filters fold into one disclosure, and
+  all text meets 4.5:1 contrast. Recent sorts by a session's last turn, and
+  a row names the pane, PR and ticket that last ran it. Sessions with no
+  summary are "unsummarized", and an empty result offers to include them.
+  The footer says when history last indexed a session.
+- **Start from another app.** `POST /api/linear/start` makes or reuses the
+  worktree for a Linear issue's branch, starts Claude with a prompt and
+  links the issue to the card. An optional `name` names and pins the new
+  pane. Send `pr` in place of `branch` to start on a pull request: periscope
+  checks it out as `pr-<N>`, or brings that worktree up to the PR's latest
+  commit, and says in a `warning` when it cannot. `POST /api/select` selects
+  a pane on the dashboard, and `GET /api/open/catalog` gives each repo's
+  GitHub `slug`. todo-hub's Start in periscope uses these routes; the README
+  describes them.
+- **Speed.** Each dashboard refresh starts less than half as many processes
+  as before. On a busy machine the dashboard used to fall 3 to 13 seconds
+  behind. `gh` calls no longer run macOS's `security` tool each time. The
+  resource popover ends with the poll time and the processes per minute.
+- **Terminal copy.** Text copied from a terminal tile no longer pastes with
+  spaces out to the pane's width. Each run of spaces becomes one space, and
+  line breaks stay. This also removes the indentation of copied code.
+- **Smaller things.** Codex panes are found again when their process name
+  is long. A prompt that starts with `-`, or is over about 16 KB, now
+  reaches Claude; before, Claude got an empty input. A key that tmux refuses
+  now shows as a failure in the permission and reply buttons and in
+  `/api/send-bulk`. The transcript's working dot no longer pulses, and the
+  detail header's ↻ is grey when age alone set it off.
+
 ## v0.3.0 — 2026-11-04
 
 Reviews get a proper reading surface, and the dashboard starts showing what
