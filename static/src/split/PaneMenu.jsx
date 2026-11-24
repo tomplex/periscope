@@ -223,8 +223,8 @@ function Menu({ m }) {
   // Renaming, it holds text fields, not menu items: a group, not a menu.
   if (renaming) {
     return (
-      <div {...root} role="group" aria-label="rename colours">
-        <div class="pane-menu-head">Rename colours<span class="pane-menu-hint">↵ save · esc cancel</span></div>
+      <div {...root} role="group" aria-label="rename colors">
+        <div class="pane-menu-head">Rename colors<span class="pane-menu-hint">↵ save · esc cancel</span></div>
         {TAB_COLOURS.map((c) => (
           <label key={c.id} class="tb-dd-item tab-colour-item">
             <span class={`tab-colour-swatch tab-colour-${c.id}`} aria-hidden="true"></span>
@@ -248,13 +248,13 @@ function Menu({ m }) {
   // The readout names the swatch under the pointer or the cursor, or else
   // the pane's own colour: the strip has no room for names.
   const shown = preview.value?.pid === m.pid ? preview.value.colour : current;
-  const swatchName = (id) => (id ? prefs.getTabColourName(id) : "No colour");
+  const swatchName = (id) => (id ? prefs.getTabColourName(id) : "No color");
   const hue = (id) => TAB_COLOURS.find((c) => c.id === id)?.name;
 
   return (
     <div {...root} role="menu" aria-label={`actions for ${label}`} onMouseLeave={() => { preview.value = null; }}>
       <div class="pane-menu-head">Actions for <b>{label}</b></div>
-      <div class="pane-menu-swatches" role="group" aria-label="tab colour">
+      <div class="pane-menu-swatches" role="group" aria-label="tab color">
         {[...TAB_COLOURS.map((c) => c.id), null].map((id, i) => (
           <button
             key={id || "none"}
@@ -262,7 +262,7 @@ function Menu({ m }) {
             role="menuitemradio"
             aria-checked={current === id}
             aria-label={swatchName(id)}
-            title={id ? `${swatchName(id)}${names[id] ? ` (${hue(id)})` : ""} · ${tabs(counts[id] || 0)} · ${i + 1}` : "No colour · 0"}
+            title={id ? `${swatchName(id)}${names[id] ? ` (${hue(id)})` : ""} · ${tabs(counts[id] || 0)} · ${i + 1}` : "No color · 0"}
             tabIndex={-1}
             class={`pane-menu-swatch${current === id ? " active" : ""}${cursor === i ? " is-cursor" : ""}`}
             onMouseEnter={hover(id)}

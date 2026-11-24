@@ -222,7 +222,7 @@ export function PaneRow({
   );
   const colour = shownTabColour(w.pid);
   const colourChip = colour && (
-    <span class="pane-pill pane-pill-colour" title="this tab's colour">{getTabColourName(colour)}</span>
+    <span class="pane-pill pane-pill-colour" title="this tab's color">{getTabColourName(colour)}</span>
   );
 
   return (
@@ -268,7 +268,7 @@ export function PaneRow({
             >{pinned ? "★" : "☆"}</button>
             <button
               class="rail-more"
-              title="more: colour, move account, freeze name, editor"
+              title="more: color, move account, freeze name, editor"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               onClick={(e) => { e.stopPropagation(); openPaneMenu(w, e.currentTarget.getBoundingClientRect(), menuActions); }}

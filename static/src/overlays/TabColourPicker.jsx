@@ -27,7 +27,7 @@ export function TabColourPicker() {
   const current = getTabTint().id;
   return (
     <fieldset class="tab-tint-picker">
-      <legend>Tab colours</legend>
+      <legend>Tab colors</legend>
       <div class="tab-tint-options">
         {TAB_TINTS.map((t) => (
           <label key={t.id} class="settings-tile tab-tint-option">
@@ -39,7 +39,7 @@ export function TabColourPicker() {
         ))}
       </div>
       <p class="settings-overrides-hint">
-        How strongly a tab's colour tints its card in the rail. Right-click a card to colour it.
+        How strongly a tab's color tints its card in the rail. Right-click a card to color it.
       </p>
     </fieldset>
   );

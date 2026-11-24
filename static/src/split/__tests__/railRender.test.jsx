@@ -592,10 +592,10 @@ describe("<Rail> tab colours", () => {
     railSelection.value = "pane:p1";
     withPrefs({ p1: { colour: "iris" } }, { tab_colour_names: { iris: "ci" } });
     let html = render(<Rail />);
-    expect(html).toContain('<span class="pane-pill pane-pill-colour" title="this tab\'s colour">ci</span>');
+    expect(html).toContain('<span class="pane-pill pane-pill-colour" title="this tab\'s color">ci</span>');
     withPrefs({ p1: { colour: "iris" } });
     html = render(<Rail />);
-    expect(html).toContain('title="this tab\'s colour">Iris</span>');
+    expect(html).toContain('title="this tab\'s color">Iris</span>');
   });
 
   it("names no colour on a plain selected card", () => {

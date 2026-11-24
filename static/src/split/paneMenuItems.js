@@ -14,7 +14,7 @@ export const SWATCHES = TAB_COLOURS.length + 1;
 // can't close a tab.
 export function paneMenuItems({ pinned, namePinned, move, editor }) {
   return [
-    { id: "rename", key: "r", label: "Rename colours…" },
+    { id: "rename", key: "r", label: "Rename colors…" },
     { id: "pin", key: "p", label: pinned ? "Unpin tab" : "Pin tab", sep: true },
     move && { id: "move", key: "m", label: `Move to account ${move}` },
     { id: "name", key: "n", label: "Freeze name", checked: Boolean(namePinned) },
