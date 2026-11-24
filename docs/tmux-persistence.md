@@ -230,11 +230,22 @@ own saves.
 
 To go back to a copy (this discards everything written after it):
 
-```sh
-bin/periscope stop
-cd ~/.config/periscope && rm -f periscope.db-wal periscope.db-shm
-cp backups/<time>/state.json backups/<time>/periscope.db .
-```
+1. Start tmux and wait until its restore is complete. Periscope deletes the
+   rows of panes that tmux does not show, so a start before that undoes the
+   recovery. A pane that got a new `@periscope_id` loses its old rows again.
+2. Run `bin/periscope stop`, then repeat `bin/periscope status` until it prints
+   `not loaded`. `stop` returns before the server exits, and a live server
+   overwrites `state.json`.
+3. Restore both stores. `.restore` is safe while a Claude hook writes to the
+   database. `test` is not optional: `.restore` from a folder that has no
+   database empties the live one.
 
-Then `bin/periscope start` from the checkout. Start makes a new copy first. To
-get a few rows back instead, read them from the copy with `sqlite3`.
+   ```sh
+   cd ~/.config/periscope
+   copy=backups/<time>
+   test -f $copy/periscope.db && sqlite3 periscope.db ".restore $copy/periscope.db" && cp $copy/state.json .
+   ```
+
+4. Run `bin/periscope start`.
+
+To get a few rows back instead, read them from the copy with `sqlite3`.
