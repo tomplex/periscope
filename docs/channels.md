@@ -71,8 +71,8 @@ History (the `/history` index, so live panes aren't in it):
   session's conversation, the last 30 messages by default.
 - `resume_session(session_id, tmux_session?, workspace_id?, account?)` —
   `claude --resume` in a new window, in the session's original directory;
-  refuses a session that looks live, one already resumed in another window,
-  or one whose transcript Claude no longer keeps. A pane that idle close closed
+  refuses a session that a live Claude runs, one that looks live, one already
+  resumed in another window, or one whose transcript Claude no longer keeps. A pane that idle close closed
   comes back with its own pid, name, track and wrapper profile.
 
 Repos and rail groups:

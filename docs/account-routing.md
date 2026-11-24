@@ -98,7 +98,8 @@ data it is the first other account in registry order, never the pane's own.
 with it (`→ C`), and the click sends exactly that id. With one registered
 account there is no target and no chip.
 
-The server refuses
+A resume refuses a session that a live Claude runs. A move skips that check:
+the original pane still runs the session. The server refuses
 with 409 when the transcript was written to in the last 60s, because two
 concurrent appenders would interleave into one JSONL. That guard misreads the
 case it matters most for: Claude writes the *limit-reached* message into the
