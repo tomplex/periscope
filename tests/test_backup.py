@@ -3,6 +3,8 @@
 import sqlite3
 from contextlib import closing
 
+import pytest
+
 from periscope import config
 from periscope.backup import KEEP, back_up_stores
 
@@ -37,6 +39,33 @@ def test_drops_all_but_the_newest(tmp_xdg_home, fresh_activity_db):
     kept = _backups(tmp_xdg_home)
     assert len(kept) == KEEP
     assert kept[:-1] == old[1:]
+
+
+def test_a_stray_file_does_not_stop_the_cleanup(tmp_xdg_home, fresh_activity_db):
+    backups = tmp_xdg_home / "periscope" / "backups"
+    for i in range(KEEP):
+        (backups / f"20260101T0000{i:02}").mkdir(parents=True)
+    (backups / ".DS_Store").touch()
+
+    back_up_stores()
+
+    assert len(list(backups.glob("2*"))) == KEEP
+
+
+def test_a_failed_copy_is_not_kept(tmp_xdg_home, fresh_activity_db, monkeypatch):
+    state = tmp_xdg_home / "periscope" / "state.json"
+    state.parent.mkdir()
+    state.write_text("{}", encoding="utf-8")
+    with monkeypatch.context() as m:
+        m.setattr(config, "ACTIVITY_DB", tmp_xdg_home)  # a directory: SQLite cannot open it
+        with pytest.raises(sqlite3.OperationalError):
+            back_up_stores()
+    assert not list((tmp_xdg_home / "periscope" / "backups").glob("2*"))
+
+    back_up_stores()
+
+    [copy] = _backups(tmp_xdg_home)
+    assert sorted(f.name for f in copy.iterdir()) == ["periscope.db", "state.json"]
 
 
 def test_first_boot_has_no_state_json(tmp_xdg_home, fresh_activity_db):

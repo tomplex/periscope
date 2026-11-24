@@ -20,13 +20,17 @@ def back_up_stores() -> None:
     if not config.is_prod():
         return
     backups = config.config_dir() / "backups"
-    copy = backups / time.strftime("%Y%m%dT%H%M%S")
-    copy.mkdir(parents=True)
+    # Dated only once complete: a failed copy must not count toward KEEP, or be restored.
+    partial = backups / "partial"
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir(parents=True)
     state = store._state_path()
     if state.exists():  # a first boot has none
-        shutil.copy2(state, copy)
+        shutil.copy2(state, partial)
     # SQLite's own backup, because a file copy misses the rows still in the WAL.
-    with closing(sqlite3.connect(config.ACTIVITY_DB)) as src, closing(sqlite3.connect(copy / "periscope.db")) as dst:
+    with closing(sqlite3.connect(config.ACTIVITY_DB)) as src, closing(sqlite3.connect(partial / "periscope.db")) as dst:
         src.backup(dst)
-    for old in sorted(backups.iterdir())[:-KEEP]:
+    partial.rename(backups / time.strftime("%Y%m%dT%H%M%S"))
+    # "2*": the dated folders, not Finder's .DS_Store.
+    for old in sorted(backups.glob("2*"))[:-KEEP]:
         shutil.rmtree(old)
