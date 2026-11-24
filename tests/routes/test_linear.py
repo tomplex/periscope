@@ -315,6 +315,13 @@ def test_a_pr_start_checks_the_pr_out_and_links_it(client, no_pr_worktree, fetch
     }
 
 
+def test_a_pr_start_with_no_ticket_links_only_the_pr(client, no_pr_worktree, fetch, worktree, spawn, place):
+    body = {k: v for k, v in PR_BODY.items() if k not in ("ticket", "title")}
+    r = client.post("/api/linear/start", json=body)
+    assert r.status_code == 200 and r.json()["mode"] == "spawned"
+    assert store.get_window("k") == {"linked_pr": 812, "is_fork": True}
+
+
 def test_a_branch_start_answers_the_worktree_warning(client, worktree, spawn, place):
     worktree.return_value = {**worktree.return_value, "warning": "fetch failed: origin/main may be stale ('offline')"}
     r = client.post("/api/linear/start", json=BODY)
