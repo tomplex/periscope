@@ -1897,8 +1897,9 @@ _CHANNEL_TOOLS: list[_ChannelTool] = [
             "replace this session. Use when past work should be continued, "
             "not just read — for reference, get_history_session is enough. "
             "Refuses if Claude no longer keeps the session's transcript, if "
-            "the session looks live (transcript written within the last "
-            "minute), or if it is already resumed in another window."
+            "a live Claude runs the session, if it looks live (transcript "
+            "written within the last minute), or if it is already resumed in "
+            "another window."
         ),
         "inputSchema": {
             "type": "object",

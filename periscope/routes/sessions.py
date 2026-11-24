@@ -145,7 +145,13 @@ def _finish_resume(record: activity.ClosedPane | None, result: dict) -> dict:
 
 
 def _window_new_resume(
-    session: str, exec_cmd: str, resume_id: str | None, mode: str, account: str | None = None, force: bool = False
+    session: str,
+    exec_cmd: str,
+    resume_id: str | None,
+    mode: str,
+    account: str | None = None,
+    force: bool = False,
+    moving: bool = False,
 ) -> dict:
     """`mode=resume`: run `claude --resume <id>` in the directory the session
     started in. The sentinel `session` is auto-created on first use. Returns
@@ -170,12 +176,15 @@ def _window_new_resume(
     most wants to move off an exhausted subscription — always looks live to
     that guard. The already-resumed-elsewhere guard is never skipped: two
     concurrent appenders interleaving into one JSONL is a different failure.
+
+    `moving` (move-account) skips ONLY the check that a live Claude runs the
+    session: the pane it moves still does.
     """
     if not resume_id:
         raise HTTPException(400, "resume_id required for mode=resume")
     config_dir = store.account_config_dir(account)
     transcript = jsonl_for_session(resume_id)
-    if refusal := resume_refusal(resume_id, transcript, force=force):
+    if refusal := resume_refusal(resume_id, transcript, force=force, moving=moving):
         raise HTTPException(*refusal)
     assert transcript is not None  # resume_refusal refuses a missing transcript
     cwd = _start_cwd(transcript)
@@ -602,7 +611,8 @@ def pane_move_account(pid: str, account: str, force: bool = False):
     leaves the original running: it is the only fallback if the resume doesn't
     take, and killing a pane the user hasn't finished reading is unrecoverable.
 
-    Guards that live in `_window_new_resume` still apply — a transcript written
+    `_window_new_resume`'s guards apply, except the one on a live Claude that
+    runs the session (the original pane's does) — a transcript written
     to in the last 60s 409s (two concurrent appenders would interleave into the
     same JSONL), as does a session already resumed elsewhere. `force=1` bypasses
     the mtime guard only — the client sends it after the user confirms "move
@@ -634,6 +644,7 @@ def pane_move_account(pid: str, account: str, force: bool = False):
         "resume",
         account=account,
         force=force,
+        moving=True,
     )
     target = result["target"]
     new_pane_id = tmux("display-message", "-t", target, "-p", "#{pane_id}").strip()
