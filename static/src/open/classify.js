@@ -1,5 +1,6 @@
 // Pure: query string (+ catalog) → ranked candidate cards. No DOM, no signals.
-// Each card: { kind: 'open'|'worktree'|'pr'|'reviews', label, descriptor }.
+// Each card: { kind: 'open'|'worktree'|'track'|'pr'|'reviews'|'command', label,
+// descriptor }, plus `group` where the section header isn't the kind's own.
 
 const PR_URL = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/;
 const PR_HASH = /^#?(\d+)$/;
@@ -29,6 +30,13 @@ function match(hay, needle) {
   return hay.toLowerCase().includes(needle.toLowerCase());
 }
 
+// A repo named exactly the query leads, then one that starts with it:
+// "periscope" puts periscope above periscope-hardening.
+function rank(label, q) {
+  const l = label.toLowerCase(), n = q.toLowerCase();
+  return l === n ? 0 : l.startsWith(n) ? 1 : 2;
+}
+
 export function classify(query, catalog) {
   const q = (query || "").trim();
   const cards = [];
@@ -50,30 +58,36 @@ export function classify(query, catalog) {
                  sub: "register + open", descriptor: { path: typed } });
   }
 
-  // Create actions lead — a new worktree or track is almost always the target,
-  // so they sit above "open existing". Grouped by kind (all new-worktree cards,
-  // then all new-track cards) so each section header appears once even when
-  // several repos match.
-  for (const r of catalog.repos || []) {
-    if (match(r.label, q) || match(r.repo, q)) {
-      cards.push({ kind: "worktree", label: `${r.label} · new worktree…`,
-                   sub: `off origin/${r.default_branch || "HEAD"}`,
-                   repo: r.repo, branches: r.branches, descriptor: null });
+  // One section per matching repo, holding everything you can start there:
+  // its main checkout, a new worktree, a new track. The main checkout leads —
+  // it is the usual target (an agent there makes its own worktrees), and
+  // grouped by kind it sat below every repo's create rows.
+  const worktrees = catalog.worktrees || [];
+  const shown = new Set();   // paths that already have an open card
+  const repos = (catalog.repos || []).filter(r => match(r.label, q) || match(r.repo, q));
+  repos.sort((a, b) => rank(a.label, q) - rank(b.label, q));
+  for (const r of repos) {
+    const main = worktrees.find(w => w.repo === r.repo && w.is_main);
+    if (main) {
+      shown.add(main.path);
+      cards.push({ kind: "open", group: r.label, label: `open · ${main.branch || "detached"}`,
+                   sub: main.path, descriptor: { path: main.path } });
     }
+    cards.push({ kind: "worktree", group: r.label, label: "new worktree…",
+                 sub: `off origin/${r.default_branch || "HEAD"}`,
+                 repo: r.repo, branches: r.branches, descriptor: null });
+    cards.push({ kind: "track", group: r.label, label: "new track…",
+                 sub: "goal-scoped group", repo: r.repo, descriptor: null });
   }
-  for (const r of catalog.repos || []) {
-    if (match(r.label, q) || match(r.repo, q)) {
-      cards.push({ kind: "track", label: `${r.label} · new track…`,
-                   sub: "goal-scoped group", repo: r.repo, descriptor: null });
-    }
-  }
-  // Open an existing worktree by path/branch match.
-  for (const w of catalog.worktrees || []) {
-    if (match(w.path, q) || match(w.branch || "", q)) {
-      const repoLabel = catalog.repos.find(r => r.repo === w.repo)?.label || w.repo;
-      cards.push({ kind: "open", label: `${repoLabel} · ${w.branch || "detached"}`,
-                   sub: w.path, descriptor: { path: w.path } });
-    }
+  // Every other worktree matching by path or branch. Once per path: the
+  // catalog repeats a repo's worktrees under each of its checkouts that a root
+  // scan found as a repo.
+  for (const w of worktrees) {
+    if (shown.has(w.path) || !(match(w.path, q) || match(w.branch || "", q))) continue;
+    shown.add(w.path);
+    const repoLabel = catalog.repos.find(r => r.repo === w.repo)?.label || w.repo;
+    cards.push({ kind: "open", group: "Open worktree", label: `${repoLabel} · ${w.branch || "detached"}`,
+                 sub: w.path, descriptor: { path: w.path } });
   }
   const pr = parsePrRef(q);
   if (pr) {

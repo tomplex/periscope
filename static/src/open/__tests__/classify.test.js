@@ -88,20 +88,49 @@ describe("classify", () => {
     const cards = classify("/d/splash", catalog);
     const opens = cards.filter(c => c.kind === "open");
     expect(opens).toHaveLength(1);
-    expect(opens[0].label).toContain("splash \u00b7 main");
+    expect(opens[0]).toMatchObject({ group: "splash", label: "open \u00b7 main" });
   });
   it("emits no path card for a non-path query", () => {
     expect(classify("splash", catalog).some(c => c.label?.includes("open path"))).toBe(false);
   });
-  it("pins the create actions (worktree, track) above open-existing", () => {
-    const cards = classify("splash", catalog);
-    const firstOpen = cards.findIndex(c => c.kind === "open");
-    const wt = cards.findIndex(c => c.kind === "worktree");
-    const tk = cards.findIndex(c => c.kind === "track");
-    expect(wt).toBeGreaterThanOrEqual(0);
-    expect(tk).toBeGreaterThanOrEqual(0);
-    expect(wt).toBeLessThan(firstOpen);
-    expect(tk).toBeLessThan(firstOpen);
+});
+
+describe("classify: one section per repo", () => {
+  // splash-old is a second checkout of splash that the root scan lists as a
+  // repo of its own, so the catalog repeats every worktree under both.
+  const wts = (repo) => [
+    { path: "/d/splash", repo, branch: "main", is_main: repo === "/d/splash" },
+    { path: "/d/splash-old", repo, branch: "legacy", is_main: repo === "/d/splash-old" },
+    { path: "/d/wt/splash-feat", repo, branch: "feat-x", is_main: false },
+  ];
+  const catalog = {
+    repos: [
+      { repo: "/d/splash-old", label: "splash-old", default_branch: "main", branches: [] },
+      { repo: "/d/splash", label: "splash", default_branch: "main", branches: [] },
+    ],
+    worktrees: [...wts("/d/splash-old"), ...wts("/d/splash")],
+  };
+  const rows = (q) => classify(q, catalog).filter(c => c.kind !== "command").map(c => [c.group, c.kind, c.label]);
+
+  it("puts a repo's main checkout, new worktree and new track together, the repo named exactly first", () => {
+    expect(rows("splash").slice(0, 6)).toEqual([
+      ["splash", "open", "open · main"],
+      ["splash", "worktree", "new worktree…"],
+      ["splash", "track", "new track…"],
+      ["splash-old", "open", "open · legacy"],
+      ["splash-old", "worktree", "new worktree…"],
+      ["splash-old", "track", "new track…"],
+    ]);
+  });
+
+  it("lists the other worktrees after the repos, each path once", () => {
+    expect(rows("splash").slice(6)).toEqual([["Open worktree", "open", "splash-old · feat-x"]]);
+    const paths = classify("splash", catalog).filter(c => c.kind === "open").map(c => c.descriptor.path);
+    expect(paths).toEqual(["/d/splash", "/d/splash-old", "/d/wt/splash-feat"]);
+  });
+
+  it("offers a main checkout that matches by branch alone as a worktree", () => {
+    expect(rows("legacy")).toEqual([["Open worktree", "open", "splash-old · legacy"]]);
   });
 });
 

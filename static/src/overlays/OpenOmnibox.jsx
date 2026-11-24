@@ -194,9 +194,12 @@ export function OpenOmnibox() {
     setDrill({ card });   // worktree → branch entry; track → name entry; pr w/o repo → repo picker
   }
 
-  // Main palette items = ranked cards, decorated with section + glyph.
+  // Main palette items = ranked cards, decorated with section + glyph. A repo's
+  // cards carry their own section (the repo) and share labels across repos, so
+  // the key is the target, not the label.
   const items = classify(query, catalog).map((c) => ({
-    ...c, group: KIND_META[c.kind].group, icon: KIND_META[c.kind].icon, key: c.label,
+    ...c, group: c.group || KIND_META[c.kind].group, icon: KIND_META[c.kind].icon,
+    key: `${c.kind}:${c.repo || c.descriptor?.path || c.label}`,
   }));
 
   return (
