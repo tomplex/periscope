@@ -9,12 +9,12 @@ restarts. Time-to-live is 30 days — older state.json entries get GC'd.
 import time
 import uuid
 
-from periscope import activity, session_status
+from periscope import activity, config, session_status
 from periscope import store as _store
 from periscope.git_pr import cached_git_state
 from periscope.log import log
 from periscope.panes import list_windows
-from periscope.tmux import tmux
+from periscope.tmux import panes_snapshot, tmux
 
 _PID_TTL_S = 30 * 86400  # 30 days — GC retention for state.json window entries
 
@@ -108,6 +108,29 @@ def _pid_of_session(
     return None
 
 
+def _pid_before_restart(
+    w: dict, pid_raw: str, windows_block: dict, taken_pids: set[str], hint: dict, server_start: int
+) -> tuple[str, str] | None:
+    """The (pid, pass_name) a restored window wore on the previous tmux server.
+
+    A poll lists the window before its Claude starts, so `pid_raw` is a pid
+    minted for want of a session. Only a pid with nothing attached is given up
+    (Periscope stamps acked_at and completed_at itself), and only for a record
+    last seen before this server started: a spawn also leaves a record with its
+    session, from this server. Prod only: dev shares prod's tmux, and its
+    records are as old as its last run."""
+    if not config.is_prod():
+        return None
+    minted = windows_block.get(pid_raw) or {}
+    attached = any(minted.get(k) for k in _IMMUNITY_FIELDS if k not in ("acked_at", "completed_at"))
+    if attached or (minted.get("last_seen") or {}).get("sid"):
+        return None
+    match = _pid_of_session(windows_block, w.get("cwd"), taken_pids, hint.get("sid"), hint.get("resume"))
+    if match and (windows_block[match[0]]["last_seen"].get("ts") or 0) < server_start:
+        return match
+    return None
+
+
 def _rebind_pid(
     windows_block: dict,
     session: str,
@@ -194,6 +217,7 @@ def _resolve_one(
     carried: set[str],
     now_ts: int,
     hint: dict | None = None,
+    server_start: int = 0,
 ) -> bool:
     """Resolve one window's pid in place and refresh its `last_seen`.
 
@@ -209,6 +233,7 @@ def _resolve_one(
     target = f"{w['session']}:{w['index']}"
     pid_raw = (w.get("pid_raw") or "").strip()
     pid: str | None = None
+    match: tuple[str, str] | None = None
     if _is_pid(pid_raw):
         # Reject a pid_raw already claimed earlier in this pass —
         # tmux occasionally ends up with the same @periscope_id on
@@ -220,6 +245,7 @@ def _resolve_one(
         # distinguish the windows.
         if pid_raw not in taken:
             pid = pid_raw
+            match = _pid_before_restart(w, pid_raw, wblock, taken | carried, hint, server_start)
         else:
             # Loud on purpose: a re-mint changes the window's identity, so
             # any pid-keyed UI state (detail-pane selection, pinned rows)
@@ -249,12 +275,12 @@ def _resolve_one(
             sid=hint.get("sid"),
             resume=hint.get("resume"),
         )
-        if match:
-            pid, matched_on = match
-            # The theft path was silent in the 2026-08-05 identity merge — only
-            # the duplicate cleanup logged. Every rebind decision is loud now;
-            # `grep rebind` is the regression signal.
-            log.info("rebind %s -> %s via %s (was %s)", pid, target, matched_on, (wblock[pid].get("last_seen") or {}))
+    if match:
+        pid, matched_on = match
+        # The theft path was silent in the 2026-08-05 identity merge — only
+        # the duplicate cleanup logged. Every rebind decision is loud now;
+        # `grep rebind` is the regression signal.
+        log.info("rebind %s -> %s via %s (was %s)", pid, target, matched_on, (wblock[pid].get("last_seen") or {}))
     if pid is None:
         pid = _mint_pid()
     dirty = False
@@ -456,7 +482,12 @@ def _maintain_track_rows(windows: list[dict], taken: set[str]) -> None:
     _TRACKS_MAINTAINED = True
 
 
-def resolve_pids(windows: list[dict], session_hints: dict[str, dict] | None = None, full_roster: bool = False) -> None:
+def resolve_pids(
+    windows: list[dict],
+    session_hints: dict[str, dict] | None = None,
+    full_roster: bool = False,
+    server_start: int = 0,
+) -> None:
     """Mutates `windows` in place, adding a `pid` field to every entry.
 
     For each window:
@@ -508,7 +539,7 @@ def resolve_pids(windows: list[dict], session_hints: dict[str, dict] | None = No
         _arbitrate_duplicates(windows, wblock, hints)
         # Phase 1: per-window pid resolution + last_seen refresh.
         for w in windows:
-            if _resolve_one(w, wblock, taken, carried, now_ts, hints.get(w.get("pane_id") or "", {})):
+            if _resolve_one(w, wblock, taken, carried, now_ts, hints.get(w.get("pane_id") or "", {}), server_start):
                 dirty = True
         # Phase 2: window-entry GC.
         if _gc_windows(wblock, taken, now_ts):
@@ -553,7 +584,9 @@ def _attach_git_then_resolve_pids(windows: list[dict], full_roster: bool = False
                 "sid": session_status.live_session_id_for_pane(pane_id),
                 "resume": resumes.get(pane_id),
             }
-    resolve_pids(windows, session_hints=hints, full_roster=full_roster)
+    rows = panes_snapshot()
+    server_start = int(rows[0]["start_time"] or 0) if rows else 0
+    resolve_pids(windows, session_hints=hints, full_roster=full_roster, server_start=server_start)
 
 
 def window_by_pid(handle: str) -> tuple[str, str, dict]:

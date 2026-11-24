@@ -283,7 +283,14 @@ These are the non-obvious behaviors worth preserving:
     quotes a resume command must not inherit a dead session's identity.
     Several records can have one session (a poll mints a pid for a new window,
     then `stamp_new_window` stamps another), so both passes take the record
-    seen last.
+    seen last. A window restored by tmux-resurrect is listed before its Claude
+    starts: its first pass finds no session, mints and stamps. A later pass
+    therefore takes back the pid the window wore before the tmux server
+    restarted (`_pid_before_restart`), but only while nothing is attached to
+    the minted pid and it ran no session, and only for a record last seen
+    before `#{start_time}` — without that gate, the stamp of every spawn would
+    be undone. Prod only: dev shares prod's tmux, and its old records pass
+    that gate.
     Duplicate pids are arbitrated by recorded-sid evidence
     (`_arbitrate_duplicates`), not list order. Every rebind and arbitration
     decision is logged — `grep "rebind\|duplicate @periscope_id"` is the
