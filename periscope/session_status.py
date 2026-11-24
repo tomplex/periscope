@@ -443,6 +443,13 @@ def claude_proc_for(sid: str | None) -> dict | None:
     return {"pid": pid, "mem_mb": mb, "age_s": age}
 
 
+def claude_target(claude_pid: int) -> str | None:
+    """The `session:index` of the window whose pane runs this claude, or None
+    when it runs in no pane."""
+    panes = {p["pane_id"]: f"{p['session_name']}:{p['window_index']}" for p in tmux.panes_snapshot()}
+    return next((panes.get(pane_id) for pane_id, pid in pane_claude_pids().items() if pid == claude_pid), None)
+
+
 def _live_session(sid: str | None) -> dict | None:
     """The session file of `sid`, or None when its pid is not a live claude."""
     d = _index().get(sid) if sid else None

@@ -237,6 +237,17 @@ def test_claude_proc_for_dead_pid_none(tmp_path, monkeypatch):
     assert ss.claude_proc_for("sid-d") is None
 
 
+def test_claude_target_is_the_window_of_the_pane_that_runs_the_claude(monkeypatch):
+    rows = [
+        {"pane_id": "%1", "session_name": "dev", "window_index": "2"},
+        {"pane_id": "%2", "session_name": "feat/x", "window_index": "0"},
+    ]
+    monkeypatch.setattr(ss, "pane_claude_pids", lambda: {"%1": 11, "%2": 22})
+    monkeypatch.setattr(ss.tmux, "panes_snapshot", lambda: rows)
+    assert ss.claude_target(22) == "feat/x:0"
+    assert ss.claude_target(33) is None  # runs in no pane
+
+
 def test_claude_proc_for_unmapped_none(tmp_path, monkeypatch):
     _seed_procs(tmp_path, monkeypatch, _sess(302, "sid-k", "busy"), {302: 1})
     assert ss.claude_proc_for("sid-nope") is None
