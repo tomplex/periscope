@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from periscope.pids import (
     _PID_TTL_S,
     _REBIND_TTL_S,
@@ -26,6 +28,11 @@ def _mkwin(
         "window_id": window_id,
         "pid_raw": pid_raw,
     }
+
+
+def _record(sid, ts, **fields):
+    last_seen = {"session": "x", "name": "y", "branch": None, "cwd": "/wt", "pane_id": "%9", "sid": sid, "ts": ts}
+    return {"last_seen": last_seen, **fields}
 
 
 def test_gc_windows_keeps_spawned_by_only_entry():
@@ -827,6 +834,23 @@ def test_identity_merge_scenario_end_to_end(clean_state, fresh_activity_db, mock
     assert activity.get_pane_track(hub_pid) == "tk_pit"  # tag keyed on pid
     assert activity.get_pane_track(impl_pid) is None
     assert pids._TRACKS_MAINTAINED is True
+
+
+@pytest.mark.parametrize("hint", [{"sid": "sid-A", "resume": None}, {"sid": None, "resume": "sid-A"}])
+def test_a_session_with_several_records_rebinds_to_the_one_seen_last(clean_state, mocker, hint):
+    """A spawn leaves two: the pid a poll minted, then the one the spawn stamped."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+
+    now = int(time.time())
+    store._STATE["windows"] = {
+        "aaaa1111": _record("sid-A", now - 9000),
+        "bbbb2222": _record("sid-A", now - 5000, linked_pr=9609),
+        "cccc3333": _record("sid-A", now - 8000),
+    }
+    w = _mkwin(cwd="/wt")
+    resolve_pids([w], session_hints={"%1": hint})
+    assert w["pid"] == "bbbb2222"
 
 
 # --- window_by_pid (moved from channels._resolve_window_by_pid) ---------------

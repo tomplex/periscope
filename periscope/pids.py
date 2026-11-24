@@ -85,6 +85,29 @@ def stamp_new_window(target: str, opened_dir: str = "") -> str:
     return pid
 
 
+def _pid_of_session(
+    windows_block: dict, cwd: str | None, taken_pids: set[str], sid: str | None, resume: str | None
+) -> tuple[str, str] | None:
+    """(pid, pass_name) of the orphan record that has this session: pass 0 by
+    live sid, pass 0b by `--resume` lineage in the record's own cwd.
+
+    Several records can have one session (a poll mints a pid for a new window,
+    then the spawn stamps another), so the one seen last wins."""
+    for session_id, pass_name in ((sid, "sid"), (resume, "resume")):
+        if not session_id:
+            continue
+        records = [
+            (ls.get("ts") or 0, pid)
+            for pid, entry in windows_block.items()
+            if pid not in taken_pids
+            and (ls := entry.get("last_seen") or {}).get("sid") == session_id
+            and (pass_name == "sid" or (cwd and ls.get("cwd") == cwd))
+        ]
+        if records:
+            return max(records)[1], pass_name
+    return None
+
+
 def _rebind_pid(
     windows_block: dict,
     session: str,
@@ -113,20 +136,9 @@ def _rebind_pid(
     Pass 0 needs no corroboration — the live sid comes from the process's own
     session file, not from argv.
     """
+    if match := _pid_of_session(windows_block, cwd, taken_pids, sid, resume):
+        return match
     now = time.time()
-    if sid:
-        for pid, entry in windows_block.items():
-            if pid in taken_pids:
-                continue
-            if (entry.get("last_seen") or {}).get("sid") == sid:
-                return pid, "sid"
-    if resume:
-        for pid, entry in windows_block.items():
-            if pid in taken_pids:
-                continue
-            ls = entry.get("last_seen") or {}
-            if ls.get("sid") == resume and cwd and ls.get("cwd") == cwd:
-                return pid, "resume"
     # Pass 1: strong match on (session, name).
     # Pass 2: secondary match on (branch, cwd) when both are set.
     for pass_n in (1, 2):

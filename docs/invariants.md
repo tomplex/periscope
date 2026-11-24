@@ -281,6 +281,9 @@ These are the non-obvious behaviors worth preserving:
     `--resume <uuid>` lineage but ONLY with cwd corroboration — the hint is
     regex over ps argv, which flattens prompts, so a pane whose prompt merely
     quotes a resume command must not inherit a dead session's identity.
+    Several records can have one session (a poll mints a pid for a new window,
+    then `stamp_new_window` stamps another), so both passes take the record
+    seen last.
     Duplicate pids are arbitrated by recorded-sid evidence
     (`_arbitrate_duplicates`), not list order. Every rebind and arbitration
     decision is logged — `grep "rebind\|duplicate @periscope_id"` is the
