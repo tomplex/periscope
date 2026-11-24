@@ -70,10 +70,10 @@ def test_run_loop_records_gaps_between_broadcasts_but_not_across_idle(monkeypatc
     gaps = mocker.patch("periscope.state_hub.forks.record_gap")
     monkeypatch.setattr(state_hub, "_TICK_INTERVAL_S", 0.01)
     monkeypatch.setattr(state_hub, "_IDLE_POLL_S", 0.01)
-    builds = []
 
+    # Gaps, not builds: the loop records a gap only after the build's broadcast.
     async def until(n):
-        while len(builds) < n:
+        while gaps.call_count < n:
             await asyncio.sleep(0.005)
 
     async def main():
@@ -81,17 +81,17 @@ def test_run_loop_records_gaps_between_broadcasts_but_not_across_idle(monkeypatc
         # this test's loop its own.
         monkeypatch.setattr(state_hub, "_wake", asyncio.Event())
         q = state_hub.subscribe()
-        task = asyncio.create_task(state_hub._run_loop(asyncio.get_running_loop(), lambda: builds.append(1) or {}))
-        await until(3)
+        task = asyncio.create_task(state_hub._run_loop(asyncio.get_running_loop(), dict))
+        await until(2)
         state_hub.unsubscribe(q)
         await asyncio.sleep(0.5)  # idle: nothing built, and no gap spans it
         state_hub.subscribe()
-        await until(len(builds) + 2)
+        await until(gaps.call_count + 1)
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-    asyncio.run(main())
+    asyncio.run(asyncio.wait_for(main(), timeout=10))
     recorded = [c.args[0] for c in gaps.call_args_list]
     assert len(recorded) >= 3
     assert all(0 < g < 0.4 for g in recorded)
