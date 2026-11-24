@@ -443,6 +443,16 @@ def claude_proc_for(sid: str | None) -> dict | None:
     return {"pid": pid, "mem_mb": mb, "age_s": age}
 
 
+def _live_session(sid: str | None) -> dict | None:
+    """The session file of `sid`, or None when its pid is not a live claude."""
+    d = _index().get(sid) if sid else None
+    try:
+        pid = int(d["pid"]) if d else None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return d if pid in _live_claude_pids() else None
+
+
 def session_state_for(sid: str | None) -> dict | None:
     """Authoritative state for a sessionId, or None when unmapped, not a live
     claude, or in a status we don't trust (shell/unknown).
@@ -450,19 +460,14 @@ def session_state_for(sid: str | None) -> dict | None:
     Returns {"state": <periscope state>, "status": <raw>, "waiting_for": str|None}.
     None means "no opinion — caller keeps its scraped state."
     """
-    if not sid:
-        return None
-    d = _index().get(sid)
-    if not d:
-        return None
-    pid = d.get("pid")
-    try:
-        pid_i = int(pid)
-    except (TypeError, ValueError):
-        return None
-    if pid_i not in _live_claude_pids():
-        return None
-    state = _STATE_MAP.get(d.get("status"))
-    if state is None:
+    d = _live_session(sid)
+    state = _STATE_MAP.get(d.get("status")) if d else None
+    if d is None or state is None:
         return None
     return {"state": state, "status": d.get("status"), "waiting_for": d.get("waitingFor")}
+
+
+def has_background_shell(sid: str | None) -> bool:
+    """A live claude reports the status "shell" while it has background shells."""
+    d = _live_session(sid)
+    return d is not None and d.get("status") == "shell"

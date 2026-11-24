@@ -109,6 +109,7 @@ class Settings(TypedDict, total=False):
     worktree_layout_default: str  # "sibling" | "inline"
     worktree_layout_overrides: dict[str, str]  # realpath -> "sibling" | "inline"
     cleanup_idle_days: int
+    idle_close_weekdays: int  # 1-30; unset => idle close is off (periscope.idle_close)
     bg_account: str  # account id background commander jobs bill; unset => default
     spawn_account: str  # account id every unnamed spawn lands on; unset => launch_policy decides
     spawn_model: str  # "auto" | "default" | ANTHROPIC_MODEL value; unset => "auto" (launch_policy decides)
@@ -129,6 +130,13 @@ class PokeEntry(TypedDict):
     at: int  # epoch of the poke
     resets_at: int | None  # the 5h session reset observed right after
     verified: bool  # resets_at landed within tolerance of at + 5h
+
+
+class IdleCloseLog(TypedDict, total=False):
+    """The last night that idle close ran."""
+
+    date: str  # local YYYY-MM-DD
+    at: int
 
 
 class WallSpan(TypedDict):
@@ -165,6 +173,7 @@ _STATE_DEFAULTS: dict = {
     "workspaces": {},
     "settings": {},
     "poke_log": {},
+    "idle_close_log": {},
 }
 
 
@@ -653,6 +662,18 @@ def get_poke_log() -> dict[str, PokeEntry]:
 def record_poke(account_id: str, entry: PokeEntry) -> None:
     with _STATE_LOCK:
         _STATE.setdefault("poke_log", {})[account_id] = dict(entry)
+        _write_state(_STATE)
+
+
+def get_idle_close_log() -> IdleCloseLog:
+    """`.get` because a state file written before the key existed loads without it."""
+    with _STATE_LOCK:
+        return cast(IdleCloseLog, dict(_STATE.get("idle_close_log") or {}))
+
+
+def record_idle_close(entry: IdleCloseLog) -> None:
+    with _STATE_LOCK:
+        _STATE["idle_close_log"] = dict(entry)
         _write_state(_STATE)
 
 

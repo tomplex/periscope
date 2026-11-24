@@ -1,6 +1,6 @@
 # Idle close: close idle Claude panes at night, resume them later
 
-Status: PR 1 of 2 (closed record and resume) implemented. Prototypes: the
+Status: implemented (server part). The history view is phase 2. Prototypes: the
 "Idle close prototypes" canvas
 (https://claude.ai/artifact/1KCaANrU4beN77zNbiJAYt).
 
@@ -89,14 +89,18 @@ setting is on.
 
 Idle since is the latest of these times:
 
-1. The last write to the session's transcript (`jsonl_for_session`, mtime).
+1. The last prompt, reply or tool call in the session's transcript
+   (`turns.last_turn_at`).
 2. The end of the last turn (the view's `completed_at`).
 3. Your last action on the pane in periscope (the view's `acted_at`).
 
 The views come from `state_hub.current_windows()` (section 3). The view takes
 the larger of the in-memory and the persisted stamp for 2 and 3
 (`periscope/window_view.py:435`). The transcript catches turns that ran while
-periscope was down. `acted_at` catches a pane that you opened in periscope but
+periscope was down. Its mtime does not count: an idle Claude keeps writing
+bookkeeping rows with no turn (see decision D4). `last_turn_at` reads at most
+the last 1 MB of the file. A session with no turn in there has only the other
+two times. `acted_at` catches a pane that you opened in periscope but
 did not type in. `focused_at` does not count: it is kept only in memory, and it
 changes when you switch windows in a terminal (see decision D4).
 
@@ -121,7 +125,7 @@ New module `periscope/idle_close.py`, in the same shape as `poke.py`.
 
 ### Pure functions
 
-- `idle_since(transcript_mtime, completed_at, acted_at) -> int | None`: the
+- `idle_since(last_turn, completed_at, acted_at) -> int | None`: the
   latest of the three. A 0 or `None` stamp does not count. With no stamp that
   counts, the result is `None`.
 - `verdict(pane, at, weekdays, pinned) -> str | None` returns a code. The
@@ -137,7 +141,8 @@ New module `periscope/idle_close.py`, in the same shape as `poke.py`.
      window option, so after `kill-pane` the window keeps the closed pane's
      pid, PR and ticket, and a resume could not take them back.
   5. The state is not `idle`: the state, for example `needs-input`, `done`
-     (decision D1) or `working`.
+     (decision D1), `working`, `background-shell` (decision D5) or `draft`
+     (decision D6).
   6. Weekday hours are equal to or more than the limit: `closes`.
   7. Otherwise: `weekend`.
 - `due(now, settings, log) -> bool`: true from `SWEEP_AT` to `SWEEP_AT` + 90
@@ -148,10 +153,14 @@ One function builds the `pane` dict from a view:
 `pane_from_view(view) -> dict | None`. It gives `None` for a codex or shell
 view. The dict has the fields that `verdict` reads, plus `pane_id`, `name`
 and `mem_mb` for the record and the preview, and `profile` for the record.
-The session id comes from
-`turns.session_id_for_pane(pane_id)`, and the transcript mtime from
-`jsonl_for_session`. `mem_mb` is `None` when the view's `res` is `None`: the
-process snapshot failed, or the pane is not in it (`periscope/resources.py:263`).
+The session id comes from `turns.session_id_for_pane(pane_id)`, and the
+transcript mtime from `jsonl_for_session`. The mtime serves only the
+`no-transcript` verdict and the re-check before the kill. An idle pane with
+text in its input box (the view's `pending_input`) has the state `draft`. An
+idle pane whose Claude has background shells has the state `background-shell`
+(`session_status.has_background_shell`). `mem_mb` is `None` when the view's
+`res` is `None`: the process snapshot failed, or the pane is not in it
+(`periscope/resources.py:263`).
 `profile` is `config.profile_env(view["profile"]) or None`. The view reads the
 profile from the live Claude's environment (`session_status.pane_profiles()`,
 `periscope/window_view.py:586`), so the sweep adds no `ps` call. `None` is the
@@ -166,9 +175,10 @@ unread result.
 
 The server sends codes, and the frontend forms the words, as
 `static/src/notify/copy.js:117` does for `needs-input`. In phase 2,
-`needs-input` reads "stays · needs you", `no-transcript` reads "stays · no
-transcript", `split-window` reads "stays · split window", `weekend` reads
-"stays · weekend skipped", and each other code reads "stays · <code>".
+`needs-input` reads "stays · needs you", `background-shell` reads "stays ·
+background shell", `no-transcript` reads "stays · no transcript",
+`split-window` reads "stays · split window", `weekend` reads "stays · weekend
+skipped", and each other code reads "stays · <code>".
 
 ### The tick
 
@@ -396,10 +406,15 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
 - `weekday_hours`: same day; Friday to Monday; a start on Saturday; an end on
   Sunday; the section 2 example (Thursday 04:00 gives 59, Friday 04:00 gives
   83).
-- `idle_since`: the transcript mtime wins when it is the newest; a 0 stamp does
-  not count; `idle_since(None, 0, 0)` is `None`.
+- `idle_since`: the last turn wins when it is the newest; a 0 stamp does not
+  count; `idle_since(None, 0, 0)` is `None`.
+- `last_turn_at` (`tests/test_turns.py`): the newest prompt, reply or tool call
+  under bookkeeping rows; meta and sidechain rows, and a row with no time, do
+  not count; no turn in reach gives `None`. The tail read gives every row once,
+  newest first, for any chunk size.
 - `pane_from_view`: a view whose `focused_at` is newer than every other stamp
-  gives the same `idle_since` as without it (decision D4); a codex or shell
+  gives the same `idle_since` as without it (decision D4); a transcript write
+  with no turn gives the same `idle_since`; a codex or shell
   view gives `None`; a view with `res` `None` gives `mem_mb` `None`, and the
   pane can still close; a view with the profile `full` gives `full`, and
   `default` gives `None`.
@@ -408,8 +423,8 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   exactly `weekdays × 24` weekday hours gives `closes`; no session id; no
   transcript; an account-B session whose transcript `jsonl_for_session` does
   not find; pinned; a window with 2 panes gives `split-window`;
-  `needs-input`; `done`; `working`; a pane over the limit only in wall-clock
-  hours gives `weekend`.
+  `needs-input`; `done`; `working`; `background-shell` and `draft`, only for an
+  idle pane; a pane over the limit only in wall-clock hours gives `weekend`.
 - `_tick`: when due, it writes the log and hands one sweep to `_bg`; when not
   due, nothing (`tests/test_poke.py:208`). When the stub raises, the log is
   written, and a second `_tick` at the same frozen time hands nothing to
@@ -470,9 +485,8 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   profile, so a `full` pane comes back on the default profile. This is true
   today. [THI-471](https://linear.app/thibault-dody/issue/THI-471) tracks the
   fix.
-- **Background shells**: an idle Claude can own a background shell, for example
-  a dev server that it started. Periscope has no signal for this. The sweep
-  kills it with the pane.
+- **A forgotten background shell** keeps its pane open, with its memory
+  (decision D5).
 - **Second account**: `jsonl_for_session` looks only in `~/.claude/projects`.
   The move-account docstring says another account's `projects` folder is a
   link to it. If it is not, an account-B pane gets `no-transcript` and never
@@ -512,7 +526,23 @@ build, it runs `build_state` in a thread (`periscope/state_hub.py:72`).
   closes.
 - **D4. What counts as use.** Decided on 19 Nov: transcript writes, turn ends
   and your actions in periscope. Terminal focus (`focused_at`) does not count,
-  because a restart clears it.
+  because a restart clears it. Changed on 23 Nov: the last prompt, reply or
+  tool call in the transcript counts, not its last write. A dry run on 9 real
+  panes found 5 idle ones whose last turn was 5 to 116 hours old and whose
+  transcript was less than an hour old. Claude had written up to 50
+  `artifact-autoreact-ledger` rows with no turn. With the mtime, the sweep
+  closed none of them. Of 376 transcripts, 61 had an mtime more than an hour
+  after their last turn.
+
+- **D5. Panes with background shells.** Decided on 23 Nov: keep them open, with
+  the reason. A kill would end the shell too, for example a dev server. Claude
+  reports the status `shell` for such a session. On 23 Nov, the 3 of 9 live
+  panes with that status all showed "1 shell" or "2 shells" in their footer and
+  had a `zsh` child process. No other pane did.
+- **D6. Panes with unsent text.** Decided on 23 Nov: keep them open, with the
+  reason. Resume gives back the conversation, not text that you typed and did
+  not send. The re-check before the kill does not read the input box again:
+  the views are at most 13 seconds old.
 
 ## 10. Assumptions to check in the implementation
 

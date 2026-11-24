@@ -192,6 +192,22 @@ def test_one_ps_serves_the_whole_poll(monkeypatch, mocker):
     take.assert_called_once()
 
 
+# ── background shells ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("status,shells", [("shell", True), ("idle", False), ("busy", False), ("waiting", False)])
+def test_has_background_shell_reads_the_shell_status(tmp_path, monkeypatch, status, shells):
+    _seed(tmp_path, monkeypatch, _sess(106, "sid-b", status))
+    assert ss.has_background_shell("sid-b") is shells
+
+
+def test_has_background_shell_is_false_without_a_live_claude(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, _sess(107, "sid-dead", "shell"), live_pids=set())
+    assert not ss.has_background_shell("sid-dead")
+    assert not ss.has_background_shell("sid-missing")
+    assert not ss.has_background_shell(None)
+
+
 # ── claude_proc_for: measurement independent of status trust ─────────────
 
 

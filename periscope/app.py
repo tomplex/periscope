@@ -43,6 +43,7 @@ from periscope.routes import (
     ws,
 )
 from periscope.routes import cleanup as cleanup_routes
+from periscope.routes import idle_close as idle_close_routes
 from periscope.routes import open as open_route
 from periscope.routes import projects as projects_routes
 from periscope.routes import reviews as reviews_route
@@ -150,9 +151,13 @@ async def lifespan(_app: FastAPI):
         from periscope import poke
 
         poke_task = _task("poke", poke.run())
+        # Idle close (periscope.idle_close): kills idle Claude panes at 04:00.
+        # Prod only: dev shares prod's tmux.
+        idle_close_task = _task("idle-close", idle_close.run())
     else:
         activity_task = None
         poke_task = None
+        idle_close_task = None
     # One-shot single-session consolidation: physically move every managed
     # window into MANAGED_SESSION, then seed tracks. Self-gated (is_prod +
     # persisted flag), so call it unconditionally. Synchronous + pre-serve so
@@ -196,6 +201,8 @@ async def lifespan(_app: FastAPI):
             activity_task.cancel()
         if poke_task is not None:
             poke_task.cancel()
+        if idle_close_task is not None:
+            idle_close_task.cancel()
         if mcp_task is not None:
             with suppress(asyncio.CancelledError, Exception):
                 await mcp_task
@@ -222,6 +229,7 @@ for r in (
     fs,
     healthz,
     history,
+    idle_close_routes,
     linear,
     open_route,
     pane,

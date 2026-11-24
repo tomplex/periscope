@@ -12,6 +12,7 @@ import { useEffect, useState } from "preact/hooks";
 import { useEscape } from "../hooks/useEscape.js";
 import { track } from "../track.js";
 import { FontPicker } from "./FontPicker.jsx";
+import { idleCloseLine } from "./idleClose.js";
 import { modalRequest } from "./modalRequest.js";
 import { NotifySettings } from "./NotifySettings.jsx";
 import { TabColourPicker } from "./TabColourPicker.jsx";
@@ -32,6 +33,8 @@ export function SettingsModal() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [idleDays, setIdleDays] = useState(14);
+  const [idleClose, setIdleClose] = useState("");  // weekdays; "" is off
+  const [idleCloseRows, setIdleCloseRows] = useState(null);  // null: the setting is off
   const [layoutDefault, setLayoutDefault] = useState("sibling");
   // overrides: array of { repo, layout } so editing/removing is stable.
   const [overrides, setOverrides] = useState([]);
@@ -63,8 +66,19 @@ export function SettingsModal() {
       // Unset shows the server default (store.DEFAULT_REPO_ROOTS) so a fresh
       // install sees where periscope is looking before it saves anything.
       setRoots((s.repo_roots ?? ["~/dev"]).join("\n"));
+      setIdleClose(s.idle_close_weekdays ?? "");
+      setIdleCloseRows(null);
+      if (s.idle_close_weekdays) {
+        const { data: rows } = await modalRequest("load idle close preview", "/api/idle-close/preview");
+        setIdleCloseRows(rows ?? null);
+      }
     })();
   }, [open.value]);
+
+  function editIdleClose(weekdays) {
+    setIdleClose(weekdays);
+    setIdleCloseRows(null);  // the preview is for the saved value
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -77,6 +91,7 @@ export function SettingsModal() {
     }
     const patch = {
       cleanup_idle_days: idle,
+      idle_close_weekdays: idleClose === "" ? null : Number(idleClose),  // null turns it off
       worktree_layout_default: layoutDefault,
       worktree_layout_overrides: overridesMap,
       // null clears; the server rejects any name it can't currently detect.
@@ -122,6 +137,23 @@ export function SettingsModal() {
               onInput={(e) => setIdleDays(e.currentTarget.value)}
             />
           </label>
+          <div class="settings-idle-close">
+            <div class="settings-idle-close-row">
+              <label for="settings-idle-close">Close idle Claude panes after</label>
+              <input
+                id="settings-idle-close"
+                type="number"
+                min="1"
+                max="30"
+                placeholder="off"
+                value={idleClose}
+                onInput={(e) => editIdleClose(e.currentTarget.value)}
+              />
+              <span>weekdays</span>
+              <button type="button" disabled={idleClose === ""} onClick={() => editIdleClose("")}>off</button>
+            </div>
+            {idleCloseRows && <p class="settings-overrides-hint">{idleCloseLine(idleCloseRows)}</p>}
+          </div>
           <label>
             Preferred editor
             <select

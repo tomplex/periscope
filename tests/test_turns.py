@@ -2,6 +2,9 @@
 pane_session_hook producer that records the pane -> session mapping."""
 
 import json
+from datetime import UTC, datetime
+
+import pytest
 
 import periscope.activity as activity
 import periscope.session_status as session_status
@@ -269,15 +272,15 @@ def test_last_reply_is_capped(tmp_path):
 
 def test_last_reply_reads_back_past_a_chunk_of_bookkeeping(tmp_path):
     ledger = {"type": "artifact-autoreact-ledger", "pad": "x" * 1000}
-    rows = [ledger] * (2 * turns._REPLY_CHUNK // 1000)
+    rows = [ledger] * (2 * turns._TAIL_CHUNK // 1000)
     path = _transcript(tmp_path, _said(_text("Still found.")), *rows)
     assert turns.last_reply(path) == "Still found."
 
 
 def test_last_reply_gives_up_past_its_reach(tmp_path, monkeypatch):
-    monkeypatch.setattr(turns, "_REPLY_REACH", 4 * turns._REPLY_CHUNK)
+    monkeypatch.setattr(turns, "_TAIL_REACH", 4 * turns._TAIL_CHUNK)
     ledger = {"type": "artifact-autoreact-ledger", "pad": "x" * 1000}
-    rows = [ledger] * (5 * turns._REPLY_CHUNK // 1000)
+    rows = [ledger] * (5 * turns._TAIL_CHUNK // 1000)
     path = _transcript(tmp_path, _said(_text("Too far back.")), *rows)
     assert turns.last_reply(path) is None
 
@@ -286,6 +289,71 @@ def test_last_reply_skips_a_torn_or_foreign_row(tmp_path):
     path = tmp_path / "s1.jsonl"
     path.write_text(json.dumps(_said(_text("Survives."))) + "\n[1, 2]\n" + '{"type": "assist')
     assert turns.last_reply(path) == "Survives."
+
+
+# ── the tail read and last_turn_at: when a session last ran a prompt or reply ──
+
+
+@pytest.mark.parametrize("chunk", [1, 7, 64, 1000])
+@pytest.mark.parametrize("ends_mid_row", [False, True])
+def test_the_tail_read_gives_every_row_once_newest_first(tmp_path, monkeypatch, chunk, ends_mid_row):
+    monkeypatch.setattr(turns, "_TAIL_CHUNK", chunk)
+    path = _transcript(tmp_path, *({"type": "mode", "n": n, "pad": "é" * n} for n in range(40)))
+    if ends_mid_row:
+        path.write_text(path.read_text() + '{"type": "mo')
+    assert [ev["n"] for ev in turns._events_from_end(path)] == list(range(39, -1, -1))
+
+
+def test_the_tail_read_stops_at_its_reach(tmp_path, monkeypatch):
+    path = _transcript(tmp_path, *({"type": "mode", "n": n} for n in range(100)))
+    row = len(json.dumps({"type": "mode", "n": 99})) + 1
+    monkeypatch.setattr(turns, "_TAIL_CHUNK", 64)
+    monkeypatch.setattr(turns, "_TAIL_REACH", 10 * row + 5)  # cuts the 11th row
+    assert [ev["n"] for ev in turns._events_from_end(path)] == list(range(99, 89, -1))
+
+
+def _at(event, when):
+    return {**event, "timestamp": when}
+
+
+def _epoch(*when):
+    return datetime(*when, tzinfo=UTC).timestamp()
+
+
+def test_last_turn_at_is_the_newest_prompt_or_reply_under_the_bookkeeping(tmp_path):
+    path = _transcript(
+        tmp_path,
+        _at(_prompt("fix the banner"), "2026-11-16T22:00:00.000Z"),
+        _at(_said(_text("Fixed.")), "2026-11-16T22:00:30.000Z"),
+        *(_at(row, "2026-11-20T09:00:00.000Z") for row in _BOOKKEEPING),
+    )
+    assert turns.last_turn_at(path) == _epoch(2026, 11, 16, 22, 0, 30)
+
+
+def test_last_turn_at_counts_a_turn_that_ends_in_a_tool_call(tmp_path):
+    path = _transcript(tmp_path, _at(_TOOL_USE, "2026-11-16T22:00:00Z"), _at(_TOOL_RESULT, "2026-11-16T22:05:00Z"))
+    assert turns.last_turn_at(path) == _epoch(2026, 11, 16, 22, 5)
+
+
+def test_last_turn_at_skips_meta_and_sidechain_events_and_a_row_with_no_time(tmp_path):
+    path = _transcript(
+        tmp_path,
+        _at(_prompt("go"), "2026-11-16T22:00:00Z"),
+        _at(_said(_text("subagent"), isSidechain=True), "2026-11-17T22:00:00Z"),
+        _at({**_prompt("pushed"), "isMeta": True}, "2026-11-18T22:00:00Z"),
+        _said(_text("no time")),
+        _at(_said(_text("bad time")), "yesterday"),
+    )
+    assert turns.last_turn_at(path) == _epoch(2026, 11, 16, 22)
+
+
+def test_last_turn_at_is_none_without_a_turn_in_reach(tmp_path, monkeypatch):
+    assert turns.last_turn_at(_transcript(tmp_path, *_BOOKKEEPING)) is None
+    assert turns.last_turn_at(tmp_path / "gone.jsonl") is None
+    monkeypatch.setattr(turns, "_TAIL_REACH", 4 * turns._TAIL_CHUNK)
+    ledger = {"type": "artifact-autoreact-ledger", "pad": "x" * 1000}
+    far = _transcript(tmp_path, _at(_prompt("go"), "2026-11-16T22:00:00Z"), *[ledger] * (5 * turns._TAIL_CHUNK // 1000))
+    assert turns.last_turn_at(far) is None
 
 
 def test_last_reply_for_session_finds_the_file_and_caches_by_size(tmp_path, monkeypatch):
