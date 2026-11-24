@@ -58,8 +58,12 @@ async def lifespan(_app: FastAPI):
 
     forks.install()
     log.info("periscope starting (pid=%d, port=%d)", os.getpid(), config.PORT)
-    from periscope import store
+    from periscope import backup, store
 
+    try:
+        backup.back_up_stores()
+    except Exception:
+        log.warning("store backup failed; booting without one", exc_info=True)
     store.seed_accounts_if_missing()
     # Bound periscope.db growth — drop events older than 30 days, import the
     # legacy pane_sessions/ directory if present, then drop pane_sessions rows

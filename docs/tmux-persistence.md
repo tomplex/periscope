@@ -220,3 +220,32 @@ to `/tmp/tmux-$UID/default`, the user's own server, when it names a missing
 one, and `install`'s re-source then executes the temp confs there. Unset
 `TMUX` and `TMUX_PLUGIN_MANAGER_PATH` too: a shell in a pane inherits both, and
 TPM loads whatever plugin dir the latter names.
+
+## Store backups (`periscope/backup.py`)
+
+Each prod boot copies `state.json` and `periscope.db` to
+`~/.config/periscope/backups/<time>/` before any boot step deletes rows, and
+keeps the newest 10 copies. The tmux layout is not in them: resurrect keeps its
+own saves.
+
+To go back to a copy (this discards everything written after it):
+
+1. Start tmux and wait until its restore is complete. Periscope deletes the
+   rows of panes that tmux does not show, so a start before that undoes the
+   recovery. A pane that got a new `@periscope_id` loses its old rows again.
+2. Run `bin/periscope stop`, then repeat `bin/periscope status` until it prints
+   `not loaded`. `stop` returns before the server exits, and a live server
+   overwrites `state.json`.
+3. Restore both stores. `.restore` is safe while a Claude hook writes to the
+   database. `test` is not optional: `.restore` from a folder that has no
+   database empties the live one.
+
+   ```sh
+   cd ~/.config/periscope
+   copy=backups/<time>
+   test -f $copy/periscope.db && sqlite3 periscope.db ".restore $copy/periscope.db" && cp $copy/state.json .
+   ```
+
+4. Run `bin/periscope start`.
+
+To get a few rows back instead, read them from the copy with `sqlite3`.

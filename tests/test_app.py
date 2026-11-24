@@ -202,6 +202,41 @@ def test_lifespan_binds_mcp_on_prod_port(mocker, monkeypatch):
     assert called["count"] == 1
 
 
+def test_lifespan_backs_up_the_stores_before_any_other_boot_step(mocker, monkeypatch):
+    import periscope.config
+
+    monkeypatch.setattr(periscope.config, "PORT", periscope.config.DEV_PORT)
+    steps: list[str] = []
+    mocker.patch("periscope.backup.back_up_stores", side_effect=lambda: steps.append("backup"))
+    mocker.patch("periscope.store.seed_accounts_if_missing", side_effect=lambda: steps.append("accounts"))
+    mocker.patch("periscope.app._bg", side_effect=lambda name, *a, **kw: steps.append(name))
+    mocker.patch("periscope.tracks.seed_tracks", return_value=0)
+
+    from periscope.app import app
+
+    with TestClient(app):
+        pass
+
+    assert steps[0] == "backup"
+    assert "pane-sessions-housekeeping" in steps
+
+
+def test_lifespan_boots_when_the_backup_fails(mocker, monkeypatch, caplog):
+    import periscope.config
+
+    monkeypatch.setattr(periscope.config, "PORT", periscope.config.DEV_PORT)
+    mocker.patch("periscope.backup.back_up_stores", side_effect=OSError("disk full"))
+    mocker.patch("periscope.app._bg")
+    mocker.patch("periscope.tracks.seed_tracks", return_value=0)
+
+    from periscope.app import app
+
+    with caplog.at_level("WARNING", logger="periscope"), TestClient(app):
+        pass
+
+    assert any("store backup failed" in r.message for r in caplog.records)
+
+
 def test_app_includes_pane_actions_router():
     from periscope.app import app
 

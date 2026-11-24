@@ -204,6 +204,17 @@ def _no_tmux_persistence_tick(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_store_backup(monkeypatch):
+    """Keep the lifespan's boot copy off the real machine: config.is_prod() is
+    True under pytest, so each lifespan test would write into the developer's
+    ~/.config/periscope/backups and push out a real copy. test_backup.py binds
+    the real function at import."""
+    from periscope import backup
+
+    monkeypatch.setattr(backup, "back_up_stores", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_track_maintenance(monkeypatch):
     """Keep resolve_pids' one-shot pane_tracks maintenance OFF by default.
 
