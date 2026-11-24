@@ -12,6 +12,7 @@ mod text_behavior;
 mod zoom;
 
 fn main() {
+    text_behavior::disable_automatic_text_behaviors();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -37,7 +38,6 @@ fn main() {
             // submenu, paste in input fields silently fails.
             let handle = app.handle();
             notifications::init(handle);
-            text_behavior::disable_automatic_text_behaviors();
             let app_submenu = SubmenuBuilder::new(handle, "Periscope")
                 .item(&PredefinedMenuItem::about(handle, Some("Periscope"), None)?)
                 .separator()
