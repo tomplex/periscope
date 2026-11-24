@@ -64,11 +64,14 @@ write_plist() {
   <string>com.tom.periscope</string>
   <key>WorkingDirectory</key>
   <string>$REPO</string>
+  <!-- This script, not uv: System Settings > Login Items names a job after
+       whoever signed its program, and falls back to the file name for an
+       unsigned one. Launching uv directly lists periscope as "OpenAI OpCo,
+       LLC" (uv's signer); switching that off stops the server. -->
   <key>ProgramArguments</key>
   <array>
-    <string>$UV</string>
-    <string>run</string>
-    <string>server.py</string>
+    <string>$REPO/bin/periscope</string>
+    <string>serve</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -488,6 +491,11 @@ PY
     # arbitrary cwd); stdlib-only, so plain python3 with no uv/venv.
     ( cd "$REPO" && exec python3 -m periscope.resurrect "$2" )
     ;;
+  serve)
+    # What launchd runs (see write_plist for why it is this script). exec, so
+    # the job's process is uv itself: no sh left in between to swallow signals.
+    cd "$REPO" && exec uv run server.py
+    ;;
   start)
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
     ;;
@@ -504,7 +512,7 @@ PY
     tail -F "$LOG"
     ;;
   *)
-    echo "usage: $0 {install|update|uninstall|install-hook|install-claude-hook|install-codex-hook|uninstall-hook|uninstall-claude-hook|uninstall-codex-hook|install-tmux|uninstall-tmux|resurrect-rewrite|start|stop|restart|status|tail}"
+    echo "usage: $0 {install|update|uninstall|install-hook|install-claude-hook|install-codex-hook|uninstall-hook|uninstall-claude-hook|uninstall-codex-hook|install-tmux|uninstall-tmux|resurrect-rewrite|serve|start|stop|restart|status|tail}"
     exit 1
     ;;
 esac
