@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from periscope.pids import (
     _PID_TTL_S,
     _REBIND_TTL_S,
@@ -26,6 +28,11 @@ def _mkwin(
         "window_id": window_id,
         "pid_raw": pid_raw,
     }
+
+
+def _record(sid, ts, **fields):
+    last_seen = {"session": "x", "name": "y", "branch": None, "cwd": "/wt", "pane_id": "%9", "sid": sid, "ts": ts}
+    return {"last_seen": last_seen, **fields}
 
 
 def test_gc_windows_keeps_spawned_by_only_entry():
@@ -743,10 +750,8 @@ def test_resolve_migration_never_clobbers_pid_row(clean_state, fresh_activity_db
 
 
 def test_prune_gated_on_completed_resolve(clean_state, fresh_activity_db, mocker):
-    """Boot pruned pane_tracks BEFORE any resolve pass — post-tmux-restart the
-    live-pid set is unknowable until rebind runs, so that prune deleted every
-    tag at exactly the moment rebind could reattach them. Prune only fires
-    from a completed resolve pass, using its taken set."""
+    """The prune runs once, from a completed full-roster pass, and drops the
+    rows of pids that state.json does not have."""
     mocker.patch("periscope.pids._stamp_pid")
     from periscope import activity, pids
 
@@ -769,9 +774,9 @@ def test_prune_gated_on_completed_resolve(clean_state, fresh_activity_db, mocker
 def test_maintenance_never_runs_on_partial_pass(clean_state, fresh_activity_db, mocker):
     """resolve_pids is also called with SINGLE windows (channels.py:311,
     routes/pane.py:70, routes/auto_rename.py:119). If one of those lands
-    before the first full poll, pruning against its one-pid taken set would
-    delete every other live pane's rows — the mass-deletion class the conftest
-    documents as real data loss. Maintenance requires full_roster=True."""
+    before the first full poll, pids it did not see may not be in state.json
+    yet, and the prune would delete their rows — the mass-deletion class the
+    conftest documents as real data loss. Maintenance requires full_roster=True."""
     mocker.patch("periscope.pids._stamp_pid")
     from periscope import activity, pids
 
@@ -821,12 +826,160 @@ def test_identity_merge_scenario_end_to_end(clean_state, fresh_activity_db, mock
 
     assert hub2["pid"] == hub_pid  # identity survived by sid, not order
     assert impl2["pid"] == impl_pid
-    # The full-roster maintenance pass ran (taken = {hub_pid, impl_pid}): the
-    # hub's tag is on a LIVE pid so prune keeps it, and the impl pane —
-    # never tagged — must not have grown one.
+    # The full-roster maintenance pass ran: state.json has the hub's pid, so
+    # prune keeps its tag, and the impl pane — never tagged — must not have
+    # grown one.
     assert activity.get_pane_track(hub_pid) == "tk_pit"  # tag keyed on pid
     assert activity.get_pane_track(impl_pid) is None
     assert pids._TRACKS_MAINTAINED is True
+
+
+# --- tmux restart: a window comes back before its Claude does -------------------
+
+
+@pytest.fixture
+def prod(monkeypatch):
+    from periscope import config
+
+    monkeypatch.setattr(config, "PORT", config.PROD_PORT)
+
+
+@pytest.mark.parametrize("hint", [{"sid": "sid-A", "resume": None}, {"sid": None, "resume": "sid-A"}])
+def test_restored_window_takes_back_its_pid_once_its_claude_starts(clean_state, mocker, prod, hint):
+    """The poll that lists it first finds no session, mints a pid and stamps it."""
+    stamp = mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+
+    start = int(time.time()) - 5
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", start - 3600, linked_pr=9609)}
+    w = _mkwin(cwd="/wt")
+    resolve_pids([w], server_start=start)
+    minted = w["pid"]
+    assert minted != "aaaa1111"
+
+    w = _mkwin(cwd="/wt", pid_raw=minted)
+    resolve_pids([w], session_hints={"%1": hint}, server_start=start)
+    assert w["pid"] == "aaaa1111"
+    stamp.assert_called_with("@1", "aaaa1111")
+
+
+def test_spawn_stamp_is_not_undone_by_the_pid_a_poll_minted(clean_state, mocker, prod):
+    """A poll mints A for a new window, its Claude starts, then the spawn stamps
+    B. A's record has the session, but it is from this tmux server."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+
+    now = int(time.time())
+    start = now - 3600
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", now - 2)}
+    w = _mkwin(cwd="/wt", pid_raw="bbbb2222")
+    resolve_pids([w], session_hints={"%1": {"sid": "sid-A", "resume": None}}, server_start=start)
+    assert w["pid"] == "bbbb2222"
+
+
+@pytest.mark.parametrize(
+    "fresh",
+    [
+        pytest.param({"linked_linear": "THI-1"}, id="has a ticket"),
+        pytest.param(_record("sid-B", 0), id="ran another session"),
+    ],
+)
+def test_a_pid_in_use_is_not_given_up_for_an_older_one(clean_state, mocker, prod, fresh):
+    """The session of an older pid can come to a window by hand (/resume)."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+
+    start = int(time.time()) - 60
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", start - 3600), "bbbb2222": fresh}
+    w = _mkwin(cwd="/wt", pid_raw="bbbb2222")
+    resolve_pids([w], session_hints={"%1": {"sid": "sid-A", "resume": None}}, server_start=start)
+    assert w["pid"] == "bbbb2222"
+
+
+@pytest.mark.parametrize("stamp", ["acked_at", "completed_at"])
+def test_a_stamp_periscope_sets_itself_does_not_keep_the_minted_pid(clean_state, mocker, prod, stamp):
+    """Opening a restored pane stamps acked_at, and a poll stamps completed_at."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+
+    start = int(time.time()) - 60
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", start - 3600), "bbbb2222": {stamp: start + 10}}
+    w = _mkwin(cwd="/wt", pid_raw="bbbb2222")
+    resolve_pids([w], session_hints={"%1": {"sid": "sid-A", "resume": None}}, server_start=start)
+    assert w["pid"] == "aaaa1111"
+
+
+def test_a_single_pane_route_takes_the_pid_back_too(clean_state, mocker, prod):
+    """/api/pane polls the open pane with a row it builds itself, and can be
+    first to see the session."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import pids, session_status, store
+
+    start = int(time.time()) - 60
+    mocker.patch("periscope.pids.panes_snapshot", return_value=[{"start_time": str(start)}])
+    mocker.patch.object(session_status, "pane_resume_ids", return_value={})
+    mocker.patch.object(session_status, "live_session_id_for_pane", return_value="sid-A")
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", start - 3600), "bbbb2222": {}}
+    w = _mkwin(cwd="/wt", pid_raw="bbbb2222")
+    pids._attach_git_then_resolve_pids([w])
+    assert w["pid"] == "aaaa1111"
+
+
+def test_dev_never_takes_a_pid_back(clean_state, mocker, monkeypatch):
+    """Dev shares prod's tmux, and its records are as old as its last run."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import config, store
+
+    monkeypatch.setattr(config, "PORT", config.DEV_PORT)
+    start = int(time.time()) - 60
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", start - 3600)}
+    w = _mkwin(cwd="/wt", pid_raw="bbbb2222")
+    resolve_pids([w], session_hints={"%1": {"sid": "sid-A", "resume": None}}, server_start=start)
+    assert w["pid"] == "bbbb2222"
+
+
+def test_restored_window_never_takes_a_pid_another_window_wears(clean_state, mocker, prod):
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+
+    start = int(time.time()) - 5
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", start - 3600)}
+    first = _mkwin(cwd="/wt", pid_raw="bbbb2222")
+    wearer = _mkwin(index=2, pane_id="%2", window_id="@2", pid_raw="aaaa1111")
+    resolve_pids([first, wearer], session_hints={"%1": {"sid": "sid-A", "resume": None}}, server_start=start)
+    assert (first["pid"], wearer["pid"]) == ("bbbb2222", "aaaa1111")
+
+
+@pytest.mark.parametrize("hint", [{"sid": "sid-A", "resume": None}, {"sid": None, "resume": "sid-A"}])
+def test_a_session_with_several_records_rebinds_to_the_one_seen_last(clean_state, mocker, hint):
+    """A spawn leaves two: the pid a poll minted, then the one the spawn stamped."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import store
+
+    now = int(time.time())
+    store._STATE["windows"] = {
+        "aaaa1111": _record("sid-A", now - 9000),
+        "bbbb2222": _record("sid-A", now - 5000, linked_pr=9609),
+        "cccc3333": _record("sid-A", now - 8000),
+    }
+    w = _mkwin(cwd="/wt")
+    resolve_pids([w], session_hints={"%1": hint})
+    assert w["pid"] == "bbbb2222"
+
+
+def test_rail_group_survives_a_first_pass_in_the_middle_of_a_restore(clean_state, fresh_activity_db, mocker):
+    """The first full-roster pass after a tmux restart can see one scratch window."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import activity, pids, store
+
+    start = int(time.time()) - 5
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", start - 3600)}
+    activity.set_pane_track("aaaa1111", "tk_goal")
+    activity.set_pane_track("dead0001", "tk_goal")
+    pids._TRACKS_MAINTAINED = False
+    resolve_pids([_mkwin(session="0", pane_id="%0", window_id="@0")], full_roster=True, server_start=start)
+    assert activity.get_pane_track("aaaa1111") == "tk_goal"
+    assert activity.get_pane_track("dead0001") is None  # state.json has no such pid
 
 
 # --- window_by_pid (moved from channels._resolve_window_by_pid) ---------------

@@ -508,7 +508,7 @@ def pane_track_map() -> dict[str, str]:
         return dict(_conn().execute("SELECT pid, track_id FROM pane_tracks"))
 
 
-def prune_pane_tracks(alive_pids: set[str]) -> int:
+def prune_pane_tracks(known_pids: set[str]) -> int:
     with _LOCK:
         c = _conn()
         existing = [r[0] for r in c.execute("SELECT pid FROM pane_tracks")]
@@ -517,7 +517,7 @@ def prune_pane_tracks(alive_pids: set[str]) -> int:
         # %N rows predate the pid re-key and are the sweep's business — judged
         # against a pid set they would ALWAYS look dead and lose their tag
         # before resolve's lazy migration could carry it over.
-        dead = [p for p in existing if not p.startswith("%") and p not in alive_pids and p not in closed]
+        dead = [p for p in existing if not p.startswith("%") and p not in known_pids and p not in closed]
         c.executemany("DELETE FROM pane_tracks WHERE pid=?", [(p,) for p in dead])
         c.commit()
         return len(dead)

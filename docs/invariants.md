@@ -281,6 +281,16 @@ These are the non-obvious behaviors worth preserving:
     `--resume <uuid>` lineage but ONLY with cwd corroboration — the hint is
     regex over ps argv, which flattens prompts, so a pane whose prompt merely
     quotes a resume command must not inherit a dead session's identity.
+    Several records can have one session (a poll mints a pid for a new window,
+    then `stamp_new_window` stamps another), so both passes take the record
+    seen last. A window restored by tmux-resurrect is listed before its Claude
+    starts: its first pass finds no session, mints and stamps. A later pass
+    therefore takes back the pid the window wore before the tmux server
+    restarted (`_pid_before_restart`), but only while nothing is attached to
+    the minted pid and it ran no session, and only for a record last seen
+    before `#{start_time}` — without that gate, the stamp of every spawn would
+    be undone. Prod only: dev shares prod's tmux, and its old records pass
+    that gate.
     Duplicate pids are arbitrated by recorded-sid evidence
     (`_arbitrate_duplicates`), not list order. Every rebind and arbitration
     decision is logged — `grep "rebind\|duplicate @periscope_id"` is the
@@ -294,10 +304,10 @@ These are the non-obvious behaviors worth preserving:
     named `pid` so a raw-SQL regression against `pane_id` fails loudly, and
     the move-tab route 422s on a `pane_id` body field. Legacy `%N` rows
     migrate lazily in the first completed FULL-ROSTER resolve pass
-    (`_maintain_track_rows`), which also owns the prune — gated on the pass's
-    `taken` set because a boot-time prune fires before rebind can reattach,
-    and a partial (single-window) pass's one-pid taken set would mass-delete
-    every other pane's rows.
+    (`_maintain_track_rows`), which also owns the prune. The prune drops the
+    row of a pid that state.json no longer has, never of a pid that tmux does
+    not show: during a restore tmux shows almost no pane (on 2026-11-24 the
+    first pass saw one scratch window, and all 9 rows went).
 
 20. **A remote key press into a Claude pane re-derives its request
     server-side, re-reads the screen, addresses the pane by `%id`, and (for a

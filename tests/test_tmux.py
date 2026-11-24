@@ -377,7 +377,23 @@ def test_window_identity_empty_on_unstamped(mocker):
     assert tmux_mod.window_identity("s:1") == ("", "%7", "@9")
 
 
-_FIELDS = ["main", "0", "shell", "1", "/home/tom", "", "%5", "1717250000", "@1", "4242", "zsh", "", "1", "1"]
+_FIELDS = [
+    "main",
+    "0",
+    "shell",
+    "1",
+    "/home/tom",
+    "",
+    "%5",
+    "1717250000",
+    "@1",
+    "4242",
+    "zsh",
+    "",
+    "1",
+    "1",
+    "1717240000",
+]
 _ROW = "\x1f".join(_FIELDS)
 
 
