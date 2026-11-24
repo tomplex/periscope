@@ -304,10 +304,10 @@ These are the non-obvious behaviors worth preserving:
     named `pid` so a raw-SQL regression against `pane_id` fails loudly, and
     the move-tab route 422s on a `pane_id` body field. Legacy `%N` rows
     migrate lazily in the first completed FULL-ROSTER resolve pass
-    (`_maintain_track_rows`), which also owns the prune — gated on the pass's
-    `taken` set because a boot-time prune fires before rebind can reattach,
-    and a partial (single-window) pass's one-pid taken set would mass-delete
-    every other pane's rows.
+    (`_maintain_track_rows`), which also owns the prune. The prune drops the
+    row of a pid that state.json no longer has, never of a pid that tmux does
+    not show: during a restore tmux shows almost no pane (on 2026-11-24 the
+    first pass saw one scratch window, and all 9 rows went).
 
 20. **A remote key press into a Claude pane re-derives its request
     server-side, re-reads the screen, addresses the pane by `%id`, and (for a

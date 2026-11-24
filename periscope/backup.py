@@ -1,7 +1,7 @@
 """Copy the persistent stores at boot, before this process deletes rows from them.
 
-Boot and the first full-roster pass drop the rows of panes that tmux does not
-show. After a reboot that is every pane, until the restore brings them back.
+Boot drops the rows of panes that tmux does not show, and of old pids and
+events. After a reboot tmux shows no pane until its restore.
 """
 
 import shutil

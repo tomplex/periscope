@@ -750,10 +750,8 @@ def test_resolve_migration_never_clobbers_pid_row(clean_state, fresh_activity_db
 
 
 def test_prune_gated_on_completed_resolve(clean_state, fresh_activity_db, mocker):
-    """Boot pruned pane_tracks BEFORE any resolve pass — post-tmux-restart the
-    live-pid set is unknowable until rebind runs, so that prune deleted every
-    tag at exactly the moment rebind could reattach them. Prune only fires
-    from a completed resolve pass, using its taken set."""
+    """The prune runs once, from a completed full-roster pass, and drops the
+    rows of pids that state.json does not have."""
     mocker.patch("periscope.pids._stamp_pid")
     from periscope import activity, pids
 
@@ -776,9 +774,9 @@ def test_prune_gated_on_completed_resolve(clean_state, fresh_activity_db, mocker
 def test_maintenance_never_runs_on_partial_pass(clean_state, fresh_activity_db, mocker):
     """resolve_pids is also called with SINGLE windows (channels.py:311,
     routes/pane.py:70, routes/auto_rename.py:119). If one of those lands
-    before the first full poll, pruning against its one-pid taken set would
-    delete every other live pane's rows — the mass-deletion class the conftest
-    documents as real data loss. Maintenance requires full_roster=True."""
+    before the first full poll, pids it did not see may not be in state.json
+    yet, and the prune would delete their rows — the mass-deletion class the
+    conftest documents as real data loss. Maintenance requires full_roster=True."""
     mocker.patch("periscope.pids._stamp_pid")
     from periscope import activity, pids
 
@@ -828,9 +826,9 @@ def test_identity_merge_scenario_end_to_end(clean_state, fresh_activity_db, mock
 
     assert hub2["pid"] == hub_pid  # identity survived by sid, not order
     assert impl2["pid"] == impl_pid
-    # The full-roster maintenance pass ran (taken = {hub_pid, impl_pid}): the
-    # hub's tag is on a LIVE pid so prune keeps it, and the impl pane —
-    # never tagged — must not have grown one.
+    # The full-roster maintenance pass ran: state.json has the hub's pid, so
+    # prune keeps its tag, and the impl pane — never tagged — must not have
+    # grown one.
     assert activity.get_pane_track(hub_pid) == "tk_pit"  # tag keyed on pid
     assert activity.get_pane_track(impl_pid) is None
     assert pids._TRACKS_MAINTAINED is True
@@ -967,6 +965,21 @@ def test_a_session_with_several_records_rebinds_to_the_one_seen_last(clean_state
     w = _mkwin(cwd="/wt")
     resolve_pids([w], session_hints={"%1": hint})
     assert w["pid"] == "bbbb2222"
+
+
+def test_rail_group_survives_a_first_pass_in_the_middle_of_a_restore(clean_state, fresh_activity_db, mocker):
+    """The first full-roster pass after a tmux restart can see one scratch window."""
+    mocker.patch("periscope.pids._stamp_pid")
+    from periscope import activity, pids, store
+
+    start = int(time.time()) - 5
+    store._STATE["windows"] = {"aaaa1111": _record("sid-A", start - 3600)}
+    activity.set_pane_track("aaaa1111", "tk_goal")
+    activity.set_pane_track("dead0001", "tk_goal")
+    pids._TRACKS_MAINTAINED = False
+    resolve_pids([_mkwin(session="0", pane_id="%0", window_id="@0")], full_roster=True, server_start=start)
+    assert activity.get_pane_track("aaaa1111") == "tk_goal"
+    assert activity.get_pane_track("dead0001") is None  # state.json has no such pid
 
 
 # --- window_by_pid (moved from channels._resolve_window_by_pid) ---------------
