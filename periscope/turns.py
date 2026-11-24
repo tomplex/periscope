@@ -68,25 +68,32 @@ def jsonl_by_session() -> dict:
 _LIVE_MTIME_S = 60
 
 
-def resume_refusal(session_id: str, transcript: Path | None, *, force: bool = False) -> tuple[int, str] | None:
+def resume_refusal(
+    session_id: str, transcript: Path | None, *, force: bool = False, moving: bool = False
+) -> tuple[int, str] | None:
     """The status and detail periscope refuses to resume `session_id` with, or
     None when it can. `transcript` is Claude's own (`jsonl_for_session`), never
     history's archive copy: `--resume` reads Claude's file, which Claude deletes
     after `cleanupPeriodDays` while the archive keeps its copy. `force` skips
-    only the liveness check (routes/sessions._window_new_resume says why)."""
+    only the recent-write check, and `moving` only the running one
+    (routes/sessions._window_new_resume says why)."""
     try:
         age = time.time() - transcript.stat().st_mtime if transcript else None
     except OSError:  # Claude's cleanup deleted it after the glob
         age = None
     if age is None:
         return 404, f"Claude has no transcript for session {session_id}"
+    # static/resume.js matches the "already " prefix, here and below, to link
+    # the dashboard: change both or neither.
+    if not moving and (proc := session_status.claude_proc_for(session_id)):
+        target = session_status.claude_target(proc["pid"])
+        return 409, f"already running in {target}" if target else "already running outside tmux"
     # Rail.movePaneAccount matches the "session looks live" prefix to offer
     # "move anyway": change both or neither.
     if not force and age < _LIVE_MTIME_S:
         return 409, f"session looks live (written {int(age)}s ago); wait a minute or pick another"
-    # Two windows on one session interleave just the same, so `force` never skips this.
-    # static/resume.js matches the "already resumed" prefix to link the
-    # dashboard: change both or neither.
+    # Two windows on one session interleave just the same, so `force` never skips
+    # this. It covers the seconds before a resumed Claude writes its session file.
     if (entry := _resuming.get(session_id)) is not None:
         return 409, f"already resumed in {entry['target']}"
     return None

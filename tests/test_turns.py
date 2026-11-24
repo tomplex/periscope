@@ -428,6 +428,27 @@ def test_resume_refusal_409s_a_session_already_resumed_even_when_forced(tmp_path
     assert turns.resume_refusal("sid-r", old, force=True) == (409, "already resumed in resumes:4")
 
 
+@pytest.mark.parametrize(
+    ("target", "detail"),
+    [("dev:2", "already running in dev:2"), (None, "already running outside tmux")],
+)
+def test_resume_refusal_409s_a_session_that_a_live_claude_runs_even_when_forced(tmp_path, monkeypatch, target, detail):
+    monkeypatch.setattr(turns, "_resuming", {})
+    monkeypatch.setattr(turns.session_status, "claude_proc_for", {"sid-run": {"pid": 7}}.get)
+    monkeypatch.setattr(turns.session_status, "claude_target", {7: target}.get, raising=False)
+    old = _aged(tmp_path / "sid-run.jsonl", 600)
+    assert turns.resume_refusal("sid-run", old, force=True) == (409, detail)
+
+
+def test_resume_refusal_lets_move_account_resume_the_running_session_it_moves(tmp_path, monkeypatch):
+    monkeypatch.setattr(turns, "_resuming", {})
+    monkeypatch.setattr(turns.session_status, "claude_proc_for", {"sid-run": {"pid": 7}}.get)
+    path = _aged(tmp_path / "sid-run.jsonl", 600)
+    assert turns.resume_refusal("sid-run", path, moving=True) is None
+    refusal = turns.resume_refusal("sid-run", _aged(path, 5), moving=True)
+    assert refusal and refusal[1].startswith("session looks live")  # Rail offers "Move anyway" on this
+
+
 def test_resume_refusal_is_none_for_a_quiet_transcript(tmp_path, monkeypatch):
     monkeypatch.setattr(turns, "_resuming", {})
     assert turns.resume_refusal("sid-ok", _aged(tmp_path / "sid-ok.jsonl", 600)) is None

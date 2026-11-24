@@ -5,6 +5,7 @@ import { resumeAnswer, resumeOffer } from "../../resume.js";
 
 const LOOKS_LIVE = { status: 409, detail: "session looks live (written 12s ago); wait a minute or pick another" };
 const ALREADY = { status: 409, detail: "already resumed in resumes:4" };
+const RUNNING = { status: 409, detail: "already running in dev:2" };
 const NO_TRANSCRIPT = { status: 404, detail: "Claude has no transcript for session abc" };
 
 describe("resumeOffer", () => {
@@ -34,6 +35,14 @@ describe("resumeOffer", () => {
     expect(resumeOffer(ALREADY, undefined)).toEqual({
       button: "ready",
       status: "Already resumed in resumes:4.",
+      dashboard: true,
+    });
+  });
+
+  it("a session that a live Claude runs says where, and links the dashboard", () => {
+    expect(resumeOffer(RUNNING, undefined)).toEqual({
+      button: "ready",
+      status: "Already running in dev:2.",
       dashboard: true,
     });
   });

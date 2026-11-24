@@ -23,7 +23,7 @@ export function resumeOffer(refusal, run) {
   // A 409 lapses (a minute of quiet, the resumed window closing), and the
   // route checks again on every click: say why, and keep the button.
   if (refusal) {
-    return { button: "ready", status: sentence(refusal.detail), dashboard: refusal.detail.startsWith("already resumed") };
+    return { button: "ready", status: sentence(refusal.detail), dashboard: refusal.detail.startsWith("already ") };
   }
   return { button: "ready", status: "", dashboard: false };
 }

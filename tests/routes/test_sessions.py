@@ -754,6 +754,24 @@ def test_window_new_resume_force_skips_only_the_mtime_guard(mocker, tmp_path):
     assert "already resumed" in e.value.detail
 
 
+def test_window_new_resume_refuses_a_session_that_a_live_claude_runs_unless_moving(mocker, tmp_path):
+    from fastapi import HTTPException
+
+    from periscope.routes import sessions
+
+    calls: list[tuple] = []
+    _patch_resume_path(mocker, calls, tmp_path)
+    mocker.patch("periscope.session_status.claude_proc_for", return_value={"pid": 1})
+
+    with pytest.raises(HTTPException) as e:
+        sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+    assert (e.value.status_code, e.value.detail) == (409, "already running outside tmux")
+    assert calls == []
+
+    sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume", moving=True)
+    assert [c for c in calls if c[0] == "new-window"]
+
+
 def _patch_move_account(mocker, session_id="sess-abc", track="tk_1"):
     resume = _patch(
         mocker,
@@ -784,6 +802,7 @@ def test_move_account_spawns_resume_on_target_account(client, mocker):
     assert r.status_code == 200, r.text
     assert r.json()["pid"] == "bb22"
     assert resume.call_args.kwargs["account"] == "b"
+    assert resume.call_args.kwargs["moving"] is True  # its own pane still runs the session
     assert "--resume sess-abc" in resume.call_args[0][1]
 
 
@@ -977,7 +996,8 @@ def test_resume_of_a_session_that_came_back_takes_a_fresh_pid(mocker, tmp_path, 
     _patch(mocker, "list_windows", return_value=[{"pid_raw": "dddd4444"}] if by_window else [])
     mocker.patch("periscope.session_status.claude_proc_for", return_value=None if by_window else {"pid": 1})
 
-    result = sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume")
+    # Only a move resumes a session that a live Claude runs.
+    result = sessions._window_new_resume("resumes", "claude --resume abc", "abc", "resume", moving=not by_window)
 
     assert _spawn(calls)[-1] == "#{window_index}"
     assert "pid" not in result
