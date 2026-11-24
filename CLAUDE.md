@@ -132,6 +132,7 @@ would double-load every global.
 | `bg_commander.py` | Background command jobs + status sync |
 | `poke.py` | Daily session poke: one Haiku message per account at 08:00 so the 5h window resets ~13:00; verified, logged, prod-only |
 | `idle_close.py` | Nightly close of idle Claude panes: the rules, the 04:00 sweep and its tick, the closed records' retention, the preview; prod-only, off by default |
+| `backup.py` | Boot copy of `state.json` + `periscope.db` before boot deletes rows; prod-only. Recovery: `docs/tmux-persistence.md` |
 | `resurrect.py` / `tmux_persist.py` | Save-file `--resume` rewrite + `save_now()` / provisioning the tmux side of continuation-over-reboot |
 | `git_pr.py` / `usage.py` / `launch_policy.py` / `cost_pressure.py` | Git state + PR cache / plan usage + `choose_launch` shell / pure account-and-model routing policy / per-pane context-cost pressure |
 | `narrator.py` / `rename_ai.py` | Per-pane AI status lines + divergence renames / Anthropic SDK plumbing |

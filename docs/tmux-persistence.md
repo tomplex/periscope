@@ -220,3 +220,21 @@ to `/tmp/tmux-$UID/default`, the user's own server, when it names a missing
 one, and `install`'s re-source then executes the temp confs there. Unset
 `TMUX` and `TMUX_PLUGIN_MANAGER_PATH` too: a shell in a pane inherits both, and
 TPM loads whatever plugin dir the latter names.
+
+## Store backups (`periscope/backup.py`)
+
+Each prod boot copies `state.json` and `periscope.db` to
+`~/.config/periscope/backups/<time>/` before any boot step deletes rows, and
+keeps the newest 10 copies. The tmux layout is not in them: resurrect keeps its
+own saves.
+
+To go back to a copy (this discards everything written after it):
+
+```sh
+bin/periscope stop
+cd ~/.config/periscope && rm -f periscope.db-wal periscope.db-shm
+cp backups/<time>/state.json backups/<time>/periscope.db .
+```
+
+Then `bin/periscope start` from the checkout. Start makes a new copy first. To
+get a few rows back instead, read them from the copy with `sqlite3`.
