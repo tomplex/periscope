@@ -1,10 +1,11 @@
 """POST /api/linear/start — another app on this Mac starts Claude on a Linear issue's branch, or on a pull request.
 
 The route makes the worktree, spawns Claude with a prompt through branch_spawn (the spawn path of
-/api/reviews/prepare), and links the Linear issue to the new pane. With `pr` in place of `branch`, it checks the
-pull request out as `pr-<N>` with ⌘K's PR helper, or fast-forwards the worktree already on `pr-<N>` to the PR's
-head, and links the PR too. It answers with the new Claude's session id and the email of its Claude account, and
-with a `warning` when a worktree problem did not stop the start. A `name` labels the new pane and pins the label.
+/api/reviews/prepare), and links the Linear issue to the new pane. With no `ticket`, the pane gets no Linear link.
+With `pr` in place of `branch`, it checks the pull request out as `pr-<N>` with ⌘K's PR helper, or fast-forwards the
+worktree already on `pr-<N>` to the PR's head, and links the PR too. It answers with the new Claude's session id and
+the email of its Claude account, and with a `warning` when a worktree problem did not stop the start. A `name` labels
+the new pane and pins the label.
 A Claude already on the branch is only reported (mode "existing"): its prompt is never pasted into a session that
 may be busy, and it keeps its name.
 Selecting the pane is a separate request (POST /api/select), sent when the user asks for it.
@@ -28,7 +29,7 @@ class StartBody(BaseModel):
     # Exactly one of: the branch to start on, or a pull request on the repo's origin, checked out as `pr-<N>`.
     branch: str = ""
     pr: int | None = Field(default=None, gt=0)
-    ticket: str = Field(min_length=1)
+    ticket: str = ""  # empty: the pane gets no Linear link
     title: str = ""
     prompt: str = Field(min_length=1)
     name: str = ""  # the new pane's rail label, pinned; empty lets the narrator name it
@@ -63,7 +64,7 @@ async def _start(body: StartBody, repo: str, branch: str, key: tuple[str, str]) 
         path, reused, pr_fields, warning = await asyncio.to_thread(_pr_worktree, repo, body.pr, branch)
     spawned = await branch_spawn.spawn(key, path, body.prompt, body.name.strip() or None)
     store.set_window_fields(
-        spawned["pid"], linked_linear=body.ticket, linked_linear_title=body.title or None, **pr_fields
+        spawned["pid"], linked_linear=body.ticket or None, linked_linear_title=body.title or None, **pr_fields
     )
     email = await asyncio.to_thread(store.account_email, spawned["account"])
     return {

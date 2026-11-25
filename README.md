@@ -63,7 +63,8 @@ the worktree as it is. It answers with the new Claude's `session_id` and its
 account's `email` (null when periscope cannot read it). A `warning` in the
 answer tells of a problem that did not stop the start, for example a worktree
 that stays behind its PR. If a Claude is already on that branch, it reports
-that pane and starts nothing.
+that pane and starts nothing. A start with no Linear issue (`ticket`) links
+none to the card.
 `GET /api/open/catalog` gives each repo's `slug`, the `owner/name` of its
 origin on GitHub, so the app can find the repo of a pull request.
 `POST /api/select` with a pane's `pid` makes the dashboard select it.
